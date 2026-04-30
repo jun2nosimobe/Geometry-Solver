@@ -1,0 +1,83 @@
+第1ステップ
+🤖 [MCTS確定手] Para_A_Perp_B を採用 (期待スコア: 19.58, 探索回数: 5)
+  🟢 [証明完了] 🟢 [Concyclic] C, O, Mid_CA, Mid_BC が証明されました！ (理由: 円周角の定理の逆(Line) (前提: ))
+  [推論] 🟢 🟢 [Concyclic] C, O, Mid_CA, Mid_BC (定理: 円周角の定理の逆(Line))
+    🔄 [データ還元] 論理証明により Mid_BC が Circum_COMid_CA_(Auto) 上にある事実を構造化しました。
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第2ステップ
+🤖 [MCTS確定手] Perp_A_Perp_A を採用 (期待スコア: 20.57, 探索回数: 3)
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), PerpMid_BC, LineCA, Line_C_O_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), PerpMid_BC, LineCA, Line_C_O_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, PerpMid_BC, LineCA, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
+  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, PerpMid_BC, LineCA, LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, Line_C_O_(Auto), Line_Mid_BC_Mid_CA_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
+  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, Line_C_O_(Auto), Line_Mid_BC_Mid_CA_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, Line_Mid_BC_Mid_CA_(Auto), Line_C_O_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
+  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, Line_Mid_BC_Mid_CA_(Auto), Line_C_O_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), LineCA, PerpMid_BC, Line_C_O_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), LineCA, PerpMid_BC, Line_C_O_(Auto) (定理: 円周角の定理(Line))
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第3ステップ
+🤖 [MCTS確定手] Mid_O_C を採用 (期待スコア: 28.84, 探索回数: 4)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第4ステップ
+🤖 [MCTS確定手] Perp_Mid_CA_LineBC を採用 (期待スコア: 23.44, 探索回数: 2)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第5ステップ
+🤖 [MCTS確定手] Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto) を採用 (期待スコア: 23.29, 探索回数: 4)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第6ステップ
+🤖 [MCTS確定手] Perp_Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 23.94, 探索回数: 3)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第7ステップ
+🤖 [MCTS確定手] Int_PerpMid_CA_Perp_Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 19.90, 探索回数: 3)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第8ステップ
+🤖 [MCTS確定手] Para_Mid_O_C_Median_B を採用 (期待スコア: 18.20, 探索回数: 4)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第9ステップ
+🤖 [MCTS確定手] Mid_A_Mid_CA を採用 (期待スコア: 14.72, 探索回数: 7)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
+第10ステップ
+🤖 [MCTS確定手] Int_Line_C_O_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 15.24, 探索回数: 7)
+--- 🔍 ターゲット(Collinear)達成チェック失敗 ---
+点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
+点 G が所属している直線: ['Median_B', 'Median_A']
+点 H が所属している直線: ['Perp_B', 'Perp_A']
+----------------------------------------------
