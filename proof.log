@@ -1,83 +1,114 @@
 第1ステップ
-🤖 [MCTS確定手] Para_A_Perp_B を採用 (期待スコア: 19.58, 探索回数: 5)
-  🟢 [証明完了] 🟢 [Concyclic] C, O, Mid_CA, Mid_BC が証明されました！ (理由: 円周角の定理の逆(Line) (前提: ))
-  [推論] 🟢 🟢 [Concyclic] C, O, Mid_CA, Mid_BC (定理: 円周角の定理の逆(Line))
-    🔄 [データ還元] 論理証明により Mid_BC が Circum_COMid_CA_(Auto) 上にある事実を構造化しました。
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
+🤖 [MCTS] Perp_B_Perp_P_AB を採用 (期待スコア: 207.10)
+  🟢 [証明完了] 🟢 [EqualAngle_Line] LineCA, Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, Line_B_P_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] LineCA, Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, Line_B_P_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_B_P_(Auto), LineCA, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_B_P_(Auto), LineCA, LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Line_B_P_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Line_B_P_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] LineCA, LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), Line_B_P_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P))
+  [推論] 🟢 🟢 [EqualAngle_Line] LineCA, LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), Line_B_P_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [Concyclic] B, P, D, F が証明されました！ (理由: 円周角の定理の逆(Line) (前提: ))
+  [推論] 🟢 🟢 [Concyclic] B, P, D, F (定理: 円周角の定理の逆(Line))
+  🟢 [証明完了] 🟢 [Concyclic] C, P, D, E が証明されました！ (理由: 円周角の定理の逆(Line) (前提: ))
+  [推論] 🟢 🟢 [Concyclic] C, P, D, E (定理: 円周角の定理の逆(Line))
+  🟢 [証明完了] 🟢 [Concyclic] A, P, F, E が証明されました！ (理由: 円周角の定理の逆(Line) (前提: ))
+  [推論] 🟢 🟢 [Concyclic] A, P, F, E (定理: 円周角の定理の逆(Line))
 第2ステップ
-🤖 [MCTS確定手] Perp_A_Perp_A を採用 (期待スコア: 20.57, 探索回数: 3)
-  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), PerpMid_BC, LineCA, Line_C_O_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
-  [推論] 🟢 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), PerpMid_BC, LineCA, Line_C_O_(Auto) (定理: 円周角の定理(Line))
-  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, PerpMid_BC, LineCA, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
-  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, PerpMid_BC, LineCA, LineBC (定理: 円周角の定理(Line))
-  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, Line_C_O_(Auto), Line_Mid_BC_Mid_CA_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
-  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, Line_C_O_(Auto), Line_Mid_BC_Mid_CA_(Auto), LineBC (定理: 円周角の定理(Line))
-  🟢 [証明完了] 🟢 [EqualAngle_Line] PerpMid_CA, Line_Mid_BC_Mid_CA_(Auto), Line_C_O_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
-  [推論] 🟢 🟢 [EqualAngle_Line] PerpMid_CA, Line_Mid_BC_Mid_CA_(Auto), Line_C_O_(Auto), LineBC (定理: 円周角の定理(Line))
-  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), LineCA, PerpMid_BC, Line_C_O_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, O, Mid_CA, Mid_BC))
-  [推論] 🟢 🟢 [EqualAngle_Line] Line_Mid_BC_Mid_CA_(Auto), LineCA, PerpMid_BC, Line_C_O_(Auto) (定理: 円周角の定理(Line))
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第3ステップ
-🤖 [MCTS確定手] Mid_O_C を採用 (期待スコア: 28.84, 探索回数: 4)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第4ステップ
-🤖 [MCTS確定手] Perp_Mid_CA_LineBC を採用 (期待スコア: 23.44, 探索回数: 2)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第5ステップ
-🤖 [MCTS確定手] Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto) を採用 (期待スコア: 23.29, 探索回数: 4)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第6ステップ
-🤖 [MCTS確定手] Perp_Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 23.94, 探索回数: 3)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第7ステップ
-🤖 [MCTS確定手] Int_PerpMid_CA_Perp_Int_Line_C_O_(Auto)_Line_Mid_BC_Mid_CA_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 19.90, 探索回数: 3)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第8ステップ
-🤖 [MCTS確定手] Para_Mid_O_C_Median_B を採用 (期待スコア: 18.20, 探索回数: 4)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第9ステップ
-🤖 [MCTS確定手] Mid_A_Mid_CA を採用 (期待スコア: 14.72, 探索回数: 7)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
-第10ステップ
-🤖 [MCTS確定手] Int_Line_C_O_(Auto)_Perp_Mid_CA_LineBC を採用 (期待スコア: 15.24, 探索回数: 7)
---- 🔍 ターゲット(Collinear)達成チェック失敗 ---
-点 O が所属している直線: ['PerpMid_CA', 'PerpMid_BC', 'Line_C_O_(Auto)']
-点 G が所属している直線: ['Median_B', 'Median_A']
-点 H が所属している直線: ['Perp_B', 'Perp_A']
-----------------------------------------------
+🤖 [MCTS] Perp_P_Line_P_A_(Auto) を採用 (期待スコア: 738.53)
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_BC, Line_D_F_(Auto), Line_B_P_(Auto), LineAB = Perp_B_Perp_P_AB が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_BC, Line_D_F_(Auto), Line_B_P_(Auto), LineAB = Perp_B_Perp_P_AB (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_AB, Line_D_F_(Auto), Line_B_P_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_AB, Line_D_F_(Auto), Line_B_P_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_AB, Perp_P_BC, LineAB = Perp_B_Perp_P_AB, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_AB, Perp_P_BC, LineAB = Perp_B_Perp_P_AB, LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_AB, Line_B_P_(Auto), Line_D_F_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_AB, Line_B_P_(Auto), Line_D_F_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_BC, Line_B_P_(Auto), Line_D_F_(Auto), LineAB = Perp_B_Perp_P_AB が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_BC, Line_B_P_(Auto), Line_D_F_(Auto), LineAB = Perp_B_Perp_P_AB (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_D_E_(Auto), Perp_P_BC, LineCA, Line_C_P_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_D_E_(Auto), Perp_P_BC, LineCA, Line_C_P_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_CA, Perp_P_BC, LineCA, LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_CA, Perp_P_BC, LineCA, LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_CA, Line_C_P_(Auto), Line_D_E_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_CA, Line_C_P_(Auto), Line_D_E_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Perp_P_CA, Line_D_E_(Auto), Line_C_P_(Auto), LineBC が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Perp_P_CA, Line_D_E_(Auto), Line_C_P_(Auto), LineBC (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_D_E_(Auto), LineCA, Perp_P_BC, Line_C_P_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_D_E_(Auto), LineCA, Perp_P_BC, Line_C_P_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_AB, LineCA, Line_E_F_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_AB, LineCA, Line_E_F_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_CA, LineAB = Perp_B_Perp_P_AB, Line_E_F_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_CA, LineAB = Perp_B_Perp_P_AB, Line_E_F_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Perp_P_CA, Line_E_F_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Perp_P_CA, Line_E_F_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Perp_P_AB, Line_E_F_(Auto) が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Perp_P_AB, Line_E_F_(Auto) (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [EqualAngle_Line] LineAB = Perp_B_Perp_P_AB, LineCA, Perp_P_AB, Perp_P_CA が証明されました！ (理由: 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E))
+  [推論] 🟢 🟢 [EqualAngle_Line] LineAB = Perp_B_Perp_P_AB, LineCA, Perp_P_AB, Perp_P_CA (定理: 円周角の定理(Line))
+  🟢 [証明完了] 🟢 [Identical] Line_D_E_(Auto), Line_D_F_(Auto) が証明されました！ (理由: 直線の一致条件 (前提: ))
+  [推論] 🟢 🟢 [Identical] Line_D_E_(Auto), Line_D_F_(Auto) (定理: 直線の一致条件)
+    🔄 [同一性還元] Line_D_E_(Auto) と Line_D_F_(Auto) を統合しました。
+  🟢 [証明完了] 🟢 [Identical] Line_D_E_(Auto) = Line_D_F_(Auto), Line_E_F_(Auto) が証明されました！ (理由: 直線の一致条件 (前提: ))
+  [推論] 🟢 🟢 [Identical] Line_D_E_(Auto) = Line_D_F_(Auto), Line_E_F_(Auto) (定理: 直線の一致条件)
+    🔄 [同一性還元] Line_D_E_(Auto) = Line_D_F_(Auto) と Line_E_F_(Auto) を統合しました。
+
+【証明のトレース（証明された事実の連鎖）】
+ 1. 🟢 [Concyclic] A, B, C, P
+      <= 問題の前提条件
+ 2. 🟢 [EqualAngle_Line] LineCA, Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, Line_B_P_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 3. 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_C_P_(Auto), LineAB = Perp_B_Perp_P_AB, LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 4. 🟢 [EqualAngle_Line] Line_P_A_(Auto), Line_B_P_(Auto), LineCA, LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 5. 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Line_B_P_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 6. 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 7. 🟢 [EqualAngle_Line] LineCA, LineAB = Perp_B_Perp_P_AB, Line_C_P_(Auto), Line_B_P_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, B, C, P)
+ 8. 🟢 [Concyclic] B, P, D, F
+      <= 円周角の定理の逆(Line) (前提: )
+ 9. 🟢 [Concyclic] C, P, D, E
+      <= 円周角の定理の逆(Line) (前提: )
+ 10. 🟢 [Concyclic] A, P, F, E
+      <= 円周角の定理の逆(Line) (前提: )
+ 11. 🟢 [EqualAngle_Line] Perp_P_BC, Line_D_F_(Auto), Line_B_P_(Auto), LineAB = Perp_B_Perp_P_AB
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F)
+ 12. 🟢 [EqualAngle_Line] Perp_P_AB, Line_D_F_(Auto), Line_B_P_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F)
+ 13. 🟢 [EqualAngle_Line] Perp_P_AB, Perp_P_BC, LineAB = Perp_B_Perp_P_AB, LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F)
+ 14. 🟢 [EqualAngle_Line] Perp_P_AB, Line_B_P_(Auto), Line_D_F_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F)
+ 15. 🟢 [EqualAngle_Line] Perp_P_BC, Line_B_P_(Auto), Line_D_F_(Auto), LineAB = Perp_B_Perp_P_AB
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] B, P, D, F)
+ 16. 🟢 [EqualAngle_Line] Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), Perp_P_BC, LineCA, Line_C_P_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E)
+ 17. 🟢 [EqualAngle_Line] Perp_P_CA, Perp_P_BC, LineCA, LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E)
+ 18. 🟢 [EqualAngle_Line] Perp_P_CA, Line_C_P_(Auto), Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E)
+ 19. 🟢 [EqualAngle_Line] Perp_P_CA, Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), Line_C_P_(Auto), LineBC
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E)
+ 20. 🟢 [EqualAngle_Line] Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), LineCA, Perp_P_BC, Line_C_P_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] C, P, D, E)
+ 21. 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_AB, LineCA, Line_E_F_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E)
+ 22. 🟢 [EqualAngle_Line] Line_P_A_(Auto), Perp_P_CA, LineAB = Perp_B_Perp_P_AB, Line_E_F_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E)
+ 23. 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineAB = Perp_B_Perp_P_AB, Perp_P_CA, Line_E_F_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E)
+ 24. 🟢 [EqualAngle_Line] Line_P_A_(Auto), LineCA, Perp_P_AB, Line_E_F_(Auto)
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E)
+ 25. 🟢 [EqualAngle_Line] LineAB = Perp_B_Perp_P_AB, LineCA, Perp_P_AB, Perp_P_CA
+      <= 円周角の定理(Line) (前提: 🟢 [Concyclic] A, P, F, E)
+ 26. 🟢 [Identical] Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), Line_D_F_(Auto)
+      <= 直線の一致条件 (前提: ) (対象: Line_D_E_(Auto) ≡ Line_D_F_(Auto))
+ 27. 🟢 [Identical] Line_D_E_(Auto) = Line_D_F_(Auto) = Line_E_F_(Auto), Line_E_F_(Auto)
+      <= 直線の一致条件 (前提: ) (対象: Line_D_E_(Auto) = Line_D_F_(Auto) ≡ Line_E_F_(Auto))

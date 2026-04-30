@@ -4,10 +4,10 @@ import logging
 # ログの設定（ファイルに出力し、コンソールには出さない設定）
 logger = logging.getLogger("GeometryProver")
 logger.setLevel(logging.DEBUG)
-file_handler = logging.FileHandler('proof.log', mode='w', encoding='utf-8')
-file_handler.setFormatter(logging.Formatter('%(message)s'))
-logger.addHandler(file_handler)
-
+if not logger.handlers:
+    file_handler = logging.FileHandler('proof.log', mode='w', encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(file_handler)
 
 class Fact:
     def __init__(self, fact_type, objects, is_proven=False, proof_source=""):
@@ -28,7 +28,8 @@ class Fact:
     def __eq__(self, other):
         if not isinstance(other, Fact) or self.fact_type != other.fact_type:
             return False
-        if self.fact_type in ["Concyclic", "Collinear"]:
+        # 🌟 修正: 順序に依存しないFactタイプの拡張 (Identical, Parallel を追加)
+        if self.fact_type in ["Concyclic", "Collinear", "Identical", "Parallel"]:
             return set(self.objects) == set(other.objects)
         return self.objects == other.objects
         
@@ -61,25 +62,6 @@ class GeometryTheorem:
 
 
 # ==========================================
-# 証明探索エンジン
-# ==========================================
-def check_incidence(pt_node, curve_node, t_samples):
-    if pt_node in curve_node.parents or curve_node in pt_node.parents: return False
-    valid_count = 0
-    for t in t_samples:
-        try:
-            pt_val = pt_node.evaluate(t, {})
-            cv = curve_node.evaluate(t, {})
-            if isinstance(curve_node, Circle):
-                val = cv[0]*(pt_val[0]**2 + pt_val[1]**2) + cv[1]*pt_val[0]*pt_val[2] + cv[2]*pt_val[1]*pt_val[2] + cv[3]*pt_val[2]**2
-            else:
-                val = cv[0]*pt_val[0] + cv[1]*pt_val[1] + cv[2]*pt_val[2]
-            if val != 0: return False
-            valid_count += 1
-        except: return False
-    return valid_count >= 5
-
-# ======================================
 # 1. 包含と等価関係のグラフ構造 (E-Graph)
 # ==========================================
 class ProofEnvironment:
@@ -91,7 +73,7 @@ class ProofEnvironment:
         
         from mmp_core import GeoEntity, LogicalComponent
         
-        # 🌟 角度の基底エンティティ(e-class)の初期化
+        # 角度の基底エンティティ(e-class)の初期化
         self.zero_angle = GeoEntity("Angle", "Parallel_0")
         self.zero_angle.components.append(LogicalComponent())
         self.zero_angle.importance = 10.0
@@ -102,7 +84,6 @@ class ProofEnvironment:
         
         self.nodes.extend([self.zero_angle, self.right_angle])
 
-    # ★ 以下のメソッドで E-Graph(GeoEntity) 側に情報を統合する
     def add_equal_angle(self, L1, L2, L3, L4):
         from mmp_core import GeoEntity, Definition, LogicalComponent
         angle1, angle2 = None, None
@@ -135,13 +116,13 @@ class ProofEnvironment:
     def merge_entities_logically(self, entity1, entity2):
         """論理推論によって2つの実体が同一であると証明された場合、完全に融合する"""
         
-        # 🌟 NEW: 渡されたのがゾンビだった場合、自力で本体(ルート)まで遡る
+        # 渡されたのがゾンビだった場合、自力で本体(ルート)まで遡る
         while hasattr(entity1, '_merged_into') and entity1._merged_into is not None:
             entity1 = entity1._merged_into
         while hasattr(entity2, '_merged_into') and entity2._merged_into is not None:
             entity2 = entity2._merged_into
 
-        # 🌟 NEW: マージが中断された場合の理由を明確にロギングする
+        # マージが中断された場合の理由を明確にロギングする
         if entity1 == entity2:
             logger.debug(f"    [マージ中断] {entity1.name} と {entity2.name} は既に同じ本体です。")
             return None
@@ -152,7 +133,7 @@ class ProofEnvironment:
             logger.debug(f"    [マージ中断] 統合元(消去対象) {entity2.name} が環境(nodes)に存在しません。")
             return None
             
-        # 🌟 1. 全てのノードの「定義」と「所属図形」の中にある entity2 を entity1 に置換
+        # 1. 全てのノードの「定義」と「所属図形」の中にある entity2 を entity1 に置換
         for node in self.nodes:
             for comp in node.components:
                 # 所属図形(subobjects)の更新
@@ -164,19 +145,31 @@ class ProofEnvironment:
                 new_defs = set()
                 for d in comp.definitions:
                     if entity2 in d.parents:
-                        # 親リストの中の entity2 を entity1 に差し替える
                         new_parents = [entity1 if p == entity2 else p for p in d.parents]
-                        # Definition は immutable に設計されているはずなので新造する
                         from mmp_core import Definition
                         new_defs.add(Definition(d.def_type, new_parents, d.naive_degree, d.depth))
                     else:
                         new_defs.add(d)
                 comp.definitions = new_defs
 
-        # 🌟 2. 既に証明された事実(Fact)リストの中の参照も更新（重複判定を狂わせないため）
+            # ==========================================
+            # 🌟 NEW: Shape(相似クラス) が持つ shape_members の参照更新
+            # もし entity2 が「点」または「Triangle」だった場合、ここで本体に書き換える
+            # ==========================================
+            if getattr(node, 'shape_members', None):
+                new_shape_members = {}
+                for tri, pts in node.shape_members.items():
+                    # Triangle自身がマージされた場合はキーを差し替え
+                    new_tri = entity1 if tri == entity2 else tri
+                    # Triangleの頂点がマージされた場合はタプル内を差し替え
+                    new_pts = tuple(entity1 if p == entity2 else p for p in pts)
+                    new_shape_members[new_tri] = new_pts
+                node.shape_members = new_shape_members
+
+        # 2. 既に証明された事実(Fact)リストの中の参照も更新（重複判定を狂わせないため）
         if hasattr(self, 'prover'):
             for fact in self.prover.facts:
-                # 🌟 修正: is (メモリ一致) だけでなく、id が同じもの、または同じ名前のゾンビも容赦なく置換する
+                # is (メモリ一致) だけでなく、id が同じもの、または同じ名前のゾンビも容赦なく置換する
                 new_objects = []
                 for obj in fact.objects:
                     if obj is entity2 or getattr(obj, 'id', None) == getattr(entity2, 'id', None):
@@ -205,12 +198,10 @@ class ProofEnvironment:
         return entity1
 
 class LogicProver:
-    # ★ 修正: __init__ が古いままだったので、env と theorems を受け取るように変更
     def __init__(self, env, theorems):
         self.env = env
         self.theorems = theorems
         self.facts = []
-        # target_fact は HybridEngine 側で管理するためここからは削除
         
     def get_or_add_fact(self, new_fact):
         for existing in self.facts:
