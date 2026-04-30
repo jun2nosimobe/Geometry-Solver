@@ -401,7 +401,7 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
 # ==========================================
 # 🌟 作図ビルダー (Construction Builder)
 # ==========================================
-def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None) -> 'GeoEntity':
+def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False) -> 'GeoEntity':
     if env:
         for node in env.nodes:
             comp = node.get_best_component()
@@ -432,7 +432,12 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
         depth = 1
         naive_degree = 0
         base_imp = 8.0 # 定数はシステム基盤なので高め
+    elif is_given:
+        depth = 1
+        naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
+        base_imp = 10.0 # 問題文に登場する図形は一律で最高ランク
     else:
+        # 通常の MCTS による作図は従来通り減衰させる
         depth = max((p.get_best_component().depth for p in parents if hasattr(p, 'get_best_component') and p.get_best_component()), default=0) + 1
         naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
 
@@ -444,11 +449,11 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
 
         # 減衰係数 (Decay Factor) の適用
         if entity_type in ["Scalar", "Direction", "Shape", "Triangle"]:
-            decay_factor = 1.0  # スカラーや概念は減衰させない
+            decay_factor = 0.99  # スカラーや概念は減衰させない
         else:
             decay_factor = 0.5  # 点・線・円は深く掘るほど価値が半減する
 
-        # 基礎重要度は最低 1.0 を担保
+        # 基礎重要度は最低 0.01 を担保
         base_imp = max(0.01, avg_parent_imp * decay_factor)
 
     new_entity = GeoEntity(entity_type, name)
@@ -461,6 +466,52 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
     apply_trivial_relations(new_entity, new_def, env)
 
     return new_entity
+
+def make_free_point(name, t_x, t_y, env):
+    # t_x, t_y は Var オブジェクト
+    coords = (t_x, t_y, 1)
+    pt = GeoEntity("Point", name=name)
+    pt.numerical_degree = 2
+    # 前述の通り calculate メソッドをパッチ
+    def calc_func(t_dict, cache):
+        if id(pt) in cache: return cache[id(pt)]
+        res = [coords[0].evaluate(t_dict), coords[1].evaluate(t_dict), 1]
+        cache[id(pt)] = res
+        return res
+    pt.calculate = calc_func
+    
+    comp = LogicalComponent(initial_def=Definition("Given", [], naive_degree=0, depth=0))
+    pt.components.append(comp)
+    # 初期点なので基礎重要度を高く設定
+    pt.base_importance = 10.0
+    env.nodes.append(pt)
+    return pt
+
+def make_point_on_line(name, pt_a, pt_b, t_var, env):
+    # t_var は 0〜1 などで動く Var
+    pt = GeoEntity("Point", name=name)
+    pt.numerical_degree = 1 # 直線上なので自由度は1
+    
+    def calc_func(t_dict, cache):
+        if id(pt) in cache: return cache[id(pt)]
+        va = pt_a.calculate(t_dict, cache)
+        vb = pt_b.calculate(t_dict, cache)
+        t = t_var.evaluate(t_dict)
+        # 線分ABを t:(1-t) に内分する点
+        res = [va[0]*(1-t) + vb[0]*t, va[1]*(1-t) + vb[1]*t, 1]
+        cache[id(pt)] = res
+        return res
+    pt.calculate = calc_func
+
+    # 論理的には「直線AB上に乗っている」という定義を与える
+    L_AB = get_or_create_line(pt_a, pt_b, env)
+    comp = LogicalComponent(initial_def=Definition("PointOn", [L_AB], naive_degree=1, depth=1))
+    pt.components.append(comp)
+    link_logical_incidence(pt, L_AB)
+    
+    pt.base_importance = 10.0 # 問題文に登場する拘束点なので高め
+    env.nodes.append(pt)
+    return pt
 
 
 # ==========================================

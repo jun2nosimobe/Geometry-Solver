@@ -1,6 +1,6 @@
 # problems/prob_nine_point.py
 from logic_core import Fact
-from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity
+from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity, make_free_point
 
 class Var:
     """MMPで値を代入するためのシンボリック変数クラス"""
@@ -20,13 +20,13 @@ def setup_problem(env):
     all_vars = [t1, t2, t3, t4, t5, t6]
 
     # 2. 初期点 A, B, C の手動定義ヘルパー
-    def make_given_point(name, coords):
+    def make_free_point1(name, coords):
         pt = GeoEntity("Point", name=name)
         pt.numerical_degree = 2 # SVD計算用に自由度2を設定
         pt._given_coords = coords
         
         # Given(与えられた点)として定義を登録
-        comp = LogicalComponent(initial_def=Definition("Given", [], naive_degree=0, depth=0))
+        comp = LogicalComponent(initial_def=Definition("Given", [], naive_degree=1, depth=0))
         pt.components.append(comp)
         
         # ==========================================
@@ -52,20 +52,20 @@ def setup_problem(env):
         return pt
 
     # A, B, C を作図 (同次座標系)
-    A = make_given_point("A", (t1, t2, 1))
-    B = make_given_point("B", (t3, t4, 1))
-    C = make_given_point("C", (t5, t6, 1))
+    A = make_free_point1("A", (t1, t2, 1))
+    B = make_free_point1("B", (t3, t4, 1))
+    C = make_free_point1("C", (t5, t6, 1))
 
     # 3. 問題の作図 (九点円の一部)
     # 辺の中点
-    Mid_B_C = create_geo_entity("Midpoint", [B, C], name="Mid_BC", env=env)
-    Mid_C_A = create_geo_entity("Midpoint", [C, A], name="Mid_CA", env=env)
-    Mid_A_B = create_geo_entity("Midpoint", [A, B], name="Mid_AB", env=env)
+    Mid_B_C = create_geo_entity("Midpoint", [B, C], name="Mid_BC", env=env, is_given=True)
+    Mid_C_A = create_geo_entity("Midpoint", [C, A], name="Mid_CA", env=env, is_given=True)
+    Mid_A_B = create_geo_entity("Midpoint", [A, B], name="Mid_AB", env=env, is_given=True)
     
     # 頂点Aから対辺BCへの垂線と、その足 (H_A)
-    Line_BC = create_geo_entity("LineThroughPoints", [B, C], name="Line_BC", env=env)
-    Perp_A_BC = create_geo_entity("PerpendicularLine", [Line_BC, A], name="Perp_A_BC", env=env)
-    H_A = create_geo_entity("Intersection", [Line_BC, Perp_A_BC], name="H_A", env=env)
+    Line_BC = create_geo_entity("LineThroughPoints", [B, C], name="Line_BC", env=env, is_given=True)
+    Perp_A_BC = create_geo_entity("PerpendicularLine", [Line_BC, A], name="Perp_A_BC", env=env, is_given=True)
+    H_A = create_geo_entity("Intersection", [Line_BC, Perp_A_BC], name="H_A", env=env, is_given=True)
 
 
     # 4. 初期事実の登録
