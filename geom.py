@@ -28,12 +28,18 @@ def get_representative(obj):
         obj = obj._merged_into
     return obj
 
+def is_zero_mod(v):
+    if hasattr(v, 'value'): return v.value == 0
+    if hasattr(v, 'val'): return v.val == 0
+    if hasattr(v, 'n'): return v.n == 0
+    try: return int(v) == 0
+    except: return v == 0
+
 
 # ==========================================
 # 1. モンテカルロ木探索 (MCTS) エンジン
 # ==========================================
 class MCTSNode:
-    """MCTSの探索木ノード"""
     def __init__(self, action=None, parent=None):
         self.action = action  
         self.parent = parent
@@ -53,12 +59,10 @@ class MCTSSearchEngine:
         self.all_vars = all_vars
         self.prover = prover
         
-        # 外部委譲 (Delegation)
         self.tester = MMPTester(self.env, self.all_vars, self.prover)
         self.action_gen = ActionGenerator(set(), self.tester)
 
     def _playout(self, initial_nodes, depth=3):
-        """シミュレーション: 新しい作図を行って盤面のポテンシャルを測る"""
         sim_nodes = list(initial_nodes)
         score = 0.0
         
@@ -94,19 +98,28 @@ class MCTSSearchEngine:
                 hot_curves = [n for n in sim_nodes if n.entity_type in ["Line", "Circle"] and getattr(n, 'importance', 1.0) >= 5.0 and n not in parents]
                 for c in hot_curves:
                     cache = {}
-                    random_t_dict = {v: self.tester.t_samples[0] for v in self.all_vars} # 簡易テスト
+                    random_t_dict = {v: self.tester.t_samples[0] for v in self.all_vars}
                     try:
                         Z_val = Z.calculate(random_t_dict, cache)
                         c_val = c.calculate(random_t_dict, cache)
-                        score += getattr(c, 'importance', 1.0) * 3.0
-                        break
+                        
+                        # 🌟 修正: ガバガバ判定を修正し、実際に曲線の方程式を満たすかチェックする
+                        if c.entity_type == "Line":
+                            val = c_val[0]*Z_val[0] + c_val[1]*Z_val[1] + c_val[2]*Z_val[2]
+                        elif c.entity_type == "Circle":
+                            val = c_val[0]*(Z_val[0]**2 + Z_val[1]**2) + c_val[1]*Z_val[0]*Z_val[2] + c_val[2]*Z_val[1]*Z_val[2] + c_val[3]*Z_val[2]**2
+                        else:
+                            val = 1 # ダミー
+                            
+                        if is_zero_mod(val):
+                            score += getattr(c, 'importance', 1.0) * 3.0
+                            break # 乗っていることが確認できた場合のみブレイク
                     except: pass
             sim_nodes.append(Z)
             
         return score
 
     def _run_logic_step(self):
-        """新しい事実に基づく局所的推論とE-Graphへの還元"""
         processed_fact_strings = getattr(self, '_debug_processed_facts', set())
         self._debug_processed_facts = processed_fact_strings
 
@@ -143,6 +156,8 @@ class MCTSSearchEngine:
             matches = theorem.match_func(self.prover.facts, self.env)
             for match in matches:
                 premises, conclusion_template = theorem.apply_func(match)
+
+                if conclusion_template is None: continue
                 
                 if is_already_in_egraph(conclusion_template): continue
                 actual_premises = [self.prover.get_or_add_fact(p) for p in premises]
@@ -177,13 +192,14 @@ class MCTSSearchEngine:
                                 else:
                                     circ = create_geo_entity("Circumcircle", pts[:3], name=f"Circum_{pts[0].name}{pts[1].name}{pts[2].name}_(Auto)", env=self.env)
                                     self.env.nodes.append(circ)
-                                    # MMPマージ
                                     for node in self.env.nodes:
                                         if node != circ and self.tester.check_identical_mmp(circ, node):
                                             merged = self.env.merge_entities_logically(node, circ)
                                             if merged: circ = merged
                                             break
-                                link_logical_incidence(circ, pts[3])
+                                # 🌟 修正: 4点目以降の「すべて」の点を円にリンクする
+                                for p in pts[3:]:
+                                    link_logical_incidence(circ, p)
 
                         elif actual_conclusion.fact_type == "Collinear" and len(actual_conclusion.objects) >= 3:
                             pts = actual_conclusion.objects
@@ -199,7 +215,9 @@ class MCTSSearchEngine:
                                             merged = self.env.merge_entities_logically(node, line_obj)
                                             if merged: line_obj = merged
                                             break
-                                link_logical_incidence(line_obj, pts[2])
+                                # 🌟 修正: 3点目以降の「すべて」の点を直線にリンクする
+                                for p in pts[2:]:
+                                    link_logical_incidence(line_obj, p)
                         
                         elif actual_conclusion.fact_type == "EqualAngle_Line":
                             self.env.add_equal_angle(*actual_conclusion.objects)
@@ -216,12 +234,10 @@ class MCTSSearchEngine:
                             obj.importance = min(getattr(obj, 'importance', 1.0) + 5.0, 50.0)
 
     def run_step(self, num_simulations=40):
-        """MCTSのエントリポイント"""
         root = MCTSNode()
         root.untried_actions = self.action_gen.get_possible_actions(self.env.nodes)
         if not root.untried_actions: return
 
-        # === 1. MCTS ループ ===
         for _ in range(num_simulations):
             node = root
             sim_nodes = list(self.env.nodes)
@@ -247,7 +263,6 @@ class MCTSSearchEngine:
                 node.total_score += score
                 node = node.parent
 
-        # === 2. 確定と実行 ===
         if not root.children: return
         best_child = max(root.children, key=lambda c: c.visits)
         parents, def_type, name = best_child.action
@@ -289,7 +304,6 @@ class MCTSSearchEngine:
             if not merged:
                 Z.importance = sum(getattr(p, 'importance', 1.0) for p in parents) / len(parents) + total_drop * 3
 
-        # MMP大発見と論理推論
         self.tester.discover_all_mmp_relations(Z, parents) 
         self._run_logic_step()
 
@@ -360,7 +374,7 @@ class HybridEngine:
         return False
 
 if __name__ == "__main__":
-    problem_name = "prob_simson"
+    problem_name = "prob_miquel" # テストしやすさを考慮して適当な名前に変更可
     if len(sys.argv) > 1: problem_name = sys.argv[1]
 
     print(f"=== ハイブリッド自動定理証明システム 起動 ===")

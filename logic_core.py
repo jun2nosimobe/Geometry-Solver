@@ -1,7 +1,6 @@
 # logic_core.py
 import logging
 
-# ログの設定（ファイルに出力し、コンソールには出さない設定）
 logger = logging.getLogger("GeometryProver")
 logger.setLevel(logging.DEBUG)
 if not logger.handlers:
@@ -16,10 +15,14 @@ class Fact:
         self.is_proven = is_proven
         self.proof_source = proof_source
         self.dependents = [] 
+        # 🌟 NEW: MMPが発見した未証明の予想(Conjecture)かどうかのフラグ
+        self.is_mmp_conjecture = False 
 
     def mark_as_proven(self, source_description):
         if not self.is_proven:
             self.is_proven = True
+            # 予想が証明された場合はフラグを落とす
+            self.is_mmp_conjecture = False 
             self.proof_source = source_description
             logger.debug(f"  🟢 [証明完了] {self} が証明されました！ (理由: {source_description})")
             for step in self.dependents:
@@ -28,13 +31,18 @@ class Fact:
     def __eq__(self, other):
         if not isinstance(other, Fact) or self.fact_type != other.fact_type:
             return False
-        # 🌟 修正: 順序に依存しないFactタイプの拡張 (Identical, Parallel を追加)
         if self.fact_type in ["Concyclic", "Collinear", "Identical", "Parallel"]:
             return set(self.objects) == set(other.objects)
         return self.objects == other.objects
         
     def __repr__(self):
-        status = "🟢" if self.is_proven else "🟡"
+        # 🌟 修正: 状態に応じてマークを変える
+        if self.is_proven:
+            status = "🟢"
+        elif self.is_mmp_conjecture:
+            status = "🟡 [予想]"
+        else:
+            status = "🔴"
         names = [getattr(o, 'name', str(o)) for o in self.objects]
         return f"{status} [{self.fact_type}] {', '.join(names)}"
 
@@ -60,20 +68,13 @@ class GeometryTheorem:
         self.match_func = match_func
         self.apply_func = apply_func
 
-
-# ==========================================
-# 1. 包含と等価関係のグラフ構造 (E-Graph)
-# ==========================================
 class ProofEnvironment:
-    """現在の幾何学的な「状態」と「重要度」を管理する世界"""
     def __init__(self):
         self.nodes = []           
         self.importance = {}      
         self.affinity = {}        
         
         from mmp_core import GeoEntity, LogicalComponent
-        
-        # 角度の基底エンティティ(e-class)の初期化
         self.zero_angle = GeoEntity("Angle", "Parallel_0")
         self.zero_angle.components.append(LogicalComponent())
         self.zero_angle.importance = 10.0
@@ -114,34 +115,21 @@ class ProofEnvironment:
             self.nodes.append(new_angle)
 
     def merge_entities_logically(self, entity1, entity2):
-        """論理推論によって2つの実体が同一であると証明された場合、完全に融合する"""
-        
-        # 渡されたのがゾンビだった場合、自力で本体(ルート)まで遡る
         while hasattr(entity1, '_merged_into') and entity1._merged_into is not None:
             entity1 = entity1._merged_into
         while hasattr(entity2, '_merged_into') and entity2._merged_into is not None:
             entity2 = entity2._merged_into
 
-        # マージが中断された場合の理由を明確にロギングする
-        if entity1 == entity2:
-            logger.debug(f"    [マージ中断] {entity1.name} と {entity2.name} は既に同じ本体です。")
-            return None
-        if entity1 not in self.nodes:
-            logger.debug(f"    [マージ中断] 統合先 {entity1.name} が環境(nodes)に存在しません。")
-            return None
-        if entity2 not in self.nodes:
-            logger.debug(f"    [マージ中断] 統合元(消去対象) {entity2.name} が環境(nodes)に存在しません。")
-            return None
+        if entity1 == entity2: return None
+        if entity1 not in self.nodes: return None
+        if entity2 not in self.nodes: return None
             
-        # 1. 全てのノードの「定義」と「所属図形」の中にある entity2 を entity1 に置換
         for node in self.nodes:
             for comp in node.components:
-                # 所属図形(subobjects)の更新
                 if entity2 in comp.subobjects:
                     comp.subobjects.remove(entity2)
                     comp.subobjects.add(entity1)
                 
-                # 定義(definitions)の更新
                 new_defs = set()
                 for d in comp.definitions:
                     if entity2 in d.parents:
@@ -152,24 +140,16 @@ class ProofEnvironment:
                         new_defs.add(d)
                 comp.definitions = new_defs
 
-            # ==========================================
-            # 🌟 NEW: Shape(相似クラス) が持つ shape_members の参照更新
-            # もし entity2 が「点」または「Triangle」だった場合、ここで本体に書き換える
-            # ==========================================
             if getattr(node, 'shape_members', None):
                 new_shape_members = {}
                 for tri, pts in node.shape_members.items():
-                    # Triangle自身がマージされた場合はキーを差し替え
                     new_tri = entity1 if tri == entity2 else tri
-                    # Triangleの頂点がマージされた場合はタプル内を差し替え
                     new_pts = tuple(entity1 if p == entity2 else p for p in pts)
                     new_shape_members[new_tri] = new_pts
                 node.shape_members = new_shape_members
 
-        # 2. 既に証明された事実(Fact)リストの中の参照も更新（重複判定を狂わせないため）
         if hasattr(self, 'prover'):
             for fact in self.prover.facts:
-                # is (メモリ一致) だけでなく、id が同じもの、または同じ名前のゾンビも容赦なく置換する
                 new_objects = []
                 for obj in fact.objects:
                     if obj is entity2 or getattr(obj, 'id', None) == getattr(entity2, 'id', None):
@@ -178,14 +158,12 @@ class ProofEnvironment:
                         new_objects.append(obj)
                 fact.objects = new_objects
             
-            # 重複の排除
             unique_facts = []
             for fact in self.prover.facts:
                 if fact not in unique_facts:
                     unique_facts.append(fact)
             self.prover.facts = unique_facts
 
-        # 3. entity2 の知識を entity1 に吸収させて削除
         entity1.merge_numerical(entity2)
         while len(entity1.components) > 1:
             entity1.prove_components_equal(0, 1)
@@ -211,6 +189,12 @@ class LogicProver:
 
     def add_fact(self, fact):
         return self.get_or_add_fact(fact)
+        
+    def add_conjecture(self, conjecture_fact):
+        """🌟 NEW: MMPからの予想(🟡)を受け取る"""
+        conjecture_fact.is_proven = False
+        conjecture_fact.is_mmp_conjecture = True
+        return self.get_or_add_fact(conjecture_fact)
 
     def print_proof_trace(self, target_fact):
         logger.debug("\n【証明のトレース（証明された事実の連鎖）】")

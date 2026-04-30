@@ -8,7 +8,6 @@ from logic_core import Fact
 logger = logging.getLogger("GeometryProver")
 
 def is_zero_mod(v):
-    """ModIntの実装によらず、確実に0を判定する"""
     if hasattr(v, 'value'): return v.value == 0
     if hasattr(v, 'val'): return v.val == 0
     if hasattr(v, 'n'): return v.n == 0
@@ -25,13 +24,48 @@ class MMPTester:
         self.env = env
         self.all_vars = all_vars
         self.prover = prover
-        # SVD計算用のランダムサンプル(キャッシュ)
         self.t_samples = [ModInt(np.random.randint(1, ModInt.MOD - 1)) for _ in range(400)]
 
-    def discover_all_mmp_relations(self, Z, parents):
-        """確定した手(Z)について、ありとあらゆる代数的関係(MMP大発見)を徹底的にテストする"""
+    def _eval_point(self, P, t_dict):
+        cache = {}
+        try:
+            val = P.calculate(t_dict, cache)
+            if is_zero_mod(val[-1]): return None
+            return (val[0]/val[-1], val[1]/val[-1])
+        except:
+            return None
+
+    def _add_and_log_conjecture(self, fact_type, objects, log_message):
+        """🌟 NEW: 既に証明済みの事実や登録済みの予想を重複登録しないためのラッパー"""
+        test_fact = Fact(fact_type, objects)
         
-        # 1. 基本的な Incidence (点と曲線)
+        # 既存のFactを検索
+        existing = next((f for f in self.prover.facts if f == test_fact), None)
+        
+        if existing:
+            # すでに証明済み（または問題の仮定）ならスキップ
+            if existing.is_proven:
+                return False 
+            # すでに予想として登録済みならログをスパムしない
+            if existing.is_mmp_conjecture:
+                return False 
+
+            # 既存だが未証明で予想フラグも立っていない場合
+            existing.is_mmp_conjecture = True
+            existing.proof_source = f"MMP予想({fact_type})"
+            logger.debug(log_message)
+            return True
+            
+        # 完全な新規Factの場合
+        test_fact.is_proven = False
+        test_fact.is_mmp_conjecture = True
+        test_fact.proof_source = f"MMP予想({fact_type})"
+        self.prover.facts.append(test_fact)
+        logger.debug(log_message)
+        return True
+
+
+    def discover_all_mmp_relations(self, Z, parents):
         if is_point(Z):
             for c in [n for n in self.env.nodes if (is_line(n) or is_circle(n)) and n not in parents]: 
                 self.check_and_add_incidence(Z, c)
@@ -39,63 +73,74 @@ class MMPTester:
             for p in [n for n in self.env.nodes if is_point(n) and n not in parents]: 
                 self.check_and_add_incidence(p, Z)
                 
-        # =========================================================
-        # 追加大発見A: 直線の「平行」と「垂直」を徹底テスト
-        # =========================================================
         if is_line(Z):
             hot_lines = [n for n in self.env.nodes if is_line(n) and n not in parents and n.importance >= 3.0]
-            
             for ln in hot_lines:
                 if Z == ln: continue
-                
                 valid_para, valid_perp = 0, 0
                 for _ in range(5):
                     cache = {}
-                    random_t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD - 1)) for v in self.all_vars}
+                    random_t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
                     try:
                         cZ = Z.calculate(random_t_dict, cache)
                         cln = ln.calculate(random_t_dict, cache)
-                        # 方向ベクトルの外積成分が0なら平行
                         if is_zero_mod(cZ[0]*cln[1] - cZ[1]*cln[0]): valid_para += 1
-                        # 方向ベクトルの内積成分が0なら垂直
                         if is_zero_mod(cZ[0]*cln[0] + cZ[1]*cln[1]): valid_perp += 1
                     except: pass
                     
                 if valid_para == 5:
-                    fact = Fact("Parallel", [Z, ln], is_proven=False, proof_source="MMP大発見(平行)")
-                    if not any(f == fact for f in self.prover.facts):
-                        self.prover.add_fact(fact)
-                        logger.debug(f"    🌟 MMP大発見(平行): {Z.name} // {ln.name}")
-                        Z.importance += 5.0
-                        ln.importance += 5.0
+                    self._add_and_log_conjecture("Parallel", [Z, ln], f"    🟡 MMP予想(平行): {Z.name} // {ln.name}")
                     
                 if valid_perp == 5:
                     if hasattr(self.env, 'add_right_angle'):
                         self.env.add_right_angle(Z, ln)
-                        logger.debug(f"    🌟 MMP大発見(垂直): {Z.name} ⊥ {ln.name}")
-                        Z.importance += 5.0
-                        ln.importance += 5.0
+                        logger.debug(f"    🌟 MMP発見(垂直): {Z.name} ⊥ {ln.name}")
 
-        # =========================================================
-        # 追加大発見B: 離れた4点の「非自明な共円」を徹底テスト
-        # =========================================================
         if is_point(Z):
-            hot_pts = [n for n in self.env.nodes if is_point(n) and n != Z and n not in parents and n.importance >= 8.0]
+            hot_pts = [n for n in self.env.nodes if is_point(n) and n != Z and n not in parents and getattr(n, 'importance', 1.0) >= 3.0]
+            if len(hot_pts) < 3: return
             
-            for p1, p2, p3 in itertools.combinations(hot_pts, 3):
-                temp_circle = create_geo_entity("Circumcircle", [p1, p2, p3], name="temp", env=None)
+            collinear_groups = []
+
+            for p1, p2 in itertools.combinations(hot_pts, 2):
+                if self.check_identical_mmp(p1, p2) or self.check_identical_mmp(Z, p1): continue
                 
+                valid_collinear = 0
+                for _ in range(5):
+                    t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
+                    v_Z = self._eval_point(Z, t_dict)
+                    v_p1 = self._eval_point(p1, t_dict)
+                    v_p2 = self._eval_point(p2, t_dict)
+                    if not (v_Z and v_p1 and v_p2): continue
+                    
+                    area = v_Z[0]*(v_p1[1]-v_p2[1]) + v_p1[0]*(v_p2[1]-v_Z[1]) + v_p2[0]*(v_Z[1]-v_p1[1])
+                    if is_zero_mod(area): valid_collinear += 1
+                        
+                if valid_collinear == 5:
+                    self._add_and_log_conjecture("Collinear", [Z, p1, p2], f"    🟡 MMP予想(共線): {Z.name}, {p1.name}, {p2.name}")
+                    collinear_groups.append({Z, p1, p2})
+
+            for p1, p2, p3 in itertools.combinations(hot_pts, 3):
+                pts_set = {Z, p1, p2, p3}
+                is_sub_collinear = False
+                for group in collinear_groups:
+                    if len(group & pts_set) >= 3:
+                        is_sub_collinear = True
+                        break
+                if is_sub_collinear:
+                    continue 
+                
+                temp_circle = create_geo_entity("Circumcircle", [p1, p2, p3], name="temp", env=None)
                 valid_count = 0
                 for _ in range(5):
                     cache = {}
-                    random_t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD - 1)) for v in self.all_vars}
+                    t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
                     try:
-                        c_val = temp_circle.calculate(random_t_dict, cache)
-                        Z_val = Z.calculate(random_t_dict, cache)
+                        c_val = temp_circle.calculate(t_dict, cache)
+                        Z_val = Z.calculate(t_dict, cache)
                         if all(is_zero_mod(v) for v in c_val) or all(is_zero_mod(v) for v in Z_val): continue
-                        if is_zero_mod(Z_val[-1]): continue # 無限遠点は除外
+                        if is_zero_mod(Z_val[-1]): continue
                         
-                        # 円の方程式への代入チェック
                         u, v, w, s = c_val
                         x, y, z = Z_val
                         val = u*(x**2 + y**2) + v*x*z + w*y*z + s*z**2
@@ -104,18 +149,10 @@ class MMPTester:
                     except: pass
 
                 if valid_count == 5:
-                    fact = Fact("Concyclic", [Z, p1, p2, p3], is_proven=False, proof_source="MMP大発見(共円)")
-                    if not any(f == fact for f in self.prover.facts):
-                        self.prover.add_fact(fact)
-                        logger.debug(f"    🌟 MMP大発見(共円): {Z.name}, {p1.name}, {p2.name}, {p3.name}")
-                        Z.importance += 5.0
-                        p1.importance += 2.0
-                        p2.importance += 2.0
-                        p3.importance += 2.0
+                    self._add_and_log_conjecture("Concyclic", [Z, p1, p2, p3], f"    🟡 MMP予想(共円): {Z.name}, {p1.name}, {p2.name}, {p3.name}")
 
 
     def check_and_add_incidence(self, pt, curve):
-        """点 pt が曲線 curve の上にあるかを代数的にテストし、真実なら Fact を発行する"""
         c_pt = pt.get_best_component()
         if c_pt and curve in c_pt.subobjects: return False
         if curve in pt.mmp_subobjects: return False
@@ -123,10 +160,10 @@ class MMPTester:
         valid_count = 0
         for _ in range(5): 
             cache = {}
-            random_t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD - 1)) for v in self.all_vars}
+            t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
             try:
-                pt_val = pt.calculate(random_t_dict, cache)
-                c_val = curve.calculate(random_t_dict, cache)
+                pt_val = pt.calculate(t_dict, cache)
+                c_val = curve.calculate(t_dict, cache)
                 
                 if all(is_zero_mod(v) for v in pt_val) or all(is_zero_mod(v) for v in c_val): continue
                 if is_zero_mod(pt_val[-1]): continue 
@@ -155,36 +192,27 @@ class MMPTester:
             curve_pts = [p for p in next(iter(c_curve.definitions)).parents if getattr(p, 'entity_type', '') == "Point"] if c_curve and c_curve.definitions else []
             
             objs = [pt] + curve_pts
-            # MMPによる発見を即座に証明済みとして扱う
-            fact = Fact(fact_type, objs, is_proven=True, proof_source="MMP大発見 (代数計算による恒等式の成立)")
-            
-            if not any(f == fact for f in self.prover.facts):
-                self.prover.add_fact(fact)
-                logger.debug(f"    🌟 MMP大発見: {pt.name} が {curve.name} 上にある！")
-                pt.importance += 10.0
+            self._add_and_log_conjecture(fact_type, objs, f"    🟡 MMP予想(Incidence): {pt.name} ∈ {curve.name}")
             return True
         return False
 
-
     def check_identical_mmp(self, entity1, entity2) -> bool:
-        """2つのGeoEntityが代数的に全く同じ座標(式)を持っているか、厳密に5回テストする"""
         if entity1.entity_type != entity2.entity_type: return False
         
         valid_count = 0
         for _ in range(5):
             cache = {}
-            random_t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD - 1)) for v in self.all_vars}
+            random_t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
             try:
                 val1 = entity1.calculate(random_t_dict, cache)
                 val2 = entity2.calculate(random_t_dict, cache)
                 
-                # 3次元(点・線)と4次元(円)の両方に完全対応する「比例判定」
                 idx1 = next((i for i, x in enumerate(val1) if not is_zero_mod(x)), -1)
                 idx2 = next((i for i, x in enumerate(val2) if not is_zero_mod(x)), -1)
                 
                 if idx1 == idx2:
                     if idx1 == -1: 
-                        valid_count += 1 # 両方ゼロベクトルの異常系
+                        valid_count += 1 
                     else:
                         ratio = val2[idx1] / val1[idx1]
                         if all(is_zero_mod(val1[i] * ratio - val2[i]) for i in range(len(val1))):
@@ -193,9 +221,7 @@ class MMPTester:
             
         return valid_count == 5
 
-
     def evaluate_numerical_degree(self, Z, naive_d, target_var, max_samples=None):
-        """1変数SVDによる真の次数計算 (軽量化・フリーズ対策版)"""
         t_values, x_values, y_values = [], [], []
         fixed_vars = {v: ModInt(np.random.randint(1, ModInt.MOD - 1)) for v in self.all_vars if v != target_var}
         
@@ -219,10 +245,7 @@ class MMPTester:
         return max(get_numerical_degree(t_values, x_values, naive_d, mode='mod'),
                    get_numerical_degree(t_values, y_values, naive_d, mode='mod'))
 
-
     def evaluate_triangle_numerical_degree(self, p1, p2, p3):
-        """3点の結合座標の真の代数次数(退化を考慮)を1次元SVDで評価する"""
-        # 🌟 修正: 属性が None の場合に備えて `or 1` で安全にフォールバックする
         d1 = getattr(p1, 'numerical_degree', 1) or 1
         d2 = getattr(p2, 'numerical_degree', 1) or 1
         d3 = getattr(p3, 'numerical_degree', 1) or 1
@@ -249,7 +272,6 @@ class MMPTester:
                     x2, y2 = v2[0]/v2[-1], v2[1]/v2[-1]
                     x3, y3 = v3[0]/v3[-1], v3[1]/v3[-1]
                     
-                    # ランダム係数で1次元に射影
                     val = coeffs[0]*x1 + coeffs[1]*y1 + coeffs[2]*x2 + coeffs[3]*y2 + coeffs[4]*x3 + coeffs[5]*y3
                     t_values.append(t)
                     val_values.append(val)

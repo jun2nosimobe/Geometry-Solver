@@ -7,14 +7,15 @@ import itertools
 # 1. 作図定義 (Definition)
 # ==========================================
 class Definition:
-    def __init__(self, def_type: str, parents: List['GeoEntity'] = None, naive_degree: int = 1, depth: int = 1):
+    def __init__(self, def_type: str, parents: List[Any] = None, naive_degree: int = 1, depth: int = 1):
         self.def_type = def_type
         self.parents = parents or []
         self.naive_degree = naive_degree
         self.depth = depth
 
     def __hash__(self):
-        return hash((self.def_type, tuple(p.id for p in self.parents)))
+        # 🌟 修正: 定数(Constant)としてModInt等のリテラルが渡された場合も安全にハッシュ化する
+        return hash((self.def_type, tuple(p.id if hasattr(p, 'id') else (p.value if hasattr(p, 'value') else p) for p in self.parents)))
 
     def __eq__(self, other):
         if not isinstance(other, Definition): return False
@@ -53,17 +54,34 @@ class GeoEntity:
         self.id = uuid.uuid4()
         self.name = name                 
         self.entity_type = entity_type   
-        self.importance = 1.0            
+        
+        # ==========================================
+        # 🌟 NEW: 重要度の分離
+        # ==========================================
+        self.base_importance = 1.0       # 基礎重要度 (作図時に固定、絶対に下がらない)
+        self.heat_bonus = 0.0            # 一時的な熱 (発見で上がり、毎ターン減衰する)
+        
         self.numerical_degree = None     
         self.components: List[LogicalComponent] = []
         self.mmp_subobjects: Set['GeoEntity'] = set() 
         self.associated_facts = []
         
-        # 🌟 NEW: E-Graphマージ時のゾンビポインタ対策用
         self._merged_into = None
-        
-        # 🌟 NEW: Shape(相似クラス) エンティティ専用の辞書 {Triangle: (p1, p2, p3)}
         self.shape_members: Dict['GeoEntity', tuple] = {} 
+
+    @property
+    def importance(self):
+        """実効重要度 = 基礎重要度 + 熱ボーナス"""
+        return self.base_importance + self.heat_bonus
+
+    @importance.setter
+    def importance(self, value):
+        """【後方互換性用】古いコードから代入された場合、熱ボーナスとして差分を吸収する"""
+        self.heat_bonus = max(0.0, value - self.base_importance)
+
+    def add_heat(self, bonus: float):
+        """🌟 NEW: 熱(ボーナス)を追加するための専用メソッド"""
+        self.heat_bonus += bonus
 
     def get_best_component(self) -> LogicalComponent:
         if not self.components: return None
@@ -74,6 +92,10 @@ class GeoEntity:
         self.components.extend(other.components)
         self.mmp_subobjects.update(other.mmp_subobjects)
         
+        # 🌟 NEW: 重要度のマージ (基礎、熱ともに高い方を引き継ぐ)
+        self.base_importance = max(self.base_importance, other.base_importance)
+        self.heat_bonus = max(self.heat_bonus, other.heat_bonus)
+        
         if self.numerical_degree is None:
             self.numerical_degree = other.numerical_degree
         elif other.numerical_degree is not None:
@@ -81,6 +103,7 @@ class GeoEntity:
 
         if other.name not in self.name:
             self.name = f"{self.name} = {other.name}"
+
 
     def prove_components_equal(self, comp_idx_1: int, comp_idx_2: int):
         if comp_idx_1 == comp_idx_2: return
@@ -112,7 +135,6 @@ class GeoEntity:
     def _evaluate_given(self, t_dict):
         return tuple(v.evaluate(t_dict) if hasattr(v, 'evaluate') else v for v in self._given_coords)
 
-
 def normalize(v):
     if not v or isinstance(v[0], ModInt): return v
     max_val = max(abs(x) for x in v)
@@ -126,8 +148,12 @@ def cross_product(v1, v2):
 
 # ==========================================
 # 作図ロジック (Calculation Registry)
-# (既存のまま)
 # ==========================================
+def get_cartesian(P):
+    """同次座標からデカルト座標 (x/z, y/z) を取得する"""
+    inv_z = ModInt(1) / P[-1]
+    return P[0] * inv_z, P[1] * inv_z
+
 def calc_intersection(parents, t_dict, cache):
     L1 = parents[0].calculate(t_dict, cache)
     L2 = parents[1].calculate(t_dict, cache)
@@ -203,6 +229,45 @@ def calc_circumcircle(parents, t_dict, cache):
     s = -(sq1*(x2*z2*y3*z3 - x3*z3*y2*z2) - x1*z1*(sq2*y3*z3 - sq3*y2*z2) + y1*z1*(sq2*x3*z3 - sq3*x2*z2))
     return normalize((u, v, w, s))
 
+# ==========================================
+# 🌟 スカラー計算ロジック
+# ==========================================
+def calc_length_sq(parents, t_dict, cache):
+    """距離の2乗 (P1P2^2)"""
+    P1 = parents[0].calculate(t_dict, cache)
+    P2 = parents[1].calculate(t_dict, cache)
+    x1, y1 = get_cartesian(P1)
+    x2, y2 = get_cartesian(P2)
+    val = (x1 - x2)**2 + (y1 - y2)**2
+    return (val, ModInt(1))
+
+def calc_affine_ratio(parents, t_dict, cache):
+    """有向線分比 AB / BC (共線前提)"""
+    A = parents[0].calculate(t_dict, cache)
+    B = parents[1].calculate(t_dict, cache)
+    C = parents[2].calculate(t_dict, cache)
+    
+    xa, ya = get_cartesian(A)
+    xb, yb = get_cartesian(B)
+    xc, yc = get_cartesian(C)
+    
+    dx1, dy1 = xb - xa, yb - ya
+    dx2, dy2 = xc - xb, yc - yb
+    
+    # ゼロ割りを防ぎつつ比を計算
+    if dx2 != 0:
+        val = dx1 / dx2
+    elif dy2 != 0:
+        val = dy1 / dy2
+    else:
+        val = ModInt(0) # 退化ケース
+        
+    return (val, ModInt(1))
+
+def calc_constant(parents, t_dict, cache):
+    """定数値（ModInt）をそのまま返す"""
+    return (parents[0], ModInt(1))
+
 CALCULATION_REGISTRY = {
     "Intersection": calc_intersection,
     "LineThroughPoints": calc_line_through_points,
@@ -211,13 +276,15 @@ CALCULATION_REGISTRY = {
     "ParallelLine": calc_parallel,
     "Circumcircle": calc_circumcircle,
     "CirclesIntersection": calc_other_circle_circle_intersection,
+    "LengthSq": calc_length_sq,
+    "AffineRatio": calc_affine_ratio,
+    "Constant": calc_constant,
 }
 
 # ==========================================
-# 🌟 ヘルパー関数群 (代表元取得など)
+# ヘルパー関数群
 # ==========================================
 def get_representative(obj: GeoEntity) -> GeoEntity:
-    """E-Graph上でマージされた古い図形から、最新の真の本体を遡る"""
     while getattr(obj, '_merged_into', None) is not None:
         obj = obj._merged_into
     return obj
@@ -268,11 +335,73 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
         c1, c2, pt_exclude = parents[0], parents[1], parents[2]
         link_logical_incidence(new_entity, c1)
         link_logical_incidence(new_entity, c2)
+    # ==========================================
+    # 🌟 修正: 中点の自明な性質 (共線と辺比)
+    # ==========================================
+    elif def_type == "Midpoint":
+        A, B = parents[0], parents[1]
+        M = new_entity
+        c1, c2 = A.get_best_component(), B.get_best_component()
+        
+        # 1. A, B を通る直線を取得 (なければ裏で作図する)
+        common_lines = []
+        if c1 and c2:
+            common_lines = [obj for obj in (c1.subobjects & c2.subobjects) if getattr(obj, 'entity_type', '') == "Line"]
+            
+        if not common_lines and env is not None:
+            line_name = f"Line_{A.name}_{B.name}_(Auto)"
+            # 直線を作図 (この時点でAとBは直線に自動リンクされる)
+            line_AB = create_geo_entity("LineThroughPoints", [A, B], name=line_name, env=env)
+            line_AB.importance = 0.5
+            env.nodes.append(line_AB)
+            A.mmp_subobjects.add(line_AB)
+            B.mmp_subobjects.add(line_AB)
+            common_lines = [line_AB]
+
+        # 2. 中点 M をその直線にリンク (これで A, M, B が同一直線に所属する)
+        for ln in common_lines:
+            link_logical_incidence(M, ln)
+            
+        # 👉 この結果、次の _run_logic_step() で `match_collinear_from_line_identity` が発火し、
+        # 自動的に Fact("Collinear", [A, M, B]) が発行されます！
+
+        # 3. 作図と同時に「AM/MB = 1」をE-Graphに直結する
+        if hasattr(env, 'merge_entities_logically'):
+            val_1 = ModInt(1)
+            const_1 = None
+            for n in env.nodes:
+                if getattr(n, 'entity_type', '') == "Scalar":
+                    nc = n.get_best_component()
+                    if nc and any(d.def_type == "Constant" and d.parents and d.parents[0] == val_1 for d in nc.definitions):
+                        const_1 = n
+                        break
+            if not const_1:
+                const_1 = GeoEntity("Scalar", "Const_1")
+                const_1.components.append(LogicalComponent(initial_def=Definition("Constant", [val_1], 0, 1)))
+                env.nodes.append(const_1)
+
+            ratio_name = f"Ratio_{A.name}{M.name}_{M.name}{B.name}_(Auto)"
+            ratio_ent = None
+            for n in env.nodes:
+                if getattr(n, 'entity_type', '') == "Scalar":
+                    nc = n.get_best_component()
+                    if nc and any(d.def_type == "AffineRatio" and d.parents == [A, M, B] for d in nc.definitions):
+                        ratio_ent = n
+                        break
+            if not ratio_ent:
+                ratio_ent = GeoEntity("Scalar", ratio_name)
+                ratio_ent.components.append(LogicalComponent(initial_def=Definition("AffineRatio", [A, M, B], 1, 1)))
+                env.nodes.append(ratio_ent)
+
+            c_rep = get_representative(const_1)
+            r_rep = get_representative(ratio_ent)
+            if c_rep != r_rep:
+                env.merge_entities_logically(c_rep, r_rep)
 
 # ==========================================
 # 🌟 作図ビルダー (Construction Builder)
 # ==========================================
-def create_geo_entity(def_type: str, parents: List['GeoEntity'], name: str = "", env=None) -> 'GeoEntity':
+def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None) -> 'GeoEntity':
     if env:
         for node in env.nodes:
             comp = node.get_best_component()
@@ -289,9 +418,8 @@ def create_geo_entity(def_type: str, parents: List['GeoEntity'], name: str = "",
         entity_type = "Circle"
     elif def_type == "DirectionOf":
         entity_type = "Direction"
-    elif def_type == "LengthOf":
-        entity_type = "LengthSq"
-    # 🌟 NEW: Triangle と ShapeOf 型を追加
+    elif def_type in ["LengthSq", "AffineRatio", "Constant"]: # 🌟 スカラー型を登録
+        entity_type = "Scalar"
     elif def_type == "Triangle":
         entity_type = "Triangle"
     elif def_type == "ShapeOf":
@@ -299,8 +427,13 @@ def create_geo_entity(def_type: str, parents: List['GeoEntity'], name: str = "",
     else:
         entity_type = "Unknown"
 
-    depth = max((p.get_best_component().depth for p in parents if p.get_best_component()), default=0) + 1
-    naive_degree = sum((p.get_best_component().naive_degree for p in parents if p.get_best_component())) 
+    # 定数(Constant)は親がGeoEntityではないため特殊処理
+    if def_type == "Constant":
+        depth = 1
+        naive_degree = 0
+    else:
+        depth = max((p.get_best_component().depth for p in parents if hasattr(p, 'get_best_component') and p.get_best_component()), default=0) + 1
+        naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
 
     new_entity = GeoEntity(entity_type, name)
     new_def = Definition(def_type, parents, naive_degree, depth)
@@ -316,12 +449,10 @@ def create_geo_entity(def_type: str, parents: List['GeoEntity'], name: str = "",
 # 🌟 枝刈り付き 三角形＆相似クラス 作成・マージ群
 # ==========================================
 def get_or_create_triangle(p1: GeoEntity, p2: GeoEntity, p3: GeoEntity, env) -> GeoEntity:
-    """有望な三角形のみを辞書順で1つだけ登録し、同時にShape(相似クラス)を初期化する"""
     p1, p2, p3 = get_representative(p1), get_representative(p2), get_representative(p3)
     pts = {p1, p2, p3}
     if len(pts) < 3: return None
     
-    # すでにこの3点のTriangleが存在するか検索
     for node in env.nodes:
         if getattr(node, 'entity_type', '') == "Triangle":
             comp = node.get_best_component()
@@ -330,50 +461,40 @@ def get_or_create_triangle(p1: GeoEntity, p2: GeoEntity, p3: GeoEntity, env) -> 
                     if d.def_type == "Triangle" and set(d.parents) == pts:
                         return node
                         
-    # 次数(Degree)による枝刈り
     deg1 = getattr(p1, 'numerical_degree', 1) or 1
     deg2 = getattr(p2, 'numerical_degree', 1) or 1
     deg3 = getattr(p3, 'numerical_degree', 1) or 1
     if deg1 + deg2 + deg3 > 30:
         return None
         
-    # 物理コンテナは必ず辞書順で作成
     sorted_pts = sorted(list(pts), key=lambda x: x.name)
     name = f"Tri_{sorted_pts[0].name}{sorted_pts[1].name}{sorted_pts[2].name}"
     
     new_tri = create_geo_entity("Triangle", sorted_pts, name=name, env=env)
     new_tri.importance = 2.0
     
-    # 🌟 Triangle作成と同時に、それを1つだけ含むShape(相似クラス)を初期化
     shape_name = f"Shape_{name}"
     new_shape = create_geo_entity("ShapeOf", [new_tri], name=shape_name, env=env)
-    
-    # そのShapeの中で、各スロット(0, 1, 2)にどの頂点が入っているかを記録
     new_shape.shape_members[new_tri] = tuple(sorted_pts)
     
-    # 環境に追加
     env.nodes.extend([new_tri, new_shape])
     return new_tri
 
 def merge_shapes(shape1: GeoEntity, shape2: GeoEntity) -> GeoEntity:
-    """2つの相似クラス(Shape)を、対応順序(S3群の演算)を壊さずにマージする"""
     shape1 = get_representative(shape1)
     shape2 = get_representative(shape2)
     if shape1 == shape2: return shape1
     
-    # 両方に属している「橋渡し」の三角形を探す
     common_tri = next((t for t in shape1.shape_members if t in shape2.shape_members), None)
     if not common_tri: return None
     
     tuple1 = shape1.shape_members[common_tri]
     tuple2 = shape2.shape_members[common_tri]
     
-    # 順列のマッピングを計算 (tuple2の i 番目が tuple1の 何番目に入るか)
     mapping = {}
     for i, pt in enumerate(tuple2):
         mapping[i] = tuple1.index(pt)
         
-    # shape2のメンバーを、順序を補正しながらshape1にお引っ越し
     for tri, pts in shape2.shape_members.items():
         if tri == common_tri: continue
         new_pts = [None, None, None]
@@ -381,13 +502,11 @@ def merge_shapes(shape1: GeoEntity, shape2: GeoEntity) -> GeoEntity:
             new_pts[mapping[i]] = pt
         shape1.shape_members[tri] = tuple(new_pts)
         
-    # 統合された側をマーク (E-Graphのゾンビ化)
     shape2._merged_into = shape1
     return shape1
 
 # ==========================================
 # 1. 有限体 (ModInt) クラスと数学エンジン
-# (既存のまま)
 # ==========================================
 class ModInt:
     MOD = 998244353 
