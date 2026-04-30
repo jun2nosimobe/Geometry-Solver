@@ -431,11 +431,29 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
     if def_type == "Constant":
         depth = 1
         naive_degree = 0
+        base_imp = 8.0 # 定数はシステム基盤なので高め
     else:
         depth = max((p.get_best_component().depth for p in parents if hasattr(p, 'get_best_component') and p.get_best_component()), default=0) + 1
         naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
 
+        # 親の基礎重要度の平均を計算
+        if parents:
+            avg_parent_imp = sum(getattr(p, 'base_importance', 1.0) for p in parents) / len(parents)
+        else:
+            avg_parent_imp = 1.0
+
+        # 減衰係数 (Decay Factor) の適用
+        if entity_type in ["Scalar", "Direction", "Shape", "Triangle"]:
+            decay_factor = 1.0  # スカラーや概念は減衰させない
+        else:
+            decay_factor = 0.5  # 点・線・円は深く掘るほど価値が半減する
+
+        # 基礎重要度は最低 1.0 を担保
+        base_imp = max(0.01, avg_parent_imp * decay_factor)
+
     new_entity = GeoEntity(entity_type, name)
+    new_entity.base_importance = base_imp # 🌟 計算した基礎重要度をセット
+    
     new_def = Definition(def_type, parents, naive_degree, depth)
     new_comp = LogicalComponent(initial_def=new_def)
     new_entity.components.append(new_comp)

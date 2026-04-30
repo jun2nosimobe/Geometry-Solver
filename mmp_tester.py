@@ -35,37 +35,66 @@ class MMPTester:
         except:
             return None
 
-    def _add_and_log_conjecture(self, fact_type, objects, log_message):
-        """🌟 NEW: 既に証明済みの事実や登録済みの予想を重複登録しないためのラッパー"""
-        test_fact = Fact(fact_type, objects)
+    # ==========================================
+    # 🌟 NEW: 関連度に基づく熱(Heat)の計算と付与
+    # ==========================================
+    def _apply_conjecture_heat(self, objects, base_bonus):
+        """予想に関わった図形の基礎重要度に応じてボーナスを減衰させ、付与する"""
+        valid_objs = [o for o in objects if hasattr(o, 'base_importance')]
+        if not valid_objs: return 0.0
         
-        # 既存のFactを検索
+        # 関わった図形の基礎重要度(Base Importance)の平均をとる
+        avg_base = sum(o.base_importance for o in valid_objs) / len(valid_objs)
+        
+        # 初期のGiven点が 10.0 程度であることを基準にスケール
+        # 基礎重要度が低い(深い作図の)図形同士の発見ほど、得られるボーナスは小さくなる
+        scaled_bonus = base_bonus * (avg_base / 10.0)
+        
+        for obj in valid_objs:
+            if hasattr(obj, 'add_heat'):
+                obj.add_heat(scaled_bonus)
+                
+        return scaled_bonus
+
+    def _add_and_log_conjecture(self, fact_type, objects, log_message, base_bonus=10.0):
+        test_fact = Fact(fact_type, objects)
         existing = next((f for f in self.prover.facts if f == test_fact), None)
         
         if existing:
-            # すでに証明済み（または問題の仮定）ならスキップ
-            if existing.is_proven:
-                return False 
-            # すでに予想として登録済みならログをスパムしない
-            if existing.is_mmp_conjecture:
-                return False 
+            if existing.is_proven: return False 
+            if existing.is_mmp_conjecture: return False 
 
-            # 既存だが未証明で予想フラグも立っていない場合
             existing.is_mmp_conjecture = True
             existing.proof_source = f"MMP予想({fact_type})"
-            logger.debug(log_message)
+            
+            # 🌟 NEW: スコアを計算して記録、図形を加熱する
+            score = self._apply_conjecture_heat(objects, base_bonus)
+            existing.conjecture_score = score
+            logger.debug(f"{log_message} (熱ボーナス: +{score:.2f})")
             return True
             
-        # 完全な新規Factの場合
         test_fact.is_proven = False
         test_fact.is_mmp_conjecture = True
         test_fact.proof_source = f"MMP予想({fact_type})"
+        
+        # 🌟 NEW: スコアを計算して記録、図形を加熱する
+        score = self._apply_conjecture_heat(objects, base_bonus)
+        test_fact.conjecture_score = score
         self.prover.facts.append(test_fact)
-        logger.debug(log_message)
+        logger.debug(f"{log_message} (熱ボーナス: +{score:.2f})")
         return True
 
 
     def discover_all_mmp_relations(self, Z, parents):
+        # ==========================================
+        # 🌟 NEW: 次数(Degree)によるハードリミット
+        # ==========================================
+        deg = getattr(Z, 'numerical_degree', 1) or 1
+        if Z.entity_type in ["Point", "Line", "Direction"]:
+            if deg > 15: return  # 複雑すぎる点や線はテストしない
+        elif Z.entity_type in ["Circle", "Scalar", "LengthSq", "AffineRatio"]:
+            if deg > 25: return  # 複雑すぎる円やスカラーはテストしない
+
         if is_point(Z):
             for c in [n for n in self.env.nodes if (is_line(n) or is_circle(n)) and n not in parents]: 
                 self.check_and_add_incidence(Z, c)
@@ -74,7 +103,7 @@ class MMPTester:
                 self.check_and_add_incidence(p, Z)
                 
         if is_line(Z):
-            hot_lines = [n for n in self.env.nodes if is_line(n) and n not in parents and n.importance >= 3.0]
+            hot_lines = [n for n in self.env.nodes if is_line(n) and n not in parents and getattr(n, 'importance', 1.0) >= 3.0]
             for ln in hot_lines:
                 if Z == ln: continue
                 valid_para, valid_perp = 0, 0
@@ -89,12 +118,13 @@ class MMPTester:
                     except: pass
                     
                 if valid_para == 5:
-                    self._add_and_log_conjecture("Parallel", [Z, ln], f"    🟡 MMP予想(平行): {Z.name} // {ln.name}")
+                    self._add_and_log_conjecture("Parallel", [Z, ln], f"    🟡 MMP予想(平行): {Z.name} // {ln.name}", base_bonus=10.0)
                     
                 if valid_perp == 5:
                     if hasattr(self.env, 'add_right_angle'):
                         self.env.add_right_angle(Z, ln)
-                        logger.debug(f"    🌟 MMP発見(垂直): {Z.name} ⊥ {ln.name}")
+                        score = self._apply_conjecture_heat([Z, ln], 10.0)
+                        logger.debug(f"    🌟 MMP発見(垂直): {Z.name} ⊥ {ln.name} (熱ボーナス: +{score:.2f})")
 
         if is_point(Z):
             hot_pts = [n for n in self.env.nodes if is_point(n) and n != Z and n not in parents and getattr(n, 'importance', 1.0) >= 3.0]
@@ -117,7 +147,8 @@ class MMPTester:
                     if is_zero_mod(area): valid_collinear += 1
                         
                 if valid_collinear == 5:
-                    self._add_and_log_conjecture("Collinear", [Z, p1, p2], f"    🟡 MMP予想(共線): {Z.name}, {p1.name}, {p2.name}")
+                    # 共線は幾何的に強力なサブゴールなので base_bonus=15.0
+                    self._add_and_log_conjecture("Collinear", [Z, p1, p2], f"    🟡 MMP予想(共線): {Z.name}, {p1.name}, {p2.name}", base_bonus=15.0)
                     collinear_groups.append({Z, p1, p2})
 
             for p1, p2, p3 in itertools.combinations(hot_pts, 3):
@@ -149,7 +180,8 @@ class MMPTester:
                     except: pass
 
                 if valid_count == 5:
-                    self._add_and_log_conjecture("Concyclic", [Z, p1, p2, p3], f"    🟡 MMP予想(共円): {Z.name}, {p1.name}, {p2.name}, {p3.name}")
+                    # 共円は非常に強力なサブゴールなので base_bonus=20.0
+                    self._add_and_log_conjecture("Concyclic", [Z, p1, p2, p3], f"    🟡 MMP予想(共円): {Z.name}, {p1.name}, {p2.name}, {p3.name}", base_bonus=20.0)
 
 
     def check_and_add_incidence(self, pt, curve):
@@ -192,7 +224,7 @@ class MMPTester:
             curve_pts = [p for p in next(iter(c_curve.definitions)).parents if getattr(p, 'entity_type', '') == "Point"] if c_curve and c_curve.definitions else []
             
             objs = [pt] + curve_pts
-            self._add_and_log_conjecture(fact_type, objs, f"    🟡 MMP予想(Incidence): {pt.name} ∈ {curve.name}")
+            self._add_and_log_conjecture(fact_type, objs, f"    🟡 MMP予想(Incidence): {pt.name} ∈ {curve.name}", base_bonus=10.0)
             return True
         return False
 

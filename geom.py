@@ -5,16 +5,12 @@ import logging
 import importlib
 import sys
 
-# コアモジュールのインポート
 from mmp_core import create_geo_entity, link_logical_incidence
 from logic_core import ProofEnvironment, LogicProver, ProofStep
 from theorems import THEOREMS
-
-# リファクタリングで分離したモジュールのインポート
 from mmp_tester import MMPTester
 from action_space import ActionGenerator
 
-# ログの設定
 logger = logging.getLogger("GeometryProver")
 logger.setLevel(logging.DEBUG)
 if not logger.handlers:
@@ -23,7 +19,6 @@ if not logger.handlers:
     logger.addHandler(file_handler)
 
 def get_representative(obj):
-    """マージされて消えた古い図形から、現在の真の本体を遡る"""
     while hasattr(obj, '_merged_into') and obj._merged_into is not None:
         obj = obj._merged_into
     return obj
@@ -35,10 +30,6 @@ def is_zero_mod(v):
     try: return int(v) == 0
     except: return v == 0
 
-
-# ==========================================
-# 1. モンテカルロ木探索 (MCTS) エンジン
-# ==========================================
 class MCTSNode:
     def __init__(self, action=None, parent=None):
         self.action = action  
@@ -58,7 +49,6 @@ class MCTSSearchEngine:
         self.env = env
         self.all_vars = all_vars
         self.prover = prover
-        
         self.tester = MMPTester(self.env, self.all_vars, self.prover)
         self.action_gen = ActionGenerator(set(), self.tester)
 
@@ -70,8 +60,10 @@ class MCTSSearchEngine:
             actions = self.action_gen.get_possible_actions(sim_nodes, is_simulation=True)
             if not actions: break
             
-            action_weights = [sum(getattr(p, 'importance', 1.0) for p in a[0]) for a in actions]
+            # 実効重要度 (base + heat) でルーレット
+            action_weights = [sum(getattr(p, 'importance', 0.01) for p in a[0]) for a in actions]
             total_w = sum(action_weights)
+            if total_w == 0: break
             probs = [w / total_w for w in action_weights]
             action = actions[np.random.choice(len(actions), p=probs)]
             
@@ -83,7 +75,9 @@ class MCTSSearchEngine:
                 score -= 1.0
                 continue 
             
-            score += (sum(getattr(p, 'importance', 1.0) for p in parents) / len(parents)) * (0.5 ** step_idx)
+            # 🌟 修正: 親の平均実効重要度に基づくスコア加算 (深いゴミ点はスコアが伸びない)
+            avg_parent_imp = sum(getattr(p, 'importance', 0.01) for p in parents) / len(parents)
+            score += avg_parent_imp * (0.5 ** step_idx)
 
             if Z.entity_type in ["Point", "Line", "Circle"]:
                 for var in self.all_vars:
@@ -92,28 +86,27 @@ class MCTSSearchEngine:
                     score += max(0.1, 2.0 / (nd + 1))
                     if 1 < nd <= 15:
                         td = self.tester.evaluate_numerical_degree(Z, nd, var, max_samples=40)
-                        if td <= 15: score += max(0, nd - td) * 20.0 
+                        if td <= 15: score += max(0, nd - td) * 10.0 
                             
             if Z.entity_type == "Point":
-                hot_curves = [n for n in sim_nodes if n.entity_type in ["Line", "Circle"] and getattr(n, 'importance', 1.0) >= 5.0 and n not in parents]
+                hot_curves = [n for n in sim_nodes if n.entity_type in ["Line", "Circle"] and getattr(n, 'importance', 0.01) >= 3.0 and n not in parents]
                 for c in hot_curves:
                     cache = {}
-                    random_t_dict = {v: self.tester.t_samples[0] for v in self.all_vars}
+                    random_t_dict = {v: np.random.choice(self.tester.t_samples) for v in self.all_vars}
                     try:
                         Z_val = Z.calculate(random_t_dict, cache)
                         c_val = c.calculate(random_t_dict, cache)
                         
-                        # 🌟 修正: ガバガバ判定を修正し、実際に曲線の方程式を満たすかチェックする
                         if c.entity_type == "Line":
                             val = c_val[0]*Z_val[0] + c_val[1]*Z_val[1] + c_val[2]*Z_val[2]
                         elif c.entity_type == "Circle":
                             val = c_val[0]*(Z_val[0]**2 + Z_val[1]**2) + c_val[1]*Z_val[0]*Z_val[2] + c_val[2]*Z_val[1]*Z_val[2] + c_val[3]*Z_val[2]**2
-                        else:
-                            val = 1 # ダミー
+                        else: val = 1 
                             
                         if is_zero_mod(val):
-                            score += getattr(c, 'importance', 1.0) * 3.0
-                            break # 乗っていることが確認できた場合のみブレイク
+                            # 新しい点が熱い曲線に乗っていたら、その曲線の熱に比例したボーナス
+                            score += getattr(c, 'importance', 0.01) * 2.0
+                            break 
                     except: pass
             sim_nodes.append(Z)
             
@@ -156,12 +149,13 @@ class MCTSSearchEngine:
             matches = theorem.match_func(self.prover.facts, self.env)
             for match in matches:
                 premises, conclusion_template = theorem.apply_func(match)
-
-                if conclusion_template is None: continue
                 
+                if conclusion_template is None: continue
                 if is_already_in_egraph(conclusion_template): continue
+                
                 actual_premises = [self.prover.get_or_add_fact(p) for p in premises]
                 if not all(p.is_proven for p in actual_premises): continue
+                
                 actual_conclusion = self.prover.get_or_add_fact(conclusion_template)
                 if actual_conclusion.is_proven: continue
 
@@ -182,7 +176,6 @@ class MCTSSearchEngine:
                         processed_fact_strings.add(conclusion_str)
                         logger.debug(f"  [推論] 🟢 {actual_conclusion} (定理: {theorem.name})")
                         
-                        # データ還元 (E-Graphへの書き戻し)
                         if actual_conclusion.fact_type == "Concyclic" and len(actual_conclusion.objects) >= 4:
                             pts = actual_conclusion.objects
                             comps = [p.get_best_component() for p in pts[:3]]
@@ -197,7 +190,6 @@ class MCTSSearchEngine:
                                             merged = self.env.merge_entities_logically(node, circ)
                                             if merged: circ = merged
                                             break
-                                # 🌟 修正: 4点目以降の「すべて」の点を円にリンクする
                                 for p in pts[3:]:
                                     link_logical_incidence(circ, p)
 
@@ -215,7 +207,6 @@ class MCTSSearchEngine:
                                             merged = self.env.merge_entities_logically(node, line_obj)
                                             if merged: line_obj = merged
                                             break
-                                # 🌟 修正: 3点目以降の「すべて」の点を直線にリンクする
                                 for p in pts[2:]:
                                     link_logical_incidence(line_obj, p)
                         
@@ -230,8 +221,10 @@ class MCTSSearchEngine:
                                     actual_conclusion.proof_source += f" (対象: {name1} ≡ {name2})"
                                     logger.debug(f"    🔄 [同一性還元] {name1} と {name2} を統合しました。")
                         
+                        # 🌟 修正: 正式に証明されたFactに関わる図形に強烈な熱(Heat)を注入
                         for obj in actual_conclusion.objects:
-                            obj.importance = min(getattr(obj, 'importance', 1.0) + 5.0, 50.0)
+                            if hasattr(obj, 'add_heat'):
+                                obj.add_heat(15.0)
 
     def run_step(self, num_simulations=40):
         root = MCTSNode()
@@ -296,24 +289,30 @@ class MCTSSearchEngine:
                 if node != Z and self.tester.check_identical_mmp(Z, node):
                     merged_node = self.env.merge_entities_logically(node, Z)
                     if merged_node:
-                        merged_node.importance += total_drop * 3 + 5.0
+                        # 🌟 修正: マージ先により高い熱(Heat)を集約
+                        merged_node.add_heat(total_drop * 2.0 + 5.0)
                         Z = merged_node
                     merged = True
                     break
                     
             if not merged:
-                Z.importance = sum(getattr(p, 'importance', 1.0) for p in parents) / len(parents) + total_drop * 3
+                # 🌟 修正: 親の平均熱にさらにボーナスを足す
+                avg_heat = sum(getattr(p, 'heat_bonus', 0.0) for p in parents) / max(1, len(parents))
+                Z.heat_bonus = avg_heat + total_drop * 2.0
 
         self.tester.discover_all_mmp_relations(Z, parents) 
         self._run_logic_step()
 
+        # ==========================================
+        # 🌟 NEW: ターン終了時の美しい冷却サイクル (Decay)
+        # ==========================================
         for node in self.env.nodes:
-            node.importance = max(1.0, min(getattr(node, 'importance', 1.0) * 0.95, 50.0))
+            if hasattr(node, 'heat_bonus'):
+                # 毎ターン、一時的な熱は 15% ずつ失われていく (0.85倍)
+                # ただし、base_importance は絶対に減衰しないため、下限(0.01等)は担保される
+                node.heat_bonus *= 0.85 
 
 
-# ==========================================
-# 2. メインエンジン
-# ==========================================
 class HybridEngine:
     def __init__(self, env, all_vars, target_fact, theorems):
         self.env = env  
@@ -355,14 +354,16 @@ class HybridEngine:
 
     def run(self, max_steps=100):
         print(f"\n🔄 探索開始 (問題: {self.target_fact})")
+        
+        # 🌟 初期化: Givenの点などには最初から強烈な熱を与えておく
         for fact in self.prover.facts:
             if fact.is_proven:
                 for obj in fact.objects:
-                    if hasattr(obj, 'id'):
-                        obj.importance = max(getattr(obj, 'importance', 1.0), 8.0)
-        
+                    if hasattr(obj, 'add_heat'):
+                        obj.add_heat(10.0)
+                        
         for step in range(1, max_steps + 1):
-            logger.debug(f"第{step}ステップ")
+            logger.debug(f"\n第{step}ステップ")
             if step % 10 == 0: print(f"  ... Step {step}/{max_steps}")
             self.agent.run_step()
             proven_target = self.check_target_reached()
@@ -374,7 +375,7 @@ class HybridEngine:
         return False
 
 if __name__ == "__main__":
-    problem_name = "prob_miquel" # テストしやすさを考慮して適当な名前に変更可
+    problem_name = "prob_nine_point"
     if len(sys.argv) > 1: problem_name = sys.argv[1]
 
     print(f"=== ハイブリッド自動定理証明システム 起動 ===")
@@ -391,11 +392,10 @@ if __name__ == "__main__":
     engine = HybridEngine(env, all_vars, target_fact, THEOREMS)
     for fact in initial_facts:
         engine.prover.add_fact(fact)
-        for obj in fact.objects: obj.importance = max(getattr(obj, 'importance', 1.0), 8.0)
 
     print("▶ 初期状態のMMP大発見を実行中...")
     for n in list(env.nodes):
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
-    engine.run(max_steps=10)
+    engine.run(max_steps=15)

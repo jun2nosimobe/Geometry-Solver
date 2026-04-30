@@ -38,6 +38,7 @@ class ActionGenerator:
     def get_possible_actions(self, nodes, is_simulation=False):
         if len(nodes) < 2: return []
         
+        # MCTSルーレットの確率計算（実効重要度ベース）
         weights = np.array([getattr(n, 'importance', 1.0) for n in nodes])
         probs = weights / weights.sum()
         
@@ -56,28 +57,44 @@ class ActionGenerator:
             cy = Y.get_best_component()
             if not cx or not cy: continue
 
+            # ==========================================
+            # 1. 直線 × 直線 -> 交点
+            # ==========================================
             if X.entity_type == "Line" and Y.entity_type == "Line":
                 common_pts = [obj for obj in (cx.subobjects & cy.subobjects) if obj.entity_type == "Point"]
                 is_para = any(X in lines and Y in lines for lines in self.tester.env.parallel_classes.values()) if hasattr(self.tester.env, 'parallel_classes') else False
                 
                 if not common_pts and not is_para:
-                    name = f"Int_{X.name}_{Y.name}"
+                    # 🌟 修正: L1, L2 の対称性を保証
+                    sorted_lines = sorted([X, Y], key=lambda l: l.name)
+                    L1, L2 = sorted_lines[0], sorted_lines[1]
+                    name = f"Int_{L1.name}_{L2.name}"
                     if name not in existing_names:
-                        actions.append(([X, Y], "Intersection", name))
+                        actions.append(([L1, L2], "Intersection", name))
                         
+            # ==========================================
+            # 2. 点 × 点 -> 直線 / 中点
+            # ==========================================
             elif X.entity_type == "Point" and Y.entity_type == "Point":
                 common_lines = [obj for obj in (cx.subobjects & cy.subobjects) if obj.entity_type == "Line"]
                 
+                # 🌟 修正: 点の対称性を保証 (BとCなら、必ず B -> C の順になるようにする)
+                sorted_pts = sorted([X, Y], key=lambda p: p.name)
+                p1, p2 = sorted_pts[0], sorted_pts[1]
+                
                 if not common_lines:
-                    name_line = f"Line_{X.name}_{Y.name}"
+                    name_line = f"Line_{p1.name}_{p2.name}"
                     if name_line not in existing_names:
-                        actions.append(([X, Y], "LineThroughPoints", name_line))
+                        actions.append(([p1, p2], "LineThroughPoints", name_line))
                 
                 if getattr(X, 'importance', 1.0) + getattr(Y, 'importance', 1.0) >= 10.0:
-                    name_mid = f"Mid_{X.name}_{Y.name}"
+                    name_mid = f"Mid_{p1.name}_{p2.name}"
                     if name_mid not in existing_names:
-                        actions.append(([X, Y], "Midpoint", name_mid))
+                        actions.append(([p1, p2], "Midpoint", name_mid))
                         
+            # ==========================================
+            # 3. 点 × 直線 -> 垂線 / 平行線 (※これらは非対称なのでソートしない)
+            # ==========================================
             elif (X.entity_type == "Point" and Y.entity_type == "Line") or (Y.entity_type == "Point" and X.entity_type == "Line"):
                 pt, ln = (X, Y) if X.entity_type == "Point" else (Y, X)
                 c_pt = cx if X.entity_type == "Point" else cy
@@ -91,6 +108,9 @@ class ActionGenerator:
                     if name_para not in existing_names:
                         actions.append(([ln, pt], "ParallelLine", name_para))
 
+            # ==========================================
+            # 4. 点 × 点 × 点 -> 外接円 ＆ 三角形(Shape)
+            # ==========================================
             if len(nodes) >= 3:
                 P1, P2, P3 = np.random.choice(nodes, size=3, replace=False, p=probs)
                 if P1.entity_type == "Point" and P2.entity_type == "Point" and P3.entity_type == "Point":
@@ -99,25 +119,27 @@ class ActionGenerator:
                         imp_sum = getattr(P1, 'importance', 1.0) + getattr(P2, 'importance', 1.0) + getattr(P3, 'importance', 1.0)
                         
                         if imp_sum >= 10.0 and not self._is_collinear_mmp(P1, P2, P3):
+                            # 🌟 修正: 3点の対称性を保証
+                            sorted_3pts = sorted([P1, P2, P3], key=lambda x: x.name)
                             
                             if imp_sum >= 15.0:
                                 common_curves = cp1.subobjects & cp2.subobjects & cp3.subobjects
                                 if not common_curves: 
-                                    names = sorted([P1.name, P2.name, P3.name])
-                                    name_circ = f"Circum_{names[0]}_{names[1]}_{names[2]}"
+                                    name_circ = f"Circum_{sorted_3pts[0].name}_{sorted_3pts[1].name}_{sorted_3pts[2].name}"
                                     if name_circ not in existing_names:
-                                        actions.append(([P1, P2, P3], "Circumcircle", name_circ))
+                                        actions.append((sorted_3pts, "Circumcircle", name_circ))
 
                             common_lines = [obj for obj in (cp1.subobjects & cp2.subobjects & cp3.subobjects) if obj.entity_type == "Line"]
                             if not common_lines:
                                 true_deg = self.tester.evaluate_triangle_numerical_degree(P1, P2, P3)
-                                
                                 if true_deg <= 30: 
-                                    sorted_pts = sorted([P1, P2, P3], key=lambda x: x.name)
-                                    name_tri = f"Tri_{sorted_pts[0].name}{sorted_pts[1].name}{sorted_pts[2].name}"
+                                    name_tri = f"Tri_{sorted_3pts[0].name}{sorted_3pts[1].name}{sorted_3pts[2].name}"
                                     if name_tri not in existing_names:
-                                        actions.append((sorted_pts, "Triangle", name_tri))
+                                        actions.append((sorted_3pts, "Triangle", name_tri))
 
+        # ==========================================
+        # 5. スカラー量 (AffineRatio / LengthSq) の生成
+        # ==========================================
         if not is_simulation:
             lines = [n for n in nodes if n.entity_type == "Line"]
             if lines:
@@ -129,6 +151,7 @@ class ActionGenerator:
                         pts_weights = [getattr(p, 'importance', 1.0) for p in pts_on_L]
                         p_probs = np.array(pts_weights) / sum(pts_weights)
                         
+                        # AffineRatio (A->B / B->C) は非対称なのでソートしない
                         A, B, C = np.random.choice(pts_on_L, size=3, replace=False, p=p_probs)
                         name_ratio = f"Ratio_{A.name}{B.name}_{B.name}{C.name}_(Auto)"
                         if name_ratio not in existing_names:
@@ -143,9 +166,11 @@ class ActionGenerator:
                     if len(pts) == 3:
                         A, B, C = pts
                         for p1, p2 in [(A, B), (B, C), (C, A)]:
-                            name_len = f"LenSq_{p1.name}{p2.name}_(Auto)"
+                            # 🌟 修正: LengthSq の対称性を保証
+                            sorted_edge = sorted([p1, p2], key=lambda p: p.name)
+                            name_len = f"LenSq_{sorted_edge[0].name}{sorted_edge[1].name}_(Auto)"
                             if name_len not in existing_names:
-                                actions.append(([p1, p2], "LengthSq", name_len))
+                                actions.append((sorted_edge, "LengthSq", name_len))
 
         unique_actions = []
         seen = set()

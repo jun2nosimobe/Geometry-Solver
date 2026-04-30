@@ -28,6 +28,26 @@ def setup_problem(env):
         # Given(与えられた点)として定義を登録
         comp = LogicalComponent(initial_def=Definition("Given", [], naive_degree=0, depth=0))
         pt.components.append(comp)
+        
+        # ==========================================
+        # 🌟 NEW: MMPの計算エンジン(calculate)を実装
+        # coords (t1, t2, 1) などを、t_dict を使って評価して返す
+        # ==========================================
+        def calc_func(t_dict, cache):
+            if id(pt) in cache:
+                return cache[id(pt)]
+            
+            # coords の各要素が Var なら evaluate し、数値ならそのまま使う
+            val_x = coords[0].evaluate(t_dict) if hasattr(coords[0], 'evaluate') else coords[0]
+            val_y = coords[1].evaluate(t_dict) if hasattr(coords[1], 'evaluate') else coords[1]
+            val_z = coords[2].evaluate(t_dict) if hasattr(coords[2], 'evaluate') else coords[2]
+            
+            result = [val_x, val_y, val_z]
+            cache[id(pt)] = result
+            return result
+            
+        pt.calculate = calc_func # メソッドを上書き
+        
         env.nodes.append(pt)
         return pt
 
