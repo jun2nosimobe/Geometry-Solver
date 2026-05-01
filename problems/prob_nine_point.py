@@ -1,6 +1,6 @@
 # problems/prob_nine_point.py
-from logic_core import Fact
-from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity, make_free_point
+from logic_core import Fact, get_rep
+from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity, link_logical_incidence
 
 class Var:
     """MMPで値を代入するためのシンボリック変数クラス"""
@@ -15,11 +15,11 @@ class Var:
         return isinstance(other, Var) and self.name == other.name
 
 def setup_problem(env):
-    # 1. 独立変数の定義 (A, B, C の 6自由度)
+    # 1. 独立変数の定義 (A, B, C の 6自由度)[cite: 12]
     t1, t2, t3, t4, t5, t6 = [Var(f"t{i}") for i in range(1, 7)]
     all_vars = [t1, t2, t3, t4, t5, t6]
 
-    # 2. 初期点 A, B, C の手動定義ヘルパー
+    # 2. 初期点 A, B, C の手動定義ヘルパー[cite: 12]
     def make_free_point1(name, coords):
         pt = GeoEntity("Point", name=name)
         pt.numerical_degree = 2 # SVD計算用に自由度2を設定
@@ -29,15 +29,11 @@ def setup_problem(env):
         comp = LogicalComponent(initial_def=Definition("Given", [], naive_degree=1, depth=0))
         pt.components.append(comp)
         
-        # ==========================================
-        # 🌟 NEW: MMPの計算エンジン(calculate)を実装
-        # coords (t1, t2, 1) などを、t_dict を使って評価して返す
-        # ==========================================
+        # MMPの計算エンジン(calculate)の実装[cite: 12]
         def calc_func(t_dict, cache):
             if id(pt) in cache:
                 return cache[id(pt)]
             
-            # coords の各要素が Var なら evaluate し、数値ならそのまま使う
             val_x = coords[0].evaluate(t_dict) if hasattr(coords[0], 'evaluate') else coords[0]
             val_y = coords[1].evaluate(t_dict) if hasattr(coords[1], 'evaluate') else coords[1]
             val_z = coords[2].evaluate(t_dict) if hasattr(coords[2], 'evaluate') else coords[2]
@@ -46,41 +42,47 @@ def setup_problem(env):
             cache[id(pt)] = result
             return result
             
-        pt.calculate = calc_func # メソッドを上書き
-        
+        pt.calculate = calc_func 
         env.nodes.append(pt)
         return pt
 
-    # A, B, C を作図 (同次座標系)
+    # A, B, C を作図 (同次座標系)[cite: 12]
     A = make_free_point1("A", (t1, t2, 1))
     B = make_free_point1("B", (t3, t4, 1))
     C = make_free_point1("C", (t5, t6, 1))
 
-    # 3. 問題の作図 (九点円の一部)
+    # 3. 問題の作図 (九点円の一部)[cite: 12]
     # 辺の中点
     Mid_B_C = create_geo_entity("Midpoint", [B, C], name="Mid_BC", env=env, is_given=True)
     Mid_C_A = create_geo_entity("Midpoint", [C, A], name="Mid_CA", env=env, is_given=True)
     Mid_A_B = create_geo_entity("Midpoint", [A, B], name="Mid_AB", env=env, is_given=True)
     
-    # 頂点Aから対辺BCへの垂線と、その足 (H_A)
+    # 頂点Aから対辺BCへの垂線と、その足 (H_A)[cite: 12]
     Line_BC = create_geo_entity("LineThroughPoints", [B, C], name="Line_BC", env=env, is_given=True)
     Perp_A_BC = create_geo_entity("PerpendicularLine", [Line_BC, A], name="Perp_A_BC", env=env, is_given=True)
     H_A = create_geo_entity("Intersection", [Line_BC, Perp_A_BC], name="H_A", env=env, is_given=True)
 
-
-    # 4. 初期事実の登録
-    # ※当たり前ですが、MCTSが「H_AはBC上にある」ことを忘れないようにFactsとして入れます
-    initial_facts = [
-        Fact("Collinear", [B, H_A, C], is_proven=True, proof_source="作図の定義 (垂線の足)"),
-        Fact("Perpendicular", [Line_BC, Perp_A_BC], is_proven=True, proof_source="作図の定義 (垂線)")
-    ]
+    # ==========================================
+    # 🌟 NEW: 初期条件を E-Graph に直接焼き付ける
+    # ==========================================
     
-    # E-Graph (環境) にも直角を登録しておく
-    if hasattr(env, 'add_right_angle'):
-        env.add_right_angle(Line_BC, Perp_A_BC)
+    # [1] H_A は Line_BC と Perp_A_BC の上にある (create_geo_entity がよしなにやってくれるが念のため)
+    link_logical_incidence(H_A, Line_BC)
+    link_logical_incidence(H_A, Perp_A_BC)
 
-    # 5. 目標となる Fact (Target Fact)
+    # [2] Line_BC と Perp_A_BC は「直角 (Perpendicular_90)」であるという E-Graph ノードを作成
+    # （新アーキテクチャでは、角度ノード同士のマージによって評価されるため）
+    ang_name = f"Angle_{Line_BC.name}_{Perp_A_BC.name}"
+    ang_node = create_geo_entity("AnglePair", [Line_BC, Perp_A_BC], name=ang_name, env=env, is_given=True)
+    
+    # 環境(env)が持つ既定の直角ノードと、今作った角度ノードをマージ(同一視)する
+    if hasattr(env, 'right_angle'):
+        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_node))
+
+
+    # 4. 目標となる Fact (Target Fact)[cite: 12]
     # 4点 Mid_BC, H_A, Mid_CA, Mid_AB が共円であること！
     target_fact = Fact("Concyclic", [Mid_B_C, H_A, Mid_C_A, Mid_A_B])
 
-    return all_vars, target_fact, initial_facts
+    # 🌟 修正: initial_facts の返り値は空リストで良い (すべて E-Graph に乗せたため)
+    return all_vars, target_fact, []

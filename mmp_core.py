@@ -81,6 +81,8 @@ class GeoEntity:
 
     def add_heat(self, bonus: float):
         """🌟 NEW: 熱(ボーナス)を追加するための専用メソッド"""
+        if getattr(self, 'base_importance', 1.0) <= 0.0:
+            return
         self.heat_bonus += bonus
 
     def get_best_component(self) -> LogicalComponent:
@@ -273,6 +275,10 @@ def calc_constant(parents, t_dict, cache):
     """定数値（ModInt）をそのまま返す"""
     return (parents[0], ModInt(1))
 
+def calc_angle_pair(parents, t_dict, cache):
+    """角度はMMPで直接計算しないため、クラッシュ防止のダミー値を返す"""
+    return (ModInt(0), ModInt(1))
+
 CALCULATION_REGISTRY = {
     "Intersection": calc_intersection,
     "LineThroughPoints": calc_line_through_points,
@@ -284,6 +290,8 @@ CALCULATION_REGISTRY = {
     "LengthSq": calc_length_sq,
     "AffineRatio": calc_affine_ratio,
     "Constant": calc_constant,
+    "AnglePair": calc_angle_pair,      # 🌟 NEW: これを追加！
+    "DirectionOf": calc_angle_pair
 }
 
 # ==========================================
@@ -317,14 +325,23 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
         ln, pt = parents[0], parents[1]
         link_logical_incidence(pt, new_entity)
         if env is not None:
-            if hasattr(env, 'add_right_angle'): env.add_right_angle(ln, new_entity)
-            else: env.right_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
+            if hasattr(env, 'add_right_angle'): 
+                env.add_right_angle(ln, new_entity)
+            else: 
+                # 🌟 FIX: 直角は順序を反転しても直角 (mod π) なので両方登録する
+                env.right_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
+                env.right_angle.components[0].definitions.add(Definition("AnglePair", [new_entity, ln]))
+                
     elif def_type == "ParallelLine":
         ln, pt = parents[0], parents[1]
         link_logical_incidence(pt, new_entity)
         if env is not None:
-            if hasattr(env, 'add_right_angle'): env.add_right_angle(ln, new_entity)
-            else: env.zero_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
+            if hasattr(env, 'add_right_angle'): 
+                pass
+            else: 
+                # 🌟 FIX: 0度も順序を反転して両方登録する
+                env.zero_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
+                env.zero_angle.components[0].definitions.add(Definition("AnglePair", [new_entity, ln]))
     elif def_type == "Midpoint":
         c1, c2 = parents[0].get_best_component(), parents[1].get_best_component()
         if c1 and c2:
@@ -402,11 +419,72 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
             r_rep = get_representative(ratio_ent)
             if c_rep != r_rep:
                 env.merge_entities_logically(c_rep, r_rep)
+    for p in parents:
+        if isinstance(p, GeoEntity):
+            link_logical_incidence(p, new_entity)
+
+            
+GLOBAL_CANONICAL_T_DICT = None
+
+def set_canonical_t_dict(t_dict):
+    """mmp_tester から固定のテストデータを注入するための関数"""
+    global GLOBAL_CANONICAL_T_DICT
+    GLOBAL_CANONICAL_T_DICT = t_dict
+
+def is_canonical_angle_order(L1, L2):
+    """
+    MMPの座標を用いて、2直線 L1, L2 のなす角を評価し、
+    システム全体で一意になる順序(Canonical Order)を決定する。
+    """
+    if GLOBAL_CANONICAL_T_DICT is None: 
+        return True # シミュレーション初期などでデータがない場合のフォールバック
+
+    try:
+        # L1, L2 の方程式 ax+by+c=0 の係数ベクトルを取得
+        vec1 = L1.calculate(GLOBAL_CANONICAL_T_DICT, {})
+        vec2 = L2.calculate(GLOBAL_CANONICAL_T_DICT, {})
+        
+        # a, b は法線ベクトル。方向ベクトルは (-b, a)
+        # ここでは法線ベクトル (a1, b1) と (a2, b2) の外積(cross)を計算する
+        # cross = a1*b2 - b1*a2  (これは sin(θ) に比例する)
+        
+        # ModInt の計算
+        a1, b1 = vec1[0], vec1[1]
+        a2, b2 = vec2[0], vec2[1]
+        
+        cross_val = a1 * b2 - b1 * a2
+        
+        # 🌟 ここがポイント: 外積がゼロ(つまり平行)の場合は、別の基準(例えば内積や係数自体の大小)で決める
+        if is_zero_mod(cross_val):
+            # 平行な場合。係数 a1, a2 (または b1, b2) の大小で無理やり一意に決める
+            # (※ ここは前回の「正規化されたベクトルの辞書順」を使っても良いです)
+            val1 = a1.value if hasattr(a1, 'value') else int(a1) % ModInt.MOD
+            val2 = a2.value if hasattr(a2, 'value') else int(a2) % ModInt.MOD
+            return val1 < val2
+            
+        # 外積がゼロでない場合。
+        # 有限体(ModInt)において「正負」を決定するため、値が MOD の半分より小さいかを評価する。
+        # これにより、0 < θ < π に相当する一意な向きが決定される。
+        cross_int = cross_val.value if hasattr(cross_val, 'value') else int(cross_val) % ModInt.MOD
+        
+        # MOD/2 を境界にして「正(反時計回り)」か「負(時計回り)」かを判定
+        return cross_int < (ModInt.MOD // 2)
+
+    except:
+        return True # 計算不能時はそのまま
 
 # ==========================================
-# 🌟 作図ビルダー (Construction Builder)
+# 🌟 作図ビルダー (Construction Builder) の修正
 # ==========================================
-def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False) -> 'GeoEntity':
+def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False, is_ghost=False) -> 'GeoEntity':
+    
+    # 🌟 NEW: 角度の「値(外積の正負)」を用いて、完全に一意な順序(Ordered)に固定する！
+    if def_type == "AnglePair" and len(parents) == 2:
+        from logic_core import get_rep
+        L1, L2 = get_rep(parents[0]), get_rep(parents[1])
+        
+        if not is_canonical_angle_order(L1, L2):
+            parents = [parents[1], parents[0]] # 順序を反転して Canonical にする
     if env:
         for node in env.nodes:
             comp = node.get_best_component()
@@ -414,6 +492,7 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
                 for d in comp.definitions:
                     if d.def_type == def_type and d.parents == parents:
                         return node 
+                        
                         
     if def_type in ["Intersection", "Midpoint", "CirclesIntersection"]:
         entity_type = "Point"
@@ -423,7 +502,9 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
         entity_type = "Circle"
     elif def_type == "DirectionOf":
         entity_type = "Direction"
-    elif def_type in ["LengthSq", "AffineRatio", "Constant"]: # 🌟 スカラー型を登録
+    elif def_type == "AnglePair":
+        entity_type = "Angle"
+    elif def_type in ["LengthSq", "AffineRatio", "Constant"]:
         entity_type = "Scalar"
     elif def_type == "Triangle":
         entity_type = "Triangle"
@@ -432,43 +513,57 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
     else:
         entity_type = "Unknown"
 
+    # ==========================================
+    # 🌟 NEW: ゴーストの血統チェック（親に1つでもゴーストがいれば、子も必ずゴーストになる）
+    # ==========================================
+    parent_is_ghost = any(getattr(p, 'base_importance', 1.0) <= 0.0 for p in parents if hasattr(p, 'base_importance'))
+
     # 定数(Constant)は親がGeoEntityではないため特殊処理
-    if def_type == "Constant":
+    # 🌟 FIX: env が None の場合（_playout内の一時作図）もゴースト判定を確実にする
+    is_temp_simulation = (env is None)
+
+    if is_temp_simulation or is_ghost or parent_is_ghost: 
         depth = 1
         naive_degree = 0
-        base_imp = 8.0 # 定数はシステム基盤なので高め
+        base_imp = 0.0 
+        # 🌟 FIX: 絶対に名前を偽装させない
+        if not name.endswith("_(Ghost)"):      
+            name += "_(Ghost)"
+    elif def_type == "Constant":
+        depth = 1
+        naive_degree = 0
+    # 定数(Constant)は親がGeoEntityではないため特殊処理
     elif is_given:
         depth = 1
         naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
-        base_imp = 10.0 # 問題文に登場する図形は一律で最高ランク
+        base_imp = 10.0 
     else:
-        # 通常の MCTS による作図は従来通り減衰させる
+        # 通常の作図は従来通り減衰させる
         depth = max((p.get_best_component().depth for p in parents if hasattr(p, 'get_best_component') and p.get_best_component()), default=0) + 1
         naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
-
-        # 親の基礎重要度の平均を計算
-        if parents:
-            avg_parent_imp = sum(getattr(p, 'base_importance', 1.0) for p in parents) / len(parents)
-        else:
-            avg_parent_imp = 1.0
-
-        # 減衰係数 (Decay Factor) の適用
-        if entity_type in ["Scalar", "Direction", "Shape", "Triangle"]:
-            decay_factor = 0.99  # スカラーや概念は減衰させない
-        else:
-            decay_factor = 0.5  # 点・線・円は深く掘るほど価値が半減する
-
-        # 基礎重要度は最低 0.01 を担保
+        avg_parent_imp = sum(getattr(p, 'base_importance', 1.0) for p in parents) / max(1, len(parents))
+        decay_factor = 0.99 if entity_type in ["Scalar", "Direction", "Shape", "Triangle"] else 0.5
         base_imp = max(0.01, avg_parent_imp * decay_factor)
 
     new_entity = GeoEntity(entity_type, name)
-    new_entity.base_importance = base_imp # 🌟 計算した基礎重要度をセット
+    new_entity.base_importance = base_imp 
     
     new_def = Definition(def_type, parents, naive_degree, depth)
     new_comp = LogicalComponent(initial_def=new_def)
     new_entity.components.append(new_comp)
 
-    apply_trivial_relations(new_entity, new_def, env)
+    # ==========================================
+    # 🌟 究極の修正: 実世界のグラフを汚染しない安全装置
+    # ==========================================
+    if env is not None:
+        apply_trivial_relations(new_entity, new_def, env)
+        for p in parents:
+            if isinstance(p, GeoEntity):
+                link_logical_incidence(p, new_entity)
+                
+        # 🌟 NEW: 孤児ノードを根絶する自動 append 処理
+        if new_entity not in env.nodes:
+            env.nodes.append(new_entity)
 
     return new_entity
 

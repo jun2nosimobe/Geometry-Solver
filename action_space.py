@@ -36,13 +36,14 @@ class ActionGenerator:
         return valid_count >= 2
 
     def get_possible_actions(self, nodes, is_simulation=False):
-        if len(nodes) < 2: return []
+        valid_nodes = [n for n in nodes if getattr(n, 'base_importance', 1.0) > 0.0 and getattr(n, 'entity_type', '') in ["Point", "Line", "Circle"]]
+        if len(valid_nodes) < 2: return []
         
-        # 0除算を防ぐ安全な確率計算
-        weights = np.array([getattr(n, 'importance', 0.0) for n in nodes])
+        # 0除算を防ぐ安全な確率計算 (nodes ではなく valid_nodes を使う)
+        weights = np.array([getattr(n, 'importance', 0.0) for n in valid_nodes])
         weight_sum = weights.sum()
         if weight_sum <= 0:
-            probs = np.ones(len(nodes)) / len(nodes)
+            probs = np.ones(len(valid_nodes)) / len(valid_nodes)
         else:
             probs = weights / weight_sum
             
@@ -58,7 +59,8 @@ class ActionGenerator:
         num_samples = 20 if is_simulation else 40
 
         for _ in range(num_samples): 
-            X, Y = np.random.choice(nodes, size=2, replace=False, p=probs)
+            # 🌟 FIX: nodes ではなく valid_nodes から選択する
+            X, Y = np.random.choice(valid_nodes, size=2, replace=False, p=probs)
             
             cx = X.get_best_component()
             cy = Y.get_best_component()
@@ -122,7 +124,7 @@ class ActionGenerator:
             # 4. 点 × 点 × 点 -> 外接円 ＆ 三角形(Shape)
             # ==========================================
             if len(nodes) >= 3:
-                P1, P2, P3 = np.random.choice(nodes, size=3, replace=False, p=probs)
+                P1, P2, P3 = np.random.choice(valid_nodes, size=3, replace=False, p=probs)
                 if P1.entity_type == "Point" and P2.entity_type == "Point" and P3.entity_type == "Point":
                     cp1, cp2, cp3 = P1.get_best_component(), P2.get_best_component(), P3.get_best_component()
                     if cp1 and cp2 and cp3:
@@ -152,14 +154,14 @@ class ActionGenerator:
         # 5. スカラー量 (AffineRatio / LengthSq) の生成
         # ==========================================
         if not is_simulation:
-            lines = [n for n in nodes if n.entity_type == "Line"]
-            if lines:
-                L = random.choice(lines)
+            valid_lines = [n for n in nodes if n.entity_type == "Line" and getattr(n, 'base_importance', 1.0) > 0.0]
+            if valid_lines:
+                L = random.choice(valid_lines)
                 c_L = L.get_best_component()
                 if c_L:
-                    pts_on_L = [p for p in c_L.subobjects if p.entity_type == "Point"]
+                    pts_on_L = [p for p in c_L.subobjects if p.entity_type == "Point" and getattr(p, 'base_importance', 1.0) > 0.0]
                     if len(pts_on_L) >= 3:
-                        pts_weights = [getattr(p, 'importance', 0.0) for p in pts_on_L]
+                        pts_weights = [getattr(p, 'base_importance', 0.0) for p in pts_on_L]
                         p_weight_sum = sum(pts_weights)
                         if p_weight_sum <= 0:
                             p_probs = np.ones(len(pts_on_L)) / len(pts_on_L)
@@ -172,9 +174,9 @@ class ActionGenerator:
                             actions.append(([A, B, C], "AffineRatio", name_ratio))
                             existing_names.add(name_ratio) # 🟢 比
 
-            triangles = [n for n in nodes if n.entity_type == "Triangle"]
-            if triangles:
-                T = random.choice(triangles)
+            valid_triangles = [n for n in nodes if n.entity_type == "Triangle" and getattr(n, 'base_importance', 1.0) > 0.0]
+            if valid_triangles:
+                T = random.choice(valid_triangles)
                 c_T = T.get_best_component()
                 if c_T and hasattr(c_T, 'triangle_points'):
                     pts = c_T.triangle_points

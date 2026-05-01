@@ -2,7 +2,7 @@
 import numpy as np
 import itertools
 import logging
-from mmp_core import ModInt, get_numerical_degree, create_geo_entity
+from mmp_core import ModInt, get_numerical_degree, create_geo_entity, set_canonical_t_dict
 from logic_core import Fact
 
 logger = logging.getLogger("GeometryProver")
@@ -25,6 +25,10 @@ class MMPTester:
         self.all_vars = all_vars
         self.prover = prover
         self.t_samples = [ModInt(np.random.randint(1, ModInt.MOD - 1)) for _ in range(400)]
+        
+        # 🌟 NEW: mmp_core に正規化用の「絶対基準座標」を注入！
+        canonical_t_dict = {v: self.t_samples[0] for v in self.all_vars}
+        set_canonical_t_dict(canonical_t_dict)
 
     def _eval_point(self, P, t_dict):
         cache = {}
@@ -89,6 +93,8 @@ class MMPTester:
         # ==========================================
         # 🌟 NEW: 次数(Degree)によるハードリミット
         # ==========================================
+        if getattr(Z, 'base_importance', 1.0) <= 0.0:
+            return
         deg = getattr(Z, 'numerical_degree', 1) or 1
         if Z.entity_type in ["Point", "Line", "Direction"]:
             if deg > 15: return  # 複雑すぎる点や線はテストしない
@@ -96,10 +102,12 @@ class MMPTester:
             if deg > 25: return  # 複雑すぎる円やスカラーはテストしない
 
         if is_point(Z):
-            for c in [n for n in self.env.nodes if (is_line(n) or is_circle(n)) and n not in parents]: 
+            valid_curves = [n for n in self.env.nodes if (is_line(n) or is_circle(n)) and n not in parents and getattr(n, 'base_importance', 1.0) > 0.0]
+            for c in valid_curves: 
                 self.check_and_add_incidence(Z, c)
         elif is_line(Z) or is_circle(Z):
-            for p in [n for n in self.env.nodes if is_point(n) and n not in parents]: 
+            valid_pts = [n for n in self.env.nodes if is_point(n) and n not in parents and getattr(n, 'base_importance', 1.0) > 0.0]
+            for p in valid_pts: 
                 self.check_and_add_incidence(p, Z)
                 
         if is_line(Z):
@@ -356,3 +364,44 @@ class MMPTester:
                 true_d += d
                 
         return min(naive_d, true_d)
+
+    def get_canonical_line_vector(self, L):
+        """
+        直線のMMP座標を「射影空間の標準形」に変換する。
+        先頭の非零要素の逆元を掛けることで、スカラー倍の揺らぎを完全に吸収し、
+        E-Graph全体で絶対に揺るがない Canonical なタプルを生成する。
+        """
+        cache = {}
+        # 常に固定のシード(t_samples[0])を使って評価を完全に固定する
+        t_dict = {v: self.t_samples[0] for v in self.all_vars}
+        
+        try:
+            vec = L.calculate(t_dict, cache)
+            
+            # 先頭の非零要素のインデックスを探す
+            idx = next((i for i, x in enumerate(vec) if not is_zero_mod(x)), -1)
+            if idx == -1: 
+                return (0, 0, 0) # ゼロベクトルのフォールバック
+            
+            # 先頭の非零要素が必ず 1 になるように全体を正規化 (ユーザー提案の究極系)
+            inv_val = ModInt(1) / vec[idx]
+            norm_vec = []
+            for x in vec:
+                val = x.value if hasattr(x, 'value') else int(x) % ModInt.MOD
+                norm_val = (val * inv_val.value) % ModInt.MOD
+                norm_vec.append(norm_val)
+                
+            return tuple(norm_vec)
+        except:
+            return (0, 0, 0) # 計算不能時のフォールバック
+
+    def is_canonical_angle_order(self, L1, L2):
+        """
+        正規化されたMMP座標の辞書順比較によって、
+        2直線のなす角の「順序」を完全に一意(Ordered)に決定する。
+        """
+        v1 = self.get_canonical_line_vector(L1)
+        v2 = self.get_canonical_line_vector(L2)
+        
+        # 辞書順で完全に一意な True/False が決まる！
+        return v1 < v2
