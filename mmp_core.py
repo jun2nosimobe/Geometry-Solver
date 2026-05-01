@@ -87,22 +87,27 @@ class GeoEntity:
         if not self.components: return None
         return min(self.components, key=lambda c: (c.naive_degree, c.depth))
 
+# mmp_core.py の GeoEntity クラス内の merge_numerical を上書き
+
     def merge_numerical(self, other: 'GeoEntity'):
         if self == other: return
         self.components.extend(other.components)
         self.mmp_subobjects.update(other.mmp_subobjects)
         
-        # 🌟 NEW: 重要度のマージ (基礎、熱ともに高い方を引き継ぐ)
+        # 基礎重要度と熱は高い方を引き継ぐ（ゴーストが実体化した時に熱を継承するため）
         self.base_importance = max(self.base_importance, other.base_importance)
         self.heat_bonus = max(self.heat_bonus, other.heat_bonus)
         
+        # 🌟 NEW: 最短名戦略 (Shortest Name Strategy)
+        if len(other.name) < len(self.name):
+            self.name = other.name
+        elif len(other.name) == len(self.name) and "(Ghost)" not in other.name and "(Ghost)" in self.name:
+            self.name = other.name # 長さが同じならゴーストじゃない方の名前を優先
+            
         if self.numerical_degree is None:
             self.numerical_degree = other.numerical_degree
         elif other.numerical_degree is not None:
             self.numerical_degree = min(self.numerical_degree, other.numerical_degree)
-
-        if other.name not in self.name:
-            self.name = f"{self.name} = {other.name}"
 
 
     def prove_components_equal(self, comp_idx_1: int, comp_idx_2: int):

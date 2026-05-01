@@ -135,6 +135,13 @@ class MMPTester:
             for p1, p2 in itertools.combinations(hot_pts, 2):
                 if self.check_identical_mmp(p1, p2) or self.check_identical_mmp(Z, p1): continue
                 
+                # 🌟 Trivial Check: E-Graph上ですでに共線であることが分かっているならテストをスキップ
+                cZ, c1, c2 = Z.get_best_component(), p1.get_best_component(), p2.get_best_component()
+                if cZ and c1 and c2:
+                    common_lines = [obj for obj in (cZ.subobjects & c1.subobjects & c2.subobjects) if getattr(obj, 'entity_type', '') == "Line"]
+                    if common_lines:
+                        continue # 自明な共線なので無視
+                
                 valid_collinear = 0
                 for _ in range(5):
                     t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
@@ -161,6 +168,39 @@ class MMPTester:
                 if is_sub_collinear:
                     continue 
                 
+                # ==========================================
+                # 🌟 NEW: MMPを用いた強力な共線ガード (縮退円の排除)
+                # 4点のうち、どの3点を選んでも「面積0（共線）」にならないかチェック
+                # ==========================================
+                pts_list = list(pts_set)
+                is_degenerate = False
+                for comb in itertools.combinations(pts_list, 3):
+                    valid_col = 0
+                    for _ in range(3): # 3回テストすれば十分
+                        t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
+                        v_A = self._eval_point(comb[0], t_dict)
+                        v_B = self._eval_point(comb[1], t_dict)
+                        v_C = self._eval_point(comb[2], t_dict)
+                        if not (v_A and v_B and v_C): continue
+                        
+                        area = v_A[0]*(v_B[1]-v_C[1]) + v_B[0]*(v_C[1]-v_A[1]) + v_C[0]*(v_A[1]-v_B[1])
+                        if is_zero_mod(area): valid_col += 1
+                            
+                    if valid_col >= 2:
+                        is_degenerate = True
+                        break # いずれかの3点が共線なので、これは円ではなく直線
+                
+                if is_degenerate:
+                    continue # 縮退しているので共円テストを行わない
+                # ==========================================
+
+                # 🌟 Trivial Check: E-Graph上ですでに共円であることが分かっているならテストをスキップ
+                c3 = p3.get_best_component()
+                if cZ and c1 and c2 and c3:
+                    common_circs = [obj for obj in (cZ.subobjects & c1.subobjects & c2.subobjects & c3.subobjects) if getattr(obj, 'entity_type', '') == "Circle"]
+                    if common_circs:
+                        continue # 自明な共円なので無視
+
                 temp_circle = create_geo_entity("Circumcircle", [p1, p2, p3], name="temp", env=None)
                 valid_count = 0
                 for _ in range(5):

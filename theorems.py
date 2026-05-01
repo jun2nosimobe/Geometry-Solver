@@ -122,7 +122,9 @@ def match_cyclic_lines(facts, env):
                         L_DA = get_or_create_line(D, A, env)
                         L_DB = get_or_create_line(D, B, env)
                         if L_CA and L_CB and L_DA and L_DB:
-                            matches.append((L_CA, L_CB, L_DA, L_DB, f))
+                            reps = [get_representative(L) for L in [L_CA, L_CB, L_DA, L_DB]]
+                            if len(set(reps)) == 4: # すべて異なる直線の場合のみ
+                                matches.append((L_CA, L_CB, L_DA, L_DB, f))
     return matches
 
 def apply_cyclic_lines(match):
@@ -180,10 +182,16 @@ def match_parallel_angles_by_direction(facts, env):
         if len(parallel_lines) < 2: continue
         
         for L1, L2 in itertools.combinations(parallel_lines, 2):
+            # 🌟 修正: L1とL2がすでに同じ直線(代表元が同じ)ならスキップ
+            if get_representative(L1) == get_representative(L2): continue
+            
             pts_L1 = get_points_on(L1)
             pts_L2 = get_points_on(L2)
             for M in all_lines:
-                if M == L1 or M == L2: continue
+                # 🌟 修正: MがL1やL2と同じ直線ならスキップ
+                rep_M = get_representative(M)
+                if rep_M == get_representative(L1) or rep_M == get_representative(L2): continue
+                
                 pts_M = get_points_on(M)
                 if (pts_L1 & pts_M) and (pts_L2 & pts_M):
                     matches.append((L1, M, L2, M, f"平行線の性質({dir_node.name})"))
@@ -277,8 +285,12 @@ def match_isosceles_base_angle(facts, env):
                     L_PX = get_or_create_line(P, X, env)
                     L_PY = get_or_create_line(P, Y, env)
                     L_XY = get_or_create_line(X, Y, env)
+                    
+                    # 🌟 修正: 3つの直線がすべて異なることを確認
                     if L_PX and L_PY and L_XY:
-                        matches.append((L_PX, L_XY, L_PY, L_XY, f"二等辺三角形の底角定理 (△{P.name}{X.name}{Y.name}, {P.name}{X.name}={P.name}{Y.name})"))
+                        reps = [get_representative(L) for L in [L_PX, L_PY, L_XY]]
+                        if len(set(reps)) == 3:
+                            matches.append((L_PX, L_XY, L_PY, L_XY, f"二等辺三角形の底角定理 (△{P.name}{X.name}{Y.name}, {P.name}{X.name}={P.name}{Y.name})"))
     return matches
 
 def apply_isosceles_base_angle(match):
@@ -300,10 +312,13 @@ def match_isosceles_converse(facts, env):
             target_M = None
             L_PX, L_PY = None, None
             
-            if M1 == M2: target_M, L_PX, L_PY = M1, L1, L2
-            elif L1 == L2: target_M, L_PX, L_PY = L1, M1, M2
-            elif M1 == L2: target_M, L_PX, L_PY = M1, L1, M2
-            elif L1 == M2: target_M, L_PX, L_PY = L1, M1, L2
+            # 🌟 修正: 代表元レベルで比較してターゲットを決定
+            rep_L1, rep_M1, rep_L2, rep_M2 = [get_representative(L) for L in [L1, M1, L2, M2]]
+            
+            if rep_M1 == rep_M2: target_M, L_PX, L_PY = rep_M1, rep_L1, rep_L2
+            elif rep_L1 == rep_L2: target_M, L_PX, L_PY = rep_L1, rep_M1, rep_M2
+            elif rep_M1 == rep_L2: target_M, L_PX, L_PY = rep_M1, rep_L1, rep_M2
+            elif rep_L1 == rep_M2: target_M, L_PX, L_PY = rep_L1, rep_M1, rep_L2
             
             if target_M and L_PX != L_PY:
                 P_set = get_points_on(L_PX) & get_points_on(L_PY)
@@ -383,6 +398,10 @@ def match_identical_lines_by_angle(facts, env):
             elif M1 == L2: target_M, candidate_L1, candidate_L2 = M1, L1, M2
             elif L1 == M2: target_M, candidate_L1, candidate_L2 = L1, M1, L2
             if target_M and candidate_L1 != candidate_L2:
+                rep1 = get_representative(candidate_L1)
+                rep2 = get_representative(candidate_L2)
+                if rep1 == rep2:
+                    continue
                 common = get_points_on(candidate_L1) & get_points_on(candidate_L2)
                 if common:
                     matches.append((candidate_L1, candidate_L2, list(common)[0], target_M, angle_ent.name))
@@ -399,6 +418,13 @@ def match_collinear_from_line_identity(facts, env):
         pts = list(get_points_on(ln))
         if len(pts) >= 3:
             for p1, p2, p3 in itertools.combinations(pts, 3):
+                # ==========================================
+                # 🌟 NEW: 3点が代表元レベルで完全に異なることを確認
+                # ==========================================
+                reps = {get_representative(p) for p in (p1, p2, p3)}
+                if len(reps) < 3:
+                    continue # ダブっているゴースト点が含まれていたらスキップ
+                
                 matches.append((p1, p2, p3, ln))
     return matches
 

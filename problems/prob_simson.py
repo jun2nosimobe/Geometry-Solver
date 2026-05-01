@@ -58,7 +58,7 @@ def setup_problem(env):
     Perp_P_AB = create_geo_entity("PerpendicularLine", [LineAB, P], "Perp_P_AB", env)
     F = create_geo_entity("Intersection", [LineAB, Perp_P_AB], "F", env)
     
-    env.nodes.extend([Perp_P_BC, D, Perp_P_CA, E, Perp_P_AB, F])
+    #env.nodes.extend([Perp_P_BC, D, Perp_P_CA, E, Perp_P_AB, F])
 
     # 目標は D, E, F が一直線上にあること
     target_fact = Fact("Collinear", [D, E, F])

@@ -38,15 +38,22 @@ class ActionGenerator:
     def get_possible_actions(self, nodes, is_simulation=False):
         if len(nodes) < 2: return []
         
-        # MCTSルーレットの確率計算（実効重要度ベース）
-        weights = np.array([getattr(n, 'importance', 1.0) for n in nodes])
-        probs = weights / weights.sum()
-        
+        # 0除算を防ぐ安全な確率計算
+        weights = np.array([getattr(n, 'importance', 0.0) for n in nodes])
+        weight_sum = weights.sum()
+        if weight_sum <= 0:
+            probs = np.ones(len(nodes)) / len(nodes)
+        else:
+            probs = weights / weight_sum
+            
         actions = []
         
         if not is_simulation:
             self.historical_names.update(n.name for n in nodes)
-        existing_names = self.historical_names
+            existing_names = self.historical_names
+        else:
+            # 🌟 シミュレーション時はローカルのセットを作り、グローバルを汚さない
+            existing_names = set(n.name for n in nodes)
 
         num_samples = 20 if is_simulation else 40
 
@@ -65,12 +72,12 @@ class ActionGenerator:
                 is_para = any(X in lines and Y in lines for lines in self.tester.env.parallel_classes.values()) if hasattr(self.tester.env, 'parallel_classes') else False
                 
                 if not common_pts and not is_para:
-                    # 🌟 修正: L1, L2 の対称性を保証
                     sorted_lines = sorted([X, Y], key=lambda l: l.name)
                     L1, L2 = sorted_lines[0], sorted_lines[1]
                     name = f"Int_{L1.name}_{L2.name}"
                     if name not in existing_names:
                         actions.append(([L1, L2], "Intersection", name))
+                        existing_names.add(name) # 🟢 交点
                         
             # ==========================================
             # 2. 点 × 点 -> 直線 / 中点
@@ -78,7 +85,6 @@ class ActionGenerator:
             elif X.entity_type == "Point" and Y.entity_type == "Point":
                 common_lines = [obj for obj in (cx.subobjects & cy.subobjects) if obj.entity_type == "Line"]
                 
-                # 🌟 修正: 点の対称性を保証 (BとCなら、必ず B -> C の順になるようにする)
                 sorted_pts = sorted([X, Y], key=lambda p: p.name)
                 p1, p2 = sorted_pts[0], sorted_pts[1]
                 
@@ -86,14 +92,16 @@ class ActionGenerator:
                     name_line = f"Line_{p1.name}_{p2.name}"
                     if name_line not in existing_names:
                         actions.append(([p1, p2], "LineThroughPoints", name_line))
+                        existing_names.add(name_line) # 🟢 直線
                 
-                if getattr(X, 'importance', 1.0) + getattr(Y, 'importance', 1.0) >= 10.0:
+                if getattr(X, 'importance', 0.0) + getattr(Y, 'importance', 0.0) >= 10.0:
                     name_mid = f"Mid_{p1.name}_{p2.name}"
                     if name_mid not in existing_names:
                         actions.append(([p1, p2], "Midpoint", name_mid))
+                        existing_names.add(name_mid) # 🟢 中点
                         
             # ==========================================
-            # 3. 点 × 直線 -> 垂線 / 平行線 (※これらは非対称なのでソートしない)
+            # 3. 点 × 直線 -> 垂線 / 平行線
             # ==========================================
             elif (X.entity_type == "Point" and Y.entity_type == "Line") or (Y.entity_type == "Point" and X.entity_type == "Line"):
                 pt, ln = (X, Y) if X.entity_type == "Point" else (Y, X)
@@ -102,11 +110,13 @@ class ActionGenerator:
                 name_perp = f"Perp_{pt.name}_{ln.name}"
                 if name_perp not in existing_names:
                     actions.append(([ln, pt], "PerpendicularLine", name_perp))
+                    existing_names.add(name_perp) # 🟢 垂線
                 
                 if ln not in c_pt.subobjects:
                     name_para = f"Para_{pt.name}_{ln.name}"
                     if name_para not in existing_names:
                         actions.append(([ln, pt], "ParallelLine", name_para))
+                        existing_names.add(name_para) # 🟢 平行線
 
             # ==========================================
             # 4. 点 × 点 × 点 -> 外接円 ＆ 三角形(Shape)
@@ -116,10 +126,9 @@ class ActionGenerator:
                 if P1.entity_type == "Point" and P2.entity_type == "Point" and P3.entity_type == "Point":
                     cp1, cp2, cp3 = P1.get_best_component(), P2.get_best_component(), P3.get_best_component()
                     if cp1 and cp2 and cp3:
-                        imp_sum = getattr(P1, 'importance', 1.0) + getattr(P2, 'importance', 1.0) + getattr(P3, 'importance', 1.0)
+                        imp_sum = getattr(P1, 'importance', 0.0) + getattr(P2, 'importance', 0.0) + getattr(P3, 'importance', 0.0)
                         
                         if imp_sum >= 10.0 and not self._is_collinear_mmp(P1, P2, P3):
-                            # 🌟 修正: 3点の対称性を保証
                             sorted_3pts = sorted([P1, P2, P3], key=lambda x: x.name)
                             
                             if imp_sum >= 15.0:
@@ -128,6 +137,7 @@ class ActionGenerator:
                                     name_circ = f"Circum_{sorted_3pts[0].name}_{sorted_3pts[1].name}_{sorted_3pts[2].name}"
                                     if name_circ not in existing_names:
                                         actions.append((sorted_3pts, "Circumcircle", name_circ))
+                                        existing_names.add(name_circ) # 🟢 外接円
 
                             common_lines = [obj for obj in (cp1.subobjects & cp2.subobjects & cp3.subobjects) if obj.entity_type == "Line"]
                             if not common_lines:
@@ -136,6 +146,7 @@ class ActionGenerator:
                                     name_tri = f"Tri_{sorted_3pts[0].name}{sorted_3pts[1].name}{sorted_3pts[2].name}"
                                     if name_tri not in existing_names:
                                         actions.append((sorted_3pts, "Triangle", name_tri))
+                                        existing_names.add(name_tri) # 🟢 三角形
 
         # ==========================================
         # 5. スカラー量 (AffineRatio / LengthSq) の生成
@@ -148,14 +159,18 @@ class ActionGenerator:
                 if c_L:
                     pts_on_L = [p for p in c_L.subobjects if p.entity_type == "Point"]
                     if len(pts_on_L) >= 3:
-                        pts_weights = [getattr(p, 'importance', 1.0) for p in pts_on_L]
-                        p_probs = np.array(pts_weights) / sum(pts_weights)
+                        pts_weights = [getattr(p, 'importance', 0.0) for p in pts_on_L]
+                        p_weight_sum = sum(pts_weights)
+                        if p_weight_sum <= 0:
+                            p_probs = np.ones(len(pts_on_L)) / len(pts_on_L)
+                        else:
+                            p_probs = np.array(pts_weights) / p_weight_sum
                         
-                        # AffineRatio (A->B / B->C) は非対称なのでソートしない
                         A, B, C = np.random.choice(pts_on_L, size=3, replace=False, p=p_probs)
                         name_ratio = f"Ratio_{A.name}{B.name}_{B.name}{C.name}_(Auto)"
                         if name_ratio not in existing_names:
                             actions.append(([A, B, C], "AffineRatio", name_ratio))
+                            existing_names.add(name_ratio) # 🟢 比
 
             triangles = [n for n in nodes if n.entity_type == "Triangle"]
             if triangles:
@@ -166,12 +181,13 @@ class ActionGenerator:
                     if len(pts) == 3:
                         A, B, C = pts
                         for p1, p2 in [(A, B), (B, C), (C, A)]:
-                            # 🌟 修正: LengthSq の対称性を保証
                             sorted_edge = sorted([p1, p2], key=lambda p: p.name)
                             name_len = f"LenSq_{sorted_edge[0].name}{sorted_edge[1].name}_(Auto)"
                             if name_len not in existing_names:
                                 actions.append((sorted_edge, "LengthSq", name_len))
+                                existing_names.add(name_len) # 🟢 長さ
 
+        # 一意性の最終チェックをして返す
         unique_actions = []
         seen = set()
         for act in actions:

@@ -8,20 +8,40 @@ if not logger.handlers:
     file_handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(file_handler)
 
+def get_rep(obj):
+    while hasattr(obj, '_merged_into') and obj._merged_into is not None:
+        obj = obj._merged_into
+    return obj
+
 class Fact:
     def __init__(self, fact_type, objects, is_proven=False, proof_source=""):
         self.fact_type = fact_type  
-        self.objects = objects
+        
+        # ==========================================
+        # 🌟 修正: Factに登録される瞬間、すべてのオブジェクトを「代表元」に強制変換する！
+        # これにより、ゾンビ(A')と本体(A)が混在することがなくなる。
+        # ==========================================
+        self.objects = [get_rep(o) for o in objects]
+        
         self.is_proven = is_proven
         self.proof_source = proof_source
         self.dependents = [] 
-        # 🌟 NEW: MMPが発見した未証明の予想(Conjecture)かどうかのフラグ
         self.is_mmp_conjecture = False 
+        self.conjecture_score = 0.0
+
+        # ==========================================
+        # 🌟 修正: 自己同一性 (A = A) の虚無Factを初期化時に弾く
+        # 代表元化された結果、[A, A] になった場合は最初から証明済み(自明)とする
+        # ==========================================
+        if self.fact_type == "Identical" and len(self.objects) == 2:
+            if self.objects[0] == self.objects[1]:
+                self.is_proven = True
+                self.proof_source = "自己同一性 (自明)"
 
     def mark_as_proven(self, source_description):
+        # 既に証明済み（または自明）なら何もしない
         if not self.is_proven:
             self.is_proven = True
-            # 予想が証明された場合はフラグを落とす
             self.is_mmp_conjecture = False 
             self.proof_source = source_description
             logger.debug(f"  🟢 [証明完了] {self} が証明されました！ (理由: {source_description})")

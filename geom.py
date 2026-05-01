@@ -52,31 +52,83 @@ class MCTSSearchEngine:
         self.tester = MMPTester(self.env, self.all_vars, self.prover)
         self.action_gen = ActionGenerator(set(), self.tester)
 
+    # geom.py 内の MCTSSearchEngine._playout を上書き
+
     def _playout(self, initial_nodes, depth=3):
-        sim_nodes = list(initial_nodes)
+        sim_nodes = [get_representative(n) for n in initial_nodes]
         score = 0.0
         
         for step_idx in range(depth):
             actions = self.action_gen.get_possible_actions(sim_nodes, is_simulation=True)
             if not actions: break
             
-            # 実効重要度 (base + heat) でルーレット
-            action_weights = [sum(getattr(p, 'importance', 0.01) for p in a[0]) for a in actions]
+            valid_actions = []
+            for parents, def_type, name in actions:
+                rep_parents = [get_representative(p) for p in parents]
+                
+                # 🌟 Trivial Check 1: 論理的重複の排除
+                is_redundant = False
+                for node in sim_nodes:
+                    comp = node.get_best_component()
+                    if comp and any(d.def_type == def_type and [get_representative(p) for p in d.parents] == rep_parents for d in comp.definitions):
+                        is_redundant = True
+                        break
+                
+                if not is_redundant:
+                    valid_actions.append((rep_parents, def_type, name))
+
+            if not valid_actions:
+                score -= 2.0
+                break
+
+            action_weights = [sum(getattr(p, 'importance', 0.0) for p in a[0]) for a in valid_actions]
             total_w = sum(action_weights)
-            if total_w == 0: break
-            probs = [w / total_w for w in action_weights]
-            action = actions[np.random.choice(len(actions), p=probs)]
+            if total_w <= 0: 
+                probs = [1.0 / len(valid_actions)] * len(valid_actions)
+            else:
+                probs = [w / total_w for w in action_weights]
+                
+            chosen_action = valid_actions[np.random.choice(len(valid_actions), p=probs)]
+            rep_parents, def_type, name = chosen_action
             
-            parents, def_type, name = action[0], action[1], action[2]
-            Z = create_geo_entity(def_type, parents, name)
-            cZ = Z.get_best_component()
+            # Trivial Check 2: 数値的に既存の図形と重ならないか（一時生成してテスト）
+            Z_temp = create_geo_entity(def_type, rep_parents, name, env=None)
+            cZ = Z_temp.get_best_component()
             
             if not cZ or cZ.depth > 6: 
                 score -= 1.0
                 continue 
+
+            is_physically_redundant = False
+            matched_node = None
+            for node in sim_nodes:
+                if self.tester.check_identical_mmp(Z_temp, node):
+                    is_physically_redundant = True
+                    matched_node = node
+                    break
             
-            # 🌟 修正: 親の平均実効重要度に基づくスコア加算 (深いゴミ点はスコアが伸びない)
-            avg_parent_imp = sum(getattr(p, 'importance', 0.01) for p in parents) / len(parents)
+            if is_physically_redundant:
+                score -= 5.0 # 「垂直の垂直」等の無駄な手にはペナルティ
+                sim_nodes.append(matched_node)
+                continue
+
+            # ==========================================
+            # 🌟 NEW: 物理的にも新しい図形なら、E-Graphに「ゴースト」として正式登録
+            # ==========================================
+            env_nodes_before = len(self.env.nodes)
+            
+            # env=self.env を指定して、本物のE-Graph空間に作図する
+            Z = create_geo_entity(def_type, rep_parents, name, env=self.env)
+            
+            # もしこの作図によって本当にノードが新規追加されたなら、ゴースト化する
+            if len(self.env.nodes) > env_nodes_before:
+                Z.name = f"{Z.name}_(Ghost)"
+                Z.base_importance = 0.0
+                Z.heat_bonus = 0.0
+            
+            # ==========================================
+
+            avg_parent_imp = sum(getattr(p, 'importance', 0.0) for p in rep_parents) / len(rep_parents)
             score += avg_parent_imp * (0.5 ** step_idx)
 
             if Z.entity_type in ["Point", "Line", "Circle"]:
@@ -89,7 +141,7 @@ class MCTSSearchEngine:
                         if td <= 15: score += max(0, nd - td) * 10.0 
                             
             if Z.entity_type == "Point":
-                hot_curves = [n for n in sim_nodes if n.entity_type in ["Line", "Circle"] and getattr(n, 'importance', 0.01) >= 3.0 and n not in parents]
+                hot_curves = [n for n in sim_nodes if n.entity_type in ["Line", "Circle"] and getattr(n, 'importance', 0.0) >= 3.0 and n not in rep_parents]
                 for c in hot_curves:
                     cache = {}
                     random_t_dict = {v: np.random.choice(self.tester.t_samples) for v in self.all_vars}
@@ -104,10 +156,12 @@ class MCTSSearchEngine:
                         else: val = 1 
                             
                         if is_zero_mod(val):
-                            # 新しい点が熱い曲線に乗っていたら、その曲線の熱に比例したボーナス
-                            score += getattr(c, 'importance', 0.01) * 2.0
+                            # 🌟 Trivial Check: すでに論理的に所属している(自明な関係)なら、スコアを与えない！
+                            if c not in cZ.subobjects:
+                                score += getattr(c, 'importance', 0.0) * 2.0
                             break 
                     except: pass
+                    
             sim_nodes.append(Z)
             
         return score
@@ -115,6 +169,7 @@ class MCTSSearchEngine:
     def _run_logic_step(self):
         processed_fact_strings = getattr(self, '_debug_processed_facts', set())
         self._debug_processed_facts = processed_fact_strings
+        DEBUG_THEOREMS = True
 
         def is_already_in_egraph(fact):
             if any(getattr(obj, '_is_merged_and_dead', False) for obj in fact.objects): return True
@@ -147,6 +202,18 @@ class MCTSSearchEngine:
 
         for theorem in THEOREMS:
             matches = theorem.match_func(self.prover.facts, self.env)
+            # ==========================================
+            # 🌟 NEW: 定理マッチングのデバッグ出力
+            # ==========================================
+            if DEBUG_THEOREMS and matches:
+                logger.debug(f"  🔍 [Debug] 定理 '{theorem.name}' に {len(matches)} 件マッチ:")
+                for i, match in enumerate(matches[:50]): # ログが長すぎる場合は最初の5件だけ表示
+                    # matchタプルの中身(図形や文字列)の名前を抽出
+                    match_names = [getattr(get_representative(m), 'name', str(m)) for m in match if hasattr(m, 'name') or isinstance(m, str) or type(m).__name__ == 'Fact']
+                    logger.debug(f"      [{i+1}] 対象: {', '.join(match_names)}")
+                if len(matches) > 5:
+                    logger.debug(f"      ... (他 {max(0,len(matches) - 50)} 件)")
+            # ==========================================
             for match in matches:
                 premises, conclusion_template = theorem.apply_func(match)
                 
