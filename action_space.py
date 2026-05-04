@@ -39,7 +39,6 @@ class ActionGenerator:
         valid_nodes = [n for n in nodes if getattr(n, 'base_importance', 1.0) > 0.0 and getattr(n, 'entity_type', '') in ["Point", "Line", "Circle"]]
         if len(valid_nodes) < 2: return []
         
-        # 0除算を防ぐ安全な確率計算 (nodes ではなく valid_nodes を使う)
         weights = np.array([getattr(n, 'importance', 0.0) for n in valid_nodes])
         weight_sum = weights.sum()
         if weight_sum <= 0:
@@ -53,13 +52,11 @@ class ActionGenerator:
             self.historical_names.update(n.name for n in nodes)
             existing_names = self.historical_names
         else:
-            # 🌟 シミュレーション時はローカルのセットを作り、グローバルを汚さない
             existing_names = set(n.name for n in nodes)
 
         num_samples = 20 if is_simulation else 40
 
         for _ in range(num_samples): 
-            # 🌟 FIX: nodes ではなく valid_nodes から選択する
             X, Y = np.random.choice(valid_nodes, size=2, replace=False, p=probs)
             
             cx = X.get_best_component()
@@ -79,7 +76,7 @@ class ActionGenerator:
                     name = f"Int_{L1.name}_{L2.name}"
                     if name not in existing_names:
                         actions.append(([L1, L2], "Intersection", name))
-                        existing_names.add(name) # 🟢 交点
+                        existing_names.add(name) 
                         
             # ==========================================
             # 2. 点 × 点 -> 直線 / 中点
@@ -94,16 +91,17 @@ class ActionGenerator:
                     name_line = f"Line_{p1.name}_{p2.name}"
                     if name_line not in existing_names:
                         actions.append(([p1, p2], "LineThroughPoints", name_line))
-                        existing_names.add(name_line) # 🟢 直線
+                        existing_names.add(name_line) 
                 
                 if getattr(X, 'importance', 0.0) + getattr(Y, 'importance', 0.0) >= 10.0:
                     name_mid = f"Mid_{p1.name}_{p2.name}"
                     if name_mid not in existing_names:
                         actions.append(([p1, p2], "Midpoint", name_mid))
-                        existing_names.add(name_mid) # 🟢 中点
+                        existing_names.add(name_mid) 
                         
             # ==========================================
-            # 3. 点 × 直線 -> 垂線 / 平行線
+            # 3. 点 × 直線 -> 垂線 / 平行線 
+            # (※ DirectionPair導入後も、作図ステップとしては有効なので残す)
             # ==========================================
             elif (X.entity_type == "Point" and Y.entity_type == "Line") or (Y.entity_type == "Point" and X.entity_type == "Line"):
                 pt, ln = (X, Y) if X.entity_type == "Point" else (Y, X)
@@ -112,13 +110,13 @@ class ActionGenerator:
                 name_perp = f"Perp_{pt.name}_{ln.name}"
                 if name_perp not in existing_names:
                     actions.append(([ln, pt], "PerpendicularLine", name_perp))
-                    existing_names.add(name_perp) # 🟢 垂線
+                    existing_names.add(name_perp) 
                 
                 if ln not in c_pt.subobjects:
                     name_para = f"Para_{pt.name}_{ln.name}"
                     if name_para not in existing_names:
                         actions.append(([ln, pt], "ParallelLine", name_para))
-                        existing_names.add(name_para) # 🟢 平行線
+                        existing_names.add(name_para) 
 
             # ==========================================
             # 4. 点 × 点 × 点 -> 外接円 ＆ 三角形(Shape)
@@ -139,7 +137,7 @@ class ActionGenerator:
                                     name_circ = f"Circum_{sorted_3pts[0].name}_{sorted_3pts[1].name}_{sorted_3pts[2].name}"
                                     if name_circ not in existing_names:
                                         actions.append((sorted_3pts, "Circumcircle", name_circ))
-                                        existing_names.add(name_circ) # 🟢 外接円
+                                        existing_names.add(name_circ) 
 
                             common_lines = [obj for obj in (cp1.subobjects & cp2.subobjects & cp3.subobjects) if obj.entity_type == "Line"]
                             if not common_lines:
@@ -148,7 +146,7 @@ class ActionGenerator:
                                     name_tri = f"Tri_{sorted_3pts[0].name}{sorted_3pts[1].name}{sorted_3pts[2].name}"
                                     if name_tri not in existing_names:
                                         actions.append((sorted_3pts, "Triangle", name_tri))
-                                        existing_names.add(name_tri) # 🟢 三角形
+                                        existing_names.add(name_tri) 
 
         # ==========================================
         # 5. スカラー量 (AffineRatio / LengthSq) の生成
@@ -159,6 +157,13 @@ class ActionGenerator:
                 L = random.choice(valid_lines)
                 c_L = L.get_best_component()
                 if c_L:
+                    # 🌟 NEW: 直線が選ばれたら、必ずその「方向(Direction)」もアクション候補に投げる！
+                    # （これにより、MCTSがランダムにDirectionを生成し、AnglePair探索の種を増やす）
+                    name_dir = f"Dir_{L.name}_(Auto)"
+                    if name_dir not in existing_names:
+                        actions.append(([L], "DirectionOf", name_dir))
+                        existing_names.add(name_dir)
+
                     pts_on_L = [p for p in c_L.subobjects if p.entity_type == "Point" and getattr(p, 'base_importance', 1.0) > 0.0]
                     if len(pts_on_L) >= 3:
                         pts_weights = [getattr(p, 'base_importance', 0.0) for p in pts_on_L]
@@ -172,7 +177,7 @@ class ActionGenerator:
                         name_ratio = f"Ratio_{A.name}{B.name}_{B.name}{C.name}_(Auto)"
                         if name_ratio not in existing_names:
                             actions.append(([A, B, C], "AffineRatio", name_ratio))
-                            existing_names.add(name_ratio) # 🟢 比
+                            existing_names.add(name_ratio) 
 
             valid_triangles = [n for n in nodes if n.entity_type == "Triangle" and getattr(n, 'base_importance', 1.0) > 0.0]
             if valid_triangles:
@@ -187,9 +192,8 @@ class ActionGenerator:
                             name_len = f"LenSq_{sorted_edge[0].name}{sorted_edge[1].name}_(Auto)"
                             if name_len not in existing_names:
                                 actions.append((sorted_edge, "LengthSq", name_len))
-                                existing_names.add(name_len) # 🟢 長さ
+                                existing_names.add(name_len) 
 
-        # 一意性の最終チェックをして返す
         unique_actions = []
         seen = set()
         for act in actions:

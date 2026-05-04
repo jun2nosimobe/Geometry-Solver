@@ -355,6 +355,15 @@ class HybridEngine:
             changed = engine.run_all(self.prover.theorems)
             if not changed: break
 
+        self.agent.run_step()
+        proven_target = self.check_target_reached()
+        
+        if proven_target:
+            print(f"🎉 🎉 🎉 証明完了！ (Step: 0)")
+            print(f"最終結論: {proven_target}")
+            self.prover.print_proof_trace()
+            return True
+
         for step in range(1, max_steps + 1):
 
             logger.debug(f"\n第{step}ステップ")
@@ -392,9 +401,9 @@ if __name__ == "__main__":
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
-    engine.run(max_steps=5)
+    engine.run(max_steps=2)
 
-    print("E_Graphの描画")
+    #print("E_Graphの描画")
 
-    from visualize import draw_egraph
-    draw_egraph(env, filename=f"egraph_{problem_name}")
+    #from visualize import draw_egraph
+    #draw_egraph(env, filename=f"egraph_{problem_name}")

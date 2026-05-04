@@ -52,32 +52,34 @@ def setup_problem(env):
     C = make_free_point1("C", (t5, t6, 1))
 
     # 3. 問題の作図 (九点円の一部)[cite: 12]
+    Line_AB = create_geo_entity("LineThroughPoints", [A, B], name="Line_AB", env=env, is_given=True)
+    Line_BC = create_geo_entity("LineThroughPoints", [B, C], name="Line_BC", env=env, is_given=True)
+    Line_CA = create_geo_entity("LineThroughPoints", [C, A], name="Line_CA", env=env, is_given=True)
+
     # 辺の中点
     Mid_B_C = create_geo_entity("Midpoint", [B, C], name="Mid_BC", env=env, is_given=True)
     Mid_C_A = create_geo_entity("Midpoint", [C, A], name="Mid_CA", env=env, is_given=True)
     Mid_A_B = create_geo_entity("Midpoint", [A, B], name="Mid_AB", env=env, is_given=True)
     
-    # 頂点Aから対辺BCへの垂線と、その足 (H_A)[cite: 12]
-    Line_BC = create_geo_entity("LineThroughPoints", [B, C], name="Line_BC", env=env, is_given=True)
+    # 頂点Aから対辺BCへの垂線と、その足 (H_A)
     Perp_A_BC = create_geo_entity("PerpendicularLine", [Line_BC, A], name="Perp_A_BC", env=env, is_given=True)
     H_A = create_geo_entity("Intersection", [Line_BC, Perp_A_BC], name="H_A", env=env, is_given=True)
 
-    # ==========================================
-    # 🌟 NEW: 初期条件を E-Graph に直接焼き付ける
-    # ==========================================
-    
-    # [1] H_A は Line_BC と Perp_A_BC の上にある (create_geo_entity がよしなにやってくれるが念のため)
+    # 初期条件の焼き付け
     link_logical_incidence(H_A, Line_BC)
     link_logical_incidence(H_A, Perp_A_BC)
-
-    # [2] Line_BC と Perp_A_BC は「直角 (Perpendicular_90)」であるという E-Graph ノードを作成
-    # （新アーキテクチャでは、角度ノード同士のマージによって評価されるため）
-    ang_name = f"Angle_{Line_BC.name}_{Perp_A_BC.name}"
-    ang_node = create_geo_entity("AnglePair", [Line_BC, Perp_A_BC], name=ang_name, env=env, is_given=True)
     
-    # 環境(env)が持つ既定の直角ノードと、今作った角度ノードをマージ(同一視)する
+    # 中点の所属も明示しておく(HybridEngineが勝手にやるはずですが念のため)
+    link_logical_incidence(Mid_B_C, Line_BC)
+    link_logical_incidence(Mid_C_A, Line_CA)
+    link_logical_incidence(Mid_A_B, Line_AB)
+
+    # 角度(直角)の焼き付け
+    ang_name1 = f"Angle_{Line_BC.name}_{Perp_A_BC.name}"
+    ang_node1 = create_geo_entity("AnglePair", [Line_BC, Perp_A_BC], name=ang_name1, env=env, is_given=True)
+    
     if hasattr(env, 'right_angle'):
-        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_node))
+        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_node1))
 
 
     # 4. 目標となる Fact (Target Fact)[cite: 12]

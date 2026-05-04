@@ -236,6 +236,12 @@ def calc_circumcircle(parents, t_dict, cache):
     s = -(sq1*(x2*z2*y3*z3 - x3*z3*y2*z2) - x1*z1*(sq2*y3*z3 - sq3*y2*z2) + y1*z1*(sq2*x3*z3 - sq3*x2*z2))
     return normalize((u, v, w, s))
 
+def calc_direction(parents, t_dict, cache):
+    """直線の法線ベクトル(a, b)をDirectionの代表値として返す"""
+    L = parents[0].calculate(t_dict, cache)
+    # Lは(a, b, c)なので、(a, b, 0)を正規化して返す
+    return normalize((L[0], L[1], 0))
+
 # ==========================================
 # 🌟 スカラー計算ロジック
 # ==========================================
@@ -290,8 +296,8 @@ CALCULATION_REGISTRY = {
     "LengthSq": calc_length_sq,
     "AffineRatio": calc_affine_ratio,
     "Constant": calc_constant,
-    "AnglePair": calc_angle_pair,      # 🌟 NEW: これを追加！
-    "DirectionOf": calc_angle_pair
+    "AnglePair": calc_angle_pair,      
+    "DirectionOf": calc_direction  # 🌟 ここを変更！
 }
 
 # ==========================================
@@ -321,16 +327,26 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
     elif def_type == "Intersection":
         link_logical_incidence(new_entity, parents[0])
         link_logical_incidence(new_entity, parents[1])
+    # ==========================================
+    # mmp_core.py の apply_trivial_relations 内
+    # ==========================================
+
     elif def_type == "PerpendicularLine":
         ln, pt = parents[0], parents[1]
         link_logical_incidence(pt, new_entity)
         if env is not None:
             if hasattr(env, 'add_right_angle'): 
-                env.add_right_angle(ln, new_entity)
+                pass
             else: 
-                # 🌟 FIX: 直角は順序を反転しても直角 (mod π) なので両方登録する
-                env.right_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
-                env.right_angle.components[0].definitions.add(Definition("AnglePair", [new_entity, ln]))
+                # 🌟 FIX: 明示的に名前を生成して渡す
+                dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
+                dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
+                
+                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env)
+                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env)
+                
+                env.right_angle.components[0].definitions.add(Definition("AnglePair", [dir1, dir2]))
+                env.right_angle.components[0].definitions.add(Definition("AnglePair", [dir2, dir1]))
                 
     elif def_type == "ParallelLine":
         ln, pt = parents[0], parents[1]
@@ -339,9 +355,18 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
             if hasattr(env, 'add_right_angle'): 
                 pass
             else: 
-                # 🌟 FIX: 0度も順序を反転して両方登録する
-                env.zero_angle.components[0].definitions.add(Definition("AnglePair", [ln, new_entity]))
-                env.zero_angle.components[0].definitions.add(Definition("AnglePair", [new_entity, ln]))
+                # 🌟 FIX: 明示的に名前を生成して渡す
+                dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
+                dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
+                
+                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env)
+                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env)
+                
+                from logic_core import get_rep
+                rep1, rep2 = get_rep(dir1), get_rep(dir2)
+                if rep1 != rep2:
+                    env.merge_entities_logically(rep1, rep2)
+
     elif def_type == "Midpoint":
         c1, c2 = parents[0].get_best_component(), parents[1].get_best_component()
         if c1 and c2:
@@ -431,69 +456,41 @@ def set_canonical_t_dict(t_dict):
     global GLOBAL_CANONICAL_T_DICT
     GLOBAL_CANONICAL_T_DICT = t_dict
 
-def is_canonical_angle_order(L1, L2):
+def is_canonical_angle_order(Dir1, Dir2):
     """
-    MMPの座標を用いて、2直線 L1, L2 のなす角を評価し、
+    Directionノードのベクトルを用いて、2つの方向のなす角を評価し、
     システム全体で一意になる順序(Canonical Order)を決定する。
     """
     if GLOBAL_CANONICAL_T_DICT is None: 
-        return True # シミュレーション初期などでデータがない場合のフォールバック
+        return True 
 
     try:
-        # L1, L2 の方程式 ax+by+c=0 の係数ベクトルを取得
-        vec1 = L1.calculate(GLOBAL_CANONICAL_T_DICT, {})
-        vec2 = L2.calculate(GLOBAL_CANONICAL_T_DICT, {})
+        # 🌟 Dir1, Dir2 は calc_direction により (a, b, 0) のベクトルを返す
+        vec1 = Dir1.calculate(GLOBAL_CANONICAL_T_DICT, {})
+        vec2 = Dir2.calculate(GLOBAL_CANONICAL_T_DICT, {})
         
-        # a, b は法線ベクトル。方向ベクトルは (-b, a)
-        # ここでは法線ベクトル (a1, b1) と (a2, b2) の外積(cross)を計算する
-        # cross = a1*b2 - b1*a2  (これは sin(θ) に比例する)
-        
-        # ModInt の計算
         a1, b1 = vec1[0], vec1[1]
         a2, b2 = vec2[0], vec2[1]
         
+        # 法線ベクトルの外積 (sinθに比例)
         cross_val = a1 * b2 - b1 * a2
         
-        # 🌟 ここがポイント: 外積がゼロ(つまり平行)の場合は、別の基準(例えば内積や係数自体の大小)で決める
-        if is_zero_mod(cross_val):
-            # 平行な場合。係数 a1, a2 (または b1, b2) の大小で無理やり一意に決める
-            # (※ ここは前回の「正規化されたベクトルの辞書順」を使っても良いです)
+        if cross_val == 0: # 平行な場合
             val1 = a1.value if hasattr(a1, 'value') else int(a1) % ModInt.MOD
             val2 = a2.value if hasattr(a2, 'value') else int(a2) % ModInt.MOD
             return val1 < val2
             
-        # 外積がゼロでない場合。
-        # 有限体(ModInt)において「正負」を決定するため、値が MOD の半分より小さいかを評価する。
-        # これにより、0 < θ < π に相当する一意な向きが決定される。
         cross_int = cross_val.value if hasattr(cross_val, 'value') else int(cross_val) % ModInt.MOD
         
-        # MOD/2 を境界にして「正(反時計回り)」か「負(時計回り)」かを判定
         return cross_int < (ModInt.MOD // 2)
 
     except:
-        return True # 計算不能時はそのまま
+        return True
 
 # ==========================================
 # 🌟 作図ビルダー (Construction Builder) の修正
 # ==========================================
 def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False, is_ghost=False) -> 'GeoEntity':
-    
-    # 🌟 NEW: 角度の「値(外積の正負)」を用いて、完全に一意な順序(Ordered)に固定する！
-    if def_type == "AnglePair" and len(parents) == 2:
-        from logic_core import get_rep
-        L1, L2 = get_rep(parents[0]), get_rep(parents[1])
-        
-        if not is_canonical_angle_order(L1, L2):
-            parents = [parents[1], parents[0]] # 順序を反転して Canonical にする
-    if env:
-        for node in env.nodes:
-            comp = node.get_best_component()
-            if comp:
-                for d in comp.definitions:
-                    if d.def_type == def_type and d.parents == parents:
-                        return node 
-                        
-                        
     if def_type in ["Intersection", "Midpoint", "CirclesIntersection"]:
         entity_type = "Point"
     elif def_type in ["LineThroughPoints", "PerpendicularLine", "ParallelLine"]:

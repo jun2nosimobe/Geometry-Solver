@@ -88,15 +88,16 @@ class NotPattern(Pattern):
         self.pattern = pattern
 
     def match(self, current_bind, prover, env):
-        # 内部パターンを評価
-        matches = self.pattern.match(current_bind, prover, env)
-        # もし「現在のバインディングを満たした上で」マッチするものが1つでもあれば、条件不成立(棄却)
-        if matches:
-            return [] 
-        # マッチしなかった場合は、現在のバインディングをそのまま次に流す
-        return [current_bind]
-
-
+        # 内部パターンが1つでも状態を yield したらアウト
+        # ジェネレータから最初の要素を取ろうと試みる
+        generator = self.pattern.match(current_bind.copy(), prover, env)
+        try:
+            next(generator)
+            # マッチした (例外が出なかった) ので棄却
+            return
+        except StopIteration:
+            # マッチしなかった (StopIteration) ので、現在の状態をそのまま通過させる
+            yield current_bind
 
 class DistinctPattern(Pattern):
     """バインドされた変数がすべて『互いに異なる実体』であることを保証するパターン"""
@@ -104,13 +105,10 @@ class DistinctPattern(Pattern):
         self.vars_list = vars_list
         
     def match(self, current_bind, prover, env):
-        # 🌟 FIX: 「現在バインド済みの変数」だけを抽出してチェックする
         bound_vars = [v for v in self.vars_list if v in current_bind]
-        
         reps = [get_rep(current_bind[v]) for v in bound_vars]
         if len(set(reps)) == len(reps):
-            return [current_bind]
-        return []
+            yield current_bind
 
 class FactPattern(Pattern):
     def __init__(self, fact_type, args, target_type=None, sub_type=None):
@@ -120,118 +118,130 @@ class FactPattern(Pattern):
         self.sub_type = sub_type
 
     def match(self, current_bind, prover, env):
-        results = []
-        
+        """
+        DFS用のジェネレータ関数。
+        current_bind を直接書き換え、yield した後に状態を巻き戻す (バックトラッキング)。
+        """
         # --- 1. 同一性 (Identical) ---
         if self.fact_type == "Identical":
             v1, v2 = self.args[0], self.args[1]
             
-            # ケースA: 両方とも既にバインドされている（例: 円周角の逆での確認）
             if v1 in current_bind and v2 in current_bind:
                 if get_rep(current_bind[v1]) == get_rep(current_bind[v2]):
-                    results.append(current_bind.copy())
-            
-            # ケースB: 片方だけバインドされている（代入伝播）
-            elif v1 in current_bind:
-                new_bind = current_bind.copy()
-                new_bind[v2] = get_rep(current_bind[v1])
-                results.append(new_bind)
-            elif v2 in current_bind:
-                new_bind = current_bind.copy()
-                new_bind[v1] = get_rep(current_bind[v2])
-                results.append(new_bind)
-            
-            # ケースC: 両方とも未バインド（E-Graphから同一ノードを拾って両方に入れる）
+                    yield current_bind
+            elif v1 in current_bind or v2 in current_bind:
+                bound_var, unbound_var = (v1, v2) if v1 in current_bind else (v2, v1)
+                target_rep = get_rep(current_bind[bound_var])
+                
+                for n in env.nodes:
+                    if get_rep(n) == target_rep and is_valid_node(n):
+                        current_bind[unbound_var] = n
+                        yield current_bind
+                        del current_bind[unbound_var]
             else:
                 nodes = [n for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n)]
                 for rep in set(get_rep(n) for n in nodes):
-                    new_bind = current_bind.copy()
-                    new_bind[v1] = rep
-                    new_bind[v2] = rep
-                    results.append(new_bind)
+                    current_bind[v1] = rep
+                    current_bind[v2] = rep
+                    yield current_bind
+                    del current_bind[v1]
+                    del current_bind[v2]
 
-        # --- 2. 所属・接続関係 (Connected) ---
+       # --- 2. 所属・接続関係 (Connected) ---
         elif self.fact_type == "Connected":
             child_args = self.args[0] if isinstance(self.args[0], (list, tuple)) else [self.args[0]]
             parent_arg = self.args[1] if len(self.args) > 1 else None
             
-            # 🌟 究極の最適化: 親(直線)だけでなく、子(点)がバインド済みならそこから逆引きする！
             parent_nodes = set()
-            
             if parent_arg and parent_arg in current_bind:
                 parent_nodes.add(get_rep(current_bind[parent_arg]))
             else:
-                # バインド済みの子(点)があるか探す
                 bound_children = [current_bind[arg] for arg in child_args if arg in current_bind]
                 if bound_children:
-                    # バインド済みの子を含む直線だけを取得する
                     first_child = get_rep(bound_children[0])
-                    # 子の所属先(親)を探す
                     possible_parents = get_subentity(first_child, self.target_type) 
                     for p in possible_parents:
                         parent_nodes.add(get_rep(p))
                 else:
-                    # 親も子も未バインドなら仕方なく全探索
                     for n in env.nodes:
                         if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n):
                             parent_nodes.add(get_rep(n))
                 
             for p_node in parent_nodes:
-                # 🌟 安全な要素取得: subobjects と parents の両方から無理やり集める
                 children = set()
                 c_comp = p_node.get_best_component()
                 if c_comp:
                     for sub in c_comp.subobjects:
-                        if getattr(get_rep(sub), 'entity_type', '') == self.sub_type: children.add(get_rep(sub))
+                        rep_sub = get_rep(sub)
+                        # 🌟 修正: is_valid_node を追加
+                        if getattr(rep_sub, 'entity_type', '') == self.sub_type and is_valid_node(rep_sub): children.add(rep_sub)
                     for d in c_comp.definitions:
                         for p in d.parents:
-                            if getattr(get_rep(p), 'entity_type', '') == self.sub_type: children.add(get_rep(p))
+                            rep_p = get_rep(p)
+                            # 🌟 修正: is_valid_node を追加
+                            if getattr(rep_p, 'entity_type', '') == self.sub_type and is_valid_node(rep_p): children.add(rep_p)
                 
                 children = list(children)
                 if len(children) >= len(child_args):
                     for child_comb in itertools.permutations(children, len(child_args)):
-                        new_bind = current_bind.copy()
                         conflict = False
+                        added_vars = []
                         
                         if parent_arg:
-                            if parent_arg in new_bind and new_bind[parent_arg] != p_node: conflict = True
-                            else: new_bind[parent_arg] = p_node
+                            if parent_arg in current_bind and current_bind[parent_arg] != p_node: conflict = True
+                            elif parent_arg not in current_bind:
+                                current_bind[parent_arg] = p_node
+                                added_vars.append(parent_arg)
                         
                         if not conflict:
                             for arg_name, child_obj in zip(child_args, child_comb):
-                                if arg_name in new_bind and new_bind[arg_name] != child_obj: conflict = True; break
-                                new_bind[arg_name] = child_obj
-                            if not conflict: results.append(new_bind)
+                                if arg_name in current_bind and current_bind[arg_name] != child_obj: conflict = True; break
+                                elif arg_name not in current_bind:
+                                    current_bind[arg_name] = child_obj
+                                    added_vars.append(arg_name)
+                            
+                            if not conflict:
+                                yield current_bind
+                                
+                        for v in added_vars:
+                            del current_bind[v]
 
         # --- 3. 関数・定義関係 (DefinedBy) ---
         elif self.fact_type == "DefinedBy":
             arg_vars = self.args[:-1]
             result_var = self.args[-1]
             
-            unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint"]
+            # DirectionPair や AnglePair の両順列展開を自動化
+            unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints"]
             is_unordered = (self.target_type in unordered_types) or (self.sub_type == "Unordered")
 
-            # 🌟 劇的最適化 1: ターゲット変数が特定済みなら、O(1) で直撃する (Reverse Search)
+            # 🌟 NEW: 定義名(def_type)から実体型(entity_type)へのマッピング
+            # これにより O(N) の全探索を廃止し、O(1)の get_subentity を使えるようにする
+            entity_map = {
+                "AnglePair": "Angle", "DirectionOf": "Direction",
+                "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
+                "Midpoint": "Point", "Intersection": "Point", "CirclesIntersection": "Point",
+                "LineThroughPoints": "Line", "Circumcircle": "Circle"
+            }
+            actual_entity_type = entity_map.get(self.target_type, self.target_type)
+
             if result_var in current_bind:
                 valid_nodes = [get_rep(current_bind[result_var])]
                 
-            # 🌟 劇的最適化 2: 親変数がすべて特定済みなら、親の所属から O(1) で探す (Forward Search)
             elif all(v in current_bind for v in arg_vars):
                 rep_parents = [get_rep(current_bind[v]) for v in arg_vars]
                 
-                # 🌟 FIX: 検索時も AnglePair の引数を正規化順序に揃える
+                # 🌟 Direction対応: 親がDirectionノードであっても完全に機能する
                 if self.target_type == "AnglePair" and len(rep_parents) == 2:
                     from mmp_core import is_canonical_angle_order
-                    if not is_canonical_angle_order(parents[0], parents[1]):
-                        parents = [parents[1], parents[0]]
+                    if not is_canonical_angle_order(rep_parents[0], rep_parents[1]):
                         rep_parents = [rep_parents[1], rep_parents[0]]
                         
+                # 🌟 劇的最適化: 全ノード走査を廃止し、最初の親から O(1) で辿る
                 first_parent = rep_parents[0]
-                valid_nodes = list(get_subentity(first_parent, self.target_type))
-                
-            # 両方未特定の場合のみ全探索
+                valid_nodes = list(get_subentity(first_parent, actual_entity_type))
             else:
-                valid_nodes = [get_rep(n) for n in env.nodes if is_valid_node(n)]
+                valid_nodes = [get_rep(n) for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
                 
             for node in set(valid_nodes):
                 comp = node.get_best_component()
@@ -240,62 +250,210 @@ class FactPattern(Pattern):
                 for d in comp.definitions:
                     if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
                         reps_parents = [get_rep(p) for p in d.parents]
+                        
                         perms = list(itertools.permutations(reps_parents)) if is_unordered else [reps_parents]
                         
                         for perm in perms:
-                            new_bind = current_bind.copy()
                             conflict = False
+                            added_vars = []
                             
-                            if result_var in new_bind and new_bind[result_var] != node: conflict = True
-                            else: new_bind[result_var] = node
+                            if result_var in current_bind and current_bind[result_var] != node: conflict = True
+                            elif result_var not in current_bind:
+                                current_bind[result_var] = node
+                                added_vars.append(result_var)
                                 
                             if not conflict:
                                 for v_name, p_obj in zip(arg_vars, perm):
-                                    if v_name in new_bind and new_bind[v_name] != p_obj: conflict = True; break
-                                    new_bind[v_name] = p_obj
-                                    
-                            if not conflict: results.append(new_bind)
+                                    if v_name in current_bind and current_bind[v_name] != p_obj: conflict = True; break
+                                    elif v_name not in current_bind:
+                                        current_bind[v_name] = p_obj
+                                        added_vars.append(v_name)
+                                        
+                                if not conflict: 
+                                    yield current_bind
+                            
+                            for v in added_vars:
+                                del current_bind[v]
 
-        # --- 4. マクロ (Collinear / Concyclic) ---
-        elif self.fact_type in ["Collinear", "Concyclic"]:
-            search_type = "Line" if self.fact_type == "Collinear" else "Circle"
-            curves = [n for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == search_type and is_valid_node(n)]
-            for curve in set(get_rep(c) for c in curves):
-                # 🌟 FIX: 直線/円上の点を取得
-                pts = list(get_subentity(curve, "Point"))
-                if len(pts) >= len(self.args):
-                    for pts_comb in itertools.permutations(pts, len(self.args)):
-                        new_bind = current_bind.copy()
-                        conflict = False
-                        for arg_name, pt_obj in zip(self.args, pts_comb):
-                            if arg_name in new_bind and new_bind[arg_name] != pt_obj: conflict = True; break
-                            new_bind[arg_name] = pt_obj
-                        if not conflict: results.append(new_bind)
-
-        # --- 5. 共通要素の取得 (CommonEntity) ---
+        # --- 4. 共通要素 (CommonEntity) ---
         elif self.fact_type == "CommonEntity":
-            # 例: ["L_CA", "L_CB", "C"] (直線L_CAとL_CBの共通点Cを取得する)
             p1_var, p2_var, child_var = self.args
             
-            p1 = current_bind.get(p1_var)
-            p2 = current_bind.get(p2_var)
-            if not p1 or not p2: return [] # 親が特定されていなければ探索不能
-            
-            # E-Graph の機能を使って、それぞれの図形が持つ要素を O(1) で取得
-            children1 = get_subentity(p1, self.target_type)
-            children2 = get_subentity(p2, self.target_type)
-            
-            # 積集合(&)をとることで、一瞬で「交点」や「共通の直線」が求まる
-            common = children1 & children2
-            
-            for child in common:
-                new_bind = current_bind.copy()
-                if child_var in new_bind and new_bind[child_var] != child:
-                    continue # 矛盾する場合は破棄
-                new_bind[child_var] = child
-                results.append(new_bind)
+            if p1_var in current_bind and p2_var in current_bind:
+                p1_node = get_rep(current_bind[p1_var])
+                p2_node = get_rep(current_bind[p2_var])
+                
+                def get_sub_points(node):
+                    pts = set()
+                    comp = node.get_best_component()
+                    if comp:
+                        for sub in comp.subobjects:
+                            rep_sub = get_rep(sub)
+                            # 🌟 修正: is_valid_node を追加
+                            if getattr(rep_sub, 'entity_type', '') == self.target_type and is_valid_node(rep_sub): pts.add(rep_sub)
+                        for d in comp.definitions:
+                            for p in d.parents:
+                                rep_p = get_rep(p)
+                                # 🌟 修正: is_valid_node を追加
+                                if getattr(rep_p, 'entity_type', '') == self.target_type and is_valid_node(rep_p): pts.add(rep_p)
+                    return pts
+                    
+                common_pts = get_sub_points(p1_node) & get_sub_points(p2_node)
+                
+                for pt in common_pts:
+                    conflict = False
+                    added_vars = []
+                    if child_var in current_bind and current_bind[child_var] != pt: conflict = True
+                    elif child_var not in current_bind:
+                        current_bind[child_var] = pt
+                        added_vars.append(child_var)
+                        
+                    if not conflict:
+                        yield current_bind
+                        
+                    for v in added_vars:
+                        del current_bind[v]
 
-        return results
+        # --- 5. 共線 (Collinear) & 共円 (Concyclic) ---
+        elif self.fact_type in ["Collinear", "Concyclic"]:
+            target_entity = "Line" if self.fact_type == "Collinear" else "Circle"
+            
+            if all(v in current_bind for v in self.args):
+                p_nodes = [get_rep(current_bind[v]) for v in self.args]
+                common_curves = None
+                for p in p_nodes:
+                    curves = get_subentity(p, target_entity) 
+                    if common_curves is None:
+                        common_curves = set(curves)
+                    else:
+                        common_curves &= set(curves)
+                        
+                if common_curves: 
+                    yield current_bind
+                    
+            else:
+                curves = [n for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == target_entity and is_valid_node(n)]
+                for curve in set(get_rep(n) for n in curves):
+                    pts_on_curve = []
+                    comp = curve.get_best_component()
+                    if comp:
+                        for sub in comp.subobjects:
+                            rep_sub = get_rep(sub)
+                            # 🌟 修正: is_valid_node を追加
+                            if getattr(rep_sub, 'entity_type', '') == "Point" and is_valid_node(rep_sub):
+                                pts_on_curve.append(rep_sub)
+                        for d in comp.definitions:
+                            for p in d.parents:
+                                rep_p = get_rep(p)
+                                # 🌟 修正: is_valid_node を追加
+                                if getattr(rep_p, 'entity_type', '') == "Point" and is_valid_node(rep_p):
+                                    pts_on_curve.append(rep_p)
+                    
+                    pts_on_curve = list(set(pts_on_curve))
+                    
+                    if len(pts_on_curve) >= len(self.args):
+                        for perm in itertools.permutations(pts_on_curve, len(self.args)):
+                            conflict = False
+                            added_vars = []
+                            for v_name, pt_obj in zip(self.args, perm):
+                                if v_name in current_bind and current_bind[v_name] != pt_obj: conflict = True; break
+                                elif v_name not in current_bind:
+                                    current_bind[v_name] = pt_obj
+                                    added_vars.append(v_name)
+                            
+                            if not conflict:
+                                yield current_bind
+                                
+                            for v in added_vars:
+                                del current_bind[v]
+
+                # 🌟 B. MMP予想などの論理Factリスト(prover.facts)の確認
+                valid_facts = []
+                if hasattr(prover, 'facts'):
+                    for fact in prover.facts:
+                        # 🚨 追加: MMPの予想であり、かつ未証明のものは絶対に推論の根拠にしない！
+                        if getattr(fact, 'is_mmp_conjecture', False) and not getattr(fact, 'is_proven', False):
+                            continue
+                        
+                        if fact.fact_type == self.fact_type:
+                            valid_facts.append([get_rep(a) for a in getattr(fact, 'objects', [])])
+                
+                for f_args in valid_facts:
+                    if len(f_args) >= len(self.args):
+                        for perm in itertools.permutations(f_args, len(self.args)):
+                            conflict = False
+                            added = []
+                            for v_name, obj in zip(self.args, perm):
+                                if v_name in current_bind and current_bind[v_name] != obj: conflict = True; break
+                                elif v_name not in current_bind:
+                                    current_bind[v_name] = obj
+                                    added.append(v_name)
+                            if not conflict:
+                                yield current_bind
+                            for v in added:
+                                del current_bind[v]
+
+        # --- 6. その他のファクト ---
+        else:
+            if all(v in current_bind for v in self.args):
+                reps = [get_rep(current_bind[v]) for v in self.args]
+                fact_exists = False
+                
+                if hasattr(prover, 'facts'):
+                    for fact in prover.facts:
+                        # 🚨 追加: 未証明の予想を弾く
+                        if getattr(fact, 'is_mmp_conjecture', False) and not getattr(fact, 'is_proven', False):
+                            continue
+                            
+                        if fact.fact_type == self.fact_type:
+                            fact_reps = [get_rep(n) for n in getattr(fact, 'objects', [])]
+                            if set(reps) == set(fact_reps):
+                                fact_exists = True; break
+                            
+                if not fact_exists:
+                    for n in env.nodes:
+                        comp = get_rep(n).get_best_component()
+                        if comp:
+                            for d in comp.definitions:
+                                if d.def_type == self.fact_type:
+                                    d_reps = [get_rep(p) for p in d.parents]
+                                    if set(reps).issubset(set(d_reps)):
+                                        fact_exists = True; break
+                if fact_exists:
+                    yield current_bind
+            else:
+                valid_facts = []
+                if hasattr(prover, 'facts'):
+                    for fact in prover.facts:
+                        # 🚨 追加: 未証明の予想を弾く
+                        if getattr(fact, 'is_mmp_conjecture', False) and not getattr(fact, 'is_proven', False):
+                            continue
+                            
+                        if fact.fact_type == self.fact_type:
+                            valid_facts.append([get_rep(a) for a in getattr(fact, 'objects', [])])
+                            
+                for n in env.nodes:
+                    comp = get_rep(n).get_best_component()
+                    if comp:
+                        for d in comp.definitions:
+                            if d.def_type == self.fact_type:
+                                valid_facts.append([get_rep(p) for p in d.parents])
+                                
+                for f_args in valid_facts:
+                    if len(f_args) >= len(self.args):
+                        for perm in itertools.permutations(f_args, len(self.args)):
+                            conflict = False
+                            added = []
+                            for v_name, obj in zip(self.args, perm):
+                                if v_name in current_bind and current_bind[v_name] != obj:
+                                    conflict = True; break
+                                elif v_name not in current_bind:
+                                    current_bind[v_name] = obj
+                                    added.append(v_name)
+                            if not conflict:
+                                yield current_bind
+                            for v in added:
+                                del current_bind[v]
 
 class CustomPattern(Pattern):
     """任意のPython関数で変数を束縛・フィルタするパターン"""
@@ -304,18 +462,25 @@ class CustomPattern(Pattern):
 
     def match(self, current_bind, prover, env):
         partial_binds = self.match_func(env, current_bind)
-        if not partial_binds: return []
+        if not partial_binds: return
         
-        results = []
         for pb in partial_binds:
-            new_bind = current_bind.copy()
             conflict = False
+            added_vars = []
             for k, v in pb.items():
                 rep_v = get_rep(v)
-                if k in new_bind and new_bind[k] != rep_v: conflict = True; break
-                new_bind[k] = rep_v
-            if not conflict: results.append(new_bind)
-        return results
+                if k in current_bind and current_bind[k] != rep_v:
+                    conflict = True; break
+                elif k not in current_bind:
+                    current_bind[k] = rep_v
+                    added_vars.append(k)
+                    
+            if not conflict:
+                yield current_bind
+                
+            # バックトラッキング
+            for k in added_vars:
+                del current_bind[k]
 
 # ==========================================
 # 🌟 汎用ルールエンジン (UniversalRuleEngine)
@@ -326,35 +491,60 @@ class UniversalRuleEngine:
         self.prover = prover
 
     def _evaluate_patterns(self, theorem_name, patterns):
-        bindings = [{}] 
-        for idx, pattern in enumerate(patterns):
-            new_bindings = []
-            for bind in bindings:
-                new_bindings.extend(pattern.match(bind, self.prover, self.env))
+        """深さ優先探索 (DFS) とバックトラッキングによる超高速パターンマッチ"""
+        initial_bind = {}
+        
+        # 🌟 環境の定数ノードを初期バインド
+        if hasattr(self.env, 'right_angle'):
+            from logic_core import get_rep
+            initial_bind["Ang90"] = get_rep(self.env.right_angle)
+        if hasattr(self.env, 'zero_angle'):
+            from logic_core import get_rep
+            initial_bind["Ang0"] = get_rep(self.env.zero_angle)
             
-            # 重複排除
-            unique = []
-            for b in new_bindings:
-                if b not in unique: unique.append(b)
-            bindings = unique
+        # デバッグ用：各パターンで何件生き残ったかカウントする
+        survival_counts = [0] * len(patterns)
             
-            # 🌟 DEBUG: 各条件ごとの生き残りバインディング数をログ出力
-            if hasattr(pattern, 'fact_type'):
-                logger.debug(f"      [条件 {idx+1}: {pattern.fact_type}] 生き残り: {len(bindings)}件")
-            elif isinstance(pattern, NotPattern):
-                logger.debug(f"      [条件 {idx+1}: NotPattern] 生き残り: {len(bindings)}件")
-            else:
-                logger.debug(f"      [条件 {idx+1}: Custom] 生き残り: {len(bindings)}件")
-
-            if not bindings: 
-                break # この時点で0件なら、以降の条件は評価しない
+        def dfs(pattern_idx, current_bind):
+            # すべてのパターン(条件)をクリアした場合のみコピーして返す
+            if pattern_idx == len(patterns):
+                yield current_bind.copy()
+                return
+            
+            pattern = patterns[pattern_idx]
+            
+            # match 関数(ジェネレータ)から次々と候補を受け取る
+            for bound_dict in pattern.match(current_bind, self.prover, self.env):
+                survival_counts[pattern_idx] += 1
+                yield from dfs(pattern_idx + 1, bound_dict)
                 
-        return bindings
+        # 探索スタート (リスト化して確実な結果セットを得る)
+        results = list(dfs(0, initial_bind))
+        
+        import logging
+        logger = logging.getLogger("GeometryProver")
+        # ログ出力
+        for i, count in enumerate(survival_counts):
+            # パターンの詳細を文字列化
+            pat = patterns[i]
+            if isinstance(pat, FactPattern):
+                pat_desc = f"FactPattern({pat.fact_type}, {pat.target_type})"
+            elif isinstance(pat, DistinctPattern):
+                pat_desc = "Distinct"
+            elif isinstance(pat, NotPattern):
+                pat_desc = "Not"
+            else:
+                pat_desc = pat.__class__.__name__
+                
+            logger.debug(f"      [条件 {i+1}: {pat_desc}] 生き残り探索数: {count}")
+            if count == 0: break
+            
+        return results
 
     def _execute_constructions(self, constructions, bind):
         """宣言的作図の実行 (共通の親を持つか探し、無ければ作る)"""
         from mmp_core import create_geo_entity, link_logical_incidence
-        import itertools
+        from logic_core import get_subentity
         
         for constr in constructions:
             parents = [bind[arg] for arg in constr.args]
@@ -377,11 +567,10 @@ class UniversalRuleEngine:
                 common &= get_subentity(p, constr.target_type)
                 
             found_obj = None
-            # 🌟 FIX: AnglePair は除外し、LineThroughPoints を追加！
             unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints"]
             is_unordered = constr.def_type in unordered_types
             
-            # 🌟 究極の修正: 適当に list(common)[0] を拾うのをやめ、定義の順序まで厳格に照合する
+            # 定義の順序まで厳格に照合する
             for obj in common:
                 comp = obj.get_best_component()
                 if comp:
@@ -412,6 +601,9 @@ class UniversalRuleEngine:
     def apply_conclusions(self, theorem_name, conclusions, bind):
         """結論の実行"""
         from mmp_core import link_logical_incidence
+        from logic_core import get_rep, get_subentity
+        import logging
+        logger = logging.getLogger("GeometryProver")
         applied_anything = False
         
         for conc in conclusions:
@@ -456,8 +648,9 @@ class UniversalRuleEngine:
 
         return applied_anything
 
-
     def run_all(self, theorems):
+        import logging
+        logger = logging.getLogger("GeometryProver")
         applied_any_in_this_run = False
         
         for theorem in theorems:
@@ -477,6 +670,7 @@ class UniversalRuleEngine:
                             type_ok = False; break
                 if not type_ok: continue
 
+                # ここで _execute_constructions が呼ばれます
                 if not self._execute_constructions(theorem.constructions, bind): continue
 
                 if self.apply_conclusions(theorem.name, theorem.conclusions, bind):
