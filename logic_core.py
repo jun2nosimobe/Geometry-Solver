@@ -1,12 +1,30 @@
 import logging
+import os
 import itertools
 
 logger = logging.getLogger("GeometryProver")
 logger.setLevel(logging.DEBUG)
-if not logger.handlers:
-    file_handler = logging.FileHandler('proof.log', mode='w', encoding='utf-8')
+
+# 🌟 NEW: ロガーを動的にセットアップする関数
+def setup_proof_logger(problem_name: str):
+    # すでにハンドラがあればクリア（連続実行時の重複防止）
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    # "prob_euler" から "prob_" を取り除いて "euler" にする
+    base_name = problem_name.replace("prob_", "") if problem_name.startswith("prob_") else problem_name
+    
+    # result フォルダが存在しなければ自動作成
+    os.makedirs("result", exist_ok=True)
+    
+    # 出力先のパスを生成
+    log_path = os.path.join("result", f"proof_{base_name}.log")
+    
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(file_handler)
+    
+    return log_path
 
 # ==========================================
 # 🌟 汎用 E-Graph クエリ関数
@@ -111,11 +129,14 @@ class DistinctPattern(Pattern):
             yield current_bind
 
 class FactPattern(Pattern):
-    def __init__(self, fact_type, args, target_type=None, sub_type=None):
+    # 🌟 flip_group=None を追加
+    def __init__(self, fact_type, args, target_type=None, sub_type=None, allow_flip=False, flip_group=None):
         self.fact_type = fact_type
         self.args = args
         self.target_type = target_type
         self.sub_type = sub_type
+        self.allow_flip = allow_flip
+        self.flip_group = flip_group # 🌟 保存
 
     def match(self, current_bind, prover, env):
         """
@@ -156,16 +177,12 @@ class FactPattern(Pattern):
             if parent_arg and parent_arg in current_bind:
                 parent_nodes.add(get_rep(current_bind[parent_arg]))
             else:
-                bound_children = [current_bind[arg] for arg in child_args if arg in current_bind]
-                if bound_children:
-                    first_child = get_rep(bound_children[0])
-                    possible_parents = get_subentity(first_child, self.target_type) 
-                    for p in possible_parents:
-                        parent_nodes.add(get_rep(p))
-                else:
-                    for n in env.nodes:
-                        if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n):
-                            parent_nodes.add(get_rep(n))
+                # 🌟 型チェックを緩和: "Line" が "LineThroughPoints" 等に含まれていればOKとする
+                for n in env.nodes:
+                    rep_n = get_rep(n)
+                    e_type = getattr(rep_n, 'entity_type', '')
+                    if self.target_type and (self.target_type in e_type or e_type in self.target_type) and is_valid_node(rep_n):
+                        parent_nodes.add(rep_n)
                 
             for p_node in parent_nodes:
                 children = set()
@@ -173,13 +190,17 @@ class FactPattern(Pattern):
                 if c_comp:
                     for sub in c_comp.subobjects:
                         rep_sub = get_rep(sub)
-                        # 🌟 修正: is_valid_node を追加
-                        if getattr(rep_sub, 'entity_type', '') == self.sub_type and is_valid_node(rep_sub): children.add(rep_sub)
+                        s_type = getattr(rep_sub, 'entity_type', '')
+                        # 🌟 子要素の型チェックも緩和
+                        if self.sub_type and (self.sub_type in s_type or s_type in self.sub_type) and is_valid_node(rep_sub): 
+                            children.add(rep_sub)
                     for d in c_comp.definitions:
                         for p in d.parents:
                             rep_p = get_rep(p)
-                            # 🌟 修正: is_valid_node を追加
-                            if getattr(rep_p, 'entity_type', '') == self.sub_type and is_valid_node(rep_p): children.add(rep_p)
+                            p_type = getattr(rep_p, 'entity_type', '')
+                            # 🌟 親要素の型チェックも緩和
+                            if self.sub_type and (self.sub_type in p_type or p_type in self.sub_type) and is_valid_node(rep_p): 
+                                children.add(rep_p)
                 
                 children = list(children)
                 if len(children) >= len(child_args):
@@ -205,8 +226,8 @@ class FactPattern(Pattern):
                                 
                         for v in added_vars:
                             del current_bind[v]
-
-        # --- 3. 関数・定義関係 (DefinedBy) ---
+                    
+                # --- 3. 関数・定義関係 (DefinedBy) ---
         elif self.fact_type == "DefinedBy":
             arg_vars = self.args[:-1]
             result_var = self.args[-1]
@@ -214,6 +235,7 @@ class FactPattern(Pattern):
             # DirectionPair や AnglePair の両順列展開を自動化
             unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints"]
             is_unordered = (self.target_type in unordered_types) or (self.sub_type == "Unordered")
+            should_permute = is_unordered or getattr(self, 'allow_flip', False)
 
             # 🌟 NEW: 定義名(def_type)から実体型(entity_type)へのマッピング
             # これにより O(N) の全探索を廃止し、O(1)の get_subentity を使えるようにする
@@ -221,7 +243,8 @@ class FactPattern(Pattern):
                 "AnglePair": "Angle", "DirectionOf": "Direction",
                 "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
                 "Midpoint": "Point", "Intersection": "Point", "CirclesIntersection": "Point",
-                "LineThroughPoints": "Line", "Circumcircle": "Circle"
+                "LineThroughPoints": "Line", "Circumcircle": "Circle",
+                "PerpendicularLine": "Line", "ParallelLine": "Line"  # 🌟 この1行を追加！
             }
             actual_entity_type = entity_map.get(self.target_type, self.target_type)
 
@@ -230,16 +253,12 @@ class FactPattern(Pattern):
                 
             elif all(v in current_bind for v in arg_vars):
                 rep_parents = [get_rep(current_bind[v]) for v in arg_vars]
-                
-                # 🌟 Direction対応: 親がDirectionノードであっても完全に機能する
-                if self.target_type == "AnglePair" and len(rep_parents) == 2:
-                    from mmp_core import is_canonical_angle_order
-                    if not is_canonical_angle_order(rep_parents[0], rep_parents[1]):
-                        rep_parents = [rep_parents[1], rep_parents[0]]
                         
-                # 🌟 劇的最適化: 全ノード走査を廃止し、最初の親から O(1) で辿る
-                first_parent = rep_parents[0]
-                valid_nodes = list(get_subentity(first_parent, actual_entity_type))
+                # 🌟 FIX: first_parent だけ検索する過剰最適化を廃止し、すべての親から確実に拾う
+                valid_nodes = set()
+                for p in rep_parents:
+                    valid_nodes.update(get_subentity(p, actual_entity_type))
+                valid_nodes = list(valid_nodes)
             else:
                 valid_nodes = [get_rep(n) for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
                 
@@ -251,11 +270,40 @@ class FactPattern(Pattern):
                     if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
                         reps_parents = [get_rep(p) for p in d.parents]
                         
-                        perms = list(itertools.permutations(reps_parents)) if is_unordered else [reps_parents]
+                        perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
                         
                         for perm in perms:
                             conflict = False
                             added_vars = []
+                            
+                            # ==========================================
+                            # 🌟 NEW: flip_group による有向角の相対フリップ強制
+                            # ==========================================
+                            if self.target_type == "AnglePair" and len(arg_vars) == 2:
+                                is_flipped = (tuple(perm) != tuple(reps_parents))
+                                
+                                if is_flipped and not getattr(self, 'allow_flip', False):
+                                    conflict = True
+                                else:
+                                    # 1. グループ全体のフリップ状態の照合と記録
+                                    if getattr(self, 'flip_group', None):
+                                        group_key = f"__flip_group_{self.flip_group}"
+                                        if group_key not in current_bind:
+                                            current_bind[group_key] = is_flipped
+                                            added_vars.append(group_key)
+                                        elif current_bind[group_key] != is_flipped:
+                                            conflict = True # グループ内でフリップ状態が不一致なら棄却
+                                            
+                                    # 2. 個別の Angle 変数のフリップ状態を記録（apply_conclusions で使うため）
+                                    if not conflict:
+                                        indiv_key = f"__flip_{result_var}"
+                                        if indiv_key not in current_bind:
+                                            current_bind[indiv_key] = is_flipped
+                                            added_vars.append(indiv_key)
+                                        elif current_bind[indiv_key] != is_flipped:
+                                            conflict = True
+                                        
+                            # ===========================================
                             
                             if result_var in current_bind and current_bind[result_var] != node: conflict = True
                             elif result_var not in current_bind:
@@ -289,15 +337,19 @@ class FactPattern(Pattern):
                     if comp:
                         for sub in comp.subobjects:
                             rep_sub = get_rep(sub)
-                            # 🌟 修正: is_valid_node を追加
-                            if getattr(rep_sub, 'entity_type', '') == self.target_type and is_valid_node(rep_sub): pts.add(rep_sub)
+                            # 🌟 修正: pts_on_curve ではなく pts.add を使用し、対象は target_type
+                            if getattr(rep_sub, 'entity_type', '') == self.target_type and is_valid_node(rep_sub):
+                                pts.add(rep_sub)
                         for d in comp.definitions:
                             for p in d.parents:
                                 rep_p = get_rep(p)
-                                # 🌟 修正: is_valid_node を追加
-                                if getattr(rep_p, 'entity_type', '') == self.target_type and is_valid_node(rep_p): pts.add(rep_p)
+                                # 🌟 修正: pts_on_curve ではなく pts.add を使用
+                                if getattr(rep_p, 'entity_type', '') == self.target_type and is_valid_node(rep_p):
+                                    pts.add(rep_p)
+                    # 🌟 修正: 集めた pts をしっかり return する
                     return pts
                     
+                # 🌟 修正: 消えていた common_pts の計算式を復活！
                 common_pts = get_sub_points(p1_node) & get_sub_points(p2_node)
                 
                 for pt in common_pts:
@@ -493,8 +545,6 @@ class UniversalRuleEngine:
     def _evaluate_patterns(self, theorem_name, patterns):
         """深さ優先探索 (DFS) とバックトラッキングによる超高速パターンマッチ"""
         initial_bind = {}
-        
-        # 🌟 環境の定数ノードを初期バインド
         if hasattr(self.env, 'right_angle'):
             from logic_core import get_rep
             initial_bind["Ang90"] = get_rep(self.env.right_angle)
@@ -502,39 +552,63 @@ class UniversalRuleEngine:
             from logic_core import get_rep
             initial_bind["Ang0"] = get_rep(self.env.zero_angle)
             
-        # デバッグ用：各パターンで何件生き残ったかカウントする
         survival_counts = [0] * len(patterns)
+        
+        # 🌟 追跡したい図形の名前（ミケルの定理なら C, D, E, M など）
+        # ここに含まれる文字列がバインドされているルートが消滅した時だけ警告を出します
+        TARGET_NAMES = ["C", "D", "E", "M"] 
             
         def dfs(pattern_idx, current_bind):
-            # すべてのパターン(条件)をクリアした場合のみコピーして返す
             if pattern_idx == len(patterns):
                 yield current_bind.copy()
                 return
             
             pattern = patterns[pattern_idx]
+            matched_any = False
             
             # match 関数(ジェネレータ)から次々と候補を受け取る
             for bound_dict in pattern.match(current_bind, self.prover, self.env):
+                matched_any = True
                 survival_counts[pattern_idx] += 1
                 yield from dfs(pattern_idx + 1, bound_dict)
                 
-        # 探索スタート (リスト化して確実な結果セットを得る)
+            # ==========================================
+            # 🚨 デバッグトラップ: 期待ルートの消滅を検知 (完全精密版)
+            # ==========================================
+            if not matched_any and theorem_name == "円周角の定理の逆":
+                # 点の変数名リスト
+                point_keys = ["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"]
+                
+                # 現在バインドされている点オブジェクトの「正確な名前」だけを抽出
+                bound_pts = [getattr(current_bind[k], 'name', '') for k in point_keys if k in current_bind]
+                
+                # 1つ以上点がバインドされており、かつ「ターゲット以外の点（AやFなど）」が混ざっていないかチェック
+                if set(bound_pts) == set(TARGET_NAMES):
+                    import logging
+                    logger = logging.getLogger("GeometryProver")
+                    
+                    if hasattr(pattern, 'fact_type'):
+                        pat_desc = f"{pattern.__class__.__name__}({pattern.fact_type}, {getattr(pattern, 'target_type', '')})"
+                    elif hasattr(pattern, 'vars_list'):
+                        pat_desc = f"Distinct({pattern.vars_list})"
+                    else:
+                        pat_desc = pattern.__class__.__name__
+                        
+                    bound_names = {k: getattr(v, 'name', str(v)) for k, v in current_bind.items()}
+                    logger.debug(f"  🚨 [狙撃デバッグ] 条件 {pattern_idx + 1}: {pat_desc} で期待ルートが消滅！")
+                    logger.debug(f"       -> 直前のバインド状態: {bound_names}")
+            # ==========================================
+                
         results = list(dfs(0, initial_bind))
         
         import logging
         logger = logging.getLogger("GeometryProver")
-        # ログ出力
         for i, count in enumerate(survival_counts):
-            # パターンの詳細を文字列化
             pat = patterns[i]
-            if isinstance(pat, FactPattern):
-                pat_desc = f"FactPattern({pat.fact_type}, {pat.target_type})"
-            elif isinstance(pat, DistinctPattern):
-                pat_desc = "Distinct"
-            elif isinstance(pat, NotPattern):
-                pat_desc = "Not"
-            else:
-                pat_desc = pat.__class__.__name__
+            if hasattr(pat, 'fact_type'): pat_desc = f"FactPattern({pat.fact_type}, {getattr(pat, 'target_type', '')})"
+            elif hasattr(pat, 'vars_list'): pat_desc = "Distinct"
+            elif hasattr(pat, 'pattern'): pat_desc = "Not"
+            else: pat_desc = pat.__class__.__name__
                 
             logger.debug(f"      [条件 {i+1}: {pat_desc}] 生き残り探索数: {count}")
             if count == 0: break
@@ -550,10 +624,16 @@ class UniversalRuleEngine:
             parents = [bind[arg] for arg in constr.args]
             if len(set(parents)) < len(parents): return False # 自己ループ防止
 
+            # 🌟 修正: 勝手に入れ替えるのをやめ、不正な順序なら定理の適用自体をキャンセル
             if constr.def_type == "AnglePair" and len(parents) == 2:
                 from mmp_core import is_canonical_angle_order
                 if not is_canonical_angle_order(parents[0], parents[1]):
+                    # E-Graphの純粋性を守るため、順序を反転させてCanonicalにする
                     parents = [parents[1], parents[0]]
+                    # 🌟 【最重要】反転させたという事実をバインドに「裏タグ」として記録する
+                    bind[f"__flip_{constr.bind_to}"] = True
+                else:
+                    bind[f"__flip_{constr.bind_to}"] = False
 
             if constr.def_type == "LineThroughPoints" and len(parents) == 2:
                 common_lines = get_subentity(parents[0], "Line") & get_subentity(parents[1], "Line")
@@ -599,7 +679,7 @@ class UniversalRuleEngine:
         return True
 
     def apply_conclusions(self, theorem_name, conclusions, bind):
-        """結論の実行"""
+        """結論の実行 (サイレントキラー可視化版)"""
         from mmp_core import link_logical_incidence
         from logic_core import get_rep, get_subentity
         import logging
@@ -611,7 +691,28 @@ class UniversalRuleEngine:
             reps = [get_rep(o) for o in objects]
             
             if conc.fact_type == "Identical" and len(reps) == 2:
-                if reps[0] == reps[1]: continue
+                # 🌟 NEW: Angleマージの場合、フリップ状態（裏タグ）が一致するかチェック
+                if getattr(reps[0], 'entity_type', '') == "Angle":
+                    flip1 = bind.get(f"__flip_{conc.args[0]}", False)
+                    flip2 = bind.get(f"__flip_{conc.args[1]}", False)
+                    if flip1 != flip2:
+                        logger.debug(f"    ⏭️ フリップ状態の不一致 (θ ≡ -θ) のためマージをスキップ: {reps[0].name}")
+                        continue
+                        
+                if reps[0] == reps[1]:
+                    logger.debug(f"    ⏭️ 既に同一ノードのためマージをスキップ: {reps[0].name}")
+                    continue
+
+                # 🌟 ログの拡張: 根拠となった共円の点情報を取得
+                evidence_str = ""
+                if theorem_name == "円周角の定理":
+                    # Apex1, Apex2, Base1, Base2 の代表元の名前を抽出
+                    p_names = [get_rep(bind[k]).name for k in ["Apex1", "Apex2", "Base1", "Base2"] if k in bind]
+                    evidence_str = f" [根拠: 共円({', '.join(p_names)})]"
+
+                # ログ出力時に evidence_str を付加する
+                logger.info(f"  🟢 [マージ実行] {reps[0].name} ≡ {reps[1].name} (理由: {theorem_name}){evidence_str}")
+                
                 merged = self.env.merge_entities_logically(reps[0], reps[1])
                 if merged:
                     logger.debug(f"  🟢 [マージ実行] {reps[0].name} ≡ {reps[1].name} (理由: {theorem_name})")
@@ -628,6 +729,9 @@ class UniversalRuleEngine:
                         logger.debug(f"  🟢 [リンク] {child_obj.name} ∈ {parent_obj.name} (理由: {theorem_name})")
                         applied_anything = True
                         self.prover.record_trace(theorem_name, f"{child_obj.name} ∈ {parent_obj.name}")
+                    else:
+                        # 🌟 NEW: 既にリンク済みの処理を可視化
+                        logger.debug(f"    ⏭️ 既にリンク済みのためスキップ: {child_obj.name} ∈ {parent_obj.name}")
 
             elif conc.fact_type in ["Collinear", "Concyclic"]:
                 search_type = "Line" if conc.fact_type == "Collinear" else "Circle"
@@ -645,6 +749,10 @@ class UniversalRuleEngine:
                     logger.debug(f"  🟢 [マクロ構築] {', '.join(p.name for p in reps)} ∈ {new_curve.name} (理由: {theorem_name})")
                     applied_anything = True
                     self.prover.record_trace(theorem_name, f"{conc.fact_type}({', '.join(p.name for p in reps)})")
+                else:
+                    # 🌟 NEW: 既に共円/共線である場合のスキップを可視化
+                    curve_name = list(common_curves)[0].name
+                    logger.debug(f"    ⏭️ 既に {search_type} ({curve_name}) 上に存在するためスキップ: {', '.join(p.name for p in reps)}")
 
         return applied_anything
 
@@ -667,11 +775,15 @@ class UniversalRuleEngine:
                 for k, v in bind.items():
                     if k in theorem.entities and theorem.entities[k] != "Any":
                         if getattr(v, 'entity_type', '') != theorem.entities[k]:
+                            # 🌟 NEW: 型チェックの失敗を可視化
+                            logger.debug(f"    ❌ 型チェックで弾かれました ({k} が {theorem.entities[k]} ではない): {v.name}")
                             type_ok = False; break
                 if not type_ok: continue
 
-                # ここで _execute_constructions が呼ばれます
-                if not self._execute_constructions(theorem.constructions, bind): continue
+                if not self._execute_constructions(theorem.constructions, bind): 
+                    # 🌟 NEW: 作図の失敗(角度の順序違反など)を可視化
+                    logger.debug(f"    ❌ 作図(Constructions)フェーズで拒否されました: { {k: getattr(v, 'name', v) for k, v in bind.items()} }")
+                    continue
 
                 if self.apply_conclusions(theorem.name, theorem.conclusions, bind):
                     valid_count += 1
@@ -686,8 +798,13 @@ class UniversalRuleEngine:
 # 🌟 Proof Environment & Prover
 # ==========================================
 class ProofEnvironment:
-    def __init__(self):
+    # 🌟 修正1: 引数に enable_numerical_debug=False を追加
+    def __init__(self, enable_numerical_debug=False):
         self.nodes = []           
+        
+        # 🌟 デバッグ用の変数を初期化
+        self.enable_numerical_debug = enable_numerical_debug
+        self.all_vars = None
         
         from mmp_core import GeoEntity, LogicalComponent
         self.zero_angle = GeoEntity("Angle", "Parallel_0")
@@ -700,8 +817,31 @@ class ProofEnvironment:
         
         self.nodes.extend([self.zero_angle, self.right_angle])
 
-    def merge_entities_logically(self, entity1, entity2):
-        entity1, entity2 = get_rep(entity1), get_rep(entity2)
+    def merge_entities_logically(self, rep1, rep2):
+        entity1, entity2 = get_rep(rep1), get_rep(rep2)
+        if entity1 == entity2: return None
+        if entity1 not in self.nodes or entity2 not in self.nodes: return None
+
+        # --- 実行時デバッグ ---
+        if getattr(self, 'enable_numerical_debug', False) and getattr(self, 'all_vars', None):
+            from mmp_core import verify_identical_runtime
+            if not verify_identical_runtime(entity1, entity2, self.all_vars):
+                v1_val = getattr(entity1, '_debug_v', 'Unknown')
+                v2_val = getattr(entity2, '_debug_v', 'Unknown')
+                err_trace = getattr(entity1, '_calc_err_trace', '') # 🌟 エラーを取得
+                
+                err_msg = f"🚨 [FATAL ERROR] 数値検証FAIL: {entity1.name} ≡ {entity2.name}\n   -> v1_coords = {v1_val}\n   -> v2_coords = {v2_val}"
+                
+                # 🌟 真の原因をコンソールに叩き出す
+                if err_trace:
+                    err_msg += f"\n\n🔥 [計算中の内部例外 (これが真の原因です!)]:\n{err_trace}"
+                    
+                print(err_msg)
+                raise RuntimeError(err_msg)
+                
+        # 🌟 修正2: rep1, rep2 を使って get_rep を呼び出す
+        entity1, entity2 = get_rep(rep1), get_rep(rep2)
+        
         if entity1 == entity2: return None
         if entity1 not in self.nodes or entity2 not in self.nodes: return None
             

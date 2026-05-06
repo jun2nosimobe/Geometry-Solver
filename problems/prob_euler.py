@@ -11,7 +11,7 @@ class Variable:
 def setup_problem(env):
     # 三角形の自由度は3つ (A=(0,0), B=(u1,0), C=(u2,u3))
     u1, u2, u3 = Variable('u1'), Variable('u2'), Variable('u3')
-    all_vars = ["u1", "u2", "u3"]
+    all_vars = [u1, u2, u3]
 
     def make_given_point(name, coords_func):
         pt = GeoEntity("Point", name)

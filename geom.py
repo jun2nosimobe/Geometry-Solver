@@ -291,55 +291,47 @@ class HybridEngine:
 
     def run(self, max_steps=100):
         print(f"\n🔄 探索開始 (問題: {self.target_fact})")
-        # ==========================================
-        # 🌟 最強のターゲット注入 (Goal Injection v3)
-        # ==========================================
-        if self.target_fact.fact_type == "Collinear":
-            pts = self.target_fact.objects
-            from mmp_core import create_geo_entity, link_logical_incidence # 🌟 link_logical_incidence を追加！
-            import itertools
-            
-            target_lines = []
-            for p1, p2 in itertools.combinations(pts, 2):
-                line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Target)"
-                target_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env)
-                target_line.base_importance = 50.0 
-                p1.base_importance = 50.0
-                p2.base_importance = 50.0
-                target_lines.append(target_line)
-                
-            existing_lines = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Line" and getattr(n, 'base_importance', 0.0) > 0.0]
-            
-            for t_line in target_lines:
-                for e_line in existing_lines:
-                    if t_line == e_line: continue
-                    
-                    ang_name1 = f"AnglePair_{t_line.name}_{e_line.name}_(Target)"
-                    a1 = create_geo_entity("AnglePair", [t_line, e_line], name=ang_name1, env=self.env)
-                    a1.base_importance = 10.0
-                    self.env.nodes.append(a1)
-                    link_logical_incidence(t_line, a1) # 🌟 必須: 親直線とリンク！
-                    link_logical_incidence(e_line, a1) # 🌟 必須: 親直線とリンク！
+        
+        print("🔄 全結合シーディング (Universal Seeding) を実行中...")
+        from mmp_core import create_geo_entity, link_logical_incidence, is_canonical_angle_order
+        from logic_core import get_subentity
+        import itertools
 
-                    ang_name2 = f"AnglePair_{e_line.name}_{t_line.name}_(Target)"
-                    a2 = create_geo_entity("AnglePair", [e_line, t_line], name=ang_name2, env=self.env)
-                    a2.base_importance = 10.0
-                    self.env.nodes.append(a2)
-                    link_logical_incidence(e_line, a2) # 🌟 必須: 親直線とリンク！
-                    link_logical_incidence(t_line, a2) # 🌟 必須: 親直線とリンク！
-        # ==========================================
+        initial_points = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Point" and getattr(n, 'base_importance', 0.0) > 0.0]
+        
+        for p1, p2 in itertools.combinations(initial_points, 2):
+            common_lines = get_subentity(p1, "Line") & get_subentity(p2, "Line")
+            if not common_lines:
+                line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Seed)"
+                new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env)
+                new_line.base_importance = 10.0
+                self.env.nodes.append(new_line)
+                link_logical_incidence(p1, new_line)
+                link_logical_incidence(p2, new_line)
+
+        all_lines = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Line" and getattr(n, 'base_importance', 0.0) > 0.0]
+        seed_dirs = []
+        for line in all_lines:
+            dir_name = f"Dir_{line.name}_(Seed)"
+            d = create_geo_entity("DirectionOf", [line], name=dir_name, env=self.env)
+            d.base_importance = 10.0
+            self.env.nodes.append(d)
+            link_logical_incidence(line, d)
+            seed_dirs.append(d)
+
+        # 🌟 ここを修正: すべての直線ペアに対して、"Canonical Order" に従った角度ペアを「必ず」生成する
+        for d1, d2 in itertools.combinations(seed_dirs, 2):
+            # Canonical Order を判定し、正しい順序で角度ペアを作る
+            if is_canonical_angle_order(d1, d2):
+                ordered_pair = [d1, d2]
+            else:
+                ordered_pair = [d2, d1]
                 
-        elif self.target_fact.fact_type == "Concyclic":
-            # 共円が目標なら、目標の点同士を結ぶ直線をすべて引いておく(円周角を作りやすくするため)
-            pts = self.target_fact.objects
-            from mmp_core import create_geo_entity
-            import itertools
-            for p1, p2 in itertools.combinations(pts, 2):
-                line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Target)"
-                target_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env)
-                target_line.base_importance = 50.0
-                p1.base_importance = 50.0
-                p2.base_importance = 50.0
+            # 🌟 正順の角度をシード
+            ang_name = f"AnglePair_{ordered_pair[0].name}_{ordered_pair[1].name}_(Seed)"
+            a = create_geo_entity("AnglePair", ordered_pair, name=ang_name, env=self.env)
+            a.base_importance = 5.0
+            self.env.nodes.append(a)
         # ==========================================
 
         # 初期状態における Given 点への強烈な熱注入 (既存のコード)
@@ -380,16 +372,34 @@ class HybridEngine:
         return False
 
 if __name__ == "__main__":
-    problem_name = "prob_nine_point"
-    if len(sys.argv) > 1: problem_name = sys.argv[1]
+    import sys
+    import importlib
+    from logic_core import ProofEnvironment, setup_proof_logger # 🌟 インポートを追加
+    
+    problem_name = "prob_simson"
+    DEBUG_MODE = True
+    
+    if len(sys.argv) > 1: 
+        problem_name = sys.argv[1]
+
+    # 🌟 NEW: ここでログファイルの出力先を動的にセット！
+    log_file = setup_proof_logger(problem_name)
 
     print(f"=== ハイブリッド自動定理証明システム 起動 ===")
     print(f"▶ 読み込み中の問題: {problem_name}")
-    env = ProofEnvironment()
+    print(f"▶ ログ出力先: {log_file}")  # 分かりやすいように表示
+    print(f"▶ 数値デバッグモード: {'ON (厳格チェック有効)' if DEBUG_MODE else 'OFF (爆速モード)'}")
+    
+    # 🌟 1. 初期化時にデバッグフラグを渡す
+    env = ProofEnvironment(enable_numerical_debug=DEBUG_MODE)
 
     try:
         prob_module = importlib.import_module(f"problems.{problem_name}")
         all_vars, target_fact, initial_facts = prob_module.setup_problem(env)
+        
+        # 🌟 2. セットアップ直後に、検証用の自由変数(all_vars)を環境にセットする
+        env.all_vars = all_vars 
+        
     except Exception as e:
         print(f"❌ エラー: 問題ファイル 'problems/{problem_name}.py' の読み込みに失敗しました。詳細: {e}")
         sys.exit(1)
@@ -401,7 +411,7 @@ if __name__ == "__main__":
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
-    engine.run(max_steps=2)
+    engine.run(max_steps=3)
 
     #print("E_Graphの描画")
 

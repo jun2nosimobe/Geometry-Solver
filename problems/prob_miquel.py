@@ -1,6 +1,8 @@
 # problems/prob_miquel.py
+import itertools
 from mmp_core import GeoEntity, Definition, LogicalComponent, create_geo_entity, link_logical_incidence
 from logic_core import Fact, get_rep
+
 
 class Variable:
     def __init__(self, name):
@@ -52,8 +54,50 @@ def setup_problem(env):
     link_logical_incidence(CircAEF, M)
     link_logical_incidence(CircBFD, M)
 
-    # ターゲット: M, C, D, E が共円であること[cite: 13]
+    pts_dict = {"A": A, "B": B, "C": C, "D": D, "E": E, "F": F, "M": M}
+    dirs_dict = {}
+
+    # 1. 既存の辺 (LineAB, LineBC, LineCA) の方向ベクトルを取得・生成
+    # (既存の直線の方向ベクトルも AnglePair 生成のために必要です)
+    dir_AB = create_geo_entity("DirectionOf", [LineAB], "Dir_AB", env=env)
+    env.nodes.append(dir_AB)
+    dirs_dict["AB"] = dir_AB; dirs_dict["BA"] = dir_AB # 逆向きも同じものとして扱う
+
+    dir_BC = create_geo_entity("DirectionOf", [LineBC], "Dir_BC", env=env)
+    env.nodes.append(dir_BC)
+    dirs_dict["BC"] = dir_BC; dirs_dict["CB"] = dir_BC
+
+    dir_CA = create_geo_entity("DirectionOf", [LineCA], "Dir_CA", env=env)
+    env.nodes.append(dir_CA)
+    dirs_dict["CA"] = dir_CA; dirs_dict["AC"] = dir_CA
+
+    # 2. ミケル点 M から D, E, F への直線を引く
+    for pt_name in ["D", "E", "F"]:
+        line_name = f"Line_M{pt_name}"
+        line_M = create_geo_entity("LineThroughPoints", [pts_dict["M"], pts_dict[pt_name]], name=line_name, env=env)
+        env.nodes.append(line_M)
+        link_logical_incidence(pts_dict["M"], line_M)
+        link_logical_incidence(pts_dict[pt_name], line_M)
+        
+        # 方向ベクトルの作図
+        dir_name = f"Dir_M{pt_name}"
+        dir_M = create_geo_entity("DirectionOf", [line_M], name=dir_name, env=env)
+        env.nodes.append(dir_M)
+        dirs_dict[f"M{pt_name}"] = dir_M
+        dirs_dict[f"{pt_name}M"] = dir_M
+
+    # 3. 必要な有向角 (AnglePair) をすべて生成
+    all_dir_keys = list(set(dirs_dict.values())) # 重複を省いた方向ベクトルのリスト
+    for d1, d2 in itertools.combinations(all_dir_keys, 2):
+        ang_name = f"AnglePair_{d1.name}_{d2.name}"
+        ang = create_geo_entity("AnglePair", [d1, d2], name=ang_name, env=env)
+        env.nodes.append(ang)
+    # ==========================================
+
+    # ターゲット: M, C, D, E が共円であること
     target_fact = Fact("Concyclic", [M, C, D, E])
+
+    return all_vars, target_fact, []
 
     # 🌟 NEW: 全てE-Graphに書き込んだため、初期Factリストは空で返す
     return all_vars, target_fact, []

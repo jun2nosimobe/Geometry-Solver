@@ -92,7 +92,7 @@ def extract_proof_from_log(log_filename):
 
 
 if __name__ == "__main__":
-    # 🌟 ターミナルから `python extract_proof.py proof_40.log` のように実行可能にする
+    # 🌟 ターミナルから `python extract_proof.py proof.log` のように実行可能にする
     if len(sys.argv) > 1:
         target_file = sys.argv[1]
     else:

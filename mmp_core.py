@@ -129,6 +129,27 @@ class GeoEntity:
             raise ValueError(f"{self.name} には計算可能な定義がありません。")
         
         best_def = min(best_comp.definitions, key=lambda d: d.naive_degree)
+        if best_def.def_type == "Midpoint":
+            p1 = best_def.parents[0].calculate(t_dict, cache)
+            p2 = best_def.parents[1].calculate(t_dict, cache)
+            if p1 and p2 and len(p1) == 3 and len(p2) == 3:
+                # 分母を払った同次座標での中点計算: (x1*z2 + x2*z1, y1*z2 + y2*z1, 2*z1*z2)
+                val = [
+                    p1[0] * p2[2] + p2[0] * p1[2],
+                    p1[1] * p2[2] + p2[1] * p1[2],
+                    ModInt(2) * p1[2] * p2[2]
+                ]
+                cache[cache_key] = val
+                return val
+
+        if best_def.def_type == "DirectionOf":
+            line_val = best_def.parents[0].calculate(t_dict, cache)
+            if line_val and len(line_val) == 3:
+                # 直線 ax + by + cz = 0 の方向ベクトルは無限遠点 (b, -a, 0)
+                a, b, c = line_val[0], line_val[1], line_val[2]
+                val = [b, ModInt(0) - a, ModInt(0)]
+                cache[cache_key] = val
+                return val
         if best_def.def_type == "Given":
             val = self._evaluate_given(t_dict)
         elif best_def.def_type in CALCULATION_REGISTRY:
@@ -143,10 +164,14 @@ class GeoEntity:
         return tuple(v.evaluate(t_dict) if hasattr(v, 'evaluate') else v for v in self._given_coords)
 
 def normalize(v):
-    if not v or isinstance(v[0], ModInt): return v
-    max_val = max(abs(x) for x in v)
-    if max_val < 1e-12: return v
-    return tuple(x / max_val for x in v)
+    if not v: return v
+    # 🌟 ModInt対応の堅牢な正規化: 最初の非ゼロ要素で全体を割る
+    for x in v:
+        if (hasattr(x, 'value') and x.value != 0) or (not hasattr(x, 'value') and abs(float(x)) > 1e-9):
+            inv = ModInt(1) / x if hasattr(x, 'value') else 1.0 / x
+            return tuple(e * inv if hasattr(e, 'value') else e * inv for e in v)
+    # 全てゼロならそのまま返す (縮退)
+    return tuple(v)
 
 def cross_product(v1, v2):
     return (v1[1]*v2[2] - v1[2]*v2[1], 
@@ -169,7 +194,23 @@ def calc_intersection(parents, t_dict, cache):
 def calc_line_through_points(parents, t_dict, cache):
     P1 = parents[0].calculate(t_dict, cache)
     P2 = parents[1].calculate(t_dict, cache)
-    return normalize(cross_product(P1, P2))
+    
+    if not P1 or not P2 or len(P1) != 3 or len(P2) != 3: return []
+    
+    # 🌟 NEW: 2点が一致(スカラー倍)しているかチェック (外積がゼロベクトルになるか)
+    cx = P1[1] * P2[2] - P1[2] * P2[1]
+    cy = P1[2] * P2[0] - P1[0] * P2[2]
+    cz = P1[0] * P2[1] - P1[1] * P2[0]
+    
+    def is_zero(val):
+        if hasattr(val, 'value'): return val.value == 0
+        return abs(float(val)) < 1e-9
+        
+    # 2点が一致している(縮退している)場合は計算不能として空リストを返す
+    if is_zero(cx) and is_zero(cy) and is_zero(cz):
+        return []
+        
+    return normalize((cx, cy, cz))
 
 def calc_midpoint(parents, t_dict, cache):
     P1 = parents[0].calculate(t_dict, cache)
@@ -180,12 +221,16 @@ def calc_midpoint(parents, t_dict, cache):
 def calc_perpendicular(parents, t_dict, cache):
     L = parents[0].calculate(t_dict, cache)
     P = parents[1].calculate(t_dict, cache)
+    # 🌟 FIX: 親のどちらかが退化している場合は [] を返す
+    if not L or len(L) < 3 or not P or len(P) < 3: return []
     inf_pt = (L[0], L[1], 0) if hasattr(L[0], 'value') else (L[0], L[1], 0)
     return normalize(cross_product(inf_pt, P))
 
 def calc_parallel(parents, t_dict, cache):
     L = parents[0].calculate(t_dict, cache)
     P = parents[1].calculate(t_dict, cache)
+    # 🌟 FIX: 親のどちらかが退化している場合は [] を返す
+    if not L or len(L) < 3 or not P or len(P) < 3: return []
     inf_pt = (-L[1], L[0], 0) if hasattr(L[0], 'value') else (-L[1], L[0], 0)
     return normalize(cross_product(inf_pt, P))
 
@@ -239,7 +284,8 @@ def calc_circumcircle(parents, t_dict, cache):
 def calc_direction(parents, t_dict, cache):
     """直線の法線ベクトル(a, b)をDirectionの代表値として返す"""
     L = parents[0].calculate(t_dict, cache)
-    # Lは(a, b, c)なので、(a, b, 0)を正規化して返す
+    # 🌟 FIX: 直線が退化(空リスト)している場合は計算不能として [] を返す
+    if not L or len(L) < 3: return []
     return normalize((L[0], L[1], 0))
 
 # ==========================================
@@ -249,10 +295,17 @@ def calc_length_sq(parents, t_dict, cache):
     """距離の2乗 (P1P2^2)"""
     P1 = parents[0].calculate(t_dict, cache)
     P2 = parents[1].calculate(t_dict, cache)
+    
+    # 🌟 FIX: 座標が計算できなかった場合のクラッシュを防止
+    if not P1 or not P2 or len(P1) < 3 or len(P2) < 3: 
+        return []
+        
     x1, y1 = get_cartesian(P1)
     x2, y2 = get_cartesian(P2)
     val = (x1 - x2)**2 + (y1 - y2)**2
-    return (val, ModInt(1))
+    
+    # 🌟 FIX: 射影座標のタプルではなく、純粋な1次元スカラーとして返す
+    return [val]
 
 def calc_affine_ratio(parents, t_dict, cache):
     """有向線分比 AB / BC (共線前提)"""
@@ -282,8 +335,21 @@ def calc_constant(parents, t_dict, cache):
     return (parents[0], ModInt(1))
 
 def calc_angle_pair(parents, t_dict, cache):
-    """角度はMMPで直接計算しないため、クラッシュ防止のダミー値を返す"""
-    return (ModInt(0), ModInt(1))
+    """🌟 修正: 有向角を [外積, 内積] の射影座標で正確に返す"""
+    dir1 = parents[0].calculate(t_dict, cache)
+    dir2 = parents[1].calculate(t_dict, cache)
+
+    if not dir1 or not dir2 or len(dir1) < 2 or len(dir2) < 2:
+        return []
+
+    a1, b1 = dir1[0], dir1[1]
+    a2, b2 = dir2[0], dir2[1]
+
+    # 外積 (sinθ に比例) と 内積 (cosθ に比例)
+    cross_val = a1 * b2 - b1 * a2
+    dot_val = a1 * a2 + b1 * b2
+
+    return [cross_val**2, dot_val**2]
 
 CALCULATION_REGISTRY = {
     "Intersection": calc_intersection,
@@ -735,3 +801,83 @@ def get_numerical_degree(t_values, x_values, max_d, mode='mod', tolerance=1e-8):
             if matrix_rank_mod(A) < 2 * d + 2: return d
         return max_d
     return max_d
+    
+
+def verify_identical_runtime(node1, node2, all_vars, test_runs=3):
+    from mmp_core import ModInt
+    import numpy as np
+    import traceback  # 🌟 NEW: エラー詳細を取得
+    
+    valid_count = 0
+    last_v1, last_v2 = None, None
+    error_log = ""  # 🌟 NEW: エラー記録用
+    
+    def is_zero(val):
+        if hasattr(val, 'value'): return val.value == 0
+        try:
+            return abs(float(val)) < 1e-9
+        except:
+            return False
+
+    for _ in range(test_runs):
+        t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD)) for v in all_vars}
+        cache = {}
+        try:
+            v1 = node1.calculate(t_dict, cache)
+            v2 = node2.calculate(t_dict, cache)
+            last_v1, last_v2 = v1, v2
+            
+            if len(v1) == 3 and len(v2) == 3:
+                cx = v1[1] * v2[2] - v1[2] * v2[1]
+                cy = v1[2] * v2[0] - v1[0] * v2[2]
+                cz = v1[0] * v2[1] - v1[1] * v2[0]
+                if is_zero(cx) and is_zero(cy) and is_zero(cz):
+                    valid_count += 1
+                    
+            elif len(v1) == 2 and len(v2) == 2:
+                if is_zero(v1[0] * v2[1] - v1[1] * v2[0]):
+                    valid_count += 1
+                    
+            elif len(v1) == 1 and len(v2) == 1:
+                if is_zero(v1[0] - v2[0]):
+                    valid_count += 1
+        except Exception:
+            # 🌟 エラーを握りつぶさずに記録！
+            if not error_log:
+                error_log = traceback.format_exc()
+            
+    is_valid = (valid_count > 0 and valid_count == test_runs)
+    if not is_valid:
+        node1._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v1 or [])]
+        node2._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v2 or [])]
+        if error_log:
+            node1._calc_err_trace = error_log  # オブジェクトにエラーを乗せる
+            
+    return is_valid
+
+def verify_concyclic_runtime(pts, all_vars, test_runs=3):
+    """実行時に4点が共円であるか検証する"""
+    from mmp_core import ModInt, create_geo_entity
+    if len(pts) != 4: return True
+    
+    # 仮の外接円を作成 (検証用なので環境には紐付けない)
+    circle = create_geo_entity("Circumcircle", [pts[0], pts[1], pts[2]], env=None)
+    
+    valid_count = 0
+    for _ in range(test_runs):
+        t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD)) for v in all_vars}
+        cache = {}
+        try:
+            c_val = circle.calculate(t_dict, cache)
+            p4_val = pts[3].calculate(t_dict, cache)
+            if p4_val[2].value == 0: continue
+            
+            u, v, w, s = c_val[0], c_val[1], c_val[2], c_val[3]
+            x, y, z = p4_val[0], p4_val[1], p4_val[2]
+            
+            val = u * (x**2 + y**2) + v * x * z + w * y * z + s * (z**2)
+            if val.value == 0:
+                valid_count += 1
+        except Exception:
+            pass
+    return valid_count > 0 and valid_count == test_runs
