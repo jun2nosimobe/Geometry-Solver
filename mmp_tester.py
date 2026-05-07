@@ -202,14 +202,19 @@ class MMPTester:
                     continue # 縮退しているので共円テストを行わない
                 # ==========================================
 
-                # 🌟 Trivial Check: E-Graph上ですでに共円であることが分かっているならテストをスキップ
+                # 🌟 修正: 4つの点すべての最新コンポーネントを、このループ内で正しく取得し直す！
+                cZ = Z.get_best_component()
+                c1 = p1.get_best_component()
+                c2 = p2.get_best_component()
                 c3 = p3.get_best_component()
+                
                 if cZ and c1 and c2 and c3:
                     common_circs = [obj for obj in (cZ.subobjects & c1.subobjects & c2.subobjects & c3.subobjects) if getattr(obj, 'entity_type', '') == "Circle"]
                     if common_circs:
                         continue # 自明な共円なので無視
 
                 temp_circle = create_geo_entity("Circumcircle", [p1, p2, p3], name="temp", env=None)
+                
                 valid_count = 0
                 for _ in range(5):
                     cache = {}

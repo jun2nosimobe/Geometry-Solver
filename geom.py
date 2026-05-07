@@ -320,10 +320,11 @@ class HybridEngine:
             if not common_lines:
                 line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Seed)"
                 new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env)
-                new_line.base_importance = 10.0
-                self.env.nodes.append(new_line)
-                link_logical_incidence(p1, new_line)
-                link_logical_incidence(p2, new_line)
+                if new_line is not None:
+                    new_line.base_importance = 10.0
+                    self.env.nodes.append(new_line)
+                    link_logical_incidence(p1, new_line)
+                    link_logical_incidence(p2, new_line)
 
         all_lines = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Line" and getattr(n, 'base_importance', 0.0) > 0.0]
         seed_dirs = []

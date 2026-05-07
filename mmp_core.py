@@ -89,8 +89,6 @@ class GeoEntity:
         if not self.components: return None
         return min(self.components, key=lambda c: (c.naive_degree, c.depth))
 
-# mmp_core.py の GeoEntity クラス内の merge_numerical を上書き
-
     def merge_numerical(self, other: 'GeoEntity'):
         if self == other: return
         self.components.extend(other.components)
@@ -119,252 +117,144 @@ class GeoEntity:
         c1.merge_logical(c2)
         self.components.remove(c2) 
 
-    def calculate(self, t_dict: Dict, cache: Dict) -> Any:
-        cache_key = id(self)
+    def calculate(self, t_dict, cache):
+        from mmp_calculators import CALCULATORS
+        import traceback
+
+        cache_key = (self.id, id(t_dict))
         if cache_key in cache:
             return cache[cache_key]
 
-        best_comp = self.get_best_component()
-        if not best_comp or not best_comp.definitions:
-            raise ValueError(f"{self.name} には計算可能な定義がありません。")
-        
-        best_def = min(best_comp.definitions, key=lambda d: d.naive_degree)
-        if best_def.def_type == "Midpoint":
-            p1 = best_def.parents[0].calculate(t_dict, cache)
-            p2 = best_def.parents[1].calculate(t_dict, cache)
-            if p1 and p2 and len(p1) == 3 and len(p2) == 3:
-                # 分母を払った同次座標での中点計算: (x1*z2 + x2*z1, y1*z2 + y2*z1, 2*z1*z2)
-                val = [
-                    p1[0] * p2[2] + p2[0] * p1[2],
-                    p1[1] * p2[2] + p2[1] * p1[2],
-                    ModInt(2) * p1[2] * p2[2]
-                ]
-                cache[cache_key] = val
-                return val
+        result = []
+        comp = self.get_best_component()
+        if not comp or not comp.definitions:
+            return []
+            
+        best_def = list(comp.definitions)[0]
+        def_type = best_def.def_type
+        parents = best_def.parents
 
-        if best_def.def_type == "DirectionOf":
-            line_val = best_def.parents[0].calculate(t_dict, cache)
-            if line_val and len(line_val) == 3:
-                # 直線 ax + by + cz = 0 の方向ベクトルは無限遠点 (b, -a, 0)
-                a, b, c = line_val[0], line_val[1], line_val[2]
-                val = [b, ModInt(0) - a, ModInt(0)]
-                cache[cache_key] = val
-                return val
-        if best_def.def_type == "Given":
-            val = self._evaluate_given(t_dict)
-        elif best_def.def_type in CALCULATION_REGISTRY:
-            val = CALCULATION_REGISTRY[best_def.def_type](best_def.parents, t_dict, cache)
+        # ==========================================
+        # 1. Given (初期点) の座標取得（_evaluate_given 対応版！）
+        # ==========================================
+        if def_type in ["Point", "Given", "Free", "GivenPoint", "FreePoint"]:
+            if not parents:
+                val = None
+                
+                # 🌟 NEW パターン0: あなたのシステム特有の座標関数！
+                if hasattr(self, '_evaluate_given'):
+                    try:
+                        val = self._evaluate_given(t_dict)
+                    except Exception as e:
+                        self._calc_err_trace = f"_evaluate_givenの実行エラー: {str(e)}"
+                        cache[cache_key] = []
+                        return []
+
+                # パターン1: 直接のキー探索
+                if val is None:
+                    if self in t_dict: val = t_dict[self]
+                    elif getattr(self, 'name', '') in t_dict: val = t_dict[self.name]
+                    elif getattr(self, 'id', '') in t_dict: val = t_dict[self.id]
+                
+                # パターン2: オブジェクトの name プロパティでの一致探索
+                if val is None:
+                    for k, v in t_dict.items():
+                        if getattr(k, 'name', str(k)) == getattr(self, 'name', ''):
+                            val = v
+                            break
+                            
+                # パターン3: 'A_x', 'A_y' のような成分ごとの探索
+                if val is None:
+                    name = getattr(self, 'name', '')
+                    vx, vy, vz = None, None, None
+                    for k, v in t_dict.items():
+                        kstr = str(getattr(k, 'name', k))
+                        if kstr in [f"{name}_x", f"x_{name}"]: vx = v
+                        elif kstr in [f"{name}_y", f"y_{name}"]: vy = v
+                        elif kstr in [f"{name}_z", f"z_{name}"]: vz = v
+                    if vx is not None and vy is not None:
+                        val = [vx, vy, vz if vz is not None else 1]
+                        
+                # パターン4: オブジェクトが直接座標属性を持っている場合
+                if val is None:
+                    if hasattr(self, 'coord'): val = self.coord
+                    elif hasattr(self, 'coords'): val = self.coords
+                    elif hasattr(self, 'value'): val = self.value
+                
+                if val is not None:
+                    result = [val[0], val[1], val[2]] if isinstance(val, (list, tuple)) else [val, val, val]
+                    cache[cache_key] = result
+                    return result
+                else:
+                    t_keys = [str(getattr(k, 'name', k)) for k in t_dict.keys()][:8]
+                    a_attrs = [k for k in self.__dict__.keys() if not k.startswith('_')]
+                    self._calc_err_trace = f"座標不在: '{getattr(self, 'name', '')}'の座標が見つかりません。t_dictキー: {t_keys}, Aの属性: {a_attrs}"
+                    cache[cache_key] = []
+                    return []
+            else:
+                # パラメータで定義された点 (Symbol, String, または GeoEntity)
+                res = []
+                for p in parents:
+                    if hasattr(p, 'calculate'):
+                        pval = p.calculate(t_dict, cache)
+                        res.append(pval[0] if isinstance(pval, (list, tuple)) and pval else pval)
+                    elif p in t_dict: 
+                        res.append(t_dict[p])
+                    elif isinstance(p, str) and p in t_dict: 
+                        res.append(t_dict[p])
+                    else:
+                        matched = False
+                        for k, v in t_dict.items():
+                            if str(k) == str(p):
+                                res.append(v)
+                                matched = True
+                                break
+                        if not matched:
+                            if isinstance(p, (int, float)):
+                                from mmp_core import ModInt
+                                res.append(ModInt(int(p)))
+                            else:
+                                res.append(p) 
+                
+                if len(res) >= 2:
+                    if len(res) == 2:
+                        one = res[0].__class__(1) if hasattr(res[0], 'value') else 1
+                        res.append(one)
+                    cache[cache_key] = res
+                    return res
+                else:
+                    self._calc_err_trace = f"初期点の座標構築に失敗 (parents={parents}, res={res})"
+                    cache[cache_key] = []
+                    return []
+
+        # ==========================================
+        # 2. レジストリに登録された計算の実行と監視
+        # ==========================================
+        if def_type in CALCULATORS:
+            try:
+                result = CALCULATORS[def_type](parents, t_dict, cache)
+                if not result:
+                    parent_errs = []
+                    for p in parents:
+                        if hasattr(p, '_calc_err_trace') and p._calc_err_trace:
+                            parent_errs.append(f"[{getattr(p, 'name', '?')}]: {p._calc_err_trace}")
+                    
+                    err_msg = "計算結果が空([])"
+                    if parent_errs: err_msg += f" <- 親エラー: {' | '.join(parent_errs)}"
+                    else: err_msg += " (親図形が退化しているか無効な値)"
+                    self._calc_err_trace = err_msg
+            except Exception as e:
+                self._calc_err_trace = traceback.format_exc()
+                result = []
         else:
-            raise NotImplementedError(f"未知の作図タイプ: {best_def.def_type}")
-
-        cache[cache_key] = val
-        return val
+            self._calc_err_trace = f"未登録の def_type: '{def_type}'"
+            result = []
+                
+        cache[cache_key] = result
+        return result
 
     def _evaluate_given(self, t_dict):
         return tuple(v.evaluate(t_dict) if hasattr(v, 'evaluate') else v for v in self._given_coords)
-
-def normalize(v):
-    if not v: return v
-    # 🌟 ModInt対応の堅牢な正規化: 最初の非ゼロ要素で全体を割る
-    for x in v:
-        if (hasattr(x, 'value') and x.value != 0) or (not hasattr(x, 'value') and abs(float(x)) > 1e-9):
-            inv = ModInt(1) / x if hasattr(x, 'value') else 1.0 / x
-            return tuple(e * inv if hasattr(e, 'value') else e * inv for e in v)
-    # 全てゼロならそのまま返す (縮退)
-    return tuple(v)
-
-def cross_product(v1, v2):
-    return (v1[1]*v2[2] - v1[2]*v2[1], 
-            v1[2]*v2[0] - v1[0]*v2[2], 
-            v1[0]*v2[1] - v1[1]*v2[0])
-
-# ==========================================
-# 作図ロジック (Calculation Registry)
-# ==========================================
-def get_cartesian(P):
-    """同次座標からデカルト座標 (x/z, y/z) を取得する"""
-    inv_z = ModInt(1) / P[-1]
-    return P[0] * inv_z, P[1] * inv_z
-
-def calc_intersection(parents, t_dict, cache):
-    L1 = parents[0].calculate(t_dict, cache)
-    L2 = parents[1].calculate(t_dict, cache)
-    return normalize(cross_product(L1, L2))
-
-def calc_line_through_points(parents, t_dict, cache):
-    P1 = parents[0].calculate(t_dict, cache)
-    P2 = parents[1].calculate(t_dict, cache)
-    
-    if not P1 or not P2 or len(P1) != 3 or len(P2) != 3: return []
-    
-    # 🌟 NEW: 2点が一致(スカラー倍)しているかチェック (外積がゼロベクトルになるか)
-    cx = P1[1] * P2[2] - P1[2] * P2[1]
-    cy = P1[2] * P2[0] - P1[0] * P2[2]
-    cz = P1[0] * P2[1] - P1[1] * P2[0]
-    
-    def is_zero(val):
-        if hasattr(val, 'value'): return val.value == 0
-        return abs(float(val)) < 1e-9
-        
-    # 2点が一致している(縮退している)場合は計算不能として空リストを返す
-    if is_zero(cx) and is_zero(cy) and is_zero(cz):
-        return []
-        
-    return normalize((cx, cy, cz))
-
-def calc_midpoint(parents, t_dict, cache):
-    P1 = parents[0].calculate(t_dict, cache)
-    P2 = parents[1].calculate(t_dict, cache)
-    z_term = P1[2] * P2[2]
-    return normalize((P1[0]*P2[2] + P2[0]*P1[2], P1[1]*P2[2] + P2[1]*P1[2], z_term + z_term))
-
-def calc_perpendicular(parents, t_dict, cache):
-    L = parents[0].calculate(t_dict, cache)
-    P = parents[1].calculate(t_dict, cache)
-    # 🌟 FIX: 親のどちらかが退化している場合は [] を返す
-    if not L or len(L) < 3 or not P or len(P) < 3: return []
-    inf_pt = (L[0], L[1], 0) if hasattr(L[0], 'value') else (L[0], L[1], 0)
-    return normalize(cross_product(inf_pt, P))
-
-def calc_parallel(parents, t_dict, cache):
-    L = parents[0].calculate(t_dict, cache)
-    P = parents[1].calculate(t_dict, cache)
-    # 🌟 FIX: 親のどちらかが退化している場合は [] を返す
-    if not L or len(L) < 3 or not P or len(P) < 3: return []
-    inf_pt = (-L[1], L[0], 0) if hasattr(L[0], 'value') else (-L[1], L[0], 0)
-    return normalize(cross_product(inf_pt, P))
-
-def calc_other_line_circle_intersection(parents, t_dict, cache):
-    L = parents[0].calculate(t_dict, cache)
-    C = parents[1].calculate(t_dict, cache)
-    P_e = parents[2].calculate(t_dict, cache)
-    u, v, w, s = C
-    a, b, c = L
-    vx, vy = -b, a
-    A = u * (vx**2 + vy**2)
-    B = 2 * u * (P_e[1]*a - P_e[0]*b) + (v*vx + w*vy) * P_e[2]
-    new_x = A * P_e[0] - B * vx
-    new_y = A * P_e[1] - B * vy
-    new_z = A * P_e[2]
-    return normalize((new_x, new_y, new_z))
-
-def calc_other_circle_circle_intersection(parents, t_dict, cache):
-    C1 = parents[0].calculate(t_dict, cache)
-    C2 = parents[1].calculate(t_dict, cache)
-    u1, v1, w1, s1 = C1
-    u2, v2, w2, s2 = C2
-    line_a = u2 * v1 - u1 * v2
-    line_b = u2 * w1 - u1 * w2
-    line_c = u2 * s1 - u1 * s2
-    L_rad = (line_a, line_b, line_c)
-    P_e = parents[2].calculate(t_dict, cache)
-    u, v, w, s = C1
-    a, b, c = L_rad
-    vx, vy = -b, a
-    A = u * (vx**2 + vy**2)
-    B = 2 * u * (P_e[1]*a - P_e[0]*b) + (v*vx + w*vy) * P_e[2]
-    return normalize((A*P_e[0] - B*vx, A*P_e[1] - B*vy, A*P_e[2]))
-
-def calc_circumcircle(parents, t_dict, cache):
-    P1 = parents[0].calculate(t_dict, cache)
-    P2 = parents[1].calculate(t_dict, cache)
-    P3 = parents[2].calculate(t_dict, cache)
-    x1, y1, z1 = P1
-    x2, y2, z2 = P2
-    x3, y3, z3 = P3
-    sq1 = x1**2 + y1**2
-    sq2 = x2**2 + y2**2
-    sq3 = x3**2 + y3**2
-    u = z1*z2*z3 * (x1*(y2*z3 - y3*z2) - y1*(x2*z3 - x3*z2) + z1*(x2*y3 - x3*y2))
-    v = -(sq1*(y2*z2*z3**2 - y3*z3*z2**2) - y1*z1*(sq2*z3**2 - sq3*z2**2) + z1**2*(sq2*y3*z3 - sq3*y2*z2))
-    w = (sq1*(x2*z2*z3**2 - x3*z3*z2**2) - x1*z1*(sq2*z3**2 - sq3*z2**2) + z1**2*(sq2*x3*z3 - sq3*x2*z2))
-    s = -(sq1*(x2*z2*y3*z3 - x3*z3*y2*z2) - x1*z1*(sq2*y3*z3 - sq3*y2*z2) + y1*z1*(sq2*x3*z3 - sq3*x2*z2))
-    return normalize((u, v, w, s))
-
-def calc_direction(parents, t_dict, cache):
-    """直線の法線ベクトル(a, b)をDirectionの代表値として返す"""
-    L = parents[0].calculate(t_dict, cache)
-    # 🌟 FIX: 直線が退化(空リスト)している場合は計算不能として [] を返す
-    if not L or len(L) < 3: return []
-    return normalize((L[0], L[1], 0))
-
-# ==========================================
-# 🌟 スカラー計算ロジック
-# ==========================================
-def calc_length_sq(parents, t_dict, cache):
-    """距離の2乗 (P1P2^2)"""
-    P1 = parents[0].calculate(t_dict, cache)
-    P2 = parents[1].calculate(t_dict, cache)
-    
-    # 🌟 FIX: 座標が計算できなかった場合のクラッシュを防止
-    if not P1 or not P2 or len(P1) < 3 or len(P2) < 3: 
-        return []
-        
-    x1, y1 = get_cartesian(P1)
-    x2, y2 = get_cartesian(P2)
-    val = (x1 - x2)**2 + (y1 - y2)**2
-    
-    # 🌟 FIX: 射影座標のタプルではなく、純粋な1次元スカラーとして返す
-    return [val]
-
-def calc_affine_ratio(parents, t_dict, cache):
-    """有向線分比 AB / BC (共線前提)"""
-    A = parents[0].calculate(t_dict, cache)
-    B = parents[1].calculate(t_dict, cache)
-    C = parents[2].calculate(t_dict, cache)
-    
-    xa, ya = get_cartesian(A)
-    xb, yb = get_cartesian(B)
-    xc, yc = get_cartesian(C)
-    
-    dx1, dy1 = xb - xa, yb - ya
-    dx2, dy2 = xc - xb, yc - yb
-    
-    # ゼロ割りを防ぎつつ比を計算
-    if dx2 != 0:
-        val = dx1 / dx2
-    elif dy2 != 0:
-        val = dy1 / dy2
-    else:
-        val = ModInt(0) # 退化ケース
-        
-    return (val, ModInt(1))
-
-def calc_constant(parents, t_dict, cache):
-    """定数値（ModInt）をそのまま返す"""
-    return (parents[0], ModInt(1))
-
-def calc_angle_pair(parents, t_dict, cache):
-    """🌟 修正: 有向角を [外積, 内積] の射影座標で正確に返す"""
-    dir1 = parents[0].calculate(t_dict, cache)
-    dir2 = parents[1].calculate(t_dict, cache)
-
-    if not dir1 or not dir2 or len(dir1) < 2 or len(dir2) < 2:
-        return []
-
-    a1, b1 = dir1[0], dir1[1]
-    a2, b2 = dir2[0], dir2[1]
-
-    # 外積 (sinθ に比例) と 内積 (cosθ に比例)
-    cross_val = a1 * b2 - b1 * a2
-    dot_val = a1 * a2 + b1 * b2
-
-    return [cross_val**2, dot_val**2]
-
-CALCULATION_REGISTRY = {
-    "Intersection": calc_intersection,
-    "LineThroughPoints": calc_line_through_points,
-    "Midpoint": calc_midpoint,
-    "PerpendicularLine": calc_perpendicular,
-    "ParallelLine": calc_parallel,
-    "Circumcircle": calc_circumcircle,
-    "CirclesIntersection": calc_other_circle_circle_intersection,
-    "LengthSq": calc_length_sq,
-    "AffineRatio": calc_affine_ratio,
-    "Constant": calc_constant,
-    "AnglePair": calc_angle_pair,      
-    "DirectionOf": calc_direction  # 🌟 ここを変更！
-}
 
 # ==========================================
 # ヘルパー関数群
@@ -554,77 +444,83 @@ def is_canonical_angle_order(Dir1, Dir2):
         return True
 
 # ==========================================
-# 🌟 作図ビルダー (Construction Builder) の修正
+# 🌟 図形タイプのマッピング辞書
 # ==========================================
+ENTITY_TYPE_MAP = {
+    "Intersection": "Point", "Midpoint": "Point", "CirclesIntersection": "Point",
+    "LineThroughPoints": "Line", "PerpendicularLine": "Line", "ParallelLine": "Line",
+    "Circumcircle": "Circle",
+    "DirectionOf": "Direction",
+    "AnglePair": "Angle",
+    "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
+    "Triangle": "Triangle",
+    "ShapeOf": "Shape"
+}
+
 def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False, is_ghost=False) -> 'GeoEntity':
-    if def_type in ["Intersection", "Midpoint", "CirclesIntersection"]:
-        entity_type = "Point"
-    elif def_type in ["LineThroughPoints", "PerpendicularLine", "ParallelLine"]:
-        entity_type = "Line"
-    elif def_type == "Circumcircle":
-        entity_type = "Circle"
-    elif def_type == "DirectionOf":
-        entity_type = "Direction"
-    elif def_type == "AnglePair":
-        entity_type = "Angle"
-    elif def_type in ["LengthSq", "AffineRatio", "Constant"]:
-        entity_type = "Scalar"
-    elif def_type == "Triangle":
-        entity_type = "Triangle"
-    elif def_type == "ShapeOf":
-        entity_type = "Shape"
-    else:
-        entity_type = "Unknown"
+    # 1. entity_type の決定
+    entity_type = ENTITY_TYPE_MAP.get(def_type, "Unknown")
 
-    # ==========================================
-    # 🌟 NEW: ゴーストの血統チェック（親に1つでもゴーストがいれば、子も必ずゴーストになる）
-    # ==========================================
+    # 2. 親からコンポーネントを安全に抽出
+    valid_parents = [p for p in parents if hasattr(p, 'get_best_component')]
+    parent_comps = [p.get_best_component() for p in valid_parents if p.get_best_component()]
+
+    # 3. ゴースト判定
     parent_is_ghost = any(getattr(p, 'base_importance', 1.0) <= 0.0 for p in parents if hasattr(p, 'base_importance'))
+    is_true_ghost = (env is None) or is_ghost or parent_is_ghost
 
-    # 定数(Constant)は親がGeoEntityではないため特殊処理
-    # 🌟 FIX: env が None の場合（_playout内の一時作図）もゴースト判定を確実にする
-    is_temp_simulation = (env is None)
-
-    if is_temp_simulation or is_ghost or parent_is_ghost: 
-        depth = 1
-        naive_degree = 0
-        base_imp = 0.0 
-        # 🌟 FIX: 絶対に名前を偽装させない
-        if not name.endswith("_(Ghost)"):      
-            name += "_(Ghost)"
+    # 4. メタデータの計算
+    if is_true_ghost:
+        depth, naive_degree, base_imp = 1, 0, 0.0
+        if not name.endswith("_(Ghost)"): name += "_(Ghost)"
     elif def_type == "Constant":
-        depth = 1
-        naive_degree = 0
-    # 定数(Constant)は親がGeoEntityではないため特殊処理
+        depth, naive_degree, base_imp = 1, 0, 1.0 
     elif is_given:
         depth = 1
-        naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
+        naive_degree = sum(c.naive_degree for c in parent_comps)
         base_imp = 10.0 
     else:
-        # 通常の作図は従来通り減衰させる
-        depth = max((p.get_best_component().depth for p in parents if hasattr(p, 'get_best_component') and p.get_best_component()), default=0) + 1
-        naive_degree = sum((p.get_best_component().naive_degree for p in parents if hasattr(p, 'get_best_component') and p.get_best_component())) 
-        avg_parent_imp = sum(getattr(p, 'base_importance', 1.0) for p in parents) / max(1, len(parents))
+        depth = max((c.depth for c in parent_comps), default=0) + 1
+        naive_degree = sum(c.naive_degree for c in parent_comps)
+        
+        avg_parent_imp = sum(getattr(p, 'base_importance', 1.0) for p in parents if hasattr(p, 'base_importance')) / max(1, len(parents))
         decay_factor = 0.99 if entity_type in ["Scalar", "Direction", "Shape", "Triangle"] else 0.5
         base_imp = max(0.01, avg_parent_imp * decay_factor)
 
+    # 5. エンティティの生成
     new_entity = GeoEntity(entity_type, name)
     new_entity.base_importance = base_imp 
     
     new_def = Definition(def_type, parents, naive_degree, depth)
-    new_comp = LogicalComponent(initial_def=new_def)
-    new_entity.components.append(new_comp)
+    new_entity.components.append(LogicalComponent(initial_def=new_def))
 
     # ==========================================
-    # 🌟 究極の修正: 実世界のグラフを汚染しない安全装置
+    # 🌟 NEW: 退化テスト（試し斬り）をここで実行！
+    # ==========================================
+    # グラフに追加する前に、ランダム値で計算可能かチェックする
+    if env is not None and getattr(env, 'all_vars', None) and def_type not in ["Point", "Given", "Free", "Constant"]:
+        from mmp_core import ModInt
+        import numpy as np
+        
+        # 乱数で1回だけ座標を計算してみる
+        t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD)) for v in env.all_vars}
+        cache = {}
+        test_val = new_entity.calculate(t_dict, cache)
+        
+        if not test_val:
+            import logging
+            logger = logging.getLogger("GeometryProver")
+            logger.debug(f"    🚫 [生成ブロック] {name} ({def_type}) は退化図形のため生成をキャンセルしました")
+            return None # 🌟 グラフを汚染する前に None を返して完全消滅させる！
+
+    # ==========================================
+    # 6. 環境(E-Graph)への登録とリンク（健康な図形のみ到達）
     # ==========================================
     if env is not None:
         apply_trivial_relations(new_entity, new_def, env)
-        for p in parents:
-            if isinstance(p, GeoEntity):
-                link_logical_incidence(p, new_entity)
-                
-        # 🌟 NEW: 孤児ノードを根絶する自動 append 処理
+        for p in valid_parents:
+            link_logical_incidence(p, new_entity)
+            
         if new_entity not in env.nodes:
             env.nodes.append(new_entity)
 
@@ -827,22 +723,39 @@ def verify_identical_runtime(node1, node2, all_vars, test_runs=3):
             v2 = node2.calculate(t_dict, cache)
             last_v1, last_v2 = v1, v2
             
-            if len(v1) == 3 and len(v2) == 3:
+            if not isinstance(v1, (list, tuple)): v1 = [v1]
+            if not isinstance(v2, (list, tuple)): v2 = [v2]
+            if len(v1) != len(v2): continue
+            
+            if len(v1) == 3:
+                # ==========================================
+                # 🌟 NEW: ゼロベクトルの罠を防ぐガード
+                # ==========================================
+                if is_zero(v1[0]) and is_zero(v1[1]) and is_zero(v1[2]): continue
+                if is_zero(v2[0]) and is_zero(v2[1]) and is_zero(v2[2]): continue
+                
                 cx = v1[1] * v2[2] - v1[2] * v2[1]
                 cy = v1[2] * v2[0] - v1[0] * v2[2]
                 cz = v1[0] * v2[1] - v1[1] * v2[0]
                 if is_zero(cx) and is_zero(cy) and is_zero(cz):
                     valid_count += 1
                     
-            elif len(v1) == 2 and len(v2) == 2:
+            elif len(v1) == 2:
+                # ==========================================
+                # 🌟 NEW: ゼロベクトルの罠を防ぐガード
+                # ==========================================
+                if is_zero(v1[0]) and is_zero(v1[1]): continue
+                if is_zero(v2[0]) and is_zero(v2[1]): continue
+                
                 if is_zero(v1[0] * v2[1] - v1[1] * v2[0]):
                     valid_count += 1
                     
-            elif len(v1) == 1 and len(v2) == 1:
+            elif len(v1) == 1:
                 if is_zero(v1[0] - v2[0]):
                     valid_count += 1
+                    
         except Exception:
-            # 🌟 エラーを握りつぶさずに記録！
+            # エラーを握りつぶさずに記録！
             if not error_log:
                 error_log = traceback.format_exc()
             
@@ -851,7 +764,16 @@ def verify_identical_runtime(node1, node2, all_vars, test_runs=3):
         node1._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v1 or [])]
         node2._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v2 or [])]
         if error_log:
-            node1._calc_err_trace = error_log  # オブジェクトにエラーを乗せる
+            node1._calc_err_trace = error_log 
+            
+        # ==========================================
+        # 🌟 NEW: なぜ弾かれたのか、生の値をダンプして検証する
+        # ==========================================
+        print(f"❌ [拒否詳細] {node1.name} vs {node2.name}")
+        print(f"   => 値1: {node1._debug_v}")
+        print(f"   => 値2: {node2._debug_v}")
+        if error_log:
+            print(f"   => 💥 エラー発生:\n{error_log}")
             
     return is_valid
 

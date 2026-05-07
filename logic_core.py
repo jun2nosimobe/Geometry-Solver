@@ -741,22 +741,35 @@ class ProofEnvironment:
         self.nodes.extend([self.zero_angle, self.right_angle])
 
     def merge_entities_logically(self, rep1, rep2):
+        from logic_core import get_rep
         entity1, entity2 = get_rep(rep1), get_rep(rep2)
         if entity1 == entity2: return None
+        if entity1 not in self.nodes or entity2 not in self.nodes: return None
 
-    # 🌟 修正案: 基本図形の「宇宙崩壊」をフラグなしでも防ぐ
-        is_basic = entity1.entity_type in ["Point", "Line"]
-        should_verify = getattr(self, 'enable_numerical_debug', False) or is_basic
+        # ==========================================
+        # 🌟 NEW: 点・線・円などの「骨格図形」は、フラグがオフでも強制検証する！
+        # ==========================================
+        is_critical_entity = True
+        should_verify = getattr(self, 'enable_numerical_debug', False) or is_critical_entity
 
-        #should_verify=True
         if should_verify and getattr(self, 'all_vars', None):
             from mmp_core import verify_identical_runtime
-            # 検証実行
+            
             if not verify_identical_runtime(entity1, entity2, self.all_vars):
-            # 💡 ログを詳細に出す
-                print(f"❌ [拒否] 数値的に不一致: {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type})")
-                logger.info(f"❌ [拒否] 数値的に不一致: {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type})")
-                return None # 🌟 修正: raise ではなく、単にマージを拒否して推論を続けさせるのが安全
+                err_trace = getattr(entity1, '_calc_err_trace', getattr(entity2, '_calc_err_trace', ''))
+                
+                # 🌟 NEW: エラー内容を解析してログレベルを調整
+                if "退化している" in err_trace:
+                    # 退化は幾何学的に「よくあること（正常な棄却）」なので、デバッグレベルで静かに記録
+                    import logging
+                    logger = logging.getLogger("GeometryProver")
+                    logger.debug(f"    🚫 [退化棄却] {entity1.name} vs {entity2.name} (退化図形を含むためスキップ)")
+                else:
+                    # 未登録の図形など、本当のバグの場合は警告として表示！
+                    reason = f"\n  => 💥 計算エラー: {err_trace.strip()}" if err_trace else ""
+                    print(f"❌ [重大な不一致] {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type}){reason}")
+                
+                return None
                 
         entity1, entity2 = get_rep(rep1), get_rep(rep2)
         if entity1 == entity2: return None
