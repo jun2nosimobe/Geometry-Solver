@@ -3,12 +3,15 @@ import numpy as np
 import logging
 import importlib
 import sys
+import re
 
 from mmp_core import create_geo_entity, link_logical_incidence
-from logic_core import ProofEnvironment, LogicProver, UniversalRuleEngine, get_rep, get_subentity
+from logic_core import ProofEnvironment, setup_proof_logger, LogicProver, UniversalRuleEngine, get_rep, get_subentity
 from theorems import THEOREMS
 from mmp_tester import MMPTester
 from action_space import ActionGenerator
+from heuristic_engine import FocusSearchEngine
+
 
 logger = logging.getLogger("GeometryProver")
 logger.setLevel(logging.DEBUG)
@@ -39,10 +42,11 @@ class MCTSNode:
         return (self.total_score / self.visits) + c * math.sqrt(math.log(self.parent.visits) / self.visits)
 
 class MCTSSearchEngine:
-    def __init__(self, env, all_vars, prover):
+    def __init__(self, env, all_vars, prover, focus_engine): # 🌟 focus_engine を追加
         self.env = env
         self.all_vars = all_vars
         self.prover = prover
+        self.focus_engine = focus_engine # 🌟 受け取る
         self.tester = MMPTester(self.env, self.all_vars, self.prover)
         self.action_gen = ActionGenerator(set(), self.tester)
 
@@ -143,20 +147,14 @@ class MCTSSearchEngine:
             
         return score
 
-    def _run_logic_step(self):
-        """🌟 修正: 何も推論できなくなるまで連鎖的にエンジンを回し続ける固定点ループ"""
-        engine = UniversalRuleEngine(self.env, self.prover)
-        
-        changed = True
-        loop_count = 0
-        max_loops = 10 # 無限ループストッパー
-        
-        while changed and loop_count < max_loops:
-            loop_count += 1
-            logger.debug(f"\n--- 🔄 Logic Loop {loop_count} ---")
-            
-            # engine.run_all が True を返せば、まだ推論の余地があるということ
-            changed = engine.run_all(self.prover.theorems)
+    def _run_logic_step(self, target_checker=None):
+        """🌟 MCTSターンの局所論理探索"""
+        logger.debug(f"\n--- 🔄 MCTSターンの局所論理探索 ---")
+        self.focus_engine.run_until_stalled(
+            self.prover.theorems, 
+            max_steps=15,
+            target_checker=target_checker
+        )
 
     def run_step(self, num_simulations=40):
         root = MCTSNode()
@@ -240,14 +238,20 @@ class MCTSSearchEngine:
             if not merged:
                 avg_heat = sum(getattr(p, 'heat_bonus', 0.0) for p in parents) / max(1, len(parents))
                 Z.heat_bonus = avg_heat + total_drop * 2.0
+        # 🌟 NEW: 局所探索エンジンに対して「この図形(Z)と親に注目しろ！」と強烈な熱を注入する
+        self.focus_engine.scoring.heat_table[Z] += 50.0 
+        for p in parents:
+            self.focus_engine.scoring.heat_table[p] += 20.0
 
         self.tester.discover_all_mmp_relations(Z, parents) 
+        
+        # 🌟 ここで上記の _run_logic_step (局所探索) が呼ばれる
         self._run_logic_step()
 
-        # ターン終了時の冷却サイクル (Decay)
+        # ターン終了時の冷却サイクル (既存のコード)
         for node in self.env.nodes:
             if hasattr(node, 'heat_bonus'):
-                node.heat_bonus *= 0.85 
+                node.heat_bonus *= 0.85
 
 
 class HybridEngine:
@@ -256,13 +260,22 @@ class HybridEngine:
         self.all_vars = all_vars
         self.target_fact = target_fact
         self.prover = LogicProver(self.env, theorems)
-        self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover)
+        
+        # 🌟 NEW: 全探索エンジンと局所探索エンジンをここで初期化
+        self.rule_engine = UniversalRuleEngine(self.env, self.prover)
+        # focus_size は問題の複雑さに応じて 5〜7 程度がベストです
+        self.focus_engine = FocusSearchEngine(self.env, self.prover, self.rule_engine, focus_size=5)
+        
+        # MCTSSearchEngine に focus_engine を渡す
+        self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover, self.focus_engine)
         
     def check_target_reached(self):
         """🌟 汎用クエリ(get_subentity)を使った美しいゴール判定"""
+        from logic_core import get_rep, get_subentity # get_rep を確実にインポート
         tf = self.target_fact
+        
         if tf.fact_type == "Collinear":
-            pts = tf.objects
+            pts = [get_rep(p) for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
             common_lines = get_subentity(pts[0], "Line")
             for p in pts[1:]:
                 common_lines &= get_subentity(p, "Line")
@@ -272,7 +285,7 @@ class HybridEngine:
                 return tf
                 
         elif tf.fact_type == "Concyclic":
-            pts = tf.objects
+            pts = [get_rep(p) for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
             common_circles = get_subentity(pts[0], "Circle")
             for p in pts[1:]:
                 common_circles &= get_subentity(p, "Circle")
@@ -339,20 +352,27 @@ class HybridEngine:
             if hasattr(node, 'add_heat'):
                 node.add_heat(10.0)
 
-        # 🌟 NEW: MCTSを回す前に、注入した図形だけで一回論理エンジンを回す！
-        print("🔄 初期推論 (Target Injection) を実行中...")
-        from logic_core import UniversalRuleEngine
-        engine = UniversalRuleEngine(self.env, self.prover)
-        while True:
-            changed = engine.run_all(self.prover.theorems)
-            if not changed: break
+       # 初期状態における Given 点への強烈な熱注入 (既存のコード)
+        for node in self.env.nodes:
+            if hasattr(node, 'add_heat'):
+                node.add_heat(10.0)
+                # 🌟 NEW: 局所探索エンジン側にも初期熱を登録
+                self.focus_engine.scoring.heat_table[node] += 10.0
 
-        self.agent.run_step()
+       # 🌟 初期図形だけで一回局所探索を限界まで回す！
+        print("🔄 初期推論 (Target Injection) を局所探索で実行中...")
+        # target_checker に self.check_target_reached メソッドをそのまま渡す
+        self.focus_engine.run_until_stalled(
+            self.prover.theorems, 
+            max_steps=50, 
+            target_checker=self.check_target_reached
+        )
+
+        # この時点で証明が完了しているかチェック
         proven_target = self.check_target_reached()
-        
         if proven_target:
-            print(f"🎉 🎉 🎉 証明完了！ (Step: 0)")
-            print(f"最終結論: {proven_target}")
+            print(f"🎉 🎉 🎉 証明完了！ (初期推論フェーズにて)")
+            print(f"最終結論: {proven_target.proof_source}")
             self.prover.print_proof_trace()
             return True
 
@@ -372,38 +392,31 @@ class HybridEngine:
         return False
 
 if __name__ == "__main__":
-    import sys
-    import importlib
-    from logic_core import ProofEnvironment, setup_proof_logger # 🌟 インポートを追加
-    
     problem_name = "prob_simson"
-    DEBUG_MODE = True
+    DEBUG_MODE = False
     
     if len(sys.argv) > 1: 
         problem_name = sys.argv[1]
 
-    # 🌟 NEW: ここでログファイルの出力先を動的にセット！
-    log_file = setup_proof_logger(problem_name)
+    log_file = setup_proof_logger(problem_name, is_debug=DEBUG_MODE) # 🌟 is_debugフラグを渡す
 
     print(f"=== ハイブリッド自動定理証明システム 起動 ===")
     print(f"▶ 読み込み中の問題: {problem_name}")
-    print(f"▶ ログ出力先: {log_file}")  # 分かりやすいように表示
+    print(f"▶ ログ出力先: {log_file}")
     print(f"▶ 数値デバッグモード: {'ON (厳格チェック有効)' if DEBUG_MODE else 'OFF (爆速モード)'}")
     
-    # 🌟 1. 初期化時にデバッグフラグを渡す
     env = ProofEnvironment(enable_numerical_debug=DEBUG_MODE)
 
     try:
         prob_module = importlib.import_module(f"problems.{problem_name}")
         all_vars, target_fact, initial_facts = prob_module.setup_problem(env)
-        
-        # 🌟 2. セットアップ直後に、検証用の自由変数(all_vars)を環境にセットする
         env.all_vars = all_vars 
         
     except Exception as e:
         print(f"❌ エラー: 問題ファイル 'problems/{problem_name}.py' の読み込みに失敗しました。詳細: {e}")
         sys.exit(1)
 
+    # HybridEngine の初期化
     engine = HybridEngine(env, all_vars, target_fact, THEOREMS)
 
     print("▶ 初期状態のMMP大発見を実行中...")
@@ -411,9 +424,27 @@ if __name__ == "__main__":
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
+    # ==========================================
+    # 🌟 NEW: 初期状態の「論理的帰結」を局所探索で全て出し切る
+    # ==========================================
+    print("\n=== 初期状態の論理推論 (局所探索) を開始 ===")
+    
+    # HybridEngineが内部に持っているproverとrule_engineを取得 (変数名が違う場合は適宜修正してください)
+    prover = getattr(engine, 'prover', LogicProver(env, THEOREMS))
+    base_engine = getattr(engine, 'rule_engine', UniversalRuleEngine(env, prover))
+    
+    # 局所探索エンジンの初期化 (注目サイズ: 5)
+    focus_engine = FocusSearchEngine(env, prover, base_engine, focus_size=6)
+    
+    # 行き詰まるまで(最大50ターン)、初期図形だけで分かる事実をマージしまくる
+    focus_engine.run_until_stalled(THEOREMS, max_steps=50)
+
+    # ==========================================
+    # 🚀 全て準備が整った状態で、MCTSスタート
+    # ==========================================
+    print("\n=== MCTS (モンテカルロ木探索) 探索開始 ===")
     engine.run(max_steps=3)
 
-    #print("E_Graphの描画")
-
-    #from visualize import draw_egraph
-    #draw_egraph(env, filename=f"egraph_{problem_name}")
+    # print("E_Graphの描画")
+    # from visualize import draw_egraph
+    # draw_egraph(env, filename=f"egraph_{problem_name}")

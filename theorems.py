@@ -452,6 +452,45 @@ THEOREM_UNIQUE_INTERSECTION = TheoremDef(
 )
 
 # ==========================================
+# 定理: 有向角の加法性 (超高速・クエリ最適化版)
+# ==========================================
+THEOREM_DIRECTED_ANGLE_ADDITION = TheoremDef(
+    name="有向角の加法性",
+    entities={
+        "Ang12": "Angle", "Ang45": "Angle", "Ang23": "Angle", "Ang56": "Angle",
+        "D1": "Direction", "D2": "Direction", "D3": "Direction",
+        "D4": "Direction", "D5": "Direction", "D6": "Direction",
+        "Ang13": "Angle", "Ang46": "Angle"
+    },
+    patterns=[
+        # 1. 🚨超重要🚨 「すでに等しい」と証明されている角度のペアから検索を始める
+        # (E-Graph内で等しい角度のペアは、全角度の組み合わせに比べて圧倒的に少ない)
+        FactPattern("Identical", ["Ang12", "Ang45"], target_type="Angle"),
+        FactPattern("Identical", ["Ang23", "Ang56"], target_type="Angle"),
+
+        # 2. その角度を構成している方向ベクトルを逆引き (この時点で候補は数件〜数十件に激減)
+        FactPattern("DefinedBy", ["D1", "D2", "Ang12"], target_type="AnglePair"),
+        FactPattern("DefinedBy", ["D4", "D5", "Ang45"], target_type="AnglePair"),
+        
+        # 3. 🚨ここで D2 と D5 が「共通の辺(方向)」であることを要求しながら逆引き！
+        FactPattern("DefinedBy", ["D2", "D3", "Ang23"], target_type="AnglePair"),
+        FactPattern("DefinedBy", ["D5", "D6", "Ang56"], target_type="AnglePair"),
+
+        # 4. 退化(同じ方向)を排除
+        DistinctPattern(["D1", "D2", "D3"]),
+        DistinctPattern(["D4", "D5", "D6"]),
+
+        # 5. 全体をまたぐ角度が E-Graph 内に存在するかチェック
+        FactPattern("DefinedBy", ["D1", "D3", "Ang13"], target_type="AnglePair"),
+        FactPattern("DefinedBy", ["D4", "D6", "Ang46"], target_type="AnglePair")
+    ],
+    constructions=[],
+    conclusions=[
+        FactTemplate("Identical", ["Ang13", "Ang46"])
+    ]
+)
+
+# ==========================================
 # 🌟 登録リスト
 # ==========================================
 THEOREMS = [
@@ -468,5 +507,6 @@ THEOREMS = [
     THEOREM_ISOSCELES_BASE_ANGLES,
     THEOREM_ISOSCELES_CONVERSE,
     THEOREM_PERP_BISECTOR_CONVERSE,
-    THEOREM_UNIQUE_INTERSECTION 
+    THEOREM_UNIQUE_INTERSECTION,
+    THEOREM_DIRECTED_ANGLE_ADDITION 
 ]

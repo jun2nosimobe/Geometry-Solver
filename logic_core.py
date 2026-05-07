@@ -38,6 +38,7 @@ def is_valid_node(obj):
     return getattr(rep, 'base_importance', 1.0) > 0.0
 
 def get_subentity(obj, entity_types):
+    obj = get_rep(obj) # 🌟 修正: 最初に必ず代表元を取る！これがないと死んだノードを参照します
     comp = obj.get_best_component()
     if not comp: return set()
     if isinstance(entity_types, str): entity_types = [entity_types]
@@ -152,24 +153,27 @@ class FactPattern(Pattern):
         self.flip_group = flip_group
 
     def match(self, current_bind, prover, env):
+        # 🌟 探索スコープの取得
+        search_nodes = env.active_search_nodes if getattr(env, 'active_search_nodes', None) is not None else env.nodes
+        
         """ディスパッチャ: 種類に応じて専用の検索メソッドに委譲する"""
         if self.fact_type == "Identical":
-            yield from self._match_identical(current_bind, prover, env)
+            yield from self._match_identical(current_bind, prover, env, search_nodes) # 🌟 search_nodes を渡す
         elif self.fact_type == "Connected":
-            yield from self._match_connected(current_bind, prover, env)
+            yield from self._match_connected(current_bind, prover, env, search_nodes)
         elif self.fact_type == "DefinedBy":
-            yield from self._match_defined_by(current_bind, prover, env)
+            yield from self._match_defined_by(current_bind, prover, env, search_nodes)
         elif self.fact_type == "CommonEntity":
-            yield from self._match_common_entity(current_bind, prover, env)
+            yield from self._match_common_entity(current_bind, prover, env, search_nodes)
         elif self.fact_type in ["Collinear", "Concyclic"]:
-            yield from self._match_curve_macro(current_bind, prover, env)
+            yield from self._match_curve_macro(current_bind, prover, env, search_nodes)
         else:
-            yield from self._match_generic(current_bind, prover, env)
+            yield from self._match_generic(current_bind, prover, env, search_nodes)
 
     # ---------------------------------------------------------
     # 処理分割メソッド群
     # ---------------------------------------------------------
-    def _match_identical(self, current_bind, prover, env):
+    def _match_identical(self, current_bind, prover, env, search_nodes):
         v1, v2 = self.args[0], self.args[1]
         
         if v1 in current_bind and v2 in current_bind:
@@ -178,15 +182,15 @@ class FactPattern(Pattern):
         elif v1 in current_bind or v2 in current_bind:
             bound_var, unbound_var = (v1, v2) if v1 in current_bind else (v2, v1)
             target_rep = get_rep(current_bind[bound_var])
-            for n in env.nodes:
+            for n in search_nodes: # 🌟 env.nodes を置換
                 if get_rep(n) == target_rep and is_valid_node(n):
                     yield from self._try_bind_and_yield(current_bind, {unbound_var: n})
         else:
-            nodes = [n for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n)]
+            nodes = [n for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n)] # 🌟 env.nodes を置換
             for rep in set(get_rep(n) for n in nodes):
                 yield from self._try_bind_and_yield(current_bind, {v1: rep, v2: rep})
 
-    def _match_connected(self, current_bind, prover, env):
+    def _match_connected(self, current_bind, prover, env, search_nodes):
         child_args = self.args[0] if isinstance(self.args[0], (list, tuple)) else [self.args[0]]
         parent_arg = self.args[1] if len(self.args) > 1 else None
         
@@ -194,7 +198,7 @@ class FactPattern(Pattern):
         if parent_arg and parent_arg in current_bind:
             parent_nodes.add(get_rep(current_bind[parent_arg]))
         else:
-            for n in env.nodes:
+            for n in search_nodes: # 🌟 env.nodes を置換
                 rep_n = get_rep(n)
                 e_type = getattr(rep_n, 'entity_type', '')
                 if self.target_type and (self.target_type in e_type or e_type in self.target_type) and is_valid_node(rep_n):
@@ -226,7 +230,7 @@ class FactPattern(Pattern):
                         
                     yield from self._try_bind_and_yield(current_bind, new_binds)
 
-    def _match_defined_by(self, current_bind, prover, env):
+    def _match_defined_by(self, current_bind, prover, env, search_nodes):
         arg_vars = self.args[:-1]
         result_var = self.args[-1]
         
@@ -252,7 +256,8 @@ class FactPattern(Pattern):
                 valid_nodes.update(get_subentity(p, actual_entity_type))
             valid_nodes = list(valid_nodes)
         else:
-            valid_nodes = [get_rep(n) for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
+            # 🌟 env.nodes を置換
+            valid_nodes = [get_rep(n) for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
             
         for node in set(valid_nodes):
             comp = node.get_best_component()
@@ -286,7 +291,7 @@ class FactPattern(Pattern):
                             
                         yield from self._try_bind_and_yield(current_bind, new_binds)
 
-    def _match_common_entity(self, current_bind, prover, env):
+    def _match_common_entity(self, current_bind, prover, env, search_nodes):
         p1_var, p2_var, child_var = self.args
         if p1_var in current_bind and p2_var in current_bind:
             p1_node, p2_node = get_rep(current_bind[p1_var]), get_rep(current_bind[p2_var])
@@ -308,7 +313,7 @@ class FactPattern(Pattern):
             for pt in common_pts:
                 yield from self._try_bind_and_yield(current_bind, {child_var: pt})
 
-    def _match_curve_macro(self, current_bind, prover, env):
+    def _match_curve_macro(self, current_bind, prover, env, search_nodes):
         target_entity = "Line" if self.fact_type == "Collinear" else "Circle"
         
         if all(v in current_bind for v in self.args):
@@ -321,7 +326,7 @@ class FactPattern(Pattern):
             if common_curves: 
                 yield current_bind
         else:
-            curves = [n for n in env.nodes if getattr(get_rep(n), 'entity_type', '') == target_entity and is_valid_node(n)]
+            curves = [n for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == target_entity and is_valid_node(n)]
             for curve in set(get_rep(n) for n in curves):
                 pts_on_curve = []
                 comp = curve.get_best_component()
@@ -340,9 +345,9 @@ class FactPattern(Pattern):
                         new_binds = {v_name: pt_obj for v_name, pt_obj in zip(self.args, perm)}
                         yield from self._try_bind_and_yield(current_bind, new_binds)
 
-            yield from self._match_generic(current_bind, prover, env)
+            yield from self._match_generic(current_bind, prover, env, search_nodes)
 
-    def _match_generic(self, current_bind, prover, env):
+    def _match_generic(self, current_bind, prover, env, search_nodes):
         valid_facts = []
         if hasattr(prover, 'facts'):
             for fact in prover.facts:
@@ -351,7 +356,7 @@ class FactPattern(Pattern):
                     valid_facts.append([get_rep(a) for a in getattr(fact, 'objects', [])])
                     
         if not all(v in current_bind for v in self.args):
-            for n in env.nodes:
+            for n in search_nodes: # 🌟 env.nodes を置換
                 comp = get_rep(n).get_best_component()
                 if comp:
                     for d in comp.definitions:
@@ -574,7 +579,9 @@ class UniversalRuleEngine:
 # ==========================================
 class ProofEnvironment:
     def __init__(self, enable_numerical_debug=False):
-        self.nodes = []           
+        self.nodes = [] # 🌟 これは常に「グローバルな全図形」を保持する
+        self.active_search_nodes = None # 🌟 NEW: 局所探索のスコープ制限用
+        
         self.enable_numerical_debug = enable_numerical_debug
         self.all_vars = None
         
