@@ -234,7 +234,7 @@ class FactPattern(Pattern):
         arg_vars = self.args[:-1]
         result_var = self.args[-1]
         
-        unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints"]
+        unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
         is_unordered = (self.target_type in unordered_types) or (self.sub_type == "Unordered")
         should_permute = is_unordered or getattr(self, 'allow_flip', False)
 
@@ -356,7 +356,10 @@ class FactPattern(Pattern):
                     valid_facts.append([get_rep(a) for a in getattr(fact, 'objects', [])])
                     
         if not all(v in current_bind for v in self.args):
-            for n in search_nodes: # 🌟 env.nodes を置換
+            for n in search_nodes: 
+                # 🌟 FIX: ここに is_valid_node のチェックを追加！
+                if not is_valid_node(n): continue
+                
                 comp = get_rep(n).get_best_component()
                 if comp:
                     for d in comp.definitions:
@@ -416,11 +419,13 @@ class UniversalRuleEngine:
             
         return results
 
-    def _execute_constructions(self, constructions, bind):
+    def _execute_constructions(self, theorem_name, constructions, bind):
         from mmp_core import create_geo_entity, link_logical_incidence
+        from logic_core import get_rep
         
         for constr in constructions:
-            parents = [bind[arg] for arg in constr.args]
+            parents = [get_rep(bind[arg]) for arg in constr.args]
+            
             if len(set(parents)) < len(parents): return False
 
             if constr.def_type == "AnglePair" and len(parents) == 2:
@@ -441,22 +446,50 @@ class UniversalRuleEngine:
             for p in parents[1:]: common &= get_subentity(p, constr.target_type)
                 
             found_obj = None
-            is_unordered = constr.def_type in ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints"]
+            is_unordered = constr.def_type in ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
             
             for obj in common:
                 comp = obj.get_best_component()
                 if comp:
                     for d in comp.definitions:
                         if d.def_type == constr.def_type:
-                            if is_unordered and set(d.parents) == set(parents): found_obj = obj; break
-                            elif not is_unordered and d.parents == parents: found_obj = obj; break
+                            # 🌟 修正: 親を必ず最新の代表元に変換してから比較する！
+                            rep_d_parents = [get_rep(p) for p in d.parents] 
+                            
+                            if is_unordered:
+                                if set(rep_d_parents) == set(parents):
+                                    found_obj = obj; break
+                            else:
+                                if rep_d_parents == parents: 
+                                    found_obj = obj; break
                 if found_obj: break
                 
+            # ==========================================
+            # 🌟 絶対フォールバック検索も同様に修正
+            # ==========================================
+            if not found_obj:
+                for node in self.env.nodes:
+                    if not is_valid_node(node): continue
+                    comp = get_rep(node).get_best_component()
+                    if not comp: continue
+                    for d in comp.definitions:
+                        if d.def_type == constr.def_type:
+                            # 🌟 修正: ここでも最新の代表元に変換
+                            rep_d_parents = [get_rep(p) for p in d.parents]
+                            
+                            if (is_unordered and set(rep_d_parents) == set(parents)) or (not is_unordered and rep_d_parents == parents):
+                                found_obj = get_rep(node)
+                                break
+                    if found_obj: break
             if found_obj:
                 bind[constr.bind_to] = found_obj 
             else:
                 name_suffix = "_".join([getattr(p, 'name', str(id(p))[-4:]) for p in parents])
                 new_obj = create_geo_entity(constr.def_type, parents, name=f"{constr.def_type}_{name_suffix}_(Auto)", env=self.env)
+                
+                # 🌟 修正: theorem_name を使うようにする
+                new_obj.created_by_theorem = theorem_name
+                
                 self.env.nodes.append(new_obj)
                 for p in parents: link_logical_incidence(p, new_obj)
                 bind[constr.bind_to] = new_obj
@@ -473,6 +506,53 @@ class UniversalRuleEngine:
             elif conc.fact_type in ["Collinear", "Concyclic"]:
                 if self._apply_curve_macro(theorem_name, conc, bind): applied_anything = True
         return applied_anything
+
+    def _apply_congruence_closure(self):
+        """🌟 E-Graph の究極奥義：親が同じになった子要素たちを自動的にマージする（合同閉包）"""
+        from logic_core import get_rep, is_valid_node
+        changed = False
+        def_map = {}
+        
+        for node in self.env.nodes:
+            if not is_valid_node(node): continue
+            rep = get_rep(node)
+            comp = rep.get_best_component()
+            if not comp: continue
+            
+            for d in comp.definitions:
+                # ==========================================
+                # 🌟 NEW: 特異点ガード (Big Crunch 防止)
+                # 1. 親がない(独立したGiven図形)場合はデフラグしない
+                if not d.parents:
+                    continue
+                # 2. 関数ではなく単なる「型ラベル」の場合はデフラグしない
+                if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "Direction", "Angle", "Scalar"]:
+                    continue
+                # ==========================================
+
+                # 親を最新の代表元にしてシグネチャ（設計図）を作る
+                rep_parents = tuple(get_rep(p) for p in d.parents)
+                
+                # 順不同図形の場合はソートして同一視する
+                unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
+                if d.def_type in unordered_types:
+                    rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
+                    
+                signature = (d.def_type, rep_parents)
+                
+                # もし全く同じ設計図を持つ別の図形がすでに見つかっていれば、マージ！
+                if signature in def_map:
+                    existing_node = def_map[signature]
+                    if get_rep(existing_node) != rep:
+                        logger.debug(f"  🔄 [合同閉包・デフラグ] 同一の親を持つノードを統合: {rep.name} ≡ {get_rep(existing_node).name}")
+                        merged = self.env.merge_entities_logically(existing_node, rep)
+                        if merged:
+                            changed = True
+                            break # マージされたらこのノードの処理は終了し次へ
+                else:
+                    def_map[signature] = rep
+                    
+        return changed
 
     # ---------------------------------------------------------
     # 結論適用 メソッド群
@@ -507,12 +587,21 @@ class UniversalRuleEngine:
     def _apply_connected(self, theorem_name, conc, bind):
         from mmp_core import link_logical_incidence
         child_args = conc.args[0] if isinstance(conc.args[0], list) else [conc.args[0]]
-        parent_obj = bind[conc.args[1]]
+        
+        # 🌟 修正: 親ノードを必ず最新の代表元にする
+        parent_obj = get_rep(bind[conc.args[1]])
         applied = False
         
         for c_arg in child_args:
-            child_obj = bind[c_arg]
+            # 🌟 修正: 子ノードも必ず最新の代表元にする
+            child_obj = get_rep(bind[c_arg])
+            
+            # 念のための安全装置 (マージの過程でNoneになっていたらスキップ)
+            if not parent_obj or not child_obj:
+                continue
+
             if parent_obj not in get_subentity(child_obj, conc.target_type):
+                # 🌟 常に最新の代表元同士でリンクを張る
                 link_logical_incidence(parent_obj, child_obj)
                 logger.info(f"  🟢 [リンク] {child_obj.name} ∈ {parent_obj.name} (理由: {theorem_name})")
                 self.prover.record_trace(theorem_name, f"{child_obj.name} ∈ {parent_obj.name}")
@@ -527,19 +616,67 @@ class UniversalRuleEngine:
         search_type = "Line" if conc.fact_type == "Collinear" else "Circle"
         def_type = "LineThroughPoints" if conc.fact_type == "Collinear" else "Circumcircle"
         
-        common_curves = get_subentity(reps[0], search_type)
-        for pt in reps[1:]: common_curves &= get_subentity(pt, search_type)
+        base_count = 3 if search_type == "Circle" else 2
         
-        if not common_curves:
-            new_curve = create_geo_entity(def_type, reps[:3] if search_type=="Circle" else reps[:2], name=f"{def_type}_(Auto)", env=self.env)
-            self.env.nodes.append(new_curve)
-            for pt in reps: link_logical_incidence(pt, new_curve)
-            logger.info(f"  🟢 [マクロ構築] {', '.join(p.name for p in reps)} ∈ {new_curve.name} (理由: {theorem_name})")
-            self.prover.record_trace(theorem_name, f"{conc.fact_type}({', '.join(p.name for p in reps)})")
-            return True
-        else:
+        # 1. まず、対象の全点がすでに通っている曲線があるかチェック
+        common_curves = get_subentity(reps[0], search_type)
+        for pt in reps[1:]: 
+            common_curves &= get_subentity(pt, search_type)
+        
+        if common_curves:
             logger.debug(f"    ⏭️ 既に {search_type} ({list(common_curves)[0].name}) 上に存在するためスキップ: {', '.join(p.name for p in reps)}")
             return False
+            
+        # 2. ベースとなる点を通る曲線が既に存在するかチェック
+        base_curves = get_subentity(reps[0], search_type)
+        for pt in reps[1:base_count]:
+            base_curves &= get_subentity(pt, search_type)
+            
+        # ==========================================
+        # 🌟 NEW: リンク漏れ対策の「絶対フォールバック検索」
+        # ==========================================
+        if not base_curves:
+            for node in self.env.nodes:
+                if not is_valid_node(node): continue
+                if getattr(get_rep(node), 'entity_type', '') == search_type:
+                    comp = get_rep(node).get_best_component()
+                    if comp:
+                        for d in comp.definitions:
+                            if d.def_type == def_type:
+                                rep_parents = [get_rep(p) for p in d.parents]
+                                # ベース点がすべて親に含まれているか（順不同）
+                                if set(reps[:base_count]).issubset(set(rep_parents)):
+                                    base_curves = {get_rep(node)}
+                                    break
+                if base_curves: break
+        # ==========================================
+
+        if base_curves:
+            # 既存の円(または直線)に残りの点をリンクするだけ！
+            target_curve = list(base_curves)[0]
+            for pt in reps[base_count:]:
+                link_logical_incidence(pt, target_curve)
+                
+            logger.info(f"  🟢 [マクロ拡張] {', '.join(p.name for p in reps[base_count:])} を既存の {target_curve.name} に追加 (理由: {theorem_name})")
+            self.prover.record_trace(theorem_name, f"{conc.fact_type}({', '.join(p.name for p in reps)})")
+            return True
+            
+        # 3. 完全に新規作成する
+        new_curve = create_geo_entity(def_type, reps[:base_count], name=f"{def_type}_(Auto)", env=self.env)
+        
+        # 🌟 NEW: 生成元を正しく記録（Unknownを撲滅）
+        new_curve.created_by_theorem = theorem_name 
+        
+        # 🌟 NEW: env.nodes への二重登録を絶対に防ぐガード
+        if new_curve not in self.env.nodes:
+            self.env.nodes.append(new_curve)
+        
+        for pt in reps: 
+            link_logical_incidence(pt, new_curve)
+            
+        logger.info(f"  🟢 [マクロ構築] {', '.join(p.name for p in reps)} ∈ {new_curve.name} (理由: {theorem_name})")
+        self.prover.record_trace(theorem_name, f"{conc.fact_type}({', '.join(p.name for p in reps)})")
+        return True
 
     def run_all(self, theorems):
         applied_any_in_this_run = False
@@ -561,7 +698,8 @@ class UniversalRuleEngine:
                             type_ok = False; break
                 if not type_ok: continue
 
-                if not self._execute_constructions(theorem.constructions, bind): 
+                # 🌟 修正: 第1引数に theorem.name を追加して渡す！
+                if not self._execute_constructions(theorem.name, theorem.constructions, bind): 
                     logger.debug(f"    ❌ 作図フェーズ拒否: { {k: getattr(v, 'name', v) for k, v in bind.items()} }")
                     continue
 
@@ -571,6 +709,12 @@ class UniversalRuleEngine:
 
             if valid_count > 0:
                 logger.info(f"    => 🎉 {valid_count} 件の新しい結論を適用！")
+                
+        # ==========================================
+        # 🌟 NEW: 定理の適用が一通り終わるたびに、合同閉包でグラフを圧縮(デフラグ)する
+        # ==========================================
+        if self._apply_congruence_closure():
+            applied_any_in_this_run = True
                 
         return applied_any_in_this_run
 
@@ -599,15 +743,20 @@ class ProofEnvironment:
     def merge_entities_logically(self, rep1, rep2):
         entity1, entity2 = get_rep(rep1), get_rep(rep2)
         if entity1 == entity2: return None
-        if entity1 not in self.nodes or entity2 not in self.nodes: return None
 
-        if getattr(self, 'enable_numerical_debug', False) and getattr(self, 'all_vars', None):
+    # 🌟 修正案: 基本図形の「宇宙崩壊」をフラグなしでも防ぐ
+        is_basic = entity1.entity_type in ["Point", "Line"]
+        should_verify = getattr(self, 'enable_numerical_debug', False) or is_basic
+
+        #should_verify=True
+        if should_verify and getattr(self, 'all_vars', None):
             from mmp_core import verify_identical_runtime
+            # 検証実行
             if not verify_identical_runtime(entity1, entity2, self.all_vars):
-                err_msg = f"🚨 [FATAL ERROR] 数値検証FAIL: {entity1.name} ≡ {entity2.name}"
-                if getattr(entity1, '_calc_err_trace', ''): err_msg += f"\n{entity1._calc_err_trace}"
-                print(err_msg)
-                raise RuntimeError(err_msg)
+            # 💡 ログを詳細に出す
+                print(f"❌ [拒否] 数値的に不一致: {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type})")
+                logger.info(f"❌ [拒否] 数値的に不一致: {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type})")
+                return None # 🌟 修正: raise ではなく、単にマージを拒否して推論を続けさせるのが安全
                 
         entity1, entity2 = get_rep(rep1), get_rep(rep2)
         if entity1 == entity2: return None
@@ -615,6 +764,7 @@ class ProofEnvironment:
             
         for node in self.nodes:
             for comp in node.components:
+                # [既存] 他のノードが entity2 を子として持っていた場合の更新
                 if entity2 in comp.subobjects:
                     comp.subobjects.remove(entity2)
                     comp.subobjects.add(entity1)
@@ -628,6 +778,22 @@ class ProofEnvironment:
                     else:
                         new_defs.add(d)
                 comp.definitions = new_defs
+
+        # ==========================================
+        # 🌟 NEW: entity2 自身が持っていた子要素(subobjects)を、すべて entity1 に引き継ぐ！
+        # ==========================================
+        e1_comp = entity1.get_best_component()
+        e2_comp = entity2.get_best_component()
+        if e1_comp and e2_comp:
+            for child in e2_comp.subobjects:
+                e1_comp.subobjects.add(child)
+                # 子要素側から見た親のリンクも entity1 に向ける（念のため）
+                child_comp = get_rep(child).get_best_component()
+                if child_comp:
+                    for d in child_comp.definitions:
+                        if entity2 in d.parents:
+                            d.parents = [entity1 if p == entity2 else p for p in d.parents]
+        # ==========================================
 
         entity1.merge_numerical(entity2)
         while len(entity1.components) > 1:
@@ -647,6 +813,15 @@ class Fact:
         self.is_mmp_conjecture = True
         self.conjecture_score = 0.0
         self.proof_source = ""
+
+    def __str__(self):
+        # オブジェクトが名前を持っていれば名前を、なければ文字列表現を使う
+        obj_names = ", ".join([getattr(o, 'name', str(o)) for o in self.objects])
+        return f"{self.fact_type}({obj_names})"
+        
+    def __repr__(self):
+        return self.__str__()
+        
     def __eq__(self, other):
         if not isinstance(other, Fact) or self.fact_type != other.fact_type: return False
         if self.fact_type in ["Concyclic", "Collinear", "Identical", "Parallel"]: return set(self.objects) == set(other.objects)

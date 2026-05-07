@@ -108,6 +108,7 @@ class MCTSSearchEngine:
             # 物理的にも新しい図形なら、E-Graphに「ゴースト」として正式登録
             env_nodes_before = len(self.env.nodes)
             Z = create_geo_entity(def_type, rep_parents, name, env=self.env, is_ghost=True)
+            Z.created_by_theorem = "MCTS_Exploration"
 
             avg_parent_imp = sum(getattr(p, 'base_importance', 0.0) for p in rep_parents) / len(rep_parents) # ここもbase_importanceに修正
 
@@ -304,6 +305,8 @@ class HybridEngine:
 
     def run(self, max_steps=100):
         print(f"\n🔄 探索開始 (問題: {self.target_fact})")
+
+        self.focus_engine.set_target(self.target_fact)
         
         print("🔄 全結合シーディング (Universal Seeding) を実行中...")
         from mmp_core import create_geo_entity, link_logical_incidence, is_canonical_angle_order
@@ -391,6 +394,85 @@ class HybridEngine:
                 return True
         return False
 
+
+def analyze_node_utility(env, prover):
+    """E-Graph内のノードの「真の貢献度」をプロファイリングする"""
+    print("\n" + "="*40)
+    print(" 📊 E-Graph ノード貢献度プロファイリング")
+    print("="*40)
+    
+    # 1. 証明トレースから「実際に使われたノード」の名前を抽出
+    used_node_names = set()
+    
+    # 例: "AnglePair_Dir_A_Dir_B ≡ AnglePair_Dir_C_Dir_D <= 円周角の定理" から名前を抜く
+    # アンダースコア、英数字、カッコを含むノード名を大雑把に抽出する正規表現
+    node_pattern = re.compile(r'[a-zA-Z0-9_()]+') 
+    
+    for log in prover.trace_log:
+        words = node_pattern.findall(log)
+        for w in words:
+            # 短すぎる単語や定理名などを除外
+            if len(w) > 2 and w not in ["AnglePair", "Dir", "Concyclic", "Collinear"]:
+                used_node_names.add(w)
+
+    # 2. 現在の env.nodes を分類
+    from logic_core import get_rep, is_valid_node
+    
+    total_nodes = 0
+    used_nodes = []
+    unused_but_hot = []   # 探索されたが証明には繋がらなかった
+    completely_useless = [] # 探索すらされなかった完全なゴミ
+
+    for node in env.nodes:
+        rep = get_rep(node)
+        if rep != node or not is_valid_node(node):
+            continue # マージされて消えたノードやゴーストはスキップ
+            
+        total_nodes += 1
+        name = node.name
+        
+        # 名前の一部でも使われていればOKとする (緩い判定)
+        is_used = any(name in un or un in name for un in used_node_names)
+        
+        if is_used:
+            used_nodes.append(node)
+        else:
+            heat = getattr(node, 'heat_bonus', 0.0)
+            if heat > 0.5:
+                unused_but_hot.append(node)
+            else:
+                completely_useless.append(node)
+
+    # 3. 結果の出力
+    print(f"📈 最終有効ノード総数 (Canonical): {total_nodes} 個")
+    print(f"  🟢 証明に貢献したノード    : {len(used_nodes)} 個 ({(len(used_nodes)/max(1, total_nodes))*100:.1f}%)")
+    print(f"  🟡 探索されたが無駄だった  : {len(unused_but_hot)} 個 ({(len(unused_but_hot)/max(1, total_nodes))*100:.1f}%)")
+    print(f"  🔴 完全に無駄な(孤立)ノード: {len(completely_useless)} 個 ({(len(completely_useless)/max(1, total_nodes))*100:.1f}%)\n")
+
+    if completely_useless:
+        print("【🔴 完全に無駄だったノードのサンプル (Top 100)】")
+        # seedやautoが付いているものを優先して表示
+        useless_sorted = sorted(completely_useless, key=lambda n: "Seed" in n.name or "Auto" in n.name, reverse=True)
+        for n in useless_sorted[:100]:
+            comp = n.get_best_component()
+            parents = []
+            if comp and comp.definitions:
+                first_def = next(iter(comp.definitions))
+                parents = [p.name for p in first_def.parents]
+            print(f"  - {n.name} (型: {n.entity_type}, 親: {parents})")
+            
+    print("="*40 + "\n")
+
+    print("\n【🗑️ 無駄ノード生成元 (戦犯) ランキング】")
+    blame_counts = {}
+    for n in completely_useless:
+        creator = getattr(n, 'created_by_theorem', 'Unknown / Seed')
+        blame_counts[creator] = blame_counts.get(creator, 0) + 1
+        
+    for creator, count in sorted(blame_counts.items(), key=lambda x: x[1], reverse=True):
+        print(f"  - {creator}: {count} 個")
+    print("="*40 + "\n")
+
 if __name__ == "__main__":
     problem_name = "prob_simson"
     DEBUG_MODE = False
@@ -444,6 +526,10 @@ if __name__ == "__main__":
     # ==========================================
     print("\n=== MCTS (モンテカルロ木探索) 探索開始 ===")
     engine.run(max_steps=3)
+
+
+    #結果の分析
+    analyze_node_utility(env, engine.prover)
 
     # print("E_Graphの描画")
     # from visualize import draw_egraph

@@ -159,7 +159,7 @@ class ActionGenerator:
                 if c_L:
                     # 🌟 NEW: 直線が選ばれたら、必ずその「方向(Direction)」もアクション候補に投げる！
                     # （これにより、MCTSがランダムにDirectionを生成し、AnglePair探索の種を増やす）
-                    name_dir = f"Dir_{L.name}_(Auto)"
+                    name_dir = f"Dir_{L.name}_(Action)"
                     if name_dir not in existing_names:
                         actions.append(([L], "DirectionOf", name_dir))
                         existing_names.add(name_dir)
@@ -174,7 +174,7 @@ class ActionGenerator:
                             p_probs = np.array(pts_weights) / p_weight_sum
                         
                         A, B, C = np.random.choice(pts_on_L, size=3, replace=False, p=p_probs)
-                        name_ratio = f"Ratio_{A.name}{B.name}_{B.name}{C.name}_(Auto)"
+                        name_ratio = f"Ratio_{A.name}{B.name}_{B.name}{C.name}_(Action)"
                         if name_ratio not in existing_names:
                             actions.append(([A, B, C], "AffineRatio", name_ratio))
                             existing_names.add(name_ratio) 
@@ -189,7 +189,7 @@ class ActionGenerator:
                         A, B, C = pts
                         for p1, p2 in [(A, B), (B, C), (C, A)]:
                             sorted_edge = sorted([p1, p2], key=lambda p: p.name)
-                            name_len = f"LenSq_{sorted_edge[0].name}{sorted_edge[1].name}_(Auto)"
+                            name_len = f"LenSq_{sorted_edge[0].name}{sorted_edge[1].name}_(Action)"
                             if name_len not in existing_names:
                                 actions.append((sorted_edge, "LengthSq", name_len))
                                 existing_names.add(name_len) 
