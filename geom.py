@@ -5,8 +5,8 @@ import importlib
 import sys
 import re
 
-from mmp_core import create_geo_entity, link_logical_incidence
-from logic_core import ProofEnvironment, setup_proof_logger, LogicProver, UniversalRuleEngine, get_rep, get_subentity
+from mmp_core import create_geo_entity
+from logic_core import ProofEnvironment, setup_proof_logger, LogicProver, UniversalRuleEngine, get_rep
 from theorems import THEOREMS
 from mmp_tester import MMPTester
 from action_space import ActionGenerator

@@ -1,5 +1,5 @@
 import logging
-from logic_core import ProofEnvironment, LogicProver, UniversalRuleEngine, setup_proof_logger, Fact
+from logic_core import ProofEnvironment, LogicProver, UniversalRuleEngine, setup_proof_logger, Fact, get_rep
 from theorems import THEOREM_ALTERNATE_SEGMENT
 from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity, link_logical_incidence # 🌟 追加
 
@@ -64,7 +64,6 @@ ang_AD_BD = create_geo_entity("AnglePair", [dirs[("A", "D")], dirs[("B", "D")]],
 # ==========================================
 print("\n" + "="*60)
 print("🔍 [X-Ray デバッガ] E-Graph 完全ダンプ")
-from logic_core import get_rep
 for node in env.nodes:
     rep = get_rep(node)
     e_type = getattr(rep, 'entity_type', 'Unknown')

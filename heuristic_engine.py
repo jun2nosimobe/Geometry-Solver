@@ -144,7 +144,6 @@ class FocusSearchEngine:
     def _sample_focus_set(self):
         """🌟 劇的改善: 嬉しい性質と次数を考慮した Graph-Walk サンプリング"""
         from logic_core import get_rep, is_valid_node
-        import numpy as np
         
         base_types = {"Point", "Line", "Circle"}
         all_candidates = [get_rep(n) for n in self.env.nodes if getattr(get_rep(n), 'entity_type', '') in base_types and is_valid_node(n)]
