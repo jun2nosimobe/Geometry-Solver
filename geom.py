@@ -388,7 +388,7 @@ class HybridEngine:
                 # 二重登録を防ぐために if 文の中で管理するのが安全です
                 if a not in self.env.nodes:
                     self.env.nodes.append(a)
-                    
+
         # 初期状態における Given 点への強烈な熱注入 (既存のコード)
         for node in self.env.nodes:
             if hasattr(node, 'add_heat'):
@@ -514,7 +514,7 @@ def analyze_node_utility(env, prover):
 
 if __name__ == "__main__":
     problem_name = "prob_simson"
-    DEBUG_MODE = False
+    DEBUG_MODE = True
     
     if len(sys.argv) > 1: 
         problem_name = sys.argv[1]

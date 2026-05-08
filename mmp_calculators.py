@@ -245,3 +245,55 @@ def calc_tangent_line(entity, t_dict, cache):
     c_val = -(nx * xt + ny * yt)
     
     return [nx, ny, c_val]
+
+@register_calc("PoleOfLine")
+def calc_pole_of_line(entity, t_dict, cache):
+    """円 C と直線 L から極 P を計算する"""
+    if len(entity.parents) != 2: return []
+    circle = entity.parents[0]  # 円
+    line = entity.parents[1]    # 直線
+    
+    # 円を定義している3点を取得
+    comp = circle.get_best_component()
+    if not comp: return []
+    
+    circle_def = None
+    for d in comp.definitions:
+        if d.def_type == "Circumcircle" and len(d.parents) == 3:
+            circle_def = d; break
+    if not circle_def: return []
+    
+    p1 = circle_def.parents[0].calculate(t_dict, cache)
+    p2 = circle_def.parents[1].calculate(t_dict, cache)
+    p3 = circle_def.parents[2].calculate(t_dict, cache)
+    L_val = line.calculate(t_dict, cache)
+    if not (p1 and p2 and p3 and L_val): return []
+    
+    # 座標を取り出す
+    x1, y1 = p1[0]/p1[2], p1[1]/p1[2]
+    x2, y2 = p2[0]/p2[2], p2[1]/p2[2]
+    x3, y3 = p3[0]/p3[2], p3[1]/p3[2]
+    a, b, c = L_val[0], L_val[1], L_val[2]
+    
+    # 外心 O の座標 (Ox, Oy) を計算
+    D = 2 * (x1*(y2 - y3) + x2*(y3 - y1) + x3*(y1 - y2))
+    if hasattr(D, 'value') and D.value == 0: return []
+    if D == 0: return []
+    
+    sq1, sq2, sq3 = x1**2 + y1**2, x2**2 + y2**2, x3**2 + y3**2
+    Ox = (sq1*(y2 - y3) + sq2*(y3 - y1) + sq3*(y1 - y2)) / D
+    Oy = (sq1*(x3 - x2) + sq2*(x1 - x3) + sq3*(x2 - x1)) / D
+    
+    # 半径の2乗 R^2
+    R_sq = (x1 - Ox)**2 + (y1 - Oy)**2
+    
+    # 直線を O を原点とする座標系で評価した定数項 c'
+    c_prime = c + a * Ox + b * Oy
+    if hasattr(c_prime, 'value') and c_prime.value == 0: return []
+    if c_prime == 0: return [] # 直線が中心を通る場合は極が無限遠点になるためスキップ
+    
+    # 極 P の座標
+    Px = -a * R_sq / c_prime + Ox
+    Py = -b * R_sq / c_prime + Oy
+    
+    return [Px, Py, 1]

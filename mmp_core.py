@@ -323,18 +323,10 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 if rep1 != rep2:
                     env.merge_entities_logically(rep1, rep2)
     elif def_type == "TangentLine":
-        # parents = [Circle, Point] （円と、その円周上の接点）
-        circle = parents[0]
-        pt = parents[1]
-        
-        # 1. 接線(new_entity) は 円(circle) に属する (接するという意味になる)
-        link_logical_incidence(new_entity, circle) 
-        
-        # 2. 接点(pt) は 接線(new_entity) に乗っている
-        link_logical_incidence(pt, new_entity)
-        
-        # 3. 接点(pt) は 円(circle) に乗っている
-        link_logical_incidence(pt, circle)
+        circle, pt = parents[0], parents[1]
+        link_logical_incidence(new_entity, circle) # Connected(L, C)
+        link_logical_incidence(pt, new_entity)     # Connected(A, L)
+        link_logical_incidence(pt, circle)         # Connected(A, C)
         
     elif def_type == "Midpoint":
         c1, c2 = parents[0].get_best_component(), parents[1].get_best_component()
@@ -460,7 +452,7 @@ def is_canonical_angle_order(Dir1, Dir2):
 # 🌟 図形タイプのマッピング辞書
 # ==========================================
 ENTITY_TYPE_MAP = {
-    "Intersection": "Point", "Midpoint": "Point", "CirclesIntersection": "Point",
+    "Intersection": "Point", "Midpoint": "Point", "CirclesIntersection": "Point", "PoleOfLine": "Point",
     "LineThroughPoints": "Line", "PerpendicularLine": "Line", "ParallelLine": "Line", "TangentLine": "Line",
     "Circumcircle": "Circle",
     "DirectionOf": "Direction",
