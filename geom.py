@@ -108,13 +108,22 @@ class MCTSSearchEngine:
             # 物理的にも新しい図形なら、E-Graphに「ゴースト」として正式登録
             env_nodes_before = len(self.env.nodes)
             Z = create_geo_entity(def_type, rep_parents, name, env=self.env, is_ghost=True)
+            
+            # ==========================================
+            # 🌟 NEW: 退化テストで弾かれて None になった場合のガードを追加
+            # ==========================================
+            if Z is None:
+                score -= 10.0  # 退化するような無駄な作図には重いペナルティ！
+                continue
+                
             Z.created_by_theorem = "MCTS_Exploration"
 
-            avg_parent_imp = sum(getattr(p, 'base_importance', 0.0) for p in rep_parents) / len(rep_parents) # ここもbase_importanceに修正
+            avg_parent_imp = sum(getattr(p, 'base_importance', 0.0) for p in rep_parents) / len(rep_parents)
 
             score += avg_parent_imp * (0.5 ** step_idx)
 
             if Z.entity_type in ["Point", "Line", "Circle"]:
+                cZ = Z.get_best_component() # 🌟 Z_temp のものではなく、本物から取り直す
                 for var in self.all_vars:
                     nd = cZ.naive_degree
                     if nd > 30: continue

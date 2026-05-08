@@ -139,9 +139,10 @@ class FocusSearchEngine:
             local_nodes.update(get_subentity(base_node, ["Line", "Circle"]))
             
         # ==========================================
-        # 🌟 NEW: 局所ノードの爆発を防ぐ絶対防波堤 (Hard Limit)
+        # 🌟 NEW: 局所ノードの爆発を防ぐ動的リミッター
+        # focus_sizeが5なら大体 40〜50 個程度に抑えるのが適正
         # ==========================================
-        MAX_LOCAL_NODES = 250  
+        MAX_LOCAL_NODES = min(250, len(focus_set) * 10) 
         
         # 2. 親が揃っている派生図形（方向ベクトルや角度など）を引き込む
         for _ in range(2): 
@@ -160,7 +161,7 @@ class FocusSearchEngine:
                 for d in comp.definitions:
                     # 親がすべて局所グラフ内にあるか？
                     if all(get_rep(p) in local_nodes for p in d.parents):
-                        # 🌟 工夫: 角度(AnglePair)より、点や線を優先して引き込むためのスコア付け
+                        # 角度(AnglePair)より、点や線を優先して引き込む
                         priority = 1 if d.def_type in ["AnglePair", "Direction"] else 0
                         candidates.append((priority, rep_n))
                         break
@@ -168,13 +169,11 @@ class FocusSearchEngine:
             if not candidates:
                 break
                 
-            # 優先度順（重要図形が先、角度が後）にソートして追加
             candidates.sort(key=lambda x: x[0])
             
             for _, new_node in candidates:
                 if len(local_nodes) >= MAX_LOCAL_NODES:
-                    logger.warning(f"⚠️ 局所グラフが上限({MAX_LOCAL_NODES})に到達。これ以上の波及を打ち切ります。")
-                    break
+                    break # 上限到達でスパッと切る（Warningスパム防止のためログは消す）
                 if new_node not in local_nodes:
                     local_nodes.add(new_node)
                     added_this_round = True
@@ -206,11 +205,22 @@ class FocusSearchEngine:
         
         local_nodes = self._extract_local_graph(focus_set)
         active_theorems = self._prune_theorems(local_nodes, theorems)
-        logger.info(f"   => 局所ノード数: {len(local_nodes)} (全体 {len(self.env.nodes)}), 適用定理: {len(active_theorems)}/{len(theorems)}")
+        
+        # ターン開始前の全体ノード数を記録
+        nodes_before = len(self.env.nodes)
+        
+        logger.info(f"   => 局所ノード数: {len(local_nodes)} (全体 {nodes_before}), 適用定理: {len(active_theorems)}/{len(theorems)}")
 
-        self.env.active_search_nodes = local_nodes
+        # 世代管理(スナップショット)は UniversalRuleEngine 側で処理される
         success = self.base_engine.run_all(active_theorems)
-        self.env.active_search_nodes = None
+        
+        # ==========================================
+        # 🌟 NEW: ターン終了後に「待機列（新しく生まれたノード）」の数を集計して表示
+        # ==========================================
+        nodes_after = len(self.env.nodes)
+        new_nodes_count = nodes_after - nodes_before
+        if new_nodes_count > 0:
+            logger.info(f"   => 📦 [ターン終了] 新規ノードを待機列から合流: +{new_nodes_count} 個 (全体 {nodes_after})")
         
         self.scoring.apply_feedback(focus_set, success)
         self.scoring.decay_global_heat()

@@ -256,8 +256,21 @@ class FactPattern(Pattern):
                 valid_nodes.update(get_subentity(p, actual_entity_type))
             valid_nodes = list(valid_nodes)
         else:
-            # 🌟 env.nodes を置換
-            valid_nodes = [get_rep(n) for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
+            # ==========================================
+            # 🌟 NEW: 検索空間の劇的な絞り込み最適化
+            # ==========================================
+            # まだ全ての親が揃っていなくても、一つでもバインド(決定)された変数があるなら
+            # 「その親に関連する図形」だけを探せばよい！（数百倍のスピードアップ）
+            bound_args = [get_rep(current_bind[v]) for v in arg_vars if v in current_bind]
+            if bound_args:
+                valid_nodes = set()
+                for p in bound_args:
+                    valid_nodes.update(get_subentity(p, actual_entity_type))
+                
+                search_reps = {get_rep(n) for n in search_nodes}
+                valid_nodes = [n for n in valid_nodes if get_rep(n) in search_reps and is_valid_node(n)]
+            else:
+                valid_nodes = [get_rep(n) for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
             
         for node in set(valid_nodes):
             comp = node.get_best_component()
@@ -392,8 +405,22 @@ class UniversalRuleEngine:
         if hasattr(self.env, 'zero_angle'): initial_bind["Ang0"] = get_rep(self.env.zero_angle)
             
         survival_counts = [0] * len(patterns)
+        
+        # ==========================================
+        # 🌟 NEW: 組み合わせ爆発を防ぐDFSリミッター
+        # ==========================================
+        MAX_DFS_CALLS = 15000  # 探索の深さの上限
+        MAX_RESULTS = 100      # 1ターンで適用する解の最大数
+        state = {'calls': 0, 'limit_hit': False}
             
         def dfs(pattern_idx, current_bind):
+            state['calls'] += 1
+            if state['calls'] > MAX_DFS_CALLS:
+                if not state['limit_hit']:
+                    logger.warning(f"    ⚠️ [{theorem_name}] 探索空間が大きすぎるため、途中で打ち切りました (DFS上限: {MAX_DFS_CALLS})")
+                    state['limit_hit'] = True
+                return # 探索打ち切り (強制脱出)
+                
             if pattern_idx == len(patterns):
                 yield current_bind.copy()
                 return
@@ -403,7 +430,12 @@ class UniversalRuleEngine:
                 survival_counts[pattern_idx] += 1
                 yield from dfs(pattern_idx + 1, bound_dict)
                 
-        results = list(dfs(0, initial_bind))
+        results = []
+        for res in dfs(0, initial_bind):
+            results.append(res)
+            if len(results) >= MAX_RESULTS:
+                logger.debug(f"    ⚠️ [{theorem_name}] マッチ数が上限({MAX_RESULTS})に達したため取得を打ち切ります")
+                break
         
         # DEBUGモードの時だけ詳細な探索数を計算して出力
         if logger.isEnabledFor(logging.DEBUG):
@@ -487,10 +519,15 @@ class UniversalRuleEngine:
                 name_suffix = "_".join([getattr(p, 'name', str(id(p))[-4:]) for p in parents])
                 new_obj = create_geo_entity(constr.def_type, parents, name=f"{constr.def_type}_{name_suffix}_(Auto)", env=self.env)
                 
-                # 🌟 修正: theorem_name を使うようにする
+                # ==========================================
+                # 🌟 NEW: 退化検知で None が返ってきた場合のガード
+                # ==========================================
+                if new_obj is None:
+                    return False # 退化図形なので作図失敗、マッチ全体を棄却
+                
                 new_obj.created_by_theorem = theorem_name
                 
-                self.env.nodes.append(new_obj)
+                # self.env.nodes.append(new_obj) # 🌟 create_geo_entity 側で自動追加されるため削除！
                 for p in parents: link_logical_incidence(p, new_obj)
                 bind[constr.bind_to] = new_obj
         return True
@@ -510,48 +547,58 @@ class UniversalRuleEngine:
     def _apply_congruence_closure(self):
         """🌟 E-Graph の究極奥義：親が同じになった子要素たちを自動的にマージする（合同閉包）"""
         from logic_core import get_rep, is_valid_node
+        import time
+        
+        start_time = time.time()
         changed = False
         def_map = {}
+        merge_count = 0
+        nodes_checked = 0
         
-        for node in self.env.nodes:
+        # 🌟 FIX: マージによって self.env.nodes の中身が減るため、必ずコピー(list)を回す！
+        for node in list(self.env.nodes):
             if not is_valid_node(node): continue
             rep = get_rep(node)
             comp = rep.get_best_component()
             if not comp: continue
             
+            nodes_checked += 1
             for d in comp.definitions:
-                # ==========================================
-                # 🌟 NEW: 特異点ガード (Big Crunch 防止)
-                # 1. 親がない(独立したGiven図形)場合はデフラグしない
                 if not d.parents:
                     continue
-                # 2. 関数ではなく単なる「型ラベル」の場合はデフラグしない
-                if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "Direction", "Angle", "Scalar"]:
+                if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "GivenPoint", "FreePoint", "Direction", "Angle", "Scalar", "Constant"]:
                     continue
-                # ==========================================
 
-                # 親を最新の代表元にしてシグネチャ（設計図）を作る
                 rep_parents = tuple(get_rep(p) for p in d.parents)
                 
-                # 順不同図形の場合はソートして同一視する
-                unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
+                unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
                 if d.def_type in unordered_types:
                     rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
                     
                 signature = (d.def_type, rep_parents)
                 
-                # もし全く同じ設計図を持つ別の図形がすでに見つかっていれば、マージ！
                 if signature in def_map:
                     existing_node = def_map[signature]
-                    if get_rep(existing_node) != rep:
-                        logger.debug(f"  🔄 [合同閉包・デフラグ] 同一の親を持つノードを統合: {rep.name} ≡ {get_rep(existing_node).name}")
-                        merged = self.env.merge_entities_logically(existing_node, rep)
+                    rep_existing = get_rep(existing_node)
+                    rep_current = get_rep(rep)
+                    
+                    if rep_existing != rep_current:
+                        logger.debug(f"  🔄 [合同閉包] 同一の親を持つノードを統合: {rep_current.name} ≡ {rep_existing.name}")
+                        
+                        # 🌟 FIX: 設計図が完全に一致しているため、数値検証をスキップして強制マージ (爆速化)
+                        merged = self.env.merge_entities_logically(rep_existing, rep_current, force_bypass_verify=True)
                         if merged:
                             changed = True
+                            merge_count += 1
                             break # マージされたらこのノードの処理は終了し次へ
                 else:
-                    def_map[signature] = rep
+                    def_map[signature] = get_rep(rep)
                     
+        elapsed_time = time.time() - start_time
+        
+        if elapsed_time > 0.05 or merge_count > 0:
+            logger.info(f"   ⏱️ [合同閉包・完了] 処理時間: {elapsed_time:.3f}秒 (走査: {nodes_checked}ノード, マージ: {merge_count}件)")
+            
         return changed
 
     # ---------------------------------------------------------
@@ -664,12 +711,17 @@ class UniversalRuleEngine:
         # 3. 完全に新規作成する
         new_curve = create_geo_entity(def_type, reps[:base_count], name=f"{def_type}_(Auto)", env=self.env)
         
-        # 🌟 NEW: 生成元を正しく記録（Unknownを撲滅）
+        # ==========================================
+        # 🌟 NEW: 退化検知ガード
+        # ==========================================
+        if new_curve is None:
+            return False
+        
         new_curve.created_by_theorem = theorem_name 
         
-        # 🌟 NEW: env.nodes への二重登録を絶対に防ぐガード
-        if new_curve not in self.env.nodes:
-            self.env.nodes.append(new_curve)
+        # 🌟 env.nodes への追加は create_geo_entity 側で自動で行われるため削除！
+        # if new_curve not in self.env.nodes:
+        #     self.env.nodes.append(new_curve)
         
         for pt in reps: 
             link_logical_incidence(pt, new_curve)
@@ -680,6 +732,19 @@ class UniversalRuleEngine:
 
     def run_all(self, theorems):
         applied_any_in_this_run = False
+        
+        # ==========================================
+        # 🌟 NEW: 世代管理 (Epoch Management) の導入
+        # ==========================================
+        # ターン開始時のノード群のスナップショットを取る。
+        # これにより、定理Aで新しく生まれた補助ノードが、
+        # 直後の定理Bの探索空間を爆発させるのを防ぐ。
+        original_active = getattr(self.env, 'active_search_nodes', None)
+        if original_active is None:
+            self.env.active_search_nodes = list(self.env.nodes)
+        else:
+            self.env.active_search_nodes = list(original_active)
+
         for theorem in theorems:
             logger.info(f"  ▶ 評価開始: {theorem.name}")
             bindings = self._evaluate_patterns(theorem.name, theorem.patterns)
@@ -698,7 +763,6 @@ class UniversalRuleEngine:
                             type_ok = False; break
                 if not type_ok: continue
 
-                # 🌟 修正: 第1引数に theorem.name を追加して渡す！
                 if not self._execute_constructions(theorem.name, theorem.constructions, bind): 
                     logger.debug(f"    ❌ 作図フェーズ拒否: { {k: getattr(v, 'name', v) for k, v in bind.items()} }")
                     continue
@@ -709,12 +773,29 @@ class UniversalRuleEngine:
 
             if valid_count > 0:
                 logger.info(f"    => 🎉 {valid_count} 件の新しい結論を適用！")
+
+        # ==========================================
+        # 🌟 スナップショットの解除（待機列の合流）
+        # ==========================================
+        # 新しく生成されたノードは既に env.nodes に追加されているため、
+        # active_search_nodes を戻すだけで次ターンから認識される。
+        self.env.active_search_nodes = original_active
+                
+        if applied_any_in_this_run:
+            if self._apply_congruence_closure():
+                applied_any_in_this_run = True
                 
         # ==========================================
-        # 🌟 NEW: 定理の適用が一通り終わるたびに、合同閉包でグラフを圧縮(デフラグ)する
+        # 🌟 NEW: 高速ガベージコレクション (O(N) を1回だけ)
         # ==========================================
-        if self._apply_congruence_closure():
-            applied_any_in_this_run = True
+        # マージされて死んだノードを一括でリストから取り除き、
+        # MCTSの deepcopy が爆速になるようにスリム化する
+        if applied_any_in_this_run:
+            original_len = len(self.env.nodes)
+            self.env.nodes = [n for n in self.env.nodes if getattr(n, '_merged_into', None) is None]
+            deleted = original_len - len(self.env.nodes)
+            if deleted > 0:
+                logger.debug(f"   🧹 [GC] マージ済みの {deleted} 個のノードをメモリから一括解放しました")
                 
         return applied_any_in_this_run
 
@@ -740,82 +821,52 @@ class ProofEnvironment:
         
         self.nodes.extend([self.zero_angle, self.right_angle])
 
-    def merge_entities_logically(self, rep1, rep2):
+    def merge_entities_logically(self, rep1, rep2, force_bypass_verify=False):
         from logic_core import get_rep
         entity1, entity2 = get_rep(rep1), get_rep(rep2)
         if entity1 == entity2: return None
         if entity1 not in self.nodes or entity2 not in self.nodes: return None
 
-        # ==========================================
-        # 🌟 NEW: 点・線・円などの「骨格図形」は、フラグがオフでも強制検証する！
-        # ==========================================
         is_critical_entity = True
-        should_verify = getattr(self, 'enable_numerical_debug', False) or is_critical_entity
+        should_verify = (getattr(self, 'enable_numerical_debug', False) or is_critical_entity) and not force_bypass_verify
+        should_verify = True
 
         if should_verify and getattr(self, 'all_vars', None):
             from mmp_core import verify_identical_runtime
-            
             if not verify_identical_runtime(entity1, entity2, self.all_vars):
                 err_trace = getattr(entity1, '_calc_err_trace', getattr(entity2, '_calc_err_trace', ''))
-                
-                # 🌟 NEW: エラー内容を解析してログレベルを調整
                 if "退化している" in err_trace:
-                    # 退化は幾何学的に「よくあること（正常な棄却）」なので、デバッグレベルで静かに記録
                     import logging
                     logger = logging.getLogger("GeometryProver")
                     logger.debug(f"    🚫 [退化棄却] {entity1.name} vs {entity2.name} (退化図形を含むためスキップ)")
                 else:
-                    # 未登録の図形など、本当のバグの場合は警告として表示！
                     reason = f"\n  => 💥 計算エラー: {err_trace.strip()}" if err_trace else ""
                     print(f"❌ [重大な不一致] {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type}){reason}")
-                
                 return None
                 
-        entity1, entity2 = get_rep(rep1), get_rep(rep2)
-        if entity1 == entity2: return None
-        if entity1 not in self.nodes or entity2 not in self.nodes: return None
-            
-        for node in self.nodes:
-            for comp in node.components:
-                # [既存] 他のノードが entity2 を子として持っていた場合の更新
-                if entity2 in comp.subobjects:
-                    comp.subobjects.remove(entity2)
-                    comp.subobjects.add(entity1)
-                
-                new_defs = set()
-                for d in comp.definitions:
-                    if entity2 in d.parents:
-                        new_parents = [entity1 if p == entity2 else p for p in d.parents]
-                        from mmp_core import Definition
-                        new_defs.add(Definition(d.def_type, new_parents, d.naive_degree, d.depth))
-                    else:
-                        new_defs.add(d)
-                comp.definitions = new_defs
+        # ==========================================
+        # 🌟 NEW: 完全な遅延評価 (Lazy Evaluation)
+        # ==========================================
+        # 以前ここにあった O(N) の全体走査と置換処理を全削除！
+        # どこから参照されても get_rep() が自動で解決してくれます。
 
-        # ==========================================
-        # 🌟 NEW: entity2 自身が持っていた子要素(subobjects)を、すべて entity1 に引き継ぐ！
-        # ==========================================
         e1_comp = entity1.get_best_component()
         e2_comp = entity2.get_best_component()
         if e1_comp and e2_comp:
             for child in e2_comp.subobjects:
                 e1_comp.subobjects.add(child)
-                # 子要素側から見た親のリンクも entity1 に向ける（念のため）
-                child_comp = get_rep(child).get_best_component()
-                if child_comp:
-                    for d in child_comp.definitions:
-                        if entity2 in d.parents:
-                            d.parents = [entity1 if p == entity2 else p for p in d.parents]
-        # ==========================================
 
         entity1.merge_numerical(entity2)
         while len(entity1.components) > 1:
             entity1.prove_components_equal(0, 1)
             
         entity1.importance = max(getattr(entity1, 'importance', 1.0), getattr(entity2, 'importance', 1.0))
-        self.nodes.remove(entity2)
+        
+        # 🌟 O(N) かかるリストからの即時 remove も廃止し、ポインタだけ繋ぐ
         entity2._merged_into = entity1
         entity2._is_merged_and_dead = True
+        entity2.base_importance = 0.0 # is_valid_node で弾かれるようにする
+        
         return entity1
 
 class Fact:
