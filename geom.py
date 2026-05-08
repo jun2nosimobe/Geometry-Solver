@@ -201,14 +201,26 @@ class MCTSSearchEngine:
         parents, def_type, name = best_child.action
         
         Z = create_geo_entity(def_type, parents, name, env=self.env)
+        
+        # ==========================================
+        # 🌟 FIX: 本番適用時の退化ガード (Noneチェック)
+        # ==========================================
+        if Z is None:
+            logger.warning(f"⚠️ [MCTS] 採用候補だった手 ({name}) が本番環境で退化判定されたため、適用をキャンセルします。")
+            return # ループの中なら continue、関数の末尾なら return
+            
         cZ = Z.get_best_component()
         
         if def_type == "Triangle":
             cZ.triangle_points = tuple(parents)
             shape_name = f"Shape_{name}"
             new_shape = create_geo_entity("ShapeOf", [Z], name=shape_name, env=self.env)
-            new_shape.shape_members[Z] = tuple(parents)
-            self.env.nodes.extend([Z, new_shape])
+            
+            # Triangleに付随するShapeOfも退化する可能性が微レ存なので一応ガード
+            if new_shape is not None:
+                new_shape.shape_members[Z] = tuple(parents)
+                # self.env.nodes.extend([Z, new_shape]) # 🌟 create_geo_entity内で既に追加されるならここは削除でOK
+                
             Z.numerical_degree = self.tester.evaluate_triangle_numerical_degree(*parents)
             logger.debug(f"🤖 [MCTS] {Z.name} を採用 (期待スコア: {best_child.total_score/best_child.visits:.2f})")
         else:
@@ -221,8 +233,7 @@ class MCTSSearchEngine:
                     td = self.tester.evaluate_numerical_degree(Z, nd, var)
                     if cZ.depth + td <= 50: total_drop += max(0, nd - td)
 
-            Z.numerical_degree = nd - total_drop 
-            
+            Z.numerical_degree = nd - total_drop
             merged = False
             for node in self.env.nodes:
                 if node != Z and self.tester.check_identical_mmp(Z, node):
@@ -340,10 +351,20 @@ class HybridEngine:
         for line in all_lines:
             dir_name = f"Dir_{line.name}_(Seed)"
             d = create_geo_entity("DirectionOf", [line], name=dir_name, env=self.env)
-            d.base_importance = 10.0
-            self.env.nodes.append(d)
-            link_logical_incidence(line, d)
-            seed_dirs.append(d)
+            
+            # ==========================================
+            # 🌟 FIX: 退化ガードで None が返ってきた場合のチェックを追加
+            # ==========================================
+            if d is not None:
+                d.base_importance = 10.0
+                
+                # 💡 補足: create_geo_entity の中で env.nodes.append や link は
+                # 既に行われていますが、既存コードの動きを維持するため if で囲んで安全に実行します
+                if d not in self.env.nodes:
+                    self.env.nodes.append(d)
+                link_logical_incidence(line, d)
+                
+                seed_dirs.append(d)
 
         # 🌟 ここを修正: すべての直線ペアに対して、"Canonical Order" に従った角度ペアを「必ず」生成する
         for d1, d2 in itertools.combinations(seed_dirs, 2):
@@ -356,10 +377,18 @@ class HybridEngine:
             # 🌟 正順の角度をシード
             ang_name = f"AnglePair_{ordered_pair[0].name}_{ordered_pair[1].name}_(Seed)"
             a = create_geo_entity("AnglePair", ordered_pair, name=ang_name, env=self.env)
-            a.base_importance = 5.0
-            self.env.nodes.append(a)
-        # ==========================================
-
+            
+            # ==========================================
+            # 🌟 FIX: 退化ガードによる None チェックを追加
+            # ==========================================
+            if a is not None:
+                a.base_importance = 5.0
+                
+                # create_geo_entity 内部で自動 append する仕様にしている場合、
+                # 二重登録を防ぐために if 文の中で管理するのが安全です
+                if a not in self.env.nodes:
+                    self.env.nodes.append(a)
+                    
         # 初期状態における Given 点への強烈な熱注入 (既存のコード)
         for node in self.env.nodes:
             if hasattr(node, 'add_heat'):

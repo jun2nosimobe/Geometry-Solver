@@ -197,3 +197,51 @@ def calc_angle_pair(parents, t_dict, cache):
     cross_val = a1 * b2 - b1 * a2
     dot_val = a1 * a2 + b1 * b2
     return [cross_val**2, dot_val**2]
+
+
+@register_calc("TangentLine")
+def calc_tangent_line(entity, t_dict, cache):
+    """円の周上の点における接線 (parents: [Circumcircle, Point])"""
+    if len(entity.parents) != 2: return []
+    circle = entity.parents[0]
+    pt = entity.parents[1]
+    
+    comp = circle.get_best_component()
+    if not comp: return []
+    
+    # 円を定義している3点を取得
+    circle_def = None
+    for d in comp.definitions:
+        if d.def_type == "Circumcircle" and len(d.parents) == 3:
+            circle_def = d; break
+    if not circle_def: return []
+    
+    p1 = circle_def.parents[0].calculate(t_dict, cache)
+    p2 = circle_def.parents[1].calculate(t_dict, cache)
+    p3 = circle_def.parents[2].calculate(t_dict, cache)
+    p_t = pt.calculate(t_dict, cache)
+    if not (p1 and p2 and p3 and p_t): return []
+    
+    # 射影座標からデカルト座標 (x, y) に変換
+    x1, y1 = p1[0]/p1[2], p1[1]/p1[2]
+    x2, y2 = p2[0]/p2[2], p2[1]/p2[2]
+    x3, y3 = p3[0]/p3[2], p3[1]/p3[2]
+    xt, yt = p_t[0]/p_t[2], p_t[1]/p_t[2]
+    
+    # 外心 O の座標 (Ox, Oy) を計算
+    D = 2 * (x1*(y2 - y3) + x2*(y3 - y1) + x3*(y1 - y2))
+    if hasattr(D, 'value') and D.value == 0: return []
+    if D == 0: return []
+    
+    sq1, sq2, sq3 = x1**2 + y1**2, x2**2 + y2**2, x3**2 + y3**2
+    Ox = (sq1*(y2 - y3) + sq2*(y3 - y1) + sq3*(y1 - y2)) / D
+    Oy = (sq1*(x3 - x2) + sq2*(x1 - x3) + sq3*(x2 - x1)) / D
+    
+    # 法線ベクトル n = (xt - Ox, yt - Oy)
+    nx = xt - Ox
+    ny = yt - Oy
+    
+    # 接線の方程式: nx * X + ny * Y - (nx * xt + ny * yt) * Z = 0
+    c_val = -(nx * xt + ny * yt)
+    
+    return [nx, ny, c_val]

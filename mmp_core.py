@@ -322,7 +322,20 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 rep1, rep2 = get_rep(dir1), get_rep(dir2)
                 if rep1 != rep2:
                     env.merge_entities_logically(rep1, rep2)
-
+    elif def_type == "TangentLine":
+        # parents = [Circle, Point] （円と、その円周上の接点）
+        circle = parents[0]
+        pt = parents[1]
+        
+        # 1. 接線(new_entity) は 円(circle) に属する (接するという意味になる)
+        link_logical_incidence(new_entity, circle) 
+        
+        # 2. 接点(pt) は 接線(new_entity) に乗っている
+        link_logical_incidence(pt, new_entity)
+        
+        # 3. 接点(pt) は 円(circle) に乗っている
+        link_logical_incidence(pt, circle)
+        
     elif def_type == "Midpoint":
         c1, c2 = parents[0].get_best_component(), parents[1].get_best_component()
         if c1 and c2:
@@ -448,7 +461,7 @@ def is_canonical_angle_order(Dir1, Dir2):
 # ==========================================
 ENTITY_TYPE_MAP = {
     "Intersection": "Point", "Midpoint": "Point", "CirclesIntersection": "Point",
-    "LineThroughPoints": "Line", "PerpendicularLine": "Line", "ParallelLine": "Line",
+    "LineThroughPoints": "Line", "PerpendicularLine": "Line", "ParallelLine": "Line", "TangentLine": "Line",
     "Circumcircle": "Circle",
     "DirectionOf": "Direction",
     "AnglePair": "Angle",
@@ -457,13 +470,54 @@ ENTITY_TYPE_MAP = {
     "ShapeOf": "Shape"
 }
 
-def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False, is_ghost=False) -> 'GeoEntity':
+def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=None, is_given=False, is_ghost=False, importance: float = None) -> 'GeoEntity':
     # 1. entity_type の決定
     entity_type = ENTITY_TYPE_MAP.get(def_type, "Unknown")
 
     # 2. 親からコンポーネントを安全に抽出
     valid_parents = [p for p in parents if hasattr(p, 'get_best_component')]
     parent_comps = [p.get_best_component() for p in valid_parents if p.get_best_component()]
+
+    # ==========================================
+    # 🌟 NEW: E-Graphの核心技術「Hash Consing (メモ化)」
+    # まったく同じ設計図を持つ図形が既に存在する場合は、それ(最新の代表元)を返す
+    # ==========================================
+    if env is not None and not is_ghost and def_type not in ["Point", "Given", "Free", "Constant", "GivenPoint", "FreePoint"]:
+        from logic_core import get_rep, is_valid_node
+        
+        rep_parents = tuple(get_rep(p) for p in valid_parents)
+        
+        # 順不同図形の場合はソートして比較
+        unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
+        if def_type in unordered_types:
+            rep_parents_sorted = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
+        else:
+            rep_parents_sorted = rep_parents
+            
+        target_signature = (def_type, rep_parents_sorted)
+        
+        for existing_node in env.nodes:
+            if not is_valid_node(existing_node): continue
+            existing_rep = get_rep(existing_node)
+            comp = existing_rep.get_best_component()
+            if not comp: continue
+            
+            for d in comp.definitions:
+                if d.def_type == def_type and len(d.parents) == len(rep_parents):
+                    # 既存図形の親を最新にして比較
+                    existing_d_parents = tuple(get_rep(p) for p in d.parents)
+                    if def_type in unordered_types:
+                        existing_d_parents = tuple(sorted(existing_d_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
+                        
+                    if target_signature == (def_type, existing_d_parents):
+                        import logging
+                        logger = logging.getLogger("GeometryProver")
+                        logger.debug(f"    ♻️ [メモ化再利用] 新規作成をスキップし既存図形 {existing_rep.name} を流用します: {def_type}({', '.join(getattr(p, 'name', '') for p in rep_parents)})")
+                        
+                        # 重要度が上がっていれば更新してあげる
+                        if importance is not None:
+                            existing_rep.base_importance = max(getattr(existing_rep, 'base_importance', 0.0), importance)
+                        return existing_rep
 
     # 3. ゴースト判定
     parent_is_ghost = any(getattr(p, 'base_importance', 1.0) <= 0.0 for p in parents if hasattr(p, 'base_importance'))

@@ -491,11 +491,89 @@ THEOREM_DIRECTED_ANGLE_ADDITION = TheoremDef(
 )
 
 # ==========================================
+# 定理: 接弦定理 (Alternate Segment Theorem)
+# ==========================================
+THEOREM_ALTERNATE_SEGMENT = TheoremDef(
+    name="接弦定理",
+    entities={
+        "C": "Circle", "L": "Line",
+        "A": "Point", "B": "Point", "D": "Point"
+    },
+    patterns=[
+        # 🌟 FIX: 直線Lが、円Cと点Aを親に持つ接線(TangentLine)であることを確実に取得
+        FactPattern("DefinedBy", ["C", "A", "L"], target_type="TangentLine"),
+        
+        # 点 B, D は円周上の別の点
+        FactPattern("Connected", ["B", "C"]),
+        FactPattern("Connected", ["D", "C"]),
+        DistinctPattern(["A", "B", "D"])
+    ],
+    constructions=[
+        ConstructTemplate("DirectionOf", ["L"], "Direction", "Dir_L"),
+        ConstructTemplate("LineThroughPoints", ["A", "B"], "Line", "Line_AB"),
+        ConstructTemplate("DirectionOf", ["Line_AB"], "Direction", "Dir_AB"),
+        ConstructTemplate("LineThroughPoints", ["A", "D"], "Line", "Line_AD"),
+        ConstructTemplate("DirectionOf", ["Line_AD"], "Direction", "Dir_AD"),
+        ConstructTemplate("LineThroughPoints", ["B", "D"], "Line", "Line_BD"),
+        ConstructTemplate("DirectionOf", ["Line_BD"], "Direction", "Dir_BD"),
+        
+        ConstructTemplate("AnglePair", ["Dir_L", "Dir_AB"], "Angle", "Ang_L_AB"),
+        ConstructTemplate("AnglePair", ["Dir_AD", "Dir_BD"], "Angle", "Ang_AD_BD")
+    ],
+    conclusions=[
+        FactTemplate("Identical", ["Ang_L_AB", "Ang_AD_BD"])
+    ]
+)
+
+# ==========================================
+# 定理: 接弦定理の逆 (Converse of Alternate Segment Theorem)
+# ==========================================
+THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
+    name="接弦定理の逆",
+    entities={
+        "C": "Circle", "L": "Line",
+        "A": "Point", "B": "Point", "D": "Point",
+        "Dir_L": "Direction",
+        "Line_AB": "Line", "Dir_AB": "Direction",
+        "Line_AD": "Line", "Dir_AD": "Direction",
+        "Line_BD": "Line", "Dir_BD": "Direction",
+        "Ang_L_AB": "Angle", "Ang_AD_BD": "Angle"
+    },
+    patterns=[
+        # A, B, D は円上の点、Aは直線L上の点
+        FactPattern("Connected", ["A", "C"]),
+        FactPattern("Connected", ["B", "C"]),
+        FactPattern("Connected", ["D", "C"]),
+        FactPattern("Connected", ["A", "L"]),
+        DistinctPattern(["A", "B", "D"]),
+        
+        FactPattern("DefinedBy", ["L", "Dir_L"], target_type="DirectionOf"),
+        FactPattern("DefinedBy", ["A", "B", "Line_AB"], target_type="LineThroughPoints"),
+        FactPattern("DefinedBy", ["Line_AB", "Dir_AB"], target_type="DirectionOf"),
+        FactPattern("DefinedBy", ["A", "D", "Line_AD"], target_type="LineThroughPoints"),
+        FactPattern("DefinedBy", ["Line_AD", "Dir_AD"], target_type="DirectionOf"),
+        FactPattern("DefinedBy", ["B", "D", "Line_BD"], target_type="LineThroughPoints"),
+        FactPattern("DefinedBy", ["Line_BD", "Dir_BD"], target_type="DirectionOf"),
+        FactPattern("DefinedBy", ["Dir_L", "Dir_AB", "Ang_L_AB"], target_type="AnglePair"),
+        FactPattern("DefinedBy", ["Dir_AD", "Dir_BD", "Ang_AD_BD"], target_type="AnglePair"),
+        
+        FactPattern("Identical", ["Ang_L_AB", "Ang_AD_BD"])
+    ],
+    constructions=[],
+    conclusions=[
+        # 🌟 FIX: 接弦定理の逆が成立したら、LをTangentLineとしてグラフに叩き込む
+        FactTemplate("DefinedBy", ["C", "A", "L"], target_type="TangentLine")
+    ]
+)
+
+# ==========================================
 # 🌟 登録リスト
 # ==========================================
 THEOREMS = [
     THEOREM_CYCLIC_ANGLES,
     THEOREM_CONVERSE_CYCLIC,
+    THEOREM_ALTERNATE_SEGMENT,           # 🌟 追加
+    THEOREM_ALTERNATE_SEGMENT_CONVERSE,
     THEOREM_IDENTICAL_LINES,
     THEOREM_ANGLES_TO_DIR_R,
     THEOREM_ANGLES_TO_DIR_L,
