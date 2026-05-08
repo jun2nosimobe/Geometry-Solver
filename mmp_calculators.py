@@ -1,5 +1,5 @@
 # mmp_calculators.py
-from mmp_core import ModInt
+from mmp_math import ModInt
 
 CALCULATORS = {}
 

@@ -2,7 +2,8 @@
 import numpy as np
 import itertools
 import logging
-from mmp_core import ModInt, get_numerical_degree, create_geo_entity, set_canonical_t_dict
+from mmp_math import ModInt, matrix_rank_mod, get_numerical_degree
+from mmp_core import create_geo_entity, set_canonical_t_dict
 from logic_core import Fact
 
 logger = logging.getLogger("GeometryProver")
