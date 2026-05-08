@@ -532,6 +532,11 @@ THEOREM_ALTERNATE_SEGMENT = TheoremDef(
         # 5. 🌟 角度の同期マッチング (flip_group を使って反転を許容・同期させる)
         FactPattern("DefinedBy", ["Dir_L", "Dir_AB", "Ang_L_AB"], target_type="AnglePair", allow_flip=True, flip_group="AltSeg"),
         FactPattern("DefinedBy", ["Dir_AD", "Dir_BD", "Ang_AD_BD"], target_type="AnglePair", allow_flip=True, flip_group="AltSeg"),
+
+        
+        DistinctPattern(["L", "Line_AB"]),
+        DistinctPattern(["L", "Line_AD"]),
+        DistinctPattern(["L", "Line_BD"]),
         
         # 6. 無駄な自己マージ弾き
         DistinctPattern(["Ang_L_AB", "Ang_AD_BD"])
@@ -543,7 +548,7 @@ THEOREM_ALTERNATE_SEGMENT = TheoremDef(
 )
 
 # ==========================================
-# 定理: 接弦定理の逆 (頂点A 特化・超軽量突破版)
+# 定理: 接弦定理の逆 (完全幾何制約版)
 # ==========================================
 THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
     name="接弦定理の逆",
@@ -556,8 +561,10 @@ THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
         "Ang_L_AB": "Angle", "Ang_AD_BD": "Angle"
     },
     patterns=[
-        # 1. 角度と方向、直線を一気に拾い上げる
+        # 1. 角度の同一性 (E-Graphのマージを考慮し、Distinct は絶対に書かない！)
         FactPattern("Identical", ["Ang_L_AB", "Ang_AD_BD"], target_type="Angle"),
+        
+        # 2. 方向と直線の逆引き
         FactPattern("DefinedBy", ["Dir_L", "Dir_AB", "Ang_L_AB"], target_type="AnglePair", allow_flip=True, flip_group="AltSegConv"),
         FactPattern("DefinedBy", ["Dir_AD", "Dir_BD", "Ang_AD_BD"], target_type="AnglePair", allow_flip=True, flip_group="AltSegConv"),
         FactPattern("DefinedBy", ["L", "Dir_L"], target_type="DirectionOf"),
@@ -565,7 +572,7 @@ THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
         FactPattern("DefinedBy", ["Line_AD", "Dir_AD"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_BD", "Dir_BD"], target_type="DirectionOf"),
         
-        # 2. 点 A, B, D を円 C からジェネレート
+        # 3. 頂点 A, B, D の独立性 (これだけは絶対に必要)
         FactPattern("Connected", ["A", "C"], target_type="Circle", sub_type="Point"),
         FactPattern("Connected", ["B", "C"], target_type="Circle", sub_type="Point"),
         FactPattern("Connected", ["D", "C"], target_type="Circle", sub_type="Point"),
@@ -573,15 +580,18 @@ THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
         DistinctPattern(["B", "D"]),
         DistinctPattern(["A", "D"]),
         
-        # 3. 🌟 解決の核心: 頂点「A」の接続だけをチェックしてバグを回避！
-        # これだけで数学的な一意性は 100% 保証されます。
+        # 4. 🌟 すべての元凶の解決: 「完全な接続チェック」の復活
+        # 点 D のチェックが復活したため、接線 L が弦にすり替わることは物理不可能になります。
         FactPattern("Connected", ["A", "L"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["A", "Line_AB"], target_type="Line", sub_type="Point"),
-        FactPattern("Connected", ["A", "Line_AD"], target_type="Line", sub_type="Point")
+        FactPattern("Connected", ["B", "Line_AB"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["A", "Line_AD"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["D", "Line_AD"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["B", "Line_BD"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["D", "Line_BD"], target_type="Line", sub_type="Point")
     ],
     constructions=[],
     conclusions=[
-        # 結論: 直線Lは円Cに接している
         FactTemplate("Connected", ["L", "C"], target_type="Circle", sub_type="Line")
     ]
 )

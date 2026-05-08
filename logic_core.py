@@ -763,6 +763,18 @@ class UniversalRuleEngine:
                             type_ok = False; break
                 if not type_ok: continue
 
+                # ==================================================
+                # 🚨 [DEBUG] 接弦定理の逆 が発火した瞬間のバインド状態をダンプ！
+                # ==================================================
+                if theorem.name == "接弦定理の逆":
+                    logger.debug("\n" + "="*50)
+                    logger.debug(f"🚨 [DEBUG] {theorem.name} のマッチングが成功しました！")
+                    for var_name, entity in bind.items():
+                        entity_name = getattr(entity, 'name', str(entity))
+                        logger.debug(f"  {var_name: <15} -> {entity_name}")
+                    logger.debug("="*50 + "\n")
+                # ==================================================
+                
                 if not self._execute_constructions(theorem.name, theorem.constructions, bind): 
                     logger.debug(f"    ❌ 作図フェーズ拒否: { {k: getattr(v, 'name', v) for k, v in bind.items()} }")
                     continue
@@ -838,10 +850,13 @@ class ProofEnvironment:
                 if "退化している" in err_trace:
                     import logging
                     logger = logging.getLogger("GeometryProver")
-                    logger.debug(f"    🚫 [退化棄却] {entity1.name} vs {entity2.name} (退化図形を含むためスキップ)")
+                    logger.info(f"    🚫 [退化棄却] {entity1.name} vs {entity2.name} (退化図形を含むためスキップ)")
                 else:
+                    import logging
+                    logger = logging.getLogger("GeometryProver")
                     reason = f"\n  => 💥 計算エラー: {err_trace.strip()}" if err_trace else ""
                     print(f"❌ [重大な不一致] {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type}){reason}")
+                    logger.info(f"❌ [重大な不一致] {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type}){reason}")
                 return None
                 
         # ==========================================

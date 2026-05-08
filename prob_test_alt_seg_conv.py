@@ -27,6 +27,7 @@ link_logical_incidence(pts["A"], circle) # 🌟 物理リンクを追加
 link_logical_incidence(pts["B"], circle)
 link_logical_incidence(pts["D"], circle)
 
+# 接線 L を作成（"Given" として独立した実体にする）
 line_L = GeoEntity("Line", name="L")
 line_L.base_importance = 10.0
 line_L.components.append(LogicalComponent(initial_def=Definition("Given", [])))
@@ -58,19 +59,12 @@ for (p1, p2), l in lines.items():
 ang_L_AB = create_geo_entity("AnglePair", [dir_L, dirs[("A", "B")]], name="Ang_L_AB", env=env)
 ang_AD_BD = create_geo_entity("AnglePair", [dirs[("A", "D")], dirs[("B", "D")]], name="Ang_AD_BD", env=env)
 
+env.merge_entities_logically(ang_L_AB, ang_AD_BD)
+
 # ==========================================
 # 🚨 E-Graph に Fact を強制シード
 # ==========================================
-initial_facts = [
-    # 🌟 Connected(L, C) は入れない！(それを証明するのがゴールだから)
-    Fact("Connected", [pts["A"], line_L]),
-    Fact("Connected", [pts["A"], circle]),
-    Fact("Connected", [pts["B"], circle]),
-    Fact("Connected", [pts["D"], circle]),
-    
-    # 🌟 核心: 代わりに「角度が等しい」という事実を注入する
-    Fact("Identical", [ang_L_AB, ang_AD_BD])
-]
+initial_facts = []
 
 for f in initial_facts:
     f.is_proven = True
