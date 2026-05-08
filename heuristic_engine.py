@@ -1,4 +1,5 @@
 import random
+import math
 import logging
 import numpy as np
 from collections import defaultdict
@@ -17,18 +18,66 @@ class ScoringPolicy:
 
     def get_selection_score(self, node, target_nodes=None):
         """ノードが「次の注目セット」の主役に選ばれる確率"""
+        from logic_core import get_rep
+        
         base_score = getattr(node, 'importance', 1.0)
         heat = min(self.heat_table[node], self.MAX_HEAT)
         cooldown = self.cooldown_table[node]
         
-        # 🌟 NEW: 目標図形(Target)に近いほどスコアに下駄を履かせる(引力)
+        # ------------------------------------------------
+        # 1. 目標への引力 (Conjectureボーナス等もここに追加可能)
+        # ------------------------------------------------
         target_bonus = 0.0
         if target_nodes and node in target_nodes:
-            target_bonus = 15.0
+            target_bonus = 20.0
 
-        cooldown_penalty = 0.2 ** cooldown # ペナルティを少しマイルドに調整
+        # ------------------------------------------------
+        # 2. 「嬉しい性質」ボーナス (幾何学的な美しさ・対称性)
+        # ------------------------------------------------
+        prop_bonus = 0.0
+        comp = getattr(node, 'get_best_component', lambda: None)()
+        if comp:
+            # 作図の由来としての嬉しい性質
+            for d in comp.definitions:
+                if d.def_type in ["Midpoint", "PerpendicularLine", "ParallelLine", "Circumcircle", "AnglePair", "RightAngle"]:
+                    prop_bonus += 3.0
+                elif d.def_type in ["Collinear", "Concyclic"]:
+                    prop_bonus += 5.0
+                    
+            # 所属図形の多さ（＝拘束の強さ）
+            entity_type = getattr(node, 'entity_type', '')
+            if entity_type in ["Line", "Circle"]:
+                pts_on = sum(1 for sub in comp.subobjects if getattr(get_rep(sub), 'entity_type', '') == "Point")
+                if pts_on >= 3:
+                    # 共線(3点以上)や共円(4点以上)は極めて重要！
+                    prop_bonus += (pts_on - 2) * 5.0 
+            elif entity_type == "Point":
+                # たくさんの直線や円が交わる点（対称性の中心）
+                lines_circles = sum(1 for sub in comp.subobjects if getattr(get_rep(sub), 'entity_type', '') in ["Line", "Circle"])
+                if lines_circles >= 2:
+                    prop_bonus += lines_circles * 2.0
+
+        # ------------------------------------------------
+        # 3. アフィン空間上の「次数(Degree)」ペナルティ
+        # 無関係でカオスな図形（次数が大きすぎるもの）を避ける
+        # ------------------------------------------------
+        nd = getattr(node, 'numerical_degree', None)
+        if nd is None and comp:
+            nd = getattr(comp, 'naive_degree', 1)
+        elif nd is None:
+            nd = 1
+            
+        # 次数が高い＝代数的に複雑すぎる（スパゲッティ状態）ためペナルティ
+        degree_factor = 1.0
+        if nd > 2:
+            degree_factor = 1.0 / math.sqrt(nd)
+
+        # ------------------------------------------------
+        # 4. 最終スコアの計算
+        # ------------------------------------------------
+        cooldown_penalty = 0.3 ** cooldown # クールダウン
         
-        final_score = (base_score + heat + target_bonus) * cooldown_penalty
+        final_score = (base_score + heat + target_bonus + prop_bonus) * degree_factor * cooldown_penalty
         return max(0.001, final_score)
 
     def apply_feedback(self, focus_set, success):
@@ -93,13 +142,21 @@ class FocusSearchEngine:
         return list(neighbors)
 
     def _sample_focus_set(self):
-        """🌟 劇的改善: Graph-Walk (構造的) サンプリング"""
+        """🌟 劇的改善: 嬉しい性質と次数を考慮した Graph-Walk サンプリング"""
+        from logic_core import get_rep, is_valid_node
+        import numpy as np
+        
         base_types = {"Point", "Line", "Circle"}
         all_candidates = [get_rep(n) for n in self.env.nodes if getattr(get_rep(n), 'entity_type', '') in base_types and is_valid_node(n)]
         all_candidates = list(set(all_candidates))
         
+        # 🌟 NEW: 選ばれた図形のスコアを記録する辞書
+        chosen_scores = {}
+        
         if len(all_candidates) <= self.focus_size:
-            return all_candidates
+            for c in all_candidates:
+                chosen_scores[c] = self.scoring.get_selection_score(c, self.target_nodes)
+            return all_candidates, chosen_scores
 
         # 1. まず「主役 (Center)」をスコアに基づいて1つだけ選ぶ
         scores = [self.scoring.get_selection_score(c, self.target_nodes) for c in all_candidates]
@@ -108,28 +165,38 @@ class FocusSearchEngine:
         
         center_node = np.random.choice(all_candidates, p=probs)
         focus_set = {center_node}
+        chosen_scores[center_node] = scores[all_candidates.index(center_node)]
         
-        # 2. 主役の「近傍 (Neighbors)」を取得し、そこから優先的に残りを選ぶ
+        # 2. 主役の「近傍」を取得し、そこからも優先的に【スコア順】で選ぶ
         neighbors = self._get_neighbors(center_node)
-        # 近傍の中でも基本図形だけをフィルター
         valid_neighbors = [n for n in neighbors if getattr(n, 'entity_type', '') in base_types and n != center_node]
         
         if valid_neighbors:
-            num_to_pick = min(len(valid_neighbors), self.focus_size - 1)
-            # 近傍からはランダムにピック (スコア計算を省いて高速化)
-            chosen_neighbors = np.random.choice(valid_neighbors, size=num_to_pick, replace=False)
-            focus_set.update(chosen_neighbors)
+            n_scores = [self.scoring.get_selection_score(n, self.target_nodes) for n in valid_neighbors]
+            n_total = sum(n_scores)
+            n_probs = [s / n_total for s in n_scores] if n_total > 0 else None
             
-        # 3. それでもサイズに満たない場合は、全体からランダムに埋める
+            num_to_pick = min(len(valid_neighbors), self.focus_size - 1)
+            chosen_neighbors = np.random.choice(valid_neighbors, size=num_to_pick, replace=False, p=n_probs)
+            focus_set.update(chosen_neighbors)
+            for cn in chosen_neighbors:
+                chosen_scores[cn] = n_scores[valid_neighbors.index(cn)]
+            
+        # 3. それでもサイズに満たない場合は、全体から【スコア順】で埋める
         remaining_slots = self.focus_size - len(focus_set)
         if remaining_slots > 0:
             remaining_candidates = list(set(all_candidates) - focus_set)
             if remaining_candidates:
-                num_to_pick = min(len(remaining_candidates), remaining_slots)
-                fillers = np.random.choice(remaining_candidates, size=num_to_pick, replace=False)
+                r_scores = [self.scoring.get_selection_score(c, self.target_nodes) for c in remaining_candidates]
+                r_total = sum(r_scores)
+                r_probs = [s / r_total for s in r_scores] if r_total > 0 else None
+                
+                fillers = np.random.choice(remaining_candidates, size=remaining_slots, replace=False, p=r_probs)
                 focus_set.update(fillers)
+                for filler in fillers:
+                    chosen_scores[filler] = r_scores[remaining_candidates.index(filler)]
 
-        return list(focus_set)
+        return list(focus_set), chosen_scores
 
     def _extract_local_graph(self, focus_set):
         local_nodes = set(focus_set)
@@ -200,23 +267,23 @@ class FocusSearchEngine:
         return active_theorems
 
     def step(self, theorems):
-        focus_set = self._sample_focus_set()
-        logger.info(f"🔍 [局所探索] 注目セット: {', '.join([n.name for n in focus_set])}")
+        # 🌟 修正: スコアの辞書も受け取る
+        focus_set, chosen_scores = self._sample_focus_set()
+        
+        # 🌟 NEW: 図形名と一緒にスコア(評価値)を小数点第1位まで表示する
+        focus_log_parts = [f"{n.name}({chosen_scores[n]:.1f})" for n in focus_set]
+        logger.info(f"🔍 [局所探索] 注目セット: {', '.join(focus_log_parts)}")
         
         local_nodes = self._extract_local_graph(focus_set)
         active_theorems = self._prune_theorems(local_nodes, theorems)
         
-        # ターン開始前の全体ノード数を記録
         nodes_before = len(self.env.nodes)
-        
         logger.info(f"   => 局所ノード数: {len(local_nodes)} (全体 {nodes_before}), 適用定理: {len(active_theorems)}/{len(theorems)}")
 
-        # 世代管理(スナップショット)は UniversalRuleEngine 側で処理される
+        # (以下はそのまま)
+        self.env.active_search_nodes = local_nodes
         success = self.base_engine.run_all(active_theorems)
         
-        # ==========================================
-        # 🌟 NEW: ターン終了後に「待機列（新しく生まれたノード）」の数を集計して表示
-        # ==========================================
         nodes_after = len(self.env.nodes)
         new_nodes_count = nodes_after - nodes_before
         if new_nodes_count > 0:
