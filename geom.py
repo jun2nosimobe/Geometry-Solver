@@ -515,7 +515,7 @@ def analyze_node_utility(env, prover):
 
 if __name__ == "__main__":
     problem_name = "prob_simson"
-    DEBUG_MODE = False
+    DEBUG_MODE = True
     
     if len(sys.argv) > 1: 
         problem_name = sys.argv[1]

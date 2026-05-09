@@ -3,6 +3,8 @@ from typing import List, Set, Any, Dict
 import numpy as np
 import itertools
 from mmp_math import ModInt
+from mmp_calculators import CALCULATORS
+import traceback
 
 # ==========================================
 # 作図定義 (Definition)
@@ -71,14 +73,13 @@ class GeoEntity:
         self._merge_reason = None
 
     def get_rep(self):
-        """Union-Find木の根（代表元）を返す。
-           (旧 get_representative / get_rep)"""
         curr = self
-        # もし旧型の _merged_into を使っているなら:
-        # while getattr(curr, '_merged_into', None) is not None:
-        #     curr = curr._merged_into
+        depth = 0
         while curr._parent != curr:
             curr = curr._parent
+            depth += 1
+            if depth > 50:
+                print(f"🚨 [警告] Union-Findの木が異常に深いです！ ({self.name}, depth={depth})")
         return curr
 
     def is_valid(self):
@@ -86,6 +87,34 @@ class GeoEntity:
         rep = self.get_rep()
         # base_importance が 0 以下のものは無効(刈り取られた)ノードと判定
         return getattr(rep, 'base_importance', 1.0) > 0.0
+    
+    def merge_into(self, target_entity: 'GeoEntity', reason_fact=None):
+        """
+        自身を target_entity にマージする (Union-Find の Union 操作)。
+        マージの根拠となった Fact (reason_fact) を記録して証明を遡れるようにする。
+        """
+        root_self = self.get_rep()
+        root_target = target_entity.get_rep()
+        
+        if root_self == root_target:
+            return False  # 既に同じ同値類に属している
+            
+        # 🌟 1. Union-Find の木を繋ぎ、マージの「理由」を辺として記録する
+        root_self._parent = root_target
+        root_self._merge_reason = reason_fact
+        
+        # 🌟 2. 既存の数値データ・作図履歴・重要度をターゲットに吸収させる
+        root_target.merge_numerical(root_self)
+        
+        # 🌟 3. 吸収された側のリストを空にして、メモリ節約＆誤参照を完全に防ぐ
+        root_self.components = []
+        root_self.mmp_subobjects.clear()
+        
+        # 🌟 4. 計算キャッシュのクリア (もし辞書を持っていれば)
+        if hasattr(root_self, '_calc_cache'):
+            root_self._calc_cache.clear()
+            
+        return True
 
     @property
     def importance(self):
@@ -102,10 +131,11 @@ class GeoEntity:
         if getattr(self, 'base_importance', 1.0) <= 0.0:
             return
         self.heat_bonus += bonus
-
     def get_best_component(self) -> LogicalComponent:
-        if not self.components: return None
-        return min(self.components, key=lambda c: (c.naive_degree, c.depth))
+        # 🌟 NEW: 常に最新の代表元(get_rep)から取得する！
+        rep = self.get_rep()
+        if not rep.components: return None
+        return min(rep.components, key=lambda c: (c.naive_degree, c.depth))
 
     def merge_numerical(self, other: 'GeoEntity'):
         if self == other: return
@@ -136,8 +166,11 @@ class GeoEntity:
         self.components.remove(c2) 
 
     def calculate(self, t_dict, cache):
-        from mmp_calculators import CALCULATORS
-        import traceback
+        # 🌟 NEW: 自分がマージ済みの古いノードなら、代表元に計算を完全丸投げする！
+        rep = self.get_rep()
+        if rep != self:
+            return rep.calculate(t_dict, cache)
+
 
         cache_key = (self.id, id(t_dict))
         if cache_key in cache:
@@ -485,7 +518,8 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
 
     # 4. メタデータの計算
     if is_true_ghost:
-        depth, naive_degree, base_imp = 1, 0, 0.0
+        # 🌟 FIX: ゴーストが実体を乗っ取らないよう、degreeを無限大に！
+        depth, naive_degree, base_imp = 1, float('inf'), 0.0 
         if not name.endswith("_(Ghost)"): name += "_(Ghost)"
     elif def_type == "Constant":
         depth, naive_degree, base_imp = 1, 0, 1.0 

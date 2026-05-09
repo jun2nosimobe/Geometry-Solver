@@ -27,9 +27,14 @@ class Fact:
         
     def __eq__(self, other):
         if not isinstance(other, Fact) or self.fact_type != other.fact_type: return False
+    
+        # 🌟 常に最新の代表元を取得して比較する！
+        my_reps = [o.get_rep() if hasattr(o, 'get_rep') else o for o in self.objects]
+        other_reps = [o.get_rep() if hasattr(o, 'get_rep') else o for o in other.objects]
+    
         if self.fact_type in ["Concyclic", "Collinear", "Identical", "Parallel"]: 
-            return set(self.objects) == set(other.objects)
-        return self.objects == other.objects
+            return set(my_reps) == set(other_reps)
+        return my_reps == other_reps
 
 
 class LogicProver:

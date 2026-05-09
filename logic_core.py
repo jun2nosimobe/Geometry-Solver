@@ -3,6 +3,7 @@ import os
 import itertools
 import time
 from proof_manager import Fact, LogicProver, print_proof_tree
+from mmp_core import Definition
 
 logger = logging.getLogger("GeometryProver")
 
@@ -26,28 +27,36 @@ def setup_proof_logger(problem_name: str, is_debug: bool = False):
     
     return log_path
 
-# ==========================================
-# 🌟 汎用 E-Graph クエリ関数
-# ==========================================
-def get_subentity(obj, entity_types):
-    obj = obj.get_rep() 
-    comp = obj.get_best_component()
-    if not comp: return set()
-    if isinstance(entity_types, str): entity_types = [entity_types]
-    result_set = set()
+
+def get_subentity(node, target_type=None):
+    """指定された型の関連図形を検索し、必ず最新の代表元(get_rep)として返す"""
+    res = set()
+    rep_node = node.get_rep() if hasattr(node, 'get_rep') else node
+    comp = getattr(rep_node, 'get_best_component', lambda: None)()
+    if not comp: return res
     
-    for sub_obj in comp.subobjects:
-        rep_sub = sub_obj.get_rep()
-        if rep_sub.is_valid() and getattr(rep_sub, 'entity_type', '') in entity_types:
-            result_set.add(rep_sub)
+    # 🌟 NEW: リスト・タプル・文字列のどれが来ても安全に判定する内部関数
+    def is_match(obj):
+        if not target_type: return True
+        e_type = getattr(obj, 'entity_type', '')
+        if not e_type: return False
+        
+        if isinstance(target_type, (list, tuple)):
+            return any(t in e_type for t in target_type)
+        return target_type in e_type
+
+    for sub in comp.subobjects:
+        sub_rep = sub.get_rep() if hasattr(sub, 'get_rep') else sub
+        if is_match(sub_rep) and getattr(sub_rep, 'is_valid', lambda: True)():
+            res.add(sub_rep)
             
     for d in comp.definitions:
         for p in d.parents:
-            rep_p =p. get_rep()
-            if rep_p.is_valid() and getattr(rep_p, 'entity_type', '') in entity_types:
-                result_set.add(rep_p)
-    return result_set
-
+            p_rep = p.get_rep() if hasattr(p, 'get_rep') else p
+            if is_match(p_rep) and getattr(p_rep, 'is_valid', lambda: True)():
+                res.add(p_rep)
+                
+    return res
 
 # ==========================================
 # 🌟 宣言的スキーマ定義
@@ -248,11 +257,6 @@ class FactPattern(Pattern):
                 valid_nodes.update(get_subentity(p, actual_entity_type))
             valid_nodes = list(valid_nodes)
         else:
-            # ==========================================
-            # 🌟 NEW: 検索空間の劇的な絞り込み最適化
-            # ==========================================
-            # まだ全ての親が揃っていなくても、一つでもバインド(決定)された変数があるなら
-            # 「その親に関連する図形」だけを探せばよい！（数百倍のスピードアップ）
             bound_args = [current_bind[v].get_rep() for v in arg_vars if v in current_bind]
             if bound_args:
                 valid_nodes = set()
@@ -270,7 +274,9 @@ class FactPattern(Pattern):
             
             for d in comp.definitions:
                 if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
-                    reps_parents = [p.get_rep() for p in d.parents]
+                    # 🌟 FIX 1: ここ！ d.parents は古いゴーストの可能性があるので、必ず最新の代表元に変換！
+                    reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
+                    
                     perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
                     
                     for perm in perms:
@@ -358,18 +364,19 @@ class FactPattern(Pattern):
             for fact in prover.facts:
                 if getattr(fact, 'is_mmp_conjecture', False) and not getattr(fact, 'is_proven', False): continue
                 if fact.fact_type == self.fact_type:
-                    valid_facts.append([a.get_rep() for a in getattr(fact, 'objects', [])])
+                    # 🌟 FIX 2: Factデータベースに登録されている図形も、すべて最新の代表元に直して比較する！
+                    valid_facts.append([a.get_rep() if hasattr(a, 'get_rep') else a for a in getattr(fact, 'objects', [])])
                     
         if not all(v in current_bind for v in self.args):
             for n in search_nodes: 
-                # 🌟 FIX: ここに is_valid_node のチェックを追加！
                 if not n.is_valid(): continue
                 
                 comp = n.get_rep().get_best_component()
                 if comp:
                     for d in comp.definitions:
                         if d.def_type == self.fact_type:
-                            valid_facts.append([p.get_rep() for p in d.parents])
+                            # 🌟 FIX 3: 定義側の親も代表元に！
+                            valid_facts.append([p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents])
                             
         if all(v in current_bind for v in self.args):
             reps = [current_bind[v].get_rep() for v in self.args]
@@ -381,7 +388,6 @@ class FactPattern(Pattern):
                     for perm in itertools.permutations(f_args, len(self.args)):
                         new_binds = {v_name: obj for v_name, obj in zip(self.args, perm)}
                         yield from self._try_bind_and_yield(current_bind, new_binds)
-
 
 # ==========================================
 # 🌟 ディスパッチャ化されたルールエンジン
@@ -447,11 +453,13 @@ class UniversalRuleEngine:
         from mmp_core import create_geo_entity, link_logical_incidence
         
         for constr in constructions:
-            parents = [bind[arg].get_rep() for arg in constr.args]
+            # 🌟 FIX 4: bindされた変数を取得する際、確実に代表元にする！
+            parents = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in constr.args]
             
             if len(set(parents)) < len(parents): return False
 
             if constr.def_type == "AnglePair" and len(parents) == 2:
+                # ここに渡す parents[0] と parents[1] は、上の FIX 4 によって実体の Direction になっているので安全！
                 if not self.env.tester.is_canonical_angle_order(parents[0], parents[1]):
                     parents = [parents[1], parents[0]]
                     bind[f"__flip_{constr.bind_to}"] = True
@@ -557,7 +565,6 @@ class UniversalRuleEngine:
         merge_count = 0
         nodes_checked = 0
         
-        # 🌟 FIX: マージによって self.env.nodes の中身が減るため、必ずコピー(list)を回す！
         for node in list(self.env.nodes):
             if not node.is_valid(): continue
             rep = node.get_rep()
@@ -575,7 +582,7 @@ class UniversalRuleEngine:
                 
                 unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
                 if d.def_type in unordered_types:
-                    rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
+                    rep_parents = tuple(p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents)
                     
                 signature = (d.def_type, rep_parents)
                 
@@ -637,20 +644,17 @@ class UniversalRuleEngine:
         from mmp_core import link_logical_incidence
         child_args = conc.args[0] if isinstance(conc.args[0], list) else [conc.args[0]]
         
-        # 🌟 修正: 親ノードを必ず最新の代表元にする
-        parent_obj = bind[conc.args[1]].get_rep()
+        # 🌟 修正: hasattr ガードを付ける
+        parent_obj = bind[conc.args[1]].get_rep() if hasattr(bind[conc.args[1]], 'get_rep') else bind[conc.args[1]]
         applied = False
         
         for c_arg in child_args:
-            # 🌟 修正: 子ノードも必ず最新の代表元にする
-            child_obj = bind[c_arg].get_rep()
-            
-            # 念のための安全装置 (マージの過程でNoneになっていたらスキップ)
-            if not parent_obj or not child_obj:
-                continue
+            child_obj = bind[c_arg].get_rep() if hasattr(bind[c_arg], 'get_rep') else bind[c_arg]
+            if not parent_obj or not child_obj: continue
 
-            if parent_obj not in get_subentity(child_obj, conc.target_type):
-                # 🌟 常に最新の代表元同士でリンクを張る
+            # 🌟 致命的バグ修正: conc.target_type ではなく parent_obj.entity_type を使う！
+            p_type = getattr(parent_obj, 'entity_type', '')
+            if parent_obj not in get_subentity(child_obj, p_type):
                 link_logical_incidence(parent_obj, child_obj)
                 logger.info(f"  🟢 [リンク] {child_obj.name} ∈ {parent_obj.name} (理由: {theorem_name})")
                 self.prover.record_trace(theorem_name, f"{child_obj.name} ∈ {parent_obj.name}")
@@ -658,10 +662,11 @@ class UniversalRuleEngine:
             else:
                 logger.debug(f"    ⏭️ 既にリンク済みのためスキップ: {child_obj.name} ∈ {parent_obj.name}")
         return applied
-
+    
     def _apply_curve_macro(self, theorem_name, conc, bind):
         from mmp_core import create_geo_entity, link_logical_incidence
-        reps = [bind[arg].get_rep() for arg in conc.args]
+        # 🌟 修正: hasattr ガード
+        reps = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in conc.args]
         search_type = "Line" if conc.fact_type == "Collinear" else "Circle"
         def_type = "LineThroughPoints" if conc.fact_type == "Collinear" else "Circumcircle"
         
@@ -698,7 +703,6 @@ class UniversalRuleEngine:
                                     base_curves = {node.get_rep()}
                                     break
                 if base_curves: break
-        # ==========================================
 
         if base_curves:
             # 既存の円(または直線)に残りの点をリンクするだけ！
@@ -821,17 +825,16 @@ class ProofEnvironment:
         
         self.nodes.extend([self.zero_angle, self.right_angle])
 
-    def merge_entities_logically(self, rep1, rep2, force_bypass_verify=False):
+    def merge_entities_logically(self, rep1, rep2, force_bypass_verify=False, reason_fact=None):
         entity1, entity2 = rep1.get_rep(), rep2.get_rep()
         if entity1 == entity2: return None
         if entity1 not in self.nodes or entity2 not in self.nodes: return None
 
         is_critical_entity = True
         should_verify = (getattr(self, 'enable_numerical_debug', False) or is_critical_entity) and not force_bypass_verify
-        should_verify = True
 
         if should_verify and getattr(self, 'all_vars', None):
-            if not self.tester.verify_identical(entity1, entity2):     # 🟢 これでOK！
+            if not self.tester.verify_identical(entity1, entity2):
                 err_trace = getattr(entity1, '_calc_err_trace', getattr(entity2, '_calc_err_trace', ''))
                 if "退化している" in err_trace:
                     import logging
@@ -845,27 +848,36 @@ class ProofEnvironment:
                     logger.info(f"❌ [重大な不一致] {entity1.name}({entity1.entity_type}) vs {entity2.name}({entity2.entity_type}){reason}")
                 return None
                 
-        # ==========================================
-        # 🌟 NEW: 完全な遅延評価 (Lazy Evaluation)
-        # ==========================================
-        # 以前ここにあった O(N) の全体走査と置換処理を全削除！
-        # どこから参照されても get_rep() が自動で解決してくれます。
+        # 🌟 GeoEntity に実装した merge_into を呼び出し、理由とともに結合！
+        entity2.merge_into(entity1, reason_fact=reason_fact)
+        entity2.base_importance = 0.0 
 
-        e1_comp = entity1.get_best_component()
-        e2_comp = entity2.get_best_component()
-        if e1_comp and e2_comp:
-            for child in e2_comp.subobjects:
-                e1_comp.subobjects.add(child)
-
-        entity1.merge_numerical(entity2)
-        while len(entity1.components) > 1:
-            entity1.prove_components_equal(0, 1)
+        # ==========================================
+        # 🌟 復活: 安全な O(N) 親参照の置換 (E-Graphの論理連結性の維持)
+        # ==========================================
+        # これがないと、ゴーストを親に持っていた子が孤立して「無駄ノード」化します。
+        # ※ Pythonのset破壊(ハッシュ割れ)を防ぐため、一度取り出して再構築します。
+        for n in self.nodes:
+            if not getattr(n, 'is_valid', lambda: True)(): continue
+            comp = n.get_best_component()
+            if not comp: continue
             
-        entity1.importance = max(getattr(entity1, 'importance', 1.0), getattr(entity2, 'importance', 1.0))
-        
-        # 🌟 O(N) かかるリストからの即時 remove も廃止し、ポインタだけ繋ぐ
-        entity2._merged_into = entity1
-        entity2._is_merged_and_dead = True
-        entity2.base_importance = 0.0 # is_valid_node で弾かれるようにする
-        
-        return entity1
+            needs_update = False
+            for d in comp.definitions:
+                if entity2 in d.parents:
+                    needs_update = True
+                    break
+                    
+            if needs_update:
+                new_defs = set()
+                for d in comp.definitions:
+                    new_parents = [entity1 if p == entity2 else p for p in d.parents]
+                    if new_parents != d.parents:
+                        # 🌟 FIX: ハッシュ割れを防ぐため、オブジェクトを直接書き換えずに「新規作成」する
+                        new_d = Definition(d.def_type, new_parents, d.naive_degree, d.depth)
+                        new_defs.add(new_d)
+                    else:
+                        new_defs.add(d)
+                comp.definitions = new_defs # 安全に上書き
+
+        return entity1.get_rep()
