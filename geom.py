@@ -6,7 +6,8 @@ import sys
 import re
 
 from mmp_core import create_geo_entity
-from logic_core import ProofEnvironment, setup_proof_logger, LogicProver, UniversalRuleEngine, get_rep
+from logic_core import ProofEnvironment, setup_proof_logger, UniversalRuleEngine
+from proof_manager import Fact, LogicProver, print_proof_tree
 from theorems import THEOREMS
 from mmp_tester import MMPTester
 from action_space import ActionGenerator
@@ -51,7 +52,7 @@ class MCTSSearchEngine:
         self.action_gen = ActionGenerator(set(), self.tester)
 
     def _playout(self, initial_nodes, depth=3):
-        sim_nodes = [get_rep(n) for n in initial_nodes]
+        sim_nodes = [n.get_rep() for n in initial_nodes]
         score = 0.0
         
         for step_idx in range(depth):
@@ -60,13 +61,13 @@ class MCTSSearchEngine:
             
             valid_actions = []
             for parents, def_type, name in actions:
-                rep_parents = [get_rep(p) for p in parents]
+                rep_parents = [p.get_rep() for p in parents]
                 
                 # Trivial Check 1: 論理的重複の排除
                 is_redundant = False
                 for node in sim_nodes:
                     comp = node.get_best_component()
-                    if comp and any(d.def_type == def_type and [get_rep(p) for p in d.parents] == rep_parents for d in comp.definitions):
+                    if comp and any(d.def_type == def_type and [p.get_rep() for p in d.parents] == rep_parents for d in comp.definitions):
                         is_redundant = True
                         break
                 
@@ -292,11 +293,11 @@ class HybridEngine:
         
     def check_target_reached(self):
         """🌟 汎用クエリ(get_subentity)を使った美しいゴール判定"""
-        from logic_core import get_rep, get_subentity # get_rep を確実にインポート
+        from logic_core import get_subentity 
         tf = self.target_fact
         
         if tf.fact_type == "Collinear":
-            pts = [get_rep(p) for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
+            pts = [p.get_rep() for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
             common_lines = get_subentity(pts[0], "Line")
             for p in pts[1:]:
                 common_lines &= get_subentity(p, "Line")
@@ -306,7 +307,7 @@ class HybridEngine:
                 return tf
                 
         elif tf.fact_type == "Concyclic":
-            pts = [get_rep(p) for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
+            pts = [p.get_rep() for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
             common_circles = get_subentity(pts[0], "Circle")
             for p in pts[1:]:
                 common_circles &= get_subentity(p, "Circle")
@@ -316,7 +317,7 @@ class HybridEngine:
                 return tf
 
         elif tf.fact_type == "Identical":
-            if get_rep(tf.objects[0]) == get_rep(tf.objects[1]):
+            if tf.objects[0].get_rep() == tf.objects[1].get_rep():
                 tf.is_proven = True
                 tf.proof_source = f"E-Graph マージ確認 (対象: {tf.objects[0].name} ≡ {tf.objects[1].name})"
                 return tf
@@ -329,7 +330,7 @@ class HybridEngine:
         self.focus_engine.set_target(self.target_fact)
         
         print("🔄 全結合シーディング (Universal Seeding) を実行中...")
-        from mmp_core import create_geo_entity, link_logical_incidence, is_canonical_angle_order
+        from mmp_core import create_geo_entity, link_logical_incidence
         from logic_core import get_subentity
         import itertools
 
@@ -369,7 +370,7 @@ class HybridEngine:
         # 🌟 ここを修正: すべての直線ペアに対して、"Canonical Order" に従った角度ペアを「必ず」生成する
         for d1, d2 in itertools.combinations(seed_dirs, 2):
             # Canonical Order を判定し、正しい順序で角度ペアを作る
-            if is_canonical_angle_order(d1, d2):
+            if self.env.tester.is_canonical_angle_order(d1, d2):
                 ordered_pair = [d1, d2]
             else:
                 ordered_pair = [d2, d1]
@@ -415,6 +416,7 @@ class HybridEngine:
         if proven_target:
             print(f"🎉 🎉 🎉 証明完了！ (初期推論フェーズにて)")
             print(f"最終結論: {proven_target.proof_source}")
+            print_proof_tree(proven_target)
             self.prover.print_proof_trace()
             return True
 
@@ -430,6 +432,7 @@ class HybridEngine:
                 print(f"🎉 🎉 🎉 証明完了！ (Step: {step})")
                 print(f"最終結論: {proven_target}")
                 self.prover.print_proof_trace()
+                print_proof_tree(proven_target)
                 return True
         return False
 
@@ -454,17 +457,15 @@ def analyze_node_utility(env, prover):
             if len(w) > 2 and w not in ["AnglePair", "Dir", "Concyclic", "Collinear"]:
                 used_node_names.add(w)
 
-    # 2. 現在の env.nodes を分類
-    from logic_core import get_rep, is_valid_node
-    
+    # 2. 現在の env.nodes を分類    
     total_nodes = 0
     used_nodes = []
     unused_but_hot = []   # 探索されたが証明には繋がらなかった
     completely_useless = [] # 探索すらされなかった完全なゴミ
 
     for node in env.nodes:
-        rep = get_rep(node)
-        if rep != node or not is_valid_node(node):
+        rep = node.get_rep()
+        if rep != node or not node.is_valid():
             continue # マージされて消えたノードやゴーストはスキップ
             
         total_nodes += 1
@@ -514,61 +515,82 @@ def analyze_node_utility(env, prover):
 
 if __name__ == "__main__":
     problem_name = "prob_simson"
-    DEBUG_MODE = True
+    DEBUG_MODE = False
     
     if len(sys.argv) > 1: 
         problem_name = sys.argv[1]
 
-    log_file = setup_proof_logger(problem_name, is_debug=DEBUG_MODE) # 🌟 is_debugフラグを渡す
+    log_file = setup_proof_logger(problem_name, is_debug=DEBUG_MODE)
 
     print(f"=== ハイブリッド自動定理証明システム 起動 ===")
     print(f"▶ 読み込み中の問題: {problem_name}")
     print(f"▶ ログ出力先: {log_file}")
     print(f"▶ 数値デバッグモード: {'ON (厳格チェック有効)' if DEBUG_MODE else 'OFF (爆速モード)'}")
     
+    # 1. 環境(土台)の作成
     env = ProofEnvironment(enable_numerical_debug=DEBUG_MODE)
 
     try:
         prob_module = importlib.import_module(f"problems.{problem_name}")
+        # all_vars を取得 (※Testerの初期化に必須なため、最初に読み込む)
         all_vars, target_fact, initial_facts = prob_module.setup_problem(env)
         env.all_vars = all_vars 
-        
     except Exception as e:
         print(f"❌ エラー: 問題ファイル 'problems/{problem_name}.py' の読み込みに失敗しました。詳細: {e}")
         sys.exit(1)
 
-    # HybridEngine の初期化
-    engine = HybridEngine(env, all_vars, target_fact, THEOREMS)
+    # ==========================================
+    # 🌟 NEW: 依存関係の明示的な注入 (Dependency Injection)
+    # ==========================================
+    # 探索エンジン(HybridEngine)を作る前に、Prover と Tester を作って env に組み込む！
+    # ※インポートが上部にある場合はここは不要ですが、念のため記載しています
+    from proof_manager import LogicProver
+    from mmp_tester import MMPTester
+    from logic_core import UniversalRuleEngine
+    
+    prover = LogicProver(env, THEOREMS)
+    tester = MMPTester(env, all_vars, prover)
+    env.tester = tester  # 🎯 ここで土台(env)に電卓(tester)をセット！
 
+    # ==========================================
+    # 2. エンジンの初期化
+    # ==========================================
+    engine = HybridEngine(env, all_vars, target_fact, THEOREMS)
+    
+    # HybridEngine 内部で古いインスタンスが作られないよう、同じものを向かせる
+    engine.prover = prover
+    engine.tester = tester
+    if hasattr(engine, 'agent'):
+        engine.agent.tester = tester
+        
+    # rule_engine の取得またはセット
+    if hasattr(engine, 'rule_engine'):
+        engine.rule_engine.prover = prover
+        base_engine = engine.rule_engine
+    else:
+        base_engine = UniversalRuleEngine(env, prover)
+        engine.rule_engine = base_engine
+
+    # ==========================================
+    # 3. 実行フェーズ
+    # ==========================================
     print("▶ 初期状態のMMP大発見を実行中...")
     for n in list(env.nodes):
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
-    # ==========================================
-    # 🌟 NEW: 初期状態の「論理的帰結」を局所探索で全て出し切る
-    # ==========================================
     print("\n=== 初期状態の論理推論 (局所探索) を開始 ===")
-    
-    # HybridEngineが内部に持っているproverとrule_engineを取得 (変数名が違う場合は適宜修正してください)
-    prover = getattr(engine, 'prover', LogicProver(env, THEOREMS))
-    base_engine = getattr(engine, 'rule_engine', UniversalRuleEngine(env, prover))
-    
-    # 局所探索エンジンの初期化 (注目サイズ: 5)
+    # 局所探索エンジンの初期化 (注目サイズ: 6)
     focus_engine = FocusSearchEngine(env, prover, base_engine, focus_size=6)
     
     # 行き詰まるまで(最大50ターン)、初期図形だけで分かる事実をマージしまくる
     focus_engine.run_until_stalled(THEOREMS, max_steps=50)
 
-    # ==========================================
-    # 🚀 全て準備が整った状態で、MCTSスタート
-    # ==========================================
     print("\n=== MCTS (モンテカルロ木探索) 探索開始 ===")
     engine.run(max_steps=3)
 
-
-    #結果の分析
-    analyze_node_utility(env, engine.prover)
+    # 結果の分析 (engine.prover ではなく直接 prover を渡すことで安全に)
+    analyze_node_utility(env, prover)
 
     # print("E_Graphの描画")
     # from visualize import draw_egraph

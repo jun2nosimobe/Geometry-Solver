@@ -2,9 +2,10 @@
 import numpy as np
 import itertools
 import logging
-from mmp_math import ModInt, matrix_rank_mod, get_numerical_degree
-from mmp_core import create_geo_entity, set_canonical_t_dict
-from logic_core import Fact
+import traceback
+from mmp_math import ModInt, get_numerical_degree
+from mmp_core import create_geo_entity
+from proof_manager import Fact
 
 logger = logging.getLogger("GeometryProver")
 
@@ -19,17 +20,13 @@ def is_point(obj): return hasattr(obj, 'entity_type') and obj.entity_type == "Po
 def is_line(obj): return hasattr(obj, 'entity_type') and obj.entity_type == "Line"
 def is_circle(obj): return hasattr(obj, 'entity_type') and obj.entity_type == "Circle"
 
-
 class MMPTester:
     def __init__(self, env, all_vars, prover):
         self.env = env
         self.all_vars = all_vars
         self.prover = prover
         self.t_samples = [ModInt(np.random.randint(1, ModInt.MOD - 1)) for _ in range(400)]
-        
-        # 🌟 NEW: mmp_core に正規化用の「絶対基準座標」を注入！
-        canonical_t_dict = {v: self.t_samples[0] for v in self.all_vars}
-        set_canonical_t_dict(canonical_t_dict)
+        self.canonical_t_dict = {v: self.t_samples[0] for v in self.all_vars}
 
     def _eval_point(self, P, t_dict):
         cache = {}
@@ -370,44 +367,107 @@ class MMPTester:
                 true_d += d
                 
         return min(naive_d, true_d)
-
-    def get_canonical_line_vector(self, L):
+    
+    def is_canonical_angle_order(self, Dir1, Dir2):
         """
-        直線のMMP座標を「射影空間の標準形」に変換する。
-        先頭の非零要素の逆元を掛けることで、スカラー倍の揺らぎを完全に吸収し、
-        E-Graph全体で絶対に揺るがない Canonical なタプルを生成する。
+        Directionノードのベクトルを用いて、2つの方向のなす角を評価し、
+        システム全体で一意になる順序(Canonical Order)を決定する。
+        ※外積を用いた回転不変（偏角に依存しない）なキラル判定
         """
-        cache = {}
-        # 常に固定のシード(t_samples[0])を使って評価を完全に固定する
-        t_dict = {v: self.t_samples[0] for v in self.all_vars}
-        
         try:
-            vec = L.calculate(t_dict, cache)
+            # 🌟 グローバル変数ではなく、クラス自身が持つ基準辞書を使う！
+            vec1 = Dir1.calculate(self.canonical_t_dict, {})
+            vec2 = Dir2.calculate(self.canonical_t_dict, {})
             
-            # 先頭の非零要素のインデックスを探す
-            idx = next((i for i, x in enumerate(vec) if not is_zero_mod(x)), -1)
-            if idx == -1: 
-                return (0, 0, 0) # ゼロベクトルのフォールバック
+            a1, b1 = vec1[0], vec1[1]
+            a2, b2 = vec2[0], vec2[1]
             
-            # 先頭の非零要素が必ず 1 になるように全体を正規化 (ユーザー提案の究極系)
-            inv_val = ModInt(1) / vec[idx]
-            norm_vec = []
-            for x in vec:
-                val = x.value if hasattr(x, 'value') else int(x) % ModInt.MOD
-                norm_val = (val * inv_val.value) % ModInt.MOD
-                norm_vec.append(norm_val)
+            # 法線ベクトルの外積 (sinθに比例)
+            cross_val = a1 * b2 - b1 * a2
+            
+            if cross_val == 0: # 平行な場合
+                val1 = a1.value if hasattr(a1, 'value') else int(a1) % ModInt.MOD
+                val2 = a2.value if hasattr(a2, 'value') else int(a2) % ModInt.MOD
+                return val1 < val2
                 
-            return tuple(norm_vec)
-        except:
-            return (0, 0, 0) # 計算不能時のフォールバック
+            cross_int = cross_val.value if hasattr(cross_val, 'value') else int(cross_val) % ModInt.MOD
+            
+            return cross_int < (ModInt.MOD // 2)
 
-    def is_canonical_angle_order(self, L1, L2):
-        """
-        正規化されたMMP座標の辞書順比較によって、
-        2直線のなす角の「順序」を完全に一意(Ordered)に決定する。
-        """
-        v1 = self.get_canonical_line_vector(L1)
-        v2 = self.get_canonical_line_vector(L2)
+        except Exception:
+            return True
         
-        # 辞書順で完全に一意な True/False が決まる！
-        return v1 < v2
+    def verify_identical(self, node1, node2, test_runs=3):
+        """
+        2つのノードが数値的に同一かを、複数のテストランで検証する。
+        """
+        rep1 = node1.get_rep()
+        rep2 = node2.get_rep()
+
+        if rep1.entity_type != rep2.entity_type:
+            return False
+
+        valid_count = 0
+        error_log = None
+        last_v1 = None
+        last_v2 = None
+
+        for i in range(test_runs):
+            t_dict = {v: self.t_samples[i] for v in self.all_vars}
+            
+            try:
+                v1 = rep1.calculate(t_dict, {})
+                v2 = rep2.calculate(t_dict, {})
+                last_v1 = v1
+                last_v2 = v2
+                
+                if not v1 or not v2: continue
+                if len(v1) != len(v2): continue
+
+                if self._check_numerical_match(v1, v2):
+                    valid_count += 1
+            except Exception:
+                # 🌟 エラーを握りつぶさずに記録！
+                if not error_log:
+                    error_log = traceback.format_exc()
+                continue
+
+        is_valid = (valid_count > 0 and valid_count == test_runs)
+        
+        # ==========================================
+        # 🌟 なぜ弾かれたのか、生の値をダンプして検証する
+        # ==========================================
+        if not is_valid:
+            # 生の値をリスト化してプロパティに保存
+            rep1._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v1 or [])]
+            rep2._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v2 or [])]
+            if error_log:
+                rep1._calc_err_trace = error_log 
+                
+            print(f"❌ [拒否詳細] {rep1.name} vs {rep2.name}")
+            print(f"   => 値1: {rep1._debug_v}")
+            print(f"   => 値2: {rep2._debug_v}")
+            if error_log:
+                print(f"   => 💥 エラー発生:\n{error_log}")
+
+        return is_valid
+
+    def _check_numerical_match(self, v1, v2):
+        """ベクトル v1, v2 が（スカラー倍を除いて）一致するか判定"""
+        # ==========================================
+        # 🌟 ゼロベクトルの罠を防ぐガード（既存のロジックを統合）
+        # ==========================================
+        def is_zero(val):
+            return val.value == 0 if hasattr(val, 'value') else val == 0
+
+        if len(v1) == 3: # Point or Line
+            return (is_zero(v1[0]*v2[1] - v1[1]*v2[0]) and 
+                    is_zero(v1[1]*v2[2] - v1[2]*v2[1]) and 
+                    is_zero(v1[2]*v2[0] - v1[0]*v2[2]))
+        elif len(v1) == 2: # Direction
+            if is_zero(v1[0]) and is_zero(v1[1]): return False
+            if is_zero(v2[0]) and is_zero(v2[1]): return False
+            return is_zero(v1[0]*v2[1] - v1[1]*v2[0])
+        elif len(v1) == 1: # LengthSq or Ratio
+            return is_zero(v1[0] - v2[0])
+        return False

@@ -2,8 +2,9 @@ import random
 import math
 import logging
 import numpy as np
+import time
 from collections import defaultdict
-from logic_core import get_rep, is_valid_node, get_subentity
+from logic_core import get_subentity
 
 logger = logging.getLogger("GeometryProver")
 
@@ -18,7 +19,6 @@ class ScoringPolicy:
 
     def get_selection_score(self, node, target_nodes=None):
         """ノードが「次の注目セット」の主役に選ばれる確率"""
-        from logic_core import get_rep
         
         base_score = getattr(node, 'importance', 1.0)
         heat = min(self.heat_table[node], self.MAX_HEAT)
@@ -47,13 +47,13 @@ class ScoringPolicy:
             # 所属図形の多さ（＝拘束の強さ）
             entity_type = getattr(node, 'entity_type', '')
             if entity_type in ["Line", "Circle"]:
-                pts_on = sum(1 for sub in comp.subobjects if getattr(get_rep(sub), 'entity_type', '') == "Point")
+                pts_on = sum(1 for sub in comp.subobjects if getattr(sub.get_rep(), 'entity_type', '') == "Point")
                 if pts_on >= 3:
                     # 共線(3点以上)や共円(4点以上)は極めて重要！
                     prop_bonus += (pts_on - 2) * 5.0 
             elif entity_type == "Point":
                 # たくさんの直線や円が交わる点（対称性の中心）
-                lines_circles = sum(1 for sub in comp.subobjects if getattr(get_rep(sub), 'entity_type', '') in ["Line", "Circle"])
+                lines_circles = sum(1 for sub in comp.subobjects if getattr(sub.get_rep(), 'entity_type', '') in ["Line", "Circle"])
                 if lines_circles >= 2:
                     prop_bonus += lines_circles * 2.0
 
@@ -117,8 +117,8 @@ class FocusSearchEngine:
         
         # ターゲットに直接関わる図形(点)を登録
         for obj in target_fact.objects:
-            rep = get_rep(obj)
-            if is_valid_node(rep):
+            rep = obj.get_rep()
+            if rep.is_valid():
                 self.target_nodes.add(rep)
                 # その点に繋がる直線や円も「準ターゲット」として登録
                 self.target_nodes.update(get_subentity(rep, ["Line", "Circle"]))
@@ -131,22 +131,20 @@ class FocusSearchEngine:
         
         # 子要素
         for sub in comp.subobjects:
-            rep = get_rep(sub)
-            if is_valid_node(rep): neighbors.add(rep)
+            rep = sub.get_rep()
+            if rep.is_valid(): neighbors.add(rep)
         # 親要素
         for d in comp.definitions:
             for p in d.parents:
-                rep = get_rep(p)
-                if is_valid_node(rep): neighbors.add(rep)
+                rep = p.get_rep()
+                if rep.is_valid(): neighbors.add(rep)
         
         return list(neighbors)
 
     def _sample_focus_set(self):
         """🌟 劇的改善: 嬉しい性質と次数を考慮した Graph-Walk サンプリング"""
-        from logic_core import get_rep, is_valid_node
-        
         base_types = {"Point", "Line", "Circle"}
-        all_candidates = [get_rep(n) for n in self.env.nodes if getattr(get_rep(n), 'entity_type', '') in base_types and is_valid_node(n)]
+        all_candidates = [n.get_rep() for n in self.env.nodes if getattr(n.get_rep(), 'entity_type', '') in base_types and n.is_valid()]
         all_candidates = list(set(all_candidates))
         
         # 🌟 NEW: 選ばれた図形のスコアを記録する辞書
@@ -219,14 +217,14 @@ class FocusSearchEngine:
             candidates = []
             
             for node in self.env.nodes:
-                if node in local_nodes or not is_valid_node(node): continue
-                rep_n = get_rep(node)
+                if node in local_nodes or not node.is_valid(): continue
+                rep_n = node.get_rep()
                 comp = rep_n.get_best_component()
                 if not comp: continue
                 
                 for d in comp.definitions:
                     # 親がすべて局所グラフ内にあるか？
-                    if all(get_rep(p) in local_nodes for p in d.parents):
+                    if all(p.get_rep() in local_nodes for p in d.parents):
                         # 角度(AnglePair)より、点や線を優先して引き込む
                         priority = 1 if d.def_type in ["AnglePair", "Direction"] else 0
                         candidates.append((priority, rep_n))
@@ -248,8 +246,8 @@ class FocusSearchEngine:
                 break
 
         # 3. 必須の定数ノードを追加
-        if hasattr(self.env, 'right_angle'): local_nodes.add(get_rep(self.env.right_angle))
-        if hasattr(self.env, 'zero_angle'): local_nodes.add(get_rep(self.env.zero_angle))
+        if hasattr(self.env, 'right_angle'): local_nodes.add(self.env.right_angle.get_rep())
+        if hasattr(self.env, 'zero_angle'): local_nodes.add(self.env.zero_angle.get_rep())
         
         return list(local_nodes)
 
@@ -293,7 +291,6 @@ class FocusSearchEngine:
         return success
 
     def run_until_stalled(self, theorems, max_steps=100, target_checker=None):
-        import time
         stalled_counter = 0
         logger.info("🚀 局所ヒューリスティック探索を開始します...")
         

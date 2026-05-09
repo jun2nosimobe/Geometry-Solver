@@ -113,3 +113,49 @@ def merge_shapes(shape1: GeoEntity, shape2: GeoEntity) -> GeoEntity:
         
     shape2._merged_into = shape1
     return shape1
+
+
+
+
+    def get_canonical_line_vector(self, L):
+        """
+        直線のMMP座標を「射影空間の標準形」に変換する。
+        先頭の非零要素の逆元を掛けることで、スカラー倍の揺らぎを完全に吸収し、
+        E-Graph全体で絶対に揺るがない Canonical なタプルを生成する。
+        """
+        cache = {}
+        # 常に固定のシード(t_samples[0])を使って評価を完全に固定する
+        t_dict = {v: self.t_samples[0] for v in self.all_vars}
+        
+        try:
+            vec = L.calculate(t_dict, cache)
+            
+            # 先頭の非零要素のインデックスを探す
+            idx = next((i for i, x in enumerate(vec) if not is_zero_mod(x)), -1)
+            if idx == -1: 
+                return (0, 0, 0) # ゼロベクトルのフォールバック
+            
+            # 先頭の非零要素が必ず 1 になるように全体を正規化 (ユーザー提案の究極系)
+            inv_val = ModInt(1) / vec[idx]
+            norm_vec = []
+            for x in vec:
+                val = x.value if hasattr(x, 'value') else int(x) % ModInt.MOD
+                norm_val = (val * inv_val.value) % ModInt.MOD
+                norm_vec.append(norm_val)
+                
+            return tuple(norm_vec)
+        except:
+            return (0, 0, 0) # 計算不能時のフォールバック
+
+    def is_canonical_angle_order(self, L1, L2):
+        """
+        正規化されたMMP座標の辞書順比較によって、
+        2直線のなす角の「順序」を完全に一意(Ordered)に決定する。
+        """
+        v1 = self.get_canonical_line_vector(L1)
+        v2 = self.get_canonical_line_vector(L2)
+        
+        # 辞書順で完全に一意な True/False が決まる！
+        return v1 < v2
+    
+

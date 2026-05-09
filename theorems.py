@@ -2,11 +2,11 @@
 
 from logic_core import (
     TheoremDef, FactPattern, NotPattern, CustomPattern,
-    ConstructTemplate, FactTemplate, get_rep, get_subentity, DistinctPattern,
+    ConstructTemplate, FactTemplate,  get_subentity, DistinctPattern,
 )
 
 def get_constant_value(scalar_entity):
-    comp = get_rep(scalar_entity).get_best_component()
+    comp = scalar_entity.get_rep().get_best_component()
     if not comp: return None
     for d in comp.definitions:
         if d.def_type == "Constant": return d.parents[0] 

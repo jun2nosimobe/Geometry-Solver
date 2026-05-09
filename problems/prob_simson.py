@@ -1,6 +1,6 @@
 # problems/prob_simson.py
 from mmp_core import GeoEntity, Definition, LogicalComponent, create_geo_entity, link_logical_incidence
-from logic_core import Fact, get_rep
+from proof_manager import Fact
 
 class Variable:
     def __init__(self, name):
@@ -55,7 +55,7 @@ def setup_problem(env):
     link_logical_incidence(D, Perp_P_BC)
     ang_D = create_geo_entity("AnglePair", [LineBC, Perp_P_BC], "Angle_D", env, is_given=True)
     if hasattr(env, 'right_angle'):
-        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_D))
+        env.merge_entities_logically(env.right_angle.get_rep(), ang_D.get_rep())
 
     # -- E --
     Perp_P_CA = create_geo_entity("PerpendicularLine", [LineCA, P], "Perp_P_CA", env)
@@ -64,7 +64,7 @@ def setup_problem(env):
     link_logical_incidence(E, Perp_P_CA)
     ang_E = create_geo_entity("AnglePair", [LineCA, Perp_P_CA], "Angle_E", env, is_given=True)
     if hasattr(env, 'right_angle'):
-        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_E))
+        env.merge_entities_logically(env.right_angle.get_rep(), ang_E.get_rep())
 
     # -- F --
     Perp_P_AB = create_geo_entity("PerpendicularLine", [LineAB, P], "Perp_P_AB", env)
@@ -73,7 +73,7 @@ def setup_problem(env):
     link_logical_incidence(F, Perp_P_AB)
     ang_F = create_geo_entity("AnglePair", [LineAB, Perp_P_AB], "Angle_F", env, is_given=True)
     if hasattr(env, 'right_angle'):
-        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_F))
+        env.merge_entities_logically(env.right_angle.get_rep(), ang_F.get_rep())
 
     # 目標は D, E, F が一直線上にあること[cite: 12]
     target_fact = Fact("Collinear", [D, E, F])

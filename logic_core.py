@@ -1,6 +1,8 @@
 import logging
 import os
 import itertools
+import time
+from proof_manager import Fact, LogicProver, print_proof_tree
 
 logger = logging.getLogger("GeometryProver")
 
@@ -27,32 +29,22 @@ def setup_proof_logger(problem_name: str, is_debug: bool = False):
 # ==========================================
 # 🌟 汎用 E-Graph クエリ関数
 # ==========================================
-def get_rep(obj):
-    if obj is None: return None
-    while hasattr(obj, '_merged_into') and obj._merged_into is not None:
-        obj = obj._merged_into
-    return obj
-
-def is_valid_node(obj):
-    rep = get_rep(obj)
-    return getattr(rep, 'base_importance', 1.0) > 0.0
-
 def get_subentity(obj, entity_types):
-    obj = get_rep(obj) # 🌟 修正: 最初に必ず代表元を取る！これがないと死んだノードを参照します
+    obj = obj.get_rep() 
     comp = obj.get_best_component()
     if not comp: return set()
     if isinstance(entity_types, str): entity_types = [entity_types]
     result_set = set()
     
     for sub_obj in comp.subobjects:
-        rep_sub = get_rep(sub_obj)
-        if is_valid_node(rep_sub) and getattr(rep_sub, 'entity_type', '') in entity_types:
+        rep_sub = sub_obj.get_rep()
+        if rep_sub.is_valid() and getattr(rep_sub, 'entity_type', '') in entity_types:
             result_set.add(rep_sub)
             
     for d in comp.definitions:
         for p in d.parents:
-            rep_p = get_rep(p)
-            if is_valid_node(rep_p) and getattr(rep_p, 'entity_type', '') in entity_types:
+            rep_p =p. get_rep()
+            if rep_p.is_valid() and getattr(rep_p, 'entity_type', '') in entity_types:
                 result_set.add(rep_p)
     return result_set
 
@@ -125,7 +117,7 @@ class DistinctPattern(Pattern):
         
     def match(self, current_bind, prover, env):
         bound_vars = [v for v in self.vars_list if v in current_bind]
-        reps = [get_rep(current_bind[v]) for v in bound_vars]
+        reps = [current_bind[v].get_rep() for v in bound_vars]
         if len(set(reps)) == len(reps):
             yield current_bind
 
@@ -137,7 +129,7 @@ class CustomPattern(Pattern):
         partial_binds = self.match_func(env, current_bind)
         if not partial_binds: return
         for pb in partial_binds:
-            new_binds = {k: get_rep(v) for k, v in pb.items()}
+            new_binds = {k: v.get_rep() for k, v in pb.items()}
             yield from self._try_bind_and_yield(current_bind, new_binds)
 
 # ==========================================
@@ -177,17 +169,17 @@ class FactPattern(Pattern):
         v1, v2 = self.args[0], self.args[1]
         
         if v1 in current_bind and v2 in current_bind:
-            if get_rep(current_bind[v1]) == get_rep(current_bind[v2]):
+            if current_bind[v1].get_rep() == current_bind[v2].get_rep():
                 yield current_bind
         elif v1 in current_bind or v2 in current_bind:
             bound_var, unbound_var = (v1, v2) if v1 in current_bind else (v2, v1)
-            target_rep = get_rep(current_bind[bound_var])
+            target_rep = current_bind[bound_var].get_rep()
             for n in search_nodes: # 🌟 env.nodes を置換
-                if get_rep(n) == target_rep and is_valid_node(n):
+                if n.get_rep() == target_rep and n.is_valid():
                     yield from self._try_bind_and_yield(current_bind, {unbound_var: n})
         else:
-            nodes = [n for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == self.target_type and is_valid_node(n)] # 🌟 env.nodes を置換
-            for rep in set(get_rep(n) for n in nodes):
+            nodes = [n for n in search_nodes if getattr(n.get_rep(), 'entity_type', '') == self.target_type and n.is_valid()] # 🌟 env.nodes を置換
+            for rep in set(n.get_rep() for n in nodes):
                 yield from self._try_bind_and_yield(current_bind, {v1: rep, v2: rep})
 
     def _match_connected(self, current_bind, prover, env, search_nodes):
@@ -196,12 +188,12 @@ class FactPattern(Pattern):
         
         parent_nodes = set()
         if parent_arg and parent_arg in current_bind:
-            parent_nodes.add(get_rep(current_bind[parent_arg]))
+            parent_nodes.add(current_bind[parent_arg].get_rep())
         else:
             for n in search_nodes: # 🌟 env.nodes を置換
-                rep_n = get_rep(n)
+                rep_n = n.get_rep()
                 e_type = getattr(rep_n, 'entity_type', '')
-                if self.target_type and (self.target_type in e_type or e_type in self.target_type) and is_valid_node(rep_n):
+                if self.target_type and (self.target_type in e_type or e_type in self.target_type) and rep_n.is_valid():
                     parent_nodes.add(rep_n)
             
         for p_node in parent_nodes:
@@ -209,15 +201,15 @@ class FactPattern(Pattern):
             c_comp = p_node.get_best_component()
             if c_comp:
                 for sub in c_comp.subobjects:
-                    rep_sub = get_rep(sub)
+                    rep_sub = sub.get_rep()
                     s_type = getattr(rep_sub, 'entity_type', '')
-                    if self.sub_type and (self.sub_type in s_type or s_type in self.sub_type) and is_valid_node(rep_sub): 
+                    if self.sub_type and (self.sub_type in s_type or s_type in self.sub_type) and rep_sub.is_valid(): 
                         children.add(rep_sub)
                 for d in c_comp.definitions:
                     for p in d.parents:
-                        rep_p = get_rep(p)
+                        rep_p = p.get_rep()
                         p_type = getattr(rep_p, 'entity_type', '')
-                        if self.sub_type and (self.sub_type in p_type or p_type in self.sub_type) and is_valid_node(rep_p): 
+                        if self.sub_type and (self.sub_type in p_type or p_type in self.sub_type) and rep_p.is_valid(): 
                             children.add(rep_p)
             
             children = list(children)
@@ -248,9 +240,9 @@ class FactPattern(Pattern):
         actual_entity_type = entity_map.get(self.target_type, self.target_type)
 
         if result_var in current_bind:
-            valid_nodes = [get_rep(current_bind[result_var])]
+            valid_nodes = [current_bind[result_var].get_rep()]
         elif all(v in current_bind for v in arg_vars):
-            rep_parents = [get_rep(current_bind[v]) for v in arg_vars]
+            rep_parents = [current_bind[v].get_rep() for v in arg_vars]
             valid_nodes = set()
             for p in rep_parents:
                 valid_nodes.update(get_subentity(p, actual_entity_type))
@@ -261,16 +253,16 @@ class FactPattern(Pattern):
             # ==========================================
             # まだ全ての親が揃っていなくても、一つでもバインド(決定)された変数があるなら
             # 「その親に関連する図形」だけを探せばよい！（数百倍のスピードアップ）
-            bound_args = [get_rep(current_bind[v]) for v in arg_vars if v in current_bind]
+            bound_args = [current_bind[v].get_rep() for v in arg_vars if v in current_bind]
             if bound_args:
                 valid_nodes = set()
                 for p in bound_args:
                     valid_nodes.update(get_subentity(p, actual_entity_type))
                 
-                search_reps = {get_rep(n) for n in search_nodes}
-                valid_nodes = [n for n in valid_nodes if get_rep(n) in search_reps and is_valid_node(n)]
+                search_reps = {n.get_rep() for n in search_nodes}
+                valid_nodes = [n for n in valid_nodes if n.get_rep() in search_reps and n.is_valid()]
             else:
-                valid_nodes = [get_rep(n) for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == actual_entity_type and is_valid_node(n)]
+                valid_nodes = [n.get_rep() for n in search_nodes if getattr(n.get_rep(), 'entity_type', '') == actual_entity_type and n.is_valid()]
             
         for node in set(valid_nodes):
             comp = node.get_best_component()
@@ -278,7 +270,7 @@ class FactPattern(Pattern):
             
             for d in comp.definitions:
                 if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
-                    reps_parents = [get_rep(p) for p in d.parents]
+                    reps_parents = [p.get_rep() for p in d.parents]
                     perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
                     
                     for perm in perms:
@@ -307,19 +299,19 @@ class FactPattern(Pattern):
     def _match_common_entity(self, current_bind, prover, env, search_nodes):
         p1_var, p2_var, child_var = self.args
         if p1_var in current_bind and p2_var in current_bind:
-            p1_node, p2_node = get_rep(current_bind[p1_var]), get_rep(current_bind[p2_var])
+            p1_node, p2_node = current_bind[p1_var].get_rep(), current_bind[p2_var].get_rep()
             
             def get_sub_points(node):
                 pts = set()
                 comp = node.get_best_component()
                 if comp:
                     for sub in comp.subobjects:
-                        rep_sub = get_rep(sub)
-                        if getattr(rep_sub, 'entity_type', '') == self.target_type and is_valid_node(rep_sub): pts.add(rep_sub)
+                        rep_sub = sub.get_rep()
+                        if getattr(rep_sub, 'entity_type', '') == self.target_type and rep_sub.is_valid(): pts.add(rep_sub)
                     for d in comp.definitions:
                         for p in d.parents:
-                            rep_p = get_rep(p)
-                            if getattr(rep_p, 'entity_type', '') == self.target_type and is_valid_node(rep_p): pts.add(rep_p)
+                            rep_p = p.get_rep()
+                            if getattr(rep_p, 'entity_type', '') == self.target_type and rep_p.is_valid(): pts.add(rep_p)
                 return pts
                 
             common_pts = get_sub_points(p1_node) & get_sub_points(p2_node)
@@ -330,7 +322,7 @@ class FactPattern(Pattern):
         target_entity = "Line" if self.fact_type == "Collinear" else "Circle"
         
         if all(v in current_bind for v in self.args):
-            p_nodes = [get_rep(current_bind[v]) for v in self.args]
+            p_nodes = [current_bind[v].get_rep() for v in self.args]
             common_curves = None
             for p in p_nodes:
                 curves = get_subentity(p, target_entity) 
@@ -339,18 +331,18 @@ class FactPattern(Pattern):
             if common_curves: 
                 yield current_bind
         else:
-            curves = [n for n in search_nodes if getattr(get_rep(n), 'entity_type', '') == target_entity and is_valid_node(n)]
-            for curve in set(get_rep(n) for n in curves):
+            curves = [n for n in search_nodes if getattr(n.get_rep(), 'entity_type', '') == target_entity and n.is_valid()]
+            for curve in set(n.get_rep() for n in curves):
                 pts_on_curve = []
                 comp = curve.get_best_component()
                 if comp:
                     for sub in comp.subobjects:
-                        rep_sub = get_rep(sub)
-                        if getattr(rep_sub, 'entity_type', '') == "Point" and is_valid_node(rep_sub): pts_on_curve.append(rep_sub)
+                        rep_sub = sub.get_rep()
+                        if getattr(rep_sub, 'entity_type', '') == "Point" and rep_sub.is_valid(): pts_on_curve.append(rep_sub)
                     for d in comp.definitions:
                         for p in d.parents:
-                            rep_p = get_rep(p)
-                            if getattr(rep_p, 'entity_type', '') == "Point" and is_valid_node(rep_p): pts_on_curve.append(rep_p)
+                            rep_p = p.get_rep()
+                            if getattr(rep_p, 'entity_type', '') == "Point" and rep_p.is_valid(): pts_on_curve.append(rep_p)
                 
                 pts_on_curve = list(set(pts_on_curve))
                 if len(pts_on_curve) >= len(self.args):
@@ -366,21 +358,21 @@ class FactPattern(Pattern):
             for fact in prover.facts:
                 if getattr(fact, 'is_mmp_conjecture', False) and not getattr(fact, 'is_proven', False): continue
                 if fact.fact_type == self.fact_type:
-                    valid_facts.append([get_rep(a) for a in getattr(fact, 'objects', [])])
+                    valid_facts.append([a.get_rep() for a in getattr(fact, 'objects', [])])
                     
         if not all(v in current_bind for v in self.args):
             for n in search_nodes: 
                 # 🌟 FIX: ここに is_valid_node のチェックを追加！
-                if not is_valid_node(n): continue
+                if not n.is_valid(): continue
                 
-                comp = get_rep(n).get_best_component()
+                comp = n.get_rep().get_best_component()
                 if comp:
                     for d in comp.definitions:
                         if d.def_type == self.fact_type:
-                            valid_facts.append([get_rep(p) for p in d.parents])
+                            valid_facts.append([p.get_rep() for p in d.parents])
                             
         if all(v in current_bind for v in self.args):
-            reps = [get_rep(current_bind[v]) for v in self.args]
+            reps = [current_bind[v].get_rep() for v in self.args]
             if any(set(reps).issubset(set(f_args)) for f_args in valid_facts):
                 yield current_bind
         else:
@@ -401,8 +393,8 @@ class UniversalRuleEngine:
 
     def _evaluate_patterns(self, theorem_name, patterns):
         initial_bind = {}
-        if hasattr(self.env, 'right_angle'): initial_bind["Ang90"] = get_rep(self.env.right_angle)
-        if hasattr(self.env, 'zero_angle'): initial_bind["Ang0"] = get_rep(self.env.zero_angle)
+        if hasattr(self.env, 'right_angle'): initial_bind["Ang90"] = self.env.right_angle.get_rep()
+        if hasattr(self.env, 'zero_angle'): initial_bind["Ang0"] = self.env.zero_angle.get_rep()
             
         survival_counts = [0] * len(patterns)
         
@@ -453,16 +445,14 @@ class UniversalRuleEngine:
 
     def _execute_constructions(self, theorem_name, constructions, bind):
         from mmp_core import create_geo_entity, link_logical_incidence
-        from logic_core import get_rep
         
         for constr in constructions:
-            parents = [get_rep(bind[arg]) for arg in constr.args]
+            parents = [bind[arg].get_rep() for arg in constr.args]
             
             if len(set(parents)) < len(parents): return False
 
             if constr.def_type == "AnglePair" and len(parents) == 2:
-                from mmp_core import is_canonical_angle_order
-                if not is_canonical_angle_order(parents[0], parents[1]):
+                if not self.env.tester.is_canonical_angle_order(parents[0], parents[1]):
                     parents = [parents[1], parents[0]]
                     bind[f"__flip_{constr.bind_to}"] = True
                 else:
@@ -486,7 +476,7 @@ class UniversalRuleEngine:
                     for d in comp.definitions:
                         if d.def_type == constr.def_type:
                             # 🌟 修正: 親を必ず最新の代表元に変換してから比較する！
-                            rep_d_parents = [get_rep(p) for p in d.parents] 
+                            rep_d_parents = [p.get_rep() for p in d.parents] 
                             
                             if is_unordered:
                                 if set(rep_d_parents) == set(parents):
@@ -501,16 +491,16 @@ class UniversalRuleEngine:
             # ==========================================
             if not found_obj:
                 for node in self.env.nodes:
-                    if not is_valid_node(node): continue
-                    comp = get_rep(node).get_best_component()
+                    if not node.is_valid(): continue
+                    comp = node.get_rep().get_best_component()
                     if not comp: continue
                     for d in comp.definitions:
                         if d.def_type == constr.def_type:
                             # 🌟 修正: ここでも最新の代表元に変換
-                            rep_d_parents = [get_rep(p) for p in d.parents]
+                            rep_d_parents = [p.get_rep() for p in d.parents]
                             
                             if (is_unordered and set(rep_d_parents) == set(parents)) or (not is_unordered and rep_d_parents == parents):
-                                found_obj = get_rep(node)
+                                found_obj = node.get_rep()
                                 break
                     if found_obj: break
             if found_obj:
@@ -534,8 +524,23 @@ class UniversalRuleEngine:
 
     def apply_conclusions(self, theorem_name, conclusions, bind):
         """ディスパッチャ: 結論の実行を種類ごとに振り分ける"""
+        # 🌟 premises として、条件に使われた図形（bindの値）をリスト化しておく
+        current_premises = list(bind.values())
         applied_anything = False
         for conc in conclusions:
+            if isinstance(conc, FactTemplate):
+                # 🌟 修正：テンプレートの変数名(args)から、実際の図形オブジェクト(reps)を取得する
+                # 例: conc.args が ["L", "C"] なら、bind["L"] と bind["C"] を取得
+                reps = [bind[arg].get_rep() for arg in conc.args]
+                
+                # 新しく Fact を作るときに、親情報を持たせる！
+                new_fact = Fact(
+                    fact_type=conc.fact_type, 
+                    objects=reps, 
+                    source_theorem=theorem_name, # 🌟 どの定理から生まれたか
+                    premises=current_premises    # 🌟 何を根拠にしたか
+                )
+                self.prover.facts.append(new_fact)
             if conc.fact_type == "Identical":
                 if self._apply_identical(theorem_name, conc, bind): applied_anything = True
             elif conc.fact_type == "Connected":
@@ -546,9 +551,6 @@ class UniversalRuleEngine:
 
     def _apply_congruence_closure(self):
         """🌟 E-Graph の究極奥義：親が同じになった子要素たちを自動的にマージする（合同閉包）"""
-        from logic_core import get_rep, is_valid_node
-        import time
-        
         start_time = time.time()
         changed = False
         def_map = {}
@@ -557,8 +559,8 @@ class UniversalRuleEngine:
         
         # 🌟 FIX: マージによって self.env.nodes の中身が減るため、必ずコピー(list)を回す！
         for node in list(self.env.nodes):
-            if not is_valid_node(node): continue
-            rep = get_rep(node)
+            if not node.is_valid(): continue
+            rep = node.get_rep()
             comp = rep.get_best_component()
             if not comp: continue
             
@@ -569,7 +571,7 @@ class UniversalRuleEngine:
                 if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "GivenPoint", "FreePoint", "Direction", "Angle", "Scalar", "Constant"]:
                     continue
 
-                rep_parents = tuple(get_rep(p) for p in d.parents)
+                rep_parents = tuple(p.get_rep() for p in d.parents)
                 
                 unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
                 if d.def_type in unordered_types:
@@ -579,8 +581,8 @@ class UniversalRuleEngine:
                 
                 if signature in def_map:
                     existing_node = def_map[signature]
-                    rep_existing = get_rep(existing_node)
-                    rep_current = get_rep(rep)
+                    rep_existing = existing_node.get_rep()
+                    rep_current = rep.get_rep()
                     
                     if rep_existing != rep_current:
                         logger.debug(f"  🔄 [合同閉包] 同一の親を持つノードを統合: {rep_current.name} ≡ {rep_existing.name}")
@@ -592,7 +594,7 @@ class UniversalRuleEngine:
                             merge_count += 1
                             break # マージされたらこのノードの処理は終了し次へ
                 else:
-                    def_map[signature] = get_rep(rep)
+                    def_map[signature] = rep.get_rep()
                     
         elapsed_time = time.time() - start_time
         
@@ -605,7 +607,7 @@ class UniversalRuleEngine:
     # 結論適用 メソッド群
     # ---------------------------------------------------------
     def _apply_identical(self, theorem_name, conc, bind):
-        reps = [get_rep(bind[arg]) for arg in conc.args]
+        reps = [bind[arg].get_rep() for arg in conc.args]
         if len(reps) != 2: return False
         
         if getattr(reps[0], 'entity_type', '') == "Angle":
@@ -621,7 +623,7 @@ class UniversalRuleEngine:
 
         evidence_str = ""
         if theorem_name == "円周角の定理":
-            p_names = [get_rep(bind[k]).name for k in ["Apex1", "Apex2", "Base1", "Base2"] if k in bind]
+            p_names = [bind[k].get_rep().name for k in ["Apex1", "Apex2", "Base1", "Base2"] if k in bind]
             evidence_str = f" [根拠: 共円({', '.join(p_names)})]"
 
         logger.info(f"  🟢 [マージ実行] {reps[0].name} ≡ {reps[1].name} (理由: {theorem_name}){evidence_str}")
@@ -636,12 +638,12 @@ class UniversalRuleEngine:
         child_args = conc.args[0] if isinstance(conc.args[0], list) else [conc.args[0]]
         
         # 🌟 修正: 親ノードを必ず最新の代表元にする
-        parent_obj = get_rep(bind[conc.args[1]])
+        parent_obj = bind[conc.args[1]].get_rep()
         applied = False
         
         for c_arg in child_args:
             # 🌟 修正: 子ノードも必ず最新の代表元にする
-            child_obj = get_rep(bind[c_arg])
+            child_obj = bind[c_arg].get_rep()
             
             # 念のための安全装置 (マージの過程でNoneになっていたらスキップ)
             if not parent_obj or not child_obj:
@@ -659,7 +661,7 @@ class UniversalRuleEngine:
 
     def _apply_curve_macro(self, theorem_name, conc, bind):
         from mmp_core import create_geo_entity, link_logical_incidence
-        reps = [get_rep(bind[arg]) for arg in conc.args]
+        reps = [bind[arg].get_rep() for arg in conc.args]
         search_type = "Line" if conc.fact_type == "Collinear" else "Circle"
         def_type = "LineThroughPoints" if conc.fact_type == "Collinear" else "Circumcircle"
         
@@ -684,16 +686,16 @@ class UniversalRuleEngine:
         # ==========================================
         if not base_curves:
             for node in self.env.nodes:
-                if not is_valid_node(node): continue
-                if getattr(get_rep(node), 'entity_type', '') == search_type:
-                    comp = get_rep(node).get_best_component()
+                if not node.is_valid(): continue
+                if getattr(node.get_rep(), 'entity_type', '') == search_type:
+                    comp = node.get_rep().get_best_component()
                     if comp:
                         for d in comp.definitions:
                             if d.def_type == def_type:
-                                rep_parents = [get_rep(p) for p in d.parents]
+                                rep_parents = [p.get_rep() for p in d.parents]
                                 # ベース点がすべて親に含まれているか（順不同）
                                 if set(reps[:base_count]).issubset(set(rep_parents)):
-                                    base_curves = {get_rep(node)}
+                                    base_curves = {node.get_rep()}
                                     break
                 if base_curves: break
         # ==========================================
@@ -762,18 +764,6 @@ class UniversalRuleEngine:
                             logger.debug(f"    ❌ 型チェック弾き ({k} が {theorem.entities[k]} ではない): {v.name}")
                             type_ok = False; break
                 if not type_ok: continue
-
-                # ==================================================
-                # 🚨 [DEBUG] 接弦定理の逆 が発火した瞬間のバインド状態をダンプ！
-                # ==================================================
-                if theorem.name == "接弦定理の逆":
-                    logger.debug("\n" + "="*50)
-                    logger.debug(f"🚨 [DEBUG] {theorem.name} のマッチングが成功しました！")
-                    for var_name, entity in bind.items():
-                        entity_name = getattr(entity, 'name', str(entity))
-                        logger.debug(f"  {var_name: <15} -> {entity_name}")
-                    logger.debug("="*50 + "\n")
-                # ==================================================
                 
                 if not self._execute_constructions(theorem.name, theorem.constructions, bind): 
                     logger.debug(f"    ❌ 作図フェーズ拒否: { {k: getattr(v, 'name', v) for k, v in bind.items()} }")
@@ -789,8 +779,6 @@ class UniversalRuleEngine:
         # ==========================================
         # 🌟 スナップショットの解除（待機列の合流）
         # ==========================================
-        # 新しく生成されたノードは既に env.nodes に追加されているため、
-        # active_search_nodes を戻すだけで次ターンから認識される。
         self.env.active_search_nodes = original_active
                 
         if applied_any_in_this_run:
@@ -834,8 +822,7 @@ class ProofEnvironment:
         self.nodes.extend([self.zero_angle, self.right_angle])
 
     def merge_entities_logically(self, rep1, rep2, force_bypass_verify=False):
-        from logic_core import get_rep
-        entity1, entity2 = get_rep(rep1), get_rep(rep2)
+        entity1, entity2 = rep1.get_rep(), rep2.get_rep()
         if entity1 == entity2: return None
         if entity1 not in self.nodes or entity2 not in self.nodes: return None
 
@@ -844,8 +831,7 @@ class ProofEnvironment:
         should_verify = True
 
         if should_verify and getattr(self, 'all_vars', None):
-            from mmp_core import verify_identical_runtime
-            if not verify_identical_runtime(entity1, entity2, self.all_vars):
+            if not self.tester.verify_identical(entity1, entity2):     # 🟢 これでOK！
                 err_trace = getattr(entity1, '_calc_err_trace', getattr(entity2, '_calc_err_trace', ''))
                 if "退化している" in err_trace:
                     import logging
@@ -883,42 +869,3 @@ class ProofEnvironment:
         entity2.base_importance = 0.0 # is_valid_node で弾かれるようにする
         
         return entity1
-
-class Fact:
-    def __init__(self, fact_type, objects):
-        self.fact_type = fact_type
-        self.objects = objects
-        self.is_proven = False
-        self.is_mmp_conjecture = True
-        self.conjecture_score = 0.0
-        self.proof_source = ""
-
-    def __str__(self):
-        # オブジェクトが名前を持っていれば名前を、なければ文字列表現を使う
-        obj_names = ", ".join([getattr(o, 'name', str(o)) for o in self.objects])
-        return f"{self.fact_type}({obj_names})"
-        
-    def __repr__(self):
-        return self.__str__()
-        
-    def __eq__(self, other):
-        if not isinstance(other, Fact) or self.fact_type != other.fact_type: return False
-        if self.fact_type in ["Concyclic", "Collinear", "Identical", "Parallel"]: return set(self.objects) == set(other.objects)
-        return self.objects == other.objects
-
-class LogicProver:
-    def __init__(self, env, theorems):
-        self.env = env
-        self.theorems = theorems
-        self.trace_log = [] 
-        self.facts = []
-        
-    def record_trace(self, theorem_name, conclusion_str):
-        log_entry = f"{conclusion_str} <= {theorem_name}"
-        if log_entry not in self.trace_log:
-            self.trace_log.append(log_entry)
-
-    def print_proof_trace(self, target_fact=None):
-        logger.info("\n【証明のトレース（E-Graph書き換え連鎖）】")
-        for i, log in enumerate(self.trace_log):
-            logger.info(f" {i+1}. 🟢 {log}")

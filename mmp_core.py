@@ -5,7 +5,7 @@ import itertools
 from mmp_math import ModInt
 
 # ==========================================
-# 1. 作図定義 (Definition)
+# 作図定義 (Definition)
 # ==========================================
 class Definition:
     def __init__(self, def_type: str, parents: List[Any] = None, naive_degree: int = 1, depth: int = 1):
@@ -23,7 +23,7 @@ class Definition:
         return self.def_type == other.def_type and self.parents == other.parents
 
 # ==========================================
-# 2. 論理コンポーネント (LogicalComponent)
+# 論理コンポーネント (LogicalComponent)
 # ==========================================
 class LogicalComponent:
     def __init__(self, initial_def: Definition = None):
@@ -48,7 +48,7 @@ class LogicalComponent:
         self.supporting_facts.update(other.supporting_facts)
 
 # ==========================================
-# 3. 幾何学実体 (GeoEntity)
+# 幾何学実体 (GeoEntity)
 # ==========================================
 class GeoEntity:
     def __init__(self, entity_type: str, name: str = ""):
@@ -56,9 +56,6 @@ class GeoEntity:
         self.name = name                 
         self.entity_type = entity_type   
         
-        # ==========================================
-        # 🌟 NEW: 重要度の分離
-        # ==========================================
         self.base_importance = 1.0       # 基礎重要度 (作図時に固定、絶対に下がらない)
         self.heat_bonus = 0.0            # 一時的な熱 (発見で上がり、毎ターン減衰する)
         
@@ -69,6 +66,26 @@ class GeoEntity:
         
         self._merged_into = None
         self.shape_members: Dict['GeoEntity', tuple] = {} 
+
+        self._parent = self
+        self._merge_reason = None
+
+    def get_rep(self):
+        """Union-Find木の根（代表元）を返す。
+           (旧 get_representative / get_rep)"""
+        curr = self
+        # もし旧型の _merged_into を使っているなら:
+        # while getattr(curr, '_merged_into', None) is not None:
+        #     curr = curr._merged_into
+        while curr._parent != curr:
+            curr = curr._parent
+        return curr
+
+    def is_valid(self):
+        """このノードが有効（削除や無効化されていない）か判定する。"""
+        rep = self.get_rep()
+        # base_importance が 0 以下のものは無効(刈り取られた)ノードと判定
+        return getattr(rep, 'base_importance', 1.0) > 0.0
 
     @property
     def importance(self):
@@ -259,11 +276,6 @@ class GeoEntity:
 # ==========================================
 # ヘルパー関数群
 # ==========================================
-def get_representative(obj: GeoEntity) -> GeoEntity:
-    while getattr(obj, '_merged_into', None) is not None:
-        obj = obj._merged_into
-    return obj
-
 def link_logical_incidence(entity1: GeoEntity, entity2: GeoEntity):
     c1 = entity1.get_best_component()
     c2 = entity2.get_best_component()
@@ -283,9 +295,6 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
     elif def_type == "Intersection":
         link_logical_incidence(new_entity, parents[0])
         link_logical_incidence(new_entity, parents[1])
-    # ==========================================
-    # mmp_core.py の apply_trivial_relations 内
-    # ==========================================
 
     elif def_type == "PerpendicularLine":
         ln, pt = parents[0], parents[1]
@@ -318,8 +327,7 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env)
                 dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env)
                 
-                from logic_core import get_rep
-                rep1, rep2 = get_rep(dir1), get_rep(dir2)
+                rep1, rep2 = dir1.get_rep(), dir2.get_rep()
                 if rep1 != rep2:
                     env.merge_entities_logically(rep1, rep2)
     elif def_type == "TangentLine":
@@ -401,52 +409,14 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 ratio_ent.components.append(LogicalComponent(initial_def=Definition("AffineRatio", [A, M, B], 1, 1)))
                 env.nodes.append(ratio_ent)
 
-            c_rep = get_representative(const_1)
-            r_rep = get_representative(ratio_ent)
+            c_rep = const_1.get_rep()
+            r_rep = ratio_ent.get_rep()
             if c_rep != r_rep:
                 env.merge_entities_logically(c_rep, r_rep)
     for p in parents:
         if isinstance(p, GeoEntity):
             link_logical_incidence(p, new_entity)
 
-            
-GLOBAL_CANONICAL_T_DICT = None
-
-def set_canonical_t_dict(t_dict):
-    """mmp_tester から固定のテストデータを注入するための関数"""
-    global GLOBAL_CANONICAL_T_DICT
-    GLOBAL_CANONICAL_T_DICT = t_dict
-
-def is_canonical_angle_order(Dir1, Dir2):
-    """
-    Directionノードのベクトルを用いて、2つの方向のなす角を評価し、
-    システム全体で一意になる順序(Canonical Order)を決定する。
-    """
-    if GLOBAL_CANONICAL_T_DICT is None: 
-        return True 
-
-    try:
-        # 🌟 Dir1, Dir2 は calc_direction により (a, b, 0) のベクトルを返す
-        vec1 = Dir1.calculate(GLOBAL_CANONICAL_T_DICT, {})
-        vec2 = Dir2.calculate(GLOBAL_CANONICAL_T_DICT, {})
-        
-        a1, b1 = vec1[0], vec1[1]
-        a2, b2 = vec2[0], vec2[1]
-        
-        # 法線ベクトルの外積 (sinθに比例)
-        cross_val = a1 * b2 - b1 * a2
-        
-        if cross_val == 0: # 平行な場合
-            val1 = a1.value if hasattr(a1, 'value') else int(a1) % ModInt.MOD
-            val2 = a2.value if hasattr(a2, 'value') else int(a2) % ModInt.MOD
-            return val1 < val2
-            
-        cross_int = cross_val.value if hasattr(cross_val, 'value') else int(cross_val) % ModInt.MOD
-        
-        return cross_int < (ModInt.MOD // 2)
-
-    except:
-        return True
 
 # ==========================================
 # 🌟 図形タイプのマッピング辞書
@@ -475,9 +445,7 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
     # まったく同じ設計図を持つ図形が既に存在する場合は、それ(最新の代表元)を返す
     # ==========================================
     if env is not None and not is_ghost and def_type not in ["Point", "Given", "Free", "Constant", "GivenPoint", "FreePoint"]:
-        from logic_core import get_rep, is_valid_node
-        
-        rep_parents = tuple(get_rep(p) for p in valid_parents)
+        rep_parents = tuple(p.get_rep() for p in valid_parents)
         
         # 順不同図形の場合はソートして比較
         unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
@@ -489,15 +457,15 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
         target_signature = (def_type, rep_parents_sorted)
         
         for existing_node in env.nodes:
-            if not is_valid_node(existing_node): continue
-            existing_rep = get_rep(existing_node)
+            if not existing_node.is_valid(): continue
+            existing_rep = existing_node.get_rep()
             comp = existing_rep.get_best_component()
             if not comp: continue
             
             for d in comp.definitions:
                 if d.def_type == def_type and len(d.parents) == len(rep_parents):
                     # 既存図形の親を最新にして比較
-                    existing_d_parents = tuple(get_rep(p) for p in d.parents)
+                    existing_d_parents = tuple(p.get_rep() for p in d.parents)
                     if def_type in unordered_types:
                         existing_d_parents = tuple(sorted(existing_d_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
                         
@@ -591,82 +559,3 @@ def make_free_point(name, t_x, t_y, env):
     pt.base_importance = 10.0
     env.nodes.append(pt)
     return pt
-
-
-def verify_identical_runtime(node1, node2, all_vars, test_runs=3):
-    from mmp_core import ModInt
-    import numpy as np
-    import traceback  # 🌟 NEW: エラー詳細を取得
-    
-    valid_count = 0
-    last_v1, last_v2 = None, None
-    error_log = ""  # 🌟 NEW: エラー記録用
-    
-    def is_zero(val):
-        if hasattr(val, 'value'): return val.value == 0
-        try:
-            return abs(float(val)) < 1e-9
-        except:
-            return False
-
-    for _ in range(test_runs):
-        t_dict = {v: ModInt(np.random.randint(1, ModInt.MOD)) for v in all_vars}
-        cache = {}
-        try:
-            v1 = node1.calculate(t_dict, cache)
-            v2 = node2.calculate(t_dict, cache)
-            last_v1, last_v2 = v1, v2
-            
-            if not isinstance(v1, (list, tuple)): v1 = [v1]
-            if not isinstance(v2, (list, tuple)): v2 = [v2]
-            if len(v1) != len(v2): continue
-            
-            if len(v1) == 3:
-                # ==========================================
-                # 🌟 NEW: ゼロベクトルの罠を防ぐガード
-                # ==========================================
-                if is_zero(v1[0]) and is_zero(v1[1]) and is_zero(v1[2]): continue
-                if is_zero(v2[0]) and is_zero(v2[1]) and is_zero(v2[2]): continue
-                
-                cx = v1[1] * v2[2] - v1[2] * v2[1]
-                cy = v1[2] * v2[0] - v1[0] * v2[2]
-                cz = v1[0] * v2[1] - v1[1] * v2[0]
-                if is_zero(cx) and is_zero(cy) and is_zero(cz):
-                    valid_count += 1
-                    
-            elif len(v1) == 2:
-                # ==========================================
-                # 🌟 NEW: ゼロベクトルの罠を防ぐガード
-                # ==========================================
-                if is_zero(v1[0]) and is_zero(v1[1]): continue
-                if is_zero(v2[0]) and is_zero(v2[1]): continue
-                
-                if is_zero(v1[0] * v2[1] - v1[1] * v2[0]):
-                    valid_count += 1
-                    
-            elif len(v1) == 1:
-                if is_zero(v1[0] - v2[0]):
-                    valid_count += 1
-                    
-        except Exception:
-            # エラーを握りつぶさずに記録！
-            if not error_log:
-                error_log = traceback.format_exc()
-            
-    is_valid = (valid_count > 0 and valid_count == test_runs)
-    if not is_valid:
-        node1._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v1 or [])]
-        node2._debug_v = [x.value if hasattr(x, 'value') else x for x in (last_v2 or [])]
-        if error_log:
-            node1._calc_err_trace = error_log 
-            
-        # ==========================================
-        # 🌟 NEW: なぜ弾かれたのか、生の値をダンプして検証する
-        # ==========================================
-        print(f"❌ [拒否詳細] {node1.name} vs {node2.name}")
-        print(f"   => 値1: {node1._debug_v}")
-        print(f"   => 値2: {node2._debug_v}")
-        if error_log:
-            print(f"   => 💥 エラー発生:\n{error_log}")
-            
-    return is_valid
