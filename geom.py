@@ -9,7 +9,7 @@ from mmp_core import create_geo_entity
 from logic_core import ProofEnvironment, setup_proof_logger, UniversalRuleEngine
 from proof_manager import Fact, LogicProver, print_proof_tree
 from theorems import THEOREMS
-from mmp_tester import MMPTester
+from mmp_tester import MMPTester, is_zero_mod
 from action_space import ActionGenerator
 from heuristic_engine import FocusSearchEngine
 
@@ -20,13 +20,6 @@ if not logger.handlers:
     file_handler = logging.FileHandler('proof.log', mode='w', encoding='utf-8')
     file_handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(file_handler)
-
-def is_zero_mod(v):
-    if hasattr(v, 'value'): return v.value == 0
-    if hasattr(v, 'val'): return v.val == 0
-    if hasattr(v, 'n'): return v.n == 0
-    try: return int(v) == 0
-    except: return v == 0
 
 class MCTSNode:
     def __init__(self, action=None, parent=None):
@@ -275,20 +268,18 @@ class MCTSSearchEngine:
             if hasattr(node, 'heat_bonus'):
                 node.heat_bonus *= 0.85
 
-
 class HybridEngine:
     def __init__(self, env, all_vars, target_fact, theorems):
         self.env = env  
         self.all_vars = all_vars
         self.target_fact = target_fact
+        
+        # 🌟 FIX 1: 退化テストが回るように、env にも変数をセットしておく！
+        self.env.all_vars = all_vars
+        
         self.prover = LogicProver(self.env, theorems)
-        
-        # 🌟 NEW: 全探索エンジンと局所探索エンジンをここで初期化
         self.rule_engine = UniversalRuleEngine(self.env, self.prover)
-        # focus_size は問題の複雑さに応じて 5〜7 程度がベストです
         self.focus_engine = FocusSearchEngine(self.env, self.prover, self.rule_engine, focus_size=5)
-        
-        # MCTSSearchEngine に focus_engine を渡す
         self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover, self.focus_engine)
         
     def check_target_reached(self):
@@ -326,11 +317,10 @@ class HybridEngine:
 
     def run(self, max_steps=100):
         print(f"\n🔄 探索開始 (問題: {self.target_fact})")
-
         self.focus_engine.set_target(self.target_fact)
         
         print("🔄 全結合シーディング (Universal Seeding) を実行中...")
-        from mmp_core import create_geo_entity, link_logical_incidence
+        from mmp_core import create_geo_entity
         from logic_core import get_subentity
         import itertools
 
@@ -340,71 +330,46 @@ class HybridEngine:
             common_lines = get_subentity(p1, "Line") & get_subentity(p2, "Line")
             if not common_lines:
                 line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Seed)"
-                new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env)
-                if new_line is not None:
-                    new_line.base_importance = 10.0
-                    self.env.nodes.append(new_line)
-                    link_logical_incidence(p1, new_line)
-                    link_logical_incidence(p2, new_line)
+                new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env, importance=10.0)
+                
+                # 🌟 NEW: サイレントキラーを暴く
+                if new_line is None:
+                    err1 = getattr(p1, '_calc_err_trace', '')
+                    err2 = getattr(p2, '_calc_err_trace', '')
+                    print(f"🚨 [直線シード失敗] {line_name} が退化判定。原因1: {err1} / 原因2: {err2}")
 
         all_lines = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Line" and getattr(n, 'base_importance', 0.0) > 0.0]
         seed_dirs = []
         for line in all_lines:
             dir_name = f"Dir_{line.name}_(Seed)"
-            d = create_geo_entity("DirectionOf", [line], name=dir_name, env=self.env)
-            
-            # ==========================================
-            # 🌟 FIX: 退化ガードで None が返ってきた場合のチェックを追加
-            # ==========================================
+            # 🌟 FIX 2: 生成するだけでOK！
+            d = create_geo_entity("DirectionOf", [line], name=dir_name, env=self.env, importance=10.0)
             if d is not None:
-                d.base_importance = 10.0
-                
-                # 💡 補足: create_geo_entity の中で env.nodes.append や link は
-                # 既に行われていますが、既存コードの動きを維持するため if で囲んで安全に実行します
-                if d not in self.env.nodes:
-                    self.env.nodes.append(d)
-                link_logical_incidence(line, d)
-                
                 seed_dirs.append(d)
 
-        # 🌟 ここを修正: すべての直線ペアに対して、"Canonical Order" に従った角度ペアを「必ず」生成する
         for d1, d2 in itertools.combinations(seed_dirs, 2):
-            # Canonical Order を判定し、正しい順序で角度ペアを作る
-            if self.env.tester.is_canonical_angle_order(d1, d2):
+            if hasattr(self.env, 'tester') and self.env.tester.is_canonical_angle_order(d1, d2):
                 ordered_pair = [d1, d2]
             else:
                 ordered_pair = [d2, d1]
                 
-            # 🌟 正順の角度をシード
+            # 🌟🌟🌟 これを追加して計算エラーの原因を暴く！ 🌟🌟🌟
             ang_name = f"AnglePair_{ordered_pair[0].name}_{ordered_pair[1].name}_(Seed)"
-            a = create_geo_entity("AnglePair", ordered_pair, name=ang_name, env=self.env)
+            a = create_geo_entity("AnglePair", ordered_pair, name=ang_name, env=self.env, importance=5.0)
             
-            # ==========================================
-            # 🌟 FIX: 退化ガードによる None チェックを追加
-            # ==========================================
-            if a is not None:
-                a.base_importance = 5.0
-                
-                # create_geo_entity 内部で自動 append する仕様にしている場合、
-                # 二重登録を防ぐために if 文の中で管理するのが安全です
-                if a not in self.env.nodes:
-                    self.env.nodes.append(a)
+            # 🌟 NEW: サイレントキラーを暴く
+            if a is None:
+                err1 = getattr(ordered_pair[0], '_calc_err_trace', '')
+                err2 = getattr(ordered_pair[1], '_calc_err_trace', '')
+                print(f"🚨 [角度シード失敗] {ang_name} が退化判定。原因1: {err1} / 原因2: {err2}")
 
-        # 初期状態における Given 点への強烈な熱注入 (既存のコード)
         for node in self.env.nodes:
             if hasattr(node, 'add_heat'):
                 node.add_heat(10.0)
+                if node in self.focus_engine.scoring.heat_table:
+                    self.focus_engine.scoring.heat_table[node] += 10.0
 
-       # 初期状態における Given 点への強烈な熱注入 (既存のコード)
-        for node in self.env.nodes:
-            if hasattr(node, 'add_heat'):
-                node.add_heat(10.0)
-                # 🌟 NEW: 局所探索エンジン側にも初期熱を登録
-                self.focus_engine.scoring.heat_table[node] += 10.0
-
-       # 🌟 初期図形だけで一回局所探索を限界まで回す！
         print("🔄 初期推論 (Target Injection) を局所探索で実行中...")
-        # target_checker に self.check_target_reached メソッドをそのまま渡す
         self.focus_engine.run_until_stalled(
             self.prover.theorems, 
             max_steps=50, 
@@ -515,7 +480,7 @@ def analyze_node_utility(env, prover):
 
 if __name__ == "__main__":
     problem_name = "prob_simson"
-    DEBUG_MODE = True
+    DEBUG_MODE = False
     
     if len(sys.argv) > 1: 
         problem_name = sys.argv[1]
@@ -579,18 +544,19 @@ if __name__ == "__main__":
         if getattr(n, 'entity_type', '') in ["Point", "Line"]:
             engine.agent.tester.discover_all_mmp_relations(n, [])
 
-    print("\n=== 初期状態の論理推論 (局所探索) を開始 ===")
-    # 局所探索エンジンの初期化 (注目サイズ: 6)
-    focus_engine = FocusSearchEngine(env, prover, base_engine, focus_size=6)
-    
-    # 行き詰まるまで(最大50ターン)、初期図形だけで分かる事実をマージしまくる
-    focus_engine.run_until_stalled(THEOREMS, max_steps=50)
+    # 🌟 FIX: ここにあった手動の FocusSearchEngine の作成と実行は削除！
+    # HybridEngine の run() が、シーディング「後」に最も効果的なタイミングでやってくれます。
 
-    print("\n=== MCTS (モンテカルロ木探索) 探索開始 ===")
-    engine.run(max_steps=3)
+    print("\n=== ハイブリッド探索 (Seeding + 局所探索 + MCTS) を開始 ===")
+    # 🌟 探索のすべてを HybridEngine に託す！
+    # max_steps はシムソンの定理の深さに合わせて、まずは 50〜100 くらいに設定するのがオススメです
+    engine.run(max_steps=50)
 
     # 結果の分析 (engine.prover ではなく直接 prover を渡すことで安全に)
-    analyze_node_utility(env, prover)
+    try:
+        analyze_node_utility(env, prover)
+    except NameError:
+        pass # もし analyze_node_utility が未インポートならスキップ
 
     # print("E_Graphの描画")
     # from visualize import draw_egraph

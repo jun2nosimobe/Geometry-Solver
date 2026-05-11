@@ -26,8 +26,12 @@ class ModInt:
     def __pow__(self, power): return ModInt(pow(self.value, int(power), self.MOD))
     def __neg__(self): return ModInt(-self.value)
     def __eq__(self, other):
-        if other == 0: return self.value == 0
-        return self.value == (other.value if isinstance(other, ModInt) else int(other) % self.MOD)
+        if isinstance(other, ModInt):
+            return self.value == other.value
+        try:
+            return self.value == (int(other) % self.MOD)
+        except (TypeError, ValueError):
+            return False
     def __abs__(self): return abs(self.value)
     def __repr__(self): return str(self.value)
 

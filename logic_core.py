@@ -126,7 +126,8 @@ class DistinctPattern(Pattern):
         
     def match(self, current_bind, prover, env):
         bound_vars = [v for v in self.vars_list if v in current_bind]
-        reps = [current_bind[v].get_rep() for v in bound_vars]
+        # 🌟 FIX: hasattrガードを追加
+        reps = [current_bind[v].get_rep() if hasattr(current_bind[v], 'get_rep') else current_bind[v] for v in bound_vars]
         if len(set(reps)) == len(reps):
             yield current_bind
 
@@ -195,14 +196,23 @@ class FactPattern(Pattern):
         child_args = self.args[0] if isinstance(self.args[0], (list, tuple)) else [self.args[0]]
         parent_arg = self.args[1] if len(self.args) > 1 else None
         
+        # 🌟 NEW: リストでも文字列でも安全に型チェックする内部関数
+        def is_type_match(expected_type, actual_type):
+            if not expected_type: return True
+            if not actual_type: return False
+            if isinstance(expected_type, (list, tuple)):
+                return any(t in actual_type for t in expected_type)
+            return expected_type in actual_type or actual_type in expected_type
+
         parent_nodes = set()
         if parent_arg and parent_arg in current_bind:
             parent_nodes.add(current_bind[parent_arg].get_rep())
         else:
-            for n in search_nodes: # 🌟 env.nodes を置換
+            for n in search_nodes: 
                 rep_n = n.get_rep()
                 e_type = getattr(rep_n, 'entity_type', '')
-                if self.target_type and (self.target_type in e_type or e_type in self.target_type) and rep_n.is_valid():
+                # 🌟 FIX: 安全な型チェックに変更
+                if is_type_match(self.target_type, e_type) and rep_n.is_valid():
                     parent_nodes.add(rep_n)
             
         for p_node in parent_nodes:
@@ -212,13 +222,15 @@ class FactPattern(Pattern):
                 for sub in c_comp.subobjects:
                     rep_sub = sub.get_rep()
                     s_type = getattr(rep_sub, 'entity_type', '')
-                    if self.sub_type and (self.sub_type in s_type or s_type in self.sub_type) and rep_sub.is_valid(): 
+                    # 🌟 FIX: 安全な型チェックに変更
+                    if is_type_match(self.sub_type, s_type) and rep_sub.is_valid(): 
                         children.add(rep_sub)
                 for d in c_comp.definitions:
                     for p in d.parents:
-                        rep_p = p.get_rep()
+                        rep_p = p.get_rep() if hasattr(p, 'get_rep') else p
                         p_type = getattr(rep_p, 'entity_type', '')
-                        if self.sub_type and (self.sub_type in p_type or p_type in self.sub_type) and rep_p.is_valid(): 
+                        # 🌟 FIX: 安全な型チェックに変更
+                        if is_type_match(self.sub_type, p_type) and getattr(rep_p, 'is_valid', lambda: True)(): 
                             children.add(rep_p)
             
             children = list(children)
@@ -424,9 +436,25 @@ class UniversalRuleEngine:
                 return
             
             pattern = patterns[pattern_idx]
+            matched_any = False
+            
             for bound_dict in pattern.match(current_bind, self.prover, self.env):
                 survival_counts[pattern_idx] += 1
+                matched_any = True
                 yield from dfs(pattern_idx + 1, bound_dict)
+                
+            # ==========================================
+            # 🌟 DEBUG: ここで「なぜこのルートが死んだのか」を暴く！
+            # ターゲットの定理名（例："円周角の定理"）の時だけ詳細を出力
+            # ==========================================
+            if not matched_any and theorem_name == "円周角の定理":
+                pat_desc = pattern.__class__.__name__
+                if hasattr(pattern, 'fact_type'): pat_desc = f"Fact({pattern.fact_type})"
+                
+                # 現在バインドされている変数の名前をカンマ区切りで取得
+                bind_info = {k: getattr(v, 'name', str(v)) for k, v in current_bind.items()}
+                
+                logger.debug(f"    💀 [死因特定] {pat_desc} で条件未達。現在のバインド: {bind_info}")
                 
         results = []
         for res in dfs(0, initial_bind):
@@ -531,30 +559,28 @@ class UniversalRuleEngine:
         return True
 
     def apply_conclusions(self, theorem_name, conclusions, bind):
-        """ディスパッチャ: 結論の実行を種類ごとに振り分ける"""
-        # 🌟 premises として、条件に使われた図形（bindの値）をリスト化しておく
         current_premises = list(bind.values())
         applied_anything = False
         for conc in conclusions:
             if isinstance(conc, FactTemplate):
-                # 🌟 修正：テンプレートの変数名(args)から、実際の図形オブジェクト(reps)を取得する
-                # 例: conc.args が ["L", "C"] なら、bind["L"] と bind["C"] を取得
-                reps = [bind[arg].get_rep() for arg in conc.args]
+                # 🌟 FIX: hasattrガードを追加 (フリップフラグなどの文字列が来てもクラッシュしないように)
+                reps = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in conc.args]
                 
-                # 新しく Fact を作るときに、親情報を持たせる！
                 new_fact = Fact(
                     fact_type=conc.fact_type, 
                     objects=reps, 
-                    source_theorem=theorem_name, # 🌟 どの定理から生まれたか
-                    premises=current_premises    # 🌟 何を根拠にしたか
+                    source_theorem=theorem_name, 
+                    premises=current_premises
                 )
                 self.prover.facts.append(new_fact)
+                
             if conc.fact_type == "Identical":
                 if self._apply_identical(theorem_name, conc, bind): applied_anything = True
             elif conc.fact_type == "Connected":
                 if self._apply_connected(theorem_name, conc, bind): applied_anything = True
             elif conc.fact_type in ["Collinear", "Concyclic"]:
                 if self._apply_curve_macro(theorem_name, conc, bind): applied_anything = True
+                
         return applied_anything
 
     def _apply_congruence_closure(self):
@@ -583,6 +609,8 @@ class UniversalRuleEngine:
                 unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
                 if d.def_type in unordered_types:
                     rep_parents = tuple(p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents)
+                    # 🌟 FIX: 順不同な図形は必ずソートしてからシグネチャにする！（復活）
+                    rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
                     
                 signature = (d.def_type, rep_parents)
                 
@@ -644,15 +672,18 @@ class UniversalRuleEngine:
         from mmp_core import link_logical_incidence
         child_args = conc.args[0] if isinstance(conc.args[0], list) else [conc.args[0]]
         
-        # 🌟 修正: hasattr ガードを付ける
+        # 🌟 FIX: hasattrガード
         parent_obj = bind[conc.args[1]].get_rep() if hasattr(bind[conc.args[1]], 'get_rep') else bind[conc.args[1]]
         applied = False
         
         for c_arg in child_args:
+            # 🌟 FIX: hasattrガード
             child_obj = bind[c_arg].get_rep() if hasattr(bind[c_arg], 'get_rep') else bind[c_arg]
-            if not parent_obj or not child_obj: continue
+            
+            if not parent_obj or not child_obj:
+                continue
 
-            # 🌟 致命的バグ修正: conc.target_type ではなく parent_obj.entity_type を使う！
+            # 🌟 FIX: conc.target_type は存在しない場合があるので、親の型を直接取得する！
             p_type = getattr(parent_obj, 'entity_type', '')
             if parent_obj not in get_subentity(child_obj, p_type):
                 link_logical_incidence(parent_obj, child_obj)

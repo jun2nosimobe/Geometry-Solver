@@ -29,12 +29,18 @@ def get_cartesian(P):
     inv_z = ModInt(1) / P[-1]
     return P[0] * inv_z, P[1] * inv_z
 
+def get_parents(entity):
+    comp = getattr(entity, 'get_best_component', lambda: None)()
+    if not comp or not comp.definitions: return []
+    return list(comp.definitions)[0].parents
+
 # ==========================================
 # 🌟 各図形の計算ロジック
 # ==========================================
 
 @register_calc("Intersection")
-def calc_intersection(parents, t_dict, cache):
+def calc_intersection(entity, t_dict, cache):
+    parents = get_parents(entity)
     L1 = parents[0].calculate(t_dict, cache)
     L2 = parents[1].calculate(t_dict, cache)
     if not L1 or not L2: return []
@@ -42,7 +48,8 @@ def calc_intersection(parents, t_dict, cache):
 
 @register_calc("LineThroughPoints")
 @register_calc("Line")
-def calc_line_through_points(parents, t_dict, cache):
+def calc_line_through_points(entity, t_dict, cache):
+    parents= get_parents(entity)
     P1 = parents[0].calculate(t_dict, cache)
     P2 = parents[1].calculate(t_dict, cache)
     if not P1 or not P2 or len(P1) != 3 or len(P2) != 3: return []
@@ -61,7 +68,8 @@ def calc_line_through_points(parents, t_dict, cache):
 
 @register_calc("Midpoint")
 @register_calc("Mid")
-def calc_midpoint(parents, t_dict, cache):
+def calc_midpoint(entity, t_dict, cache):
+    parents= get_parents(entity)
     P1 = parents[0].calculate(t_dict, cache)
     P2 = parents[1].calculate(t_dict, cache)
     if not P1 or not P2: return []
@@ -70,7 +78,8 @@ def calc_midpoint(parents, t_dict, cache):
 
 @register_calc("PerpendicularLine")
 @register_calc("Perp")
-def calc_perpendicular(parents, t_dict, cache):
+def calc_perpendicular(entity, t_dict, cache):
+    parents= get_parents(entity)
     L = parents[0].calculate(t_dict, cache)
     P = parents[1].calculate(t_dict, cache)
     if not L or len(L) < 3 or not P or len(P) < 3: return []
@@ -78,15 +87,17 @@ def calc_perpendicular(parents, t_dict, cache):
     return list(normalize(cross_product(inf_pt, P)))
 
 @register_calc("ParallelLine")
-def calc_parallel(parents, t_dict, cache):
+def calc_parallel(entity, t_dict, cache):
+    parents= get_parents(entity)
     L = parents[0].calculate(t_dict, cache)
     P = parents[1].calculate(t_dict, cache)
     if not L or len(L) < 3 or not P or len(P) < 3: return []
     inf_pt = (-L[1], L[0], 0) if hasattr(L[0], 'value') else (-L[1], L[0], 0)
     return list(normalize(cross_product(inf_pt, P)))
 
-@register_calc("LineCircleIntersection")
-def calc_other_line_circle_intersection(parents, t_dict, cache):
+@register_calc("OtherLineCircleIntersection")
+def calc_other_line_circle_intersection(entity, t_dict, cache):
+    parents= get_parents(entity)
     L = parents[0].calculate(t_dict, cache)
     C = parents[1].calculate(t_dict, cache)
     P_e = parents[2].calculate(t_dict, cache)
@@ -102,7 +113,8 @@ def calc_other_line_circle_intersection(parents, t_dict, cache):
     return list(normalize((new_x, new_y, new_z)))
 
 @register_calc("CirclesIntersection")
-def calc_other_circle_circle_intersection(parents, t_dict, cache):
+def calc_other_circle_circle_intersection(entity, t_dict, cache):
+    parents= get_parents(entity)
     C1 = parents[0].calculate(t_dict, cache)
     C2 = parents[1].calculate(t_dict, cache)
     P_e = parents[2].calculate(t_dict, cache)
@@ -122,7 +134,8 @@ def calc_other_circle_circle_intersection(parents, t_dict, cache):
     return list(normalize((A*P_e[0] - B*vx, A*P_e[1] - B*vy, A*P_e[2])))
 
 @register_calc("Circumcircle")
-def calc_circumcircle(parents, t_dict, cache):
+def calc_circumcircle(entity, t_dict, cache):
+    parents= get_parents(entity)
     P1 = parents[0].calculate(t_dict, cache)
     P2 = parents[1].calculate(t_dict, cache)
     P3 = parents[2].calculate(t_dict, cache)
@@ -142,33 +155,40 @@ def calc_circumcircle(parents, t_dict, cache):
 @register_calc("Direction")
 @register_calc("DirectionOf")
 @register_calc("Dir")
-def calc_direction(parents, t_dict, cache):
-    """方向ベクトルの計算 (1つの直線、または2点から)"""
+def calc_direction(entity, t_dict, cache):
+    parents = get_parents(entity)
     if len(parents) == 1:
-        L = parents[0].calculate(t_dict, cache)
-        if not L or len(L) < 3: return []
-        return list(normalize((L[0], L[1], 0)))
+        line_val = parents[0].calculate(t_dict, cache)
+        if not line_val: return []
+        u, v, w = line_val
+        # 🌟 FIX: normalize で包む！
+        return list(normalize([v, -u]))
     elif len(parents) == 2:
-        P1 = parents[0].calculate(t_dict, cache)
-        P2 = parents[1].calculate(t_dict, cache)
-        if not P1 or not P2 or len(P1) != 3 or len(P2) != 3: return []
-        dx = P2[0]*P1[2] - P1[0]*P2[2]
-        dy = P2[1]*P1[2] - P1[1]*P2[2]
-        return list(normalize((dy, -dx, 0))) # 射影座標の法線として扱う
+        p1 = parents[0].calculate(t_dict, cache)
+        p2 = parents[1].calculate(t_dict, cache)
+        if not p1 or not p2: return []
+        dx = p2[0]*p1[2] - p1[0]*p2[2]
+        dy = p2[1]*p1[2] - p1[1]*p2[2]
+        # 🌟 FIX: normalize で包む！
+        return list(normalize([dx, dy]))
     return []
 
 @register_calc("LengthSq")
-def calc_length_sq(parents, t_dict, cache):
-    P1 = parents[0].calculate(t_dict, cache)
-    P2 = parents[1].calculate(t_dict, cache)
-    if not P1 or not P2 or len(P1) < 3 or len(P2) < 3: return []
-    x1, y1 = get_cartesian(P1)
-    x2, y2 = get_cartesian(P2)
-    val = (x1 - x2)**2 + (y1 - y2)**2
-    return [val]
+def calc_length_sq(entity, t_dict, cache):
+    parents = get_parents(entity)
+    if len(parents) != 2: return []
+    p1 = parents[0].calculate(t_dict, cache)
+    p2 = parents[1].calculate(t_dict, cache)
+    if not p1 or not p2: return []
+    dx = p2[0]*p1[2] - p1[0]*p2[2]
+    dy = p2[1]*p1[2] - p1[1]*p2[2]
+    dz2 = (p1[2] * p2[2]) ** 2
+    # 🌟 FIX: normalize で包む！
+    return list(normalize([(dx**2 + dy**2), dz2]))
 
 @register_calc("AffineRatio")
-def calc_affine_ratio(parents, t_dict, cache):
+def calc_affine_ratio(entity, t_dict, cache):
+    parents= get_parents(entity)
     A = parents[0].calculate(t_dict, cache)
     B = parents[1].calculate(t_dict, cache)
     C = parents[2].calculate(t_dict, cache)
@@ -184,23 +204,25 @@ def calc_affine_ratio(parents, t_dict, cache):
     return [val, ModInt(1)]
 
 @register_calc("Constant")
-def calc_constant(parents, t_dict, cache):
+def calc_constant(entity, t_dict, cache):
+    parents= get_parents(entity)
     return [parents[0], ModInt(1)]
 
 @register_calc("AnglePair")
-def calc_angle_pair(parents, t_dict, cache):
-    dir1 = parents[0].calculate(t_dict, cache)
-    dir2 = parents[1].calculate(t_dict, cache)
-    if not dir1 or not dir2 or len(dir1) < 2 or len(dir2) < 2: return []
-    a1, b1 = dir1[0], dir1[1]
-    a2, b2 = dir2[0], dir2[1]
-    cross_val = a1 * b2 - b1 * a2
-    dot_val = a1 * a2 + b1 * b2
-    return [cross_val**2, dot_val**2]
-
+def calc_angle_pair(entity, t_dict, cache):
+    parents = get_parents(entity)
+    if len(parents) != 2: return []
+    d1 = parents[0].calculate(t_dict, cache)
+    d2 = parents[1].calculate(t_dict, cache)
+    if not d1 or not d2: return []
+    dot = d1[0] * d2[0] + d1[1] * d2[1]
+    cross = d1[0] * d2[1] - d1[1] * d2[0]
+    # 🌟 FIX: normalize で包む！(比率 cross/dot を同一視するため)
+    return list(normalize([cross, dot]))
 
 @register_calc("TangentLine")
 def calc_tangent_line(entity, t_dict, cache):
+    parents= get_parents(entity)
     """円の周上の点における接線 (parents: [Circumcircle, Point])"""
     if len(entity.parents) != 2: return []
     circle = entity.parents[0]

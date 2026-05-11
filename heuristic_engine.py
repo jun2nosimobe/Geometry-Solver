@@ -102,7 +102,7 @@ class ScoringPolicy:
 # 🌟 局所探索エンジン 本体 (Graph-Walk型へ進化)
 # ==========================================
 class FocusSearchEngine:
-    def __init__(self, env, prover, base_engine, focus_size=5):
+    def __init__(self, env, prover, base_engine, focus_size=6):
         self.env = env
         self.prover = prover
         self.base_engine = base_engine
@@ -194,22 +194,36 @@ class FocusSearchEngine:
                     chosen_scores[filler] = r_scores[remaining_candidates.index(filler)]
 
         return list(focus_set), chosen_scores
-
+    
     def _extract_local_graph(self, focus_set):
-        local_nodes = set(focus_set)
+        # 1. 注目ノード (5〜6個のシード) を確実に最新の代表元にする
+        local_nodes = set(n.get_rep() if hasattr(n, 'get_rep') else n for n in focus_set)
         
-        # 1. 注目ノードに直接関連する直線と円を確実に追加
-        for base_node in focus_set:
+        # 2. 骨格層：注目ノードが乗っている「直線(Line)」と「円(Circle)」を引き込む
+        for base_node in list(local_nodes):
             local_nodes.update(get_subentity(base_node, ["Line", "Circle"]))
             
         # ==========================================
-        # 🌟 NEW: 局所ノードの爆発を防ぐ動的リミッター
-        # focus_sizeが5なら大体 40〜50 個程度に抑えるのが適正
+        # 🌟 NEW: 属性層の厳密な抽出ロジック
+        # 局所グラフ内の図形「だけ」で構成される派生プロパティを引き込む
         # ==========================================
-        MAX_LOCAL_NODES = min(250, len(focus_set) * 10) 
+        # ユーザー要望のプロパティ + 比率や中点などの関連図形
+        target_derived_types = [
+            # 1. 物理リンクを持たない純粋な派生プロパティ（必須）
+            "Direction", "AnglePair", "LengthSq", "Constant", "AffineRatio", 
+            "DirectionOf", # 念のため別名も追加
+            
+            # 2. 点の作図（リンク漏れを防ぐ絶対の安全ネット）
+            "Midpoint", "Intersection", "OtherLineCircleIntersection", "CirclesIntersection",
+            
+            # 3. 線・円の作図（リンク漏れを防ぐ絶対の安全ネット）
+            "LineThroughPoints", "PerpendicularLine", "ParallelLine", "Circumcircle", "TangentLine"
+        ]
         
-        # 2. 親が揃っている派生図形（方向ベクトルや角度など）を引き込む
-        for _ in range(2): 
+        MAX_LOCAL_NODES = 150 # 局所空間のサイズ上限（5〜6シードなら通常 30〜60 程度に収まります）
+        
+        # 派生の派生 (例: 直線 → 方向 → 角度) を拾うために2周する
+        for _ in range(3): 
             if len(local_nodes) >= MAX_LOCAL_NODES:
                 break
                 
@@ -217,27 +231,31 @@ class FocusSearchEngine:
             candidates = []
             
             for node in self.env.nodes:
-                if node in local_nodes or not node.is_valid(): continue
+                if not getattr(node, 'is_valid', lambda: True)(): continue
                 rep_n = node.get_rep()
+                
+                if rep_n in local_nodes: continue
+                
                 comp = rep_n.get_best_component()
                 if not comp: continue
                 
                 for d in comp.definitions:
-                    # 親がすべて局所グラフ内にあるか？
-                    if all(p.get_rep() in local_nodes for p in d.parents):
-                        # 角度(AnglePair)より、点や線を優先して引き込む
-                        priority = 1 if d.def_type in ["AnglePair", "Direction"] else 0
-                        candidates.append((priority, rep_n))
-                        break
+                    # 🌟 判定のキモ: 親図形が「すべて」局所グラフにすでに入っているか？
+                    reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
+                    
+                    # 🌟 FIX: GeoEntity(図形)なら所属チェック、ModInt等(生データ)なら無条件でTrueとする！
+                    if all((p in local_nodes if hasattr(p, 'entity_type') else True) for p in reps_parents):
+                        # 目的の派生プロパティであれば候補に追加
+                        if d.def_type in target_derived_types:
+                            candidates.append(rep_n)
+                            break # このノードの採用は確定したので、他の Definition は見なくてよい
             
             if not candidates:
                 break
                 
-            candidates.sort(key=lambda x: x[0])
-            
-            for _, new_node in candidates:
+            for new_node in candidates:
                 if len(local_nodes) >= MAX_LOCAL_NODES:
-                    break # 上限到達でスパッと切る（Warningスパム防止のためログは消す）
+                    break 
                 if new_node not in local_nodes:
                     local_nodes.add(new_node)
                     added_this_round = True
@@ -245,14 +263,14 @@ class FocusSearchEngine:
             if not added_this_round: 
                 break
 
-        # 3. 必須の定数ノードを追加
+        # 4. 必須の定数ノード（直角・ゼロ角）を追加
         if hasattr(self.env, 'right_angle'): local_nodes.add(self.env.right_angle.get_rep())
         if hasattr(self.env, 'zero_angle'): local_nodes.add(self.env.zero_angle.get_rep())
         
         return list(local_nodes)
 
     def _prune_theorems(self, local_nodes, theorems):
-        # (既存の _prune_theorems と同じ)
+        # (変更なし: 既存の _prune_theorems と同じ)
         active_theorems = []
         types_in_local = {getattr(n, 'entity_type', '') for n in local_nodes}
         for th in theorems:
@@ -264,20 +282,36 @@ class FocusSearchEngine:
         return active_theorems
 
     def step(self, theorems):
-        # 🌟 修正: スコアの辞書も受け取る
         focus_set, chosen_scores = self._sample_focus_set()
         
-        # 🌟 NEW: 図形名と一緒にスコア(評価値)を小数点第1位まで表示する
-        focus_log_parts = [f"{n.name}({chosen_scores[n]:.1f})" for n in focus_set]
+        focus_reps = [n.get_rep() if hasattr(n, 'get_rep') else n for n in focus_set]
+        
+        focus_log_parts = [f"{n.name}({chosen_scores[orig_n]:.1f})" for n, orig_n in zip(focus_reps, focus_set)]
+        import logging
+        logger = logging.getLogger("GeometryProver")
         logger.info(f"🔍 [局所探索] 注目セット: {', '.join(focus_log_parts)}")
         
-        local_nodes = self._extract_local_graph(focus_set)
+        local_nodes = self._extract_local_graph(focus_reps) 
         active_theorems = self._prune_theorems(local_nodes, theorems)
         
         nodes_before = len(self.env.nodes)
         logger.info(f"   => 局所ノード数: {len(local_nodes)} (全体 {nodes_before}), 適用定理: {len(active_theorems)}/{len(theorems)}")
 
-        # (以下はそのまま)
+        # ==========================================
+        # 🌟 NEW: 局所ノード全体の情報を詳細に可視化
+        # ==========================================
+        from collections import defaultdict
+        node_types = defaultdict(list)
+        for n in local_nodes:
+            etype = getattr(n, 'entity_type', 'Unknown')
+            node_types[etype].append(getattr(n, 'name', str(n)))
+            
+        log_lines = ["   📦 [局所グラフの内訳]"]
+        for etype, names in sorted(node_types.items()):
+            log_lines.append(f"     ├─ {etype} ({len(names)}個): {', '.join(sorted(names))}")
+        logger.info("\n".join(log_lines))
+        # ==========================================
+
         self.env.active_search_nodes = local_nodes
         success = self.base_engine.run_all(active_theorems)
         
@@ -286,14 +320,19 @@ class FocusSearchEngine:
         if new_nodes_count > 0:
             logger.info(f"   => 📦 [ターン終了] 新規ノードを待機列から合流: +{new_nodes_count} 個 (全体 {nodes_after})")
         
+        # 評価は元のノード（orig_n）のキーで行う（辞書のキーとして使われているため）
         self.scoring.apply_feedback(focus_set, success)
         self.scoring.decay_global_heat()
         return success
 
     def run_until_stalled(self, theorems, max_steps=100, target_checker=None):
+        # (変更なし)
         stalled_counter = 0
+        import logging
+        logger = logging.getLogger("GeometryProver")
         logger.info("🚀 局所ヒューリスティック探索を開始します...")
         
+        import time
         for step in range(1, max_steps + 1):
             start_time = time.time()
             logger.info(f"\n--- ターン {step} ---")
