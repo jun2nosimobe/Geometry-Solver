@@ -32,30 +32,26 @@ def get_subentity(node, target_type=None):
     """指定された型の関連図形を検索し、必ず最新の代表元(get_rep)として返す"""
     res = set()
     rep_node = node.get_rep() if hasattr(node, 'get_rep') else node
-    comp = getattr(rep_node, 'get_best_component', lambda: None)()
-    if not comp: return res
     
-    # 🌟 NEW: リスト・タプル・文字列のどれが来ても安全に判定する内部関数
     def is_match(obj):
         if not target_type: return True
         e_type = getattr(obj, 'entity_type', '')
         if not e_type: return False
-        
         if isinstance(target_type, (list, tuple)):
             return any(t in e_type for t in target_type)
         return target_type in e_type
 
-    for sub in comp.subobjects:
-        sub_rep = sub.get_rep() if hasattr(sub, 'get_rep') else sub
-        if is_match(sub_rep) and getattr(sub_rep, 'is_valid', lambda: True)():
-            res.add(sub_rep)
-            
-    for d in comp.definitions:
-        for p in d.parents:
-            p_rep = p.get_rep() if hasattr(p, 'get_rep') else p
-            if is_match(p_rep) and getattr(p_rep, 'is_valid', lambda: True)():
-                res.add(p_rep)
-                
+    # 🌟 変更: 単一のベストコンポーネントではなく、全コンポーネントの履歴を走査する
+    for comp in getattr(rep_node, 'components', []):
+        for sub in comp.subobjects:
+            sub_rep = sub.get_rep() if hasattr(sub, 'get_rep') else sub
+            if is_match(sub_rep) and getattr(sub_rep, 'is_valid', lambda: True)():
+                res.add(sub_rep)
+        for d in comp.definitions:
+            for p in d.parents:
+                p_rep = p.get_rep() if hasattr(p, 'get_rep') else p
+                if is_match(p_rep) and getattr(p_rep, 'is_valid', lambda: True)():
+                    res.add(p_rep)
     return res
 
 # ==========================================
@@ -217,19 +213,17 @@ class FactPattern(Pattern):
             
         for p_node in parent_nodes:
             children = set()
-            c_comp = p_node.get_best_component()
-            if c_comp:
+            # 🌟 変更: p_node.get_best_component() を廃止し、全コンポーネントをチェック
+            for c_comp in getattr(p_node, 'components', []):
                 for sub in c_comp.subobjects:
                     rep_sub = sub.get_rep()
                     s_type = getattr(rep_sub, 'entity_type', '')
-                    # 🌟 FIX: 安全な型チェックに変更
                     if is_type_match(self.sub_type, s_type) and rep_sub.is_valid(): 
                         children.add(rep_sub)
                 for d in c_comp.definitions:
                     for p in d.parents:
                         rep_p = p.get_rep() if hasattr(p, 'get_rep') else p
                         p_type = getattr(rep_p, 'entity_type', '')
-                        # 🌟 FIX: 安全な型チェックに変更
                         if is_type_match(self.sub_type, p_type) and getattr(rep_p, 'is_valid', lambda: True)(): 
                             children.add(rep_p)
             
@@ -281,38 +275,38 @@ class FactPattern(Pattern):
                 valid_nodes = [n.get_rep() for n in search_nodes if getattr(n.get_rep(), 'entity_type', '') == actual_entity_type and n.is_valid()]
             
         for node in set(valid_nodes):
-            comp = node.get_best_component()
-            if not comp: continue
-            
-            for d in comp.definitions:
-                if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
-                    # 🌟 FIX 1: ここ！ d.parents は古いゴーストの可能性があるので、必ず最新の代表元に変換！
-                    reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
-                    
-                    perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
-                    
-                    for perm in perms:
-                        new_binds = {result_var: node}
+            for comp in getattr(node, 'components', []):
+                for d in comp.definitions:
+                    if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
+                        reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
                         
-                        if self.target_type == "AnglePair" and len(arg_vars) == 2:
-                            is_flipped = (tuple(perm) != tuple(reps_parents))
-                            if is_flipped and not getattr(self, 'allow_flip', False): continue
+                        # 🌟 NEW: ゴースト（無効ノード）を親に持つ別名定義は絶対にマッチさせない！
+                        if any(not getattr(p, 'is_valid', lambda: True)() for p in reps_parents):
+                            continue
                             
-                            if getattr(self, 'flip_group', None):
-                                group_key = f"__flip_group_{self.flip_group}"
-                                if group_key in current_bind and current_bind[group_key] != is_flipped:
-                                    continue
-                                new_binds[group_key] = is_flipped
+                        perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
+                        
+                        for perm in perms:
+                            new_binds = {result_var: node}
+                            if self.target_type == "AnglePair" and len(arg_vars) == 2:
+                                is_flipped = (tuple(perm) != tuple(reps_parents))
+                                if is_flipped and not getattr(self, 'allow_flip', False): continue
                                 
-                            indiv_key = f"__flip_{result_var}"
-                            if indiv_key in current_bind and current_bind[indiv_key] != is_flipped:
-                                continue
-                            new_binds[indiv_key] = is_flipped
-                            
-                        for v_name, p_obj in zip(arg_vars, perm):
-                            new_binds[v_name] = p_obj
-                            
-                        yield from self._try_bind_and_yield(current_bind, new_binds)
+                                if getattr(self, 'flip_group', None):
+                                    group_key = f"__flip_group_{self.flip_group}"
+                                    if group_key in current_bind and current_bind[group_key] != is_flipped:
+                                        continue
+                                    new_binds[group_key] = is_flipped
+                                    
+                                indiv_key = f"__flip_{result_var}"
+                                if indiv_key in current_bind and current_bind[indiv_key] != is_flipped:
+                                    continue
+                                new_binds[indiv_key] = is_flipped
+                                
+                            for v_name, p_obj in zip(arg_vars, perm):
+                                new_binds[v_name] = p_obj
+                                
+                            yield from self._try_bind_and_yield(current_bind, new_binds)
 
     def _match_common_entity(self, current_bind, prover, env, search_nodes):
         p1_var, p2_var, child_var = self.args
@@ -408,6 +402,7 @@ class UniversalRuleEngine:
     def __init__(self, env, prover):
         self.env = env
         self.prover = prover
+        self.start_time = time.time()
 
     def _evaluate_patterns(self, theorem_name, patterns):
         initial_bind = {}
@@ -769,13 +764,6 @@ class UniversalRuleEngine:
 
     def run_all(self, theorems):
         applied_any_in_this_run = False
-        
-        # ==========================================
-        # 🌟 NEW: 世代管理 (Epoch Management) の導入
-        # ==========================================
-        # ターン開始時のノード群のスナップショットを取る。
-        # これにより、定理Aで新しく生まれた補助ノードが、
-        # 直後の定理Bの探索空間を爆発させるのを防ぐ。
         original_active = getattr(self.env, 'active_search_nodes', None)
         if original_active is None:
             self.env.active_search_nodes = list(self.env.nodes)
@@ -783,11 +771,18 @@ class UniversalRuleEngine:
             self.env.active_search_nodes = list(original_active)
 
         for theorem in theorems:
-            logger.info(f"  ▶ 評価開始: {theorem.name}")
+            t_start = time.time()
+            # 🌟 NEW: 経過時間を [MM:SS] で計算
+            elapsed_sec = int(t_start - self.start_time)
+            m, s = divmod(elapsed_sec, 60)
+            
+            logger.info(f"  [{m:02d}:{s:02d}]▶ 評価開始: {theorem.name}")
+            
             bindings = self._evaluate_patterns(theorem.name, theorem.patterns)
             
             if not bindings:
-                logger.debug(f"    => ❌ マッチなし")
+                t_elapsed = time.time() - t_start
+                logger.debug(f"    => ❌ マッチなし (⏱️ {t_elapsed:.3f}秒)")
                 continue
 
             valid_count = 0
@@ -808,23 +803,19 @@ class UniversalRuleEngine:
                     valid_count += 1
                     applied_any_in_this_run = True
 
+            t_elapsed = time.time() - t_start # ⏱️ 計測終了
             if valid_count > 0:
-                logger.info(f"    => 🎉 {valid_count} 件の新しい結論を適用！")
+                logger.info(f"    => 🎉 {valid_count} 件の新しい結論を適用！ (⏱️ {t_elapsed:.3f}秒)")
+            else:
+                logger.debug(f"    => ❌ 条件不一致で作図スキップ (⏱️ {t_elapsed:.3f}秒)")
 
-        # ==========================================
-        # 🌟 スナップショットの解除（待機列の合流）
-        # ==========================================
         self.env.active_search_nodes = original_active
                 
         if applied_any_in_this_run:
             if self._apply_congruence_closure():
                 applied_any_in_this_run = True
                 
-        # ==========================================
-        # 🌟 NEW: 高速ガベージコレクション (O(N) を1回だけ)
-        # ==========================================
-        # マージされて死んだノードを一括でリストから取り除き、
-        # MCTSの deepcopy が爆速になるようにスリム化する
+        # GC処理
         if applied_any_in_this_run:
             original_len = len(self.env.nodes)
             self.env.nodes = [n for n in self.env.nodes if getattr(n, '_merged_into', None) is None]

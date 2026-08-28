@@ -26,7 +26,8 @@ class MMPTester:
         self.all_vars = all_vars
         self.prover = prover
         self.t_samples = [ModInt(np.random.randint(1, ModInt.MOD - 1)) for _ in range(400)]
-        self.canonical_t_dict = {v: self.t_samples[0] for v in self.all_vars}
+        # 🟢 変数ごとに異なる固定インデックスを割り当てるように修正
+        self.canonical_t_dict = {v: self.t_samples[i % len(self.t_samples)] for i, v in enumerate(self.all_vars)}
 
     def _eval_point(self, P, t_dict):
         cache = {}
@@ -413,7 +414,8 @@ class MMPTester:
         last_v2 = None
 
         for i in range(test_runs):
-            t_dict = {v: self.t_samples[i] for v in self.all_vars}
+            # 🟢 変数ごとに独立した乱数を選ぶように修正
+            t_dict = {v: np.random.choice(self.t_samples) for v in self.all_vars}
             
             try:
                 v1 = rep1.calculate(t_dict, {})

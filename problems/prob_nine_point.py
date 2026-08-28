@@ -1,5 +1,5 @@
 # problems/prob_nine_point.py
-from logic_core import Fact, get_rep
+from logic_core import Fact
 from mmp_core import GeoEntity, LogicalComponent, Definition, create_geo_entity, link_logical_incidence
 
 class Var:
@@ -79,7 +79,7 @@ def setup_problem(env):
     ang_node1 = create_geo_entity("AnglePair", [Line_BC, Perp_A_BC], name=ang_name1, env=env, is_given=True)
     
     if hasattr(env, 'right_angle'):
-        env.merge_entities_logically(get_rep(env.right_angle), get_rep(ang_node1))
+        env.merge_entities_logically(env.right_angle.get_rep(), ang_node1.get_rep())
 
 
     # 4. 目標となる Fact (Target Fact)[cite: 12]

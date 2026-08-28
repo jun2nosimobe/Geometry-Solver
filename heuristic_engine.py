@@ -240,15 +240,21 @@ class FocusSearchEngine:
                 if not comp: continue
                 
                 for d in comp.definitions:
-                    # 🌟 判定のキモ: 親図形が「すべて」局所グラフにすでに入っているか？
+                    # 親図形が「すべて」局所グラフにすでに入っているか？
                     reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
                     
-                    # 🌟 FIX: GeoEntity(図形)なら所属チェック、ModInt等(生データ)なら無条件でTrueとする！
                     if all((p in local_nodes if hasattr(p, 'entity_type') else True) for p in reps_parents):
+                        
+                        # 🌟 NEW: 無駄なシード増殖の絶対ブロック
+                        # 名前に (Seed) が2つ以上含まれるものは、探索のノイズになるため局所グラフに入れない
+                        name = getattr(rep_n, 'name', '')
+                        if name.count("(Seed)") >= 2:
+                            continue 
+                            
                         # 目的の派生プロパティであれば候補に追加
                         if d.def_type in target_derived_types:
                             candidates.append(rep_n)
-                            break # このノードの採用は確定したので、他の Definition は見なくてよい
+                            break
             
             if not candidates:
                 break

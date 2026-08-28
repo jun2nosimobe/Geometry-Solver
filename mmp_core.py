@@ -76,12 +76,13 @@ class GeoEntity:
 
     def get_rep(self):
         curr = self
-        depth = 0
+        path = []
         while curr._parent != curr:
+            path.append(curr)
             curr = curr._parent
-            depth += 1
-            if depth > 50:
-                print(f"🚨 [警告] Union-Findの木が異常に深いです！ ({self.name}, depth={depth})")
+        # 経路圧縮: 走破した全ノードを直接根に繋ぎ直す (爆速化)
+        for node in path:
+            node._parent = curr
         return curr
 
     def is_valid(self):
@@ -108,15 +109,12 @@ class GeoEntity:
         # 🌟 2. 既存の数値データ・作図履歴・重要度をターゲットに吸収させる
         root_target.merge_numerical(root_self)
         
-        # 🌟 3. 吸収された側のリストを空にして、メモリ節約＆誤参照を完全に防ぐ
-        # FIX: component 内部の definition も完全に破棄してゾンビ化を防ぐ
-        for comp in root_self.components:
-            comp.definitions.clear()
-            comp.subobjects.clear()
+        # 🌟 3. 【修正】参照元の clear() は絶対に行わない！ (ターゲット側のデータまで消滅するため)
+        # 変数の参照先を新しい空リスト/セットに置き換えるだけに留める
         root_self.components = []
-        root_self.mmp_subobjects.clear()
+        root_self.mmp_subobjects = set()
         
-        # 🌟 4. 計算キャッシュのクリア (もし辞書を持っていれば)
+        # 🌟 4. 計算キャッシュのクリア
         if hasattr(root_self, '_calc_cache'):
             root_self._calc_cache.clear()
             
@@ -352,11 +350,14 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
                 dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
                 
-                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env)
-                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env)
+                # 🌟 修正: 親の importance を引き継がせ、ゴーストの派生図形も確実にゴーストにする
+                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
+                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
                 
-                env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir1, dir2]))
-                env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir2, dir1]))
+                # 🌟 修正: ゴーストの場合はグローバル定数（直角）を汚染させない
+                if getattr(new_entity, 'base_importance', 1.0) > 0.0:
+                    env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir1, dir2]))
+                    env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir2, dir1]))
                 
     elif def_type == "ParallelLine":
         ln, pt = parents[0], parents[1]
@@ -368,12 +369,15 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
                 dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
                 dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
                 
-                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env)
-                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env)
+                # 🌟 ゴーストの重要度を引き継いで派生図形を作る
+                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
+                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
                 
-                rep1, rep2 = dir1.get_rep(), dir2.get_rep()
-                if rep1 != rep2:
-                    env.merge_entities_logically(rep1, rep2)
+                # 🌟 本物の図形のときだけ、グローバルな平行（0度）ノードに書き込む
+                if getattr(new_entity, 'base_importance', 1.0) > 0.0:
+                    rep1, rep2 = dir1.get_rep(), dir2.get_rep()
+                    if rep1 != rep2:
+                        env.merge_entities_logically(rep1, rep2)
                     
     elif def_type == "TangentLine":
         circle, pt = parents[0], parents[1]
@@ -454,7 +458,9 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
 
             c_rep = const_1.get_rep()
             r_rep = ratio_ent.get_rep()
-            if c_rep != r_rep:
+            
+            # 🌟 NEW: ここでもゴーストの場合は「比率=1」のグローバル定数へのマージを遮断する
+            if c_rep != r_rep and getattr(new_entity, 'base_importance', 1.0) > 0.0:
                 env.merge_entities_logically(c_rep, r_rep)
 
     # 🌟 FIX: 最後の汎用リンク処理のインデントと安全対策

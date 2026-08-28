@@ -1,7 +1,7 @@
 # problems/prob_miquel.py
 import itertools
 from mmp_core import GeoEntity, Definition, LogicalComponent, create_geo_entity, link_logical_incidence
-from logic_core import Fact, get_rep
+from logic_core import Fact
 
 
 class Variable:

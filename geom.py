@@ -231,28 +231,28 @@ class MCTSSearchEngine:
             merged = False
             for node in self.env.nodes:
                 if node != Z and self.tester.check_identical_mmp(Z, node):
-                    
-                    # ==========================================
-                    # 🌟 NEW: ゴーストの「昇格 (Promotion)」システム
-                    # ==========================================
+                    # 🌟 修正: MCTSによる数値計算だけの「強制マージ(チート)」を禁止！
+                    # 代わりに「同一である」という予想を立てて論理エンジンに証明を任せる
                     if getattr(node, 'base_importance', 1.0) <= 0.0:
-                        # 眠っていたゴーストに命(importance)を吹き込み、名前からGhostを消す
-                        node.base_importance = Z.base_importance
+                        node.base_importance = getattr(Z, 'base_importance', 1.0)
                         node.heat_bonus = 0.0
                         if "_(Ghost)" in node.name:
                             node.name = node.name.replace("_(Ghost)", "")
-                        logger.debug(f"    👻 -> 🟢 ゴースト {node.name} が本番採用され、実体化(昇格)しました！")
-                        
-                    merged_node = self.env.merge_entities_logically(node, Z)
-                    if merged_node:
-                        merged_node.add_heat(total_drop * 2.0 + 5.0)
-                        Z = merged_node
+                    
+                    # 予想ファクトを発行
+                    self.tester._add_and_log_conjecture("Identical", [node, Z], f"    🟡 MMP予想(同一): {node.name} ≡ {Z.name}", base_bonus=15.0)
+                    
+                    # 生成したZはE-Graphから取り除き、既存ノードにフォーカスを移す
+                    if Z in self.env.nodes:
+                        self.env.nodes.remove(Z)
+                    Z = node 
                     merged = True
                     break
                     
             if not merged:
                 avg_heat = sum(getattr(p, 'heat_bonus', 0.0) for p in parents) / max(1, len(parents))
-                Z.heat_bonus = avg_heat + total_drop * 2.0
+                Z.heat_bonus = avg_heat + getattr(Z, 'numerical_degree', 0) * 2.0
+                
         # 🌟 NEW: 局所探索エンジンに対して「この図形(Z)と親に注目しろ！」と強烈な熱を注入する
         self.focus_engine.scoring.heat_table[Z] += 50.0 
         for p in parents:
@@ -550,14 +550,34 @@ if __name__ == "__main__":
     print("\n=== ハイブリッド探索 (Seeding + 局所探索 + MCTS) を開始 ===")
     # 🌟 探索のすべてを HybridEngine に託す！
     # max_steps はシムソンの定理の深さに合わせて、まずは 50〜100 くらいに設定するのがオススメです
-    engine.run(max_steps=50)
+    engine.run(max_steps=2)
 
     # 結果の分析 (engine.prover ではなく直接 prover を渡すことで安全に)
     try:
         analyze_node_utility(env, prover)
     except NameError:
         pass # もし analyze_node_utility が未インポートならスキップ
+    def dump_egraph(env):
+        print("\n=== 🧠 E-Graph 内部状態ダンプ ===")
+        valid_nodes = [n for n in env.nodes if n.is_valid()]
+        for n in sorted(valid_nodes, key=lambda x: x.entity_type):
+            rep = n.get_rep()
+            if rep != n: continue # 代表元のみ出力
+            
+            defs = []
+            for comp in rep.components:
+                for d in comp.definitions:
+                    parent_names = [getattr(p.get_rep(), 'name', str(p)) if hasattr(p, 'get_rep') else str(p) for p in d.parents]
+                    defs.append(f"{d.def_type}({', '.join(parent_names)})")
+            
+            print(f"[{rep.entity_type}] {rep.name}")
+            for d_str in set(defs):
+                print(f"  └─ {d_str}")
+        print("================================\n")
+        
+    # 呼び出し例 (HybridEngine実行後など)
+    dump_egraph(env)
 
-    # print("E_Graphの描画")
-    # from visualize import draw_egraph
-    # draw_egraph(env, filename=f"egraph_{problem_name}")
+    #print("E_Graphの描画")
+    #from visualize import draw_egraph
+    #draw_egraph(env, filename=f"egraph_{problem_name}")

@@ -79,9 +79,9 @@ THEOREM_CONVERSE_CYCLIC= TheoremDef(
     patterns=[
         FactPattern("Identical", ["Ang1", "Ang2"], target_type="Angle"),
         
-        # 🌟 最重要: ここでも sub_type="Unordered" を削除！
-        FactPattern("DefinedBy", ["Dir_L1", "Dir_L2", "Ang1"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["Dir_L3", "Dir_L4", "Ang2"], target_type="AnglePair"),
+        # 🌟 allow_flip と flip_group を追加して同期
+        FactPattern("DefinedBy", ["Dir_L1", "Dir_L2", "Ang1"], target_type="AnglePair", allow_flip=True, flip_group="ConvCyc"),
+        FactPattern("DefinedBy", ["Dir_L3", "Dir_L4", "Ang2"], target_type="AnglePair", allow_flip=True, flip_group="ConvCyc"),
         
         FactPattern("Connected", ["L1", "Dir_L1"], target_type="Direction", sub_type="Line"),
         FactPattern("Connected", ["L2", "Dir_L2"], target_type="Direction", sub_type="Line"),
@@ -100,7 +100,6 @@ THEOREM_CONVERSE_CYCLIC= TheoremDef(
         FactPattern("Connected", ["P_Base2", "L2"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["P_Base2", "L4"], target_type="Line", sub_type="Point"),
         
-
         DistinctPattern(["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"])
     ],
     constructions=[],
@@ -127,17 +126,17 @@ THEOREM_IDENTICAL_LINES = TheoremDef(
     ]
 )
 
-
 # ==========================================
 # 定理: 同位角による平行判定(右共通)
 # ==========================================
 THEOREM_ANGLES_TO_DIR_R = TheoremDef(
     name="同位角による平行判定(右共通)",
-    entities={"Dir1": "Direction", "Dir2": "Direction", "DirM": "Direction", "Ang": "Angle"},
+    entities={"Dir1": "Direction", "Dir2": "Direction", "DirM": "Direction", "Ang1": "Angle", "Ang2": "Angle"},
     patterns=[
-        # 🚨 修正: allow_flip=True や sub_type="Unordered" を絶対に書かない！
-        FactPattern("DefinedBy", ["Dir1", "DirM", "Ang"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["Dir2", "DirM", "Ang"], target_type="AnglePair"),
+        # 🌟 修正: 異なる変数で独立させ、衝突を完全に防ぐ
+        FactPattern("Identical", ["Ang1", "Ang2"], target_type="Angle"),
+        FactPattern("DefinedBy", ["Dir1", "DirM", "Ang1"], target_type="AnglePair", allow_flip=True, flip_group="DirR"),
+        FactPattern("DefinedBy", ["Dir2", "DirM", "Ang2"], target_type="AnglePair", allow_flip=True, flip_group="DirR"),
         DistinctPattern(["Dir1", "Dir2", "DirM"])
     ],
     conclusions=[
@@ -150,11 +149,12 @@ THEOREM_ANGLES_TO_DIR_R = TheoremDef(
 # ==========================================
 THEOREM_ANGLES_TO_DIR_L = TheoremDef(
     name="同位角による平行判定(左共通)",
-    entities={"Dir1": "Direction", "Dir2": "Direction", "DirM": "Direction", "Ang": "Angle"},
+    entities={"Dir1": "Direction", "Dir2": "Direction", "DirM": "Direction", "Ang1": "Angle", "Ang2": "Angle"},
     patterns=[
-        # 🚨 修正: 同上。厳格に順序を守る。
-        FactPattern("DefinedBy", ["DirM", "Dir1", "Ang"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["DirM", "Dir2", "Ang"], target_type="AnglePair"),
+        # 🌟 修正: 異なる変数で独立させ、衝突を完全に防ぐ
+        FactPattern("Identical", ["Ang1", "Ang2"], target_type="Angle"),
+        FactPattern("DefinedBy", ["DirM", "Dir1", "Ang1"], target_type="AnglePair", allow_flip=True, flip_group="DirL"),
+        FactPattern("DefinedBy", ["DirM", "Dir2", "Ang2"], target_type="AnglePair", allow_flip=True, flip_group="DirL"),
         DistinctPattern(["Dir1", "Dir2", "DirM"])
     ],
     conclusions=[
@@ -182,6 +182,11 @@ THEOREM_MIDPOINT_PARALLEL = TheoremDef(
         FactTemplate("Identical", ["Dir_BC", "Dir_M1M2"], target_type="Direction")
     ]
 )
+
+
+# ==========================================
+# 定理: 直角三角形の斜辺の中線 角度が等しい方
+# ==========================================
 
 THEOREM_RIGHT_TRIANGLE_MIDPOINT = TheoremDef(
     name="直角三角形の斜辺の中線",
@@ -221,10 +226,7 @@ THEOREM_RIGHT_TRIANGLE_MIDPOINT = TheoremDef(
 )
 
 # ==========================================
-# 定理: 直角三角形の斜辺の中線 (最強・最速版) これは上の定理があるから不要では？
-# ==========================================
-# ==========================================
-# 定理: 直角三角形の斜辺の中線 (直線と距離の完全作図版)
+# 定理: 直角三角形の斜辺の中線 (直線と距離の完全作図版) 距離が等しい方
 # ==========================================
 THEOREM_RIGHT_TRIANGLE_MEDIAN = TheoremDef(
     name="直角三角形の斜辺の中線",
@@ -235,31 +237,26 @@ THEOREM_RIGHT_TRIANGLE_MEDIAN = TheoremDef(
         "Ang_A": "Angle", "Ang90": "Angle"
     },
     patterns=[
-        # 1. 90度の特定
         FactPattern("Identical", ["Ang_A", "Ang90"], target_type="Angle"),
-        FactPattern("DefinedBy", ["Dir1", "Dir2", "Ang_A"], target_type="AnglePair", sub_type="Unordered"),
-        # 2. 直線の特定
+        # 🌟 sub_type="Unordered" を allow_flip=True に変更
+        FactPattern("DefinedBy", ["Dir1", "Dir2", "Ang_A"], target_type="AnglePair", allow_flip=True),
+        
         FactPattern("DefinedBy", ["L1", "Dir1"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["L2", "Dir2"], target_type="DirectionOf"),
-        # 3. 頂点と斜辺の特定
         FactPattern("Connected", ["A", "L1"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["A", "L2"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["B", "L1"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["C", "L2"], target_type="Line", sub_type="Point"),
         DistinctPattern(["A", "B", "C"]),
-        # 4. 中点の特定
         FactPattern("DefinedBy", ["B", "C", "Mid_BC"], target_type="Midpoint")
     ],
     constructions=[
         ConstructTemplate("LineThroughPoints", ["Mid_BC", "A"], "Line", "Line_Median"),
-        # 🌟 追加: 中線の方向(Direction)も作図して E-Graph に放り込む
         ConstructTemplate("DirectionOf", ["Line_Median"], "Direction", "Dir_Median"),
-        
         ConstructTemplate("LengthSq", ["Mid_BC", "B"], "Scalar", "Dist_MB"),
         ConstructTemplate("LengthSq", ["Mid_BC", "A"], "Scalar", "Dist_MA")
     ],
     conclusions=[
-        # 2つの距離が等しいことをマージ (これにより、のちに垂直二等分線の逆定理が発火する)
         FactTemplate("Identical", ["Dist_MB", "Dist_MA"])
     ]
 )
@@ -361,28 +358,31 @@ THEOREM_ISOSCELES_CONVERSE = TheoremDef(
     entities={
         "A": "Point", "B": "Point", "C": "Point",
         "Ang_B": "Angle", "Ang_C": "Angle",
-        "DirAB": "Direction", "DirAC": "Direction", "DirBC": "Direction",
+        "DirAB": "Direction", "DirAC": "Direction", "DirBC": "Direction", "DirBC2": "Direction",
         "LineAB": "Line", "LineAC": "Line", "LineBC": "Line",
         "Dist_AB": "Scalar", "Dist_AC": "Scalar"
     },
     patterns=[
-        # 1. 直線と方向の特定
-        FactPattern("DefinedBy", ["A", "B", "LineAB"], target_type="LineThroughPoints", sub_type="Unordered"),
-        FactPattern("DefinedBy", ["A", "C", "LineAC"], target_type="LineThroughPoints", sub_type="Unordered"),
-        FactPattern("DefinedBy", ["B", "C", "LineBC"], target_type="LineThroughPoints", sub_type="Unordered"),
-        DistinctPattern(["A", "B", "C"]),
+        # 1. 🌟 爆速化: すべての直線を探すのをやめ、一致する角度から逆算スタート
+        FactPattern("Identical", ["Ang_B", "Ang_C"], target_type="Angle"),
+        FactPattern("DefinedBy", ["DirAB", "DirBC", "Ang_B"], target_type="AnglePair", allow_flip=True, flip_group="IsoscelesConv"),
+        FactPattern("DefinedBy", ["DirBC2", "DirAC", "Ang_C"], target_type="AnglePair", allow_flip=True, flip_group="IsoscelesConv"),
+        
+        # 2. 底辺となるべき方向ベクトルが、同一の直線に属することを要求する
+        FactPattern("DefinedBy", ["LineBC", "DirBC"], target_type="DirectionOf"),
+        FactPattern("DefinedBy", ["LineBC", "DirBC2"], target_type="DirectionOf"),
         
         FactPattern("DefinedBy", ["LineAB", "DirAB"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["LineAC", "DirAC"], target_type="DirectionOf"),
-        FactPattern("DefinedBy", ["LineBC", "DirBC"], target_type="DirectionOf"),
-        DistinctPattern(["DirAB", "DirAC", "DirBC"]),
-
-        # 2. 🚨 角度の取得 (flip_group を使って向きを完全同期)
-        FactPattern("DefinedBy", ["DirAB", "DirBC", "Ang_B"], target_type="AnglePair", allow_flip=True, flip_group="IsoscelesConv"),
-        FactPattern("DefinedBy", ["DirBC", "DirAC", "Ang_C"], target_type="AnglePair", allow_flip=True, flip_group="IsoscelesConv"),
+        DistinctPattern(["LineAB", "LineAC", "LineBC"]),
         
-        # 3. 角度の一致
-        FactPattern("Identical", ["Ang_B", "Ang_C"], target_type="Angle")
+        FactPattern("Connected", ["B", "LineAB"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["B", "LineBC"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["C", "LineBC"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["C", "LineAC"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["A", "LineAB"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["A", "LineAC"], target_type="Line", sub_type="Point"),
+        DistinctPattern(["A", "B", "C"])
     ],
     constructions=[
         ConstructTemplate("LengthSq", ["A", "B"], "Scalar", "Dist_AB"),
@@ -450,7 +450,6 @@ THEOREM_UNIQUE_INTERSECTION = TheoremDef(
         FactTemplate("Identical", ["P_Int", "P_Test"])
     ]
 )
-
 # ==========================================
 # 定理: 有向角の加法性 (超高速・クエリ最適化版)
 # ==========================================
@@ -463,26 +462,23 @@ THEOREM_DIRECTED_ANGLE_ADDITION = TheoremDef(
         "Ang13": "Angle", "Ang46": "Angle"
     },
     patterns=[
-        # 1. 🚨超重要🚨 「すでに等しい」と証明されている角度のペアから検索を始める
-        # (E-Graph内で等しい角度のペアは、全角度の組み合わせに比べて圧倒的に少ない)
+        # 1. まず一致している角度ペアを1つ見つける
         FactPattern("Identical", ["Ang12", "Ang45"], target_type="Angle"),
-        FactPattern("Identical", ["Ang23", "Ang56"], target_type="Angle"),
-
-        # 2. その角度を構成している方向ベクトルを逆引き (この時点で候補は数件〜数十件に激減)
-        FactPattern("DefinedBy", ["D1", "D2", "Ang12"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["D4", "D5", "Ang45"], target_type="AnglePair"),
+        FactPattern("DefinedBy", ["D1", "D2", "Ang12"], target_type="AnglePair", allow_flip=True, flip_group="Add1"),
+        FactPattern("DefinedBy", ["D4", "D5", "Ang45"], target_type="AnglePair", allow_flip=True, flip_group="Add1"),
         
-        # 3. 🚨ここで D2 と D5 が「共通の辺(方向)」であることを要求しながら逆引き！
-        FactPattern("DefinedBy", ["D2", "D3", "Ang23"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["D5", "D6", "Ang56"], target_type="AnglePair"),
-
-        # 4. 退化(同じ方向)を排除
+        # 2. 🌟 爆速化: 上で見つけた方向(D2, D5)を「含む」角度だけをピンポイントで検索！
+        FactPattern("DefinedBy", ["D2", "D3", "Ang23"], target_type="AnglePair", allow_flip=True, flip_group="Add2"),
+        FactPattern("DefinedBy", ["D5", "D6", "Ang56"], target_type="AnglePair", allow_flip=True, flip_group="Add2"),
+        
+        # 3. その抽出された2つが Identical かチェック (無駄な検索がゼロになる)
+        FactPattern("Identical", ["Ang23", "Ang56"], target_type="Angle"),
+        
         DistinctPattern(["D1", "D2", "D3"]),
         DistinctPattern(["D4", "D5", "D6"]),
-
-        # 5. 全体をまたぐ角度が E-Graph 内に存在するかチェック
-        FactPattern("DefinedBy", ["D1", "D3", "Ang13"], target_type="AnglePair"),
-        FactPattern("DefinedBy", ["D4", "D6", "Ang46"], target_type="AnglePair")
+        
+        FactPattern("DefinedBy", ["D1", "D3", "Ang13"], target_type="AnglePair", allow_flip=True, flip_group="Add3"),
+        FactPattern("DefinedBy", ["D4", "D6", "Ang46"], target_type="AnglePair", allow_flip=True, flip_group="Add3")
     ],
     constructions=[],
     conclusions=[
@@ -546,10 +542,6 @@ THEOREM_ALTERNATE_SEGMENT = TheoremDef(
         FactTemplate("Identical", ["Ang_L_AB", "Ang_AD_BD"], target_type="Angle")
     ]
 )
-
-# ==========================================
-# 定理: 接弦定理の逆 (完全幾何制約版)
-# ==========================================
 THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
     name="接弦定理の逆",
     entities={
@@ -561,34 +553,30 @@ THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
         "Ang_L_AB": "Angle", "Ang_AD_BD": "Angle"
     },
     patterns=[
-        # 1. 角度の同一性 (E-Graphのマージを考慮し、Distinct は絶対に書かない！)
         FactPattern("Identical", ["Ang_L_AB", "Ang_AD_BD"], target_type="Angle"),
-        
-        # 2. 方向と直線の逆引き
         FactPattern("DefinedBy", ["Dir_L", "Dir_AB", "Ang_L_AB"], target_type="AnglePair", allow_flip=True, flip_group="AltSegConv"),
         FactPattern("DefinedBy", ["Dir_AD", "Dir_BD", "Ang_AD_BD"], target_type="AnglePair", allow_flip=True, flip_group="AltSegConv"),
+
+        DistinctPattern(["Dir_L", "Dir_AB", "Dir_AD", "Dir_BD"]),
+        
         FactPattern("DefinedBy", ["L", "Dir_L"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_AB", "Dir_AB"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_AD", "Dir_AD"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_BD", "Dir_BD"], target_type="DirectionOf"),
         
-        # 3. 頂点 A, B, D の独立性 (これだけは絶対に必要)
-        FactPattern("Connected", ["A", "C"], target_type="Circle", sub_type="Point"),
-        FactPattern("Connected", ["B", "C"], target_type="Circle", sub_type="Point"),
-        FactPattern("Connected", ["D", "C"], target_type="Circle", sub_type="Point"),
-        DistinctPattern(["A", "B"]),
-        DistinctPattern(["B", "D"]),
-        DistinctPattern(["A", "D"]),
-        
-        # 4. 🌟 すべての元凶の解決: 「完全な接続チェック」の復活
-        # 点 D のチェックが復活したため、接線 L が弦にすり替わることは物理不可能になります。
+        # 🌟 ここへ移動: 直線が確定した直後に点をバインドし、探索空間を劇的に刈り込む
         FactPattern("Connected", ["A", "L"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["A", "Line_AB"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["B", "Line_AB"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["A", "Line_AD"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["D", "Line_AD"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["B", "Line_BD"], target_type="Line", sub_type="Point"),
-        FactPattern("Connected", ["D", "Line_BD"], target_type="Line", sub_type="Point")
+        FactPattern("Connected", ["D", "Line_BD"], target_type="Line", sub_type="Point"),
+        DistinctPattern(["A", "B", "D"]),
+        
+        FactPattern("Connected", ["A", "C"], target_type="Circle", sub_type="Point"),
+        FactPattern("Connected", ["B", "C"], target_type="Circle", sub_type="Point"),
+        FactPattern("Connected", ["D", "C"], target_type="Circle", sub_type="Point")
     ],
     constructions=[],
     conclusions=[
