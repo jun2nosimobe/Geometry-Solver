@@ -4,14 +4,15 @@ import logging
 import importlib
 import sys
 import re
+import itertools
 
 from mmp_core import create_geo_entity
-from logic_core import ProofEnvironment, setup_proof_logger, UniversalRuleEngine
+from logic_core import ProofEnvironment, setup_proof_logger
 from proof_manager import Fact, LogicProver, print_proof_tree
 from theorems import THEOREMS
 from mmp_tester import MMPTester, is_zero_mod
 from action_space import ActionGenerator
-from heuristic_engine import FocusSearchEngine
+
 
 
 logger = logging.getLogger("GeometryProver")
@@ -36,11 +37,10 @@ class MCTSNode:
         return (self.total_score / self.visits) + c * math.sqrt(math.log(self.parent.visits) / self.visits)
 
 class MCTSSearchEngine:
-    def __init__(self, env, all_vars, prover, focus_engine): # 🌟 focus_engine を追加
+    def __init__(self, env, all_vars, prover): # 🌟 focus_engine を削除
         self.env = env
         self.all_vars = all_vars
         self.prover = prover
-        self.focus_engine = focus_engine # 🌟 受け取る
         self.tester = MMPTester(self.env, self.all_vars, self.prover)
         self.action_gen = ActionGenerator(set(), self.tester)
 
@@ -151,16 +151,8 @@ class MCTSSearchEngine:
             
         return score
 
-    def _run_logic_step(self, target_checker=None):
-        """🌟 MCTSターンの局所論理探索"""
-        logger.debug(f"\n--- 🔄 MCTSターンの局所論理探索 ---")
-        self.focus_engine.run_until_stalled(
-            self.prover.theorems, 
-            max_steps=15,
-            target_checker=target_checker
-        )
 
-    def run_step(self, num_simulations=40):
+    def run_step(self, num_simulations=10): # 🌟 シミュレーション回数を減らして応答性を上げる
         root = MCTSNode()
         root.untried_actions = self.action_gen.get_possible_actions(self.env.nodes)
         if not root.untried_actions: return
@@ -252,155 +244,188 @@ class MCTSSearchEngine:
             if not merged:
                 avg_heat = sum(getattr(p, 'heat_bonus', 0.0) for p in parents) / max(1, len(parents))
                 Z.heat_bonus = avg_heat + getattr(Z, 'numerical_degree', 0) * 2.0
-                
-        # 🌟 NEW: 局所探索エンジンに対して「この図形(Z)と親に注目しろ！」と強烈な熱を注入する
-        self.focus_engine.scoring.heat_table[Z] += 50.0 
-        for p in parents:
-            self.focus_engine.scoring.heat_table[p] += 20.0
 
         self.tester.discover_all_mmp_relations(Z, parents) 
         
-        # 🌟 ここで上記の _run_logic_step (局所探索) が呼ばれる
-        self._run_logic_step()
-
         # ターン終了時の冷却サイクル (既存のコード)
         for node in self.env.nodes:
             if hasattr(node, 'heat_bonus'):
                 node.heat_bonus *= 0.85
 
+# ==========================================
+# 🌟 geom.py 内の HybridEngine の修正
+# ==========================================
 class HybridEngine:
     def __init__(self, env, all_vars, target_fact, theorems):
         self.env = env  
         self.all_vars = all_vars
         self.target_fact = target_fact
-        
-        # 🌟 FIX 1: 退化テストが回るように、env にも変数をセットしておく！
         self.env.all_vars = all_vars
         
+        from proof_manager import LogicProver
+        from logic_core import ParallelBlackboardEngine, EventType 
+        
         self.prover = LogicProver(self.env, theorems)
-        self.rule_engine = UniversalRuleEngine(self.env, self.prover)
-        self.focus_engine = FocusSearchEngine(self.env, self.prover, self.rule_engine, focus_size=5)
-        self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover, self.focus_engine)
+        self.rule_engine = ParallelBlackboardEngine(self.env, self.prover)
+        self.env.emit = self.rule_engine.emit
+        self.EventType = EventType
+        
+        # 🌟 MCTSの初期化をクリーンに
+        self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover)
         
     def check_target_reached(self):
-        """🌟 汎用クエリ(get_subentity)を使った美しいゴール判定"""
-        from logic_core import get_subentity 
-        tf = self.target_fact
+        if not self.target_fact: return None
         
-        if tf.fact_type == "Collinear":
-            pts = [p.get_rep() for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
-            common_lines = get_subentity(pts[0], "Line")
-            for p in pts[1:]:
-                common_lines &= get_subentity(p, "Line")
-            if common_lines:
-                tf.is_proven = True
-                tf.proof_source = f"E-Graph 構造解析 (同一性からの帰結: {list(common_lines)[0].name})"
-                return tf
-                
-        elif tf.fact_type == "Concyclic":
-            pts = [p.get_rep() for p in tf.objects] # 🌟 修正: 必ず get_rep で最新の代表元を取得！
-            common_circles = get_subentity(pts[0], "Circle")
-            for p in pts[1:]:
-                common_circles &= get_subentity(p, "Circle")
-            if common_circles:
-                tf.is_proven = True
-                tf.proof_source = f"E-Graph 構造解析 (共円の同定: {list(common_circles)[0].name})"
-                return tf
+        t_type = self.target_fact.fact_type
+        t_objs = [obj.get_rep() if hasattr(obj, 'get_rep') else obj for obj in self.target_fact.objects]
+        
+        if t_type == "Identical" and len(t_objs) == 2:
+            if t_objs[0] == t_objs[1]:
+                self.target_fact.is_proven = True
+                self.target_fact.proof_source = "E-Graph 同値類マージ (Identical)"
+                return self.target_fact
 
-        elif tf.fact_type == "Identical":
-            if tf.objects[0].get_rep() == tf.objects[1].get_rep():
-                tf.is_proven = True
-                tf.proof_source = f"E-Graph マージ確認 (対象: {tf.objects[0].name} ≡ {tf.objects[1].name})"
-                return tf
-                
+        if t_type in ["Collinear", "Concyclic"]:
+            target_entity = "Line" if t_type == "Collinear" else "Circle"
+            for n in self.env.nodes:
+                if not n.is_valid() or getattr(n.get_rep(), 'entity_type', '') != target_entity: continue
+                rep = n.get_rep()
+                pts = set()
+                for comp in getattr(rep, 'components', []):
+                    for sub in comp.subobjects:
+                        if getattr(sub.get_rep(), 'entity_type', '') == "Point": pts.add(sub.get_rep())
+                    for d in comp.definitions:
+                        for p in d.parents:
+                            if getattr(p.get_rep(), 'entity_type', '') == "Point": pts.add(p.get_rep())
+                            
+                # 🌟 FIX: MMPの数値予想(mmp_subobjects)の読み込みを完全に削除し、論理的な包含関係だけを信じる
+                if all(t in pts for t in t_objs):
+                    self.target_fact.is_proven = True
+                    self.target_fact.proof_source = f"E-Graph 構造的真実 ({target_entity}への包含)"
+                    return self.target_fact
+                    
+        t_obj_set = set(t_objs)
+        for fact in self.prover.facts:
+            if getattr(fact, 'is_proven', False) and fact.fact_type == t_type:
+                f_objs = [obj.get_rep() if hasattr(obj, 'get_rep') else obj for obj in fact.objects]
+                if t_type in ["Concyclic", "Collinear", "Identical"]:
+                    if set(f_objs) == t_obj_set: return fact
+                else:
+                    if f_objs == t_objs: return fact
         return None
 
-    def run(self, max_steps=100):
-        print(f"\n🔄 探索開始 (問題: {self.target_fact})")
-        self.focus_engine.set_target(self.target_fact)
-        
-        print("🔄 全結合シーディング (Universal Seeding) を実行中...")
-        from mmp_core import create_geo_entity
-        from logic_core import get_subentity
+    def run(self, max_time_seconds=60.0):
+        import time
         import itertools
+        from mmp_core import create_geo_entity
 
-        initial_points = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Point" and getattr(n, 'base_importance', 0.0) > 0.0]
-        
-        for p1, p2 in itertools.combinations(initial_points, 2):
-            common_lines = get_subentity(p1, "Line") & get_subentity(p2, "Line")
-            if not common_lines:
-                line_name = f"LineThroughPoints_{p1.name}_{p2.name}_(Seed)"
-                new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=line_name, env=self.env, importance=10.0)
-                
-                # 🌟 NEW: サイレントキラーを暴く
-                if new_line is None:
-                    err1 = getattr(p1, '_calc_err_trace', '')
-                    err2 = getattr(p2, '_calc_err_trace', '')
-                    print(f"🚨 [直線シード失敗] {line_name} が退化判定。原因1: {err1} / 原因2: {err2}")
+        print(f"\n🔄 探索開始 (問題: {self.target_fact}, 制限時間: {max_time_seconds}秒)")
+        start_time = time.time()
 
-        all_lines = [n for n in self.env.nodes if getattr(n, 'entity_type', '') == "Line" and getattr(n, 'base_importance', 0.0) > 0.0]
-        seed_dirs = []
-        for line in all_lines:
-            dir_name = f"Dir_{line.name}_(Seed)"
-            # 🌟 FIX 2: 生成するだけでOK！
-            d = create_geo_entity("DirectionOf", [line], name=dir_name, env=self.env, importance=10.0)
-            if d is not None:
-                seed_dirs.append(d)
+        # 🌟 NEW: ターゲット逆伝播 (目標図形に特大の熱を注入して探索を誘導)
+        if self.target_fact:
+            for obj in self.target_fact.objects:
+                if hasattr(obj, 'base_importance'):
+                    obj.base_importance += 20.0
 
-        for d1, d2 in itertools.combinations(seed_dirs, 2):
-            if hasattr(self.env, 'tester') and self.env.tester.is_canonical_angle_order(d1, d2):
-                ordered_pair = [d1, d2]
-            else:
-                ordered_pair = [d2, d1]
-                
-            # 🌟🌟🌟 これを追加して計算エラーの原因を暴く！ 🌟🌟🌟
-            ang_name = f"AnglePair_{ordered_pair[0].name}_{ordered_pair[1].name}_(Seed)"
-            a = create_geo_entity("AnglePair", ordered_pair, name=ang_name, env=self.env, importance=5.0)
+        print("▶ 初期状態のMMP大発見を実行中 (全有効図形を爆速テスト)...")
+        nodes_to_test = [n for n in list(self.env.nodes) if getattr(n, 'base_importance', 0.0) > 0.0 and getattr(n, 'entity_type', '') in ["Point", "Line", "Circle", "Angle", "Direction"]]
+        total_nodes = len(nodes_to_test)
+        for i, n in enumerate(nodes_to_test):
+            if i % 20 == 0 or i == total_nodes - 1:
+                print(f"  ... MMP計算進捗: {i+1} / {total_nodes} ノード完了")
+            self.env.tester.discover_all_mmp_relations(n, [])
+
+        print("🔄 並行ブラックボード推論を開始...")
+        for fact in self.prover.facts:
+            evt_type = self.EventType.NEW_CONJECTURE if getattr(fact, 'is_mmp_conjecture', False) else self.EventType.FACT_PROVEN
+            self.env.emit(evt_type, fact)
+
+        self.rule_engine.schedule_full_sweep()
+
+        while time.time() - start_time < max_time_seconds:
+            logic_start = time.time()
             
-            # 🌟 NEW: サイレントキラーを暴く
-            if a is None:
-                err1 = getattr(ordered_pair[0], '_calc_err_trace', '')
-                err2 = getattr(ordered_pair[1], '_calc_err_trace', '')
-                print(f"🚨 [角度シード失敗] {ang_name} が退化判定。原因1: {err1} / 原因2: {err2}")
-
-        for node in self.env.nodes:
-            if hasattr(node, 'add_heat'):
-                node.add_heat(10.0)
-                if node in self.focus_engine.scoring.heat_table:
-                    self.focus_engine.scoring.heat_table[node] += 10.0
-
-        print("🔄 初期推論 (Target Injection) を局所探索で実行中...")
-        self.focus_engine.run_until_stalled(
-            self.prover.theorems, 
-            max_steps=50, 
-            target_checker=self.check_target_reached
-        )
-
-        # この時点で証明が完了しているかチェック
-        proven_target = self.check_target_reached()
-        if proven_target:
-            print(f"🎉 🎉 🎉 証明完了！ (初期推論フェーズにて)")
-            print(f"最終結論: {proven_target.proof_source}")
-            print_proof_tree(proven_target)
-            self.prover.print_proof_trace()
-            return True
-
-        for step in range(1, max_steps + 1):
-
-            logger.debug(f"\n第{step}ステップ")
-            if step % 10 == 0: print(f"  ... Step {step}/{max_steps}")
+            # 🌟 FIX: matcher_budget を 1000 から 10000 に引き上げ、未処理の定理を詰まらせず一気に消化する
+            while (self.rule_engine.matcher_queue or self.rule_engine.prover_queue) and (time.time() - logic_start < 5.0):
+                self.rule_engine.run_parallel_loop(matcher_budget=10000)
             
-            self.agent.run_step()
             proven_target = self.check_target_reached()
-            
             if proven_target:
-                print(f"🎉 🎉 🎉 証明完了！ (Step: {step})")
-                print(f"最終結論: {proven_target}")
+                print(f"\n🎉 🎉 🎉 証明完了！ (Time: {time.time() - start_time:.1f}s)")
+                print(f"最終結論: {proven_target.proof_source}")
                 self.prover.print_proof_trace()
-                print_proof_tree(proven_target)
                 return True
-        return False
 
+            if not self.rule_engine.matcher_queue and not self.rule_engine.prover_queue:
+                print(f"\n⏳ [Time: {time.time()-start_time:.1f}s] ロジックがStallしました。ボトルネックを分析します...")
+                self.rule_engine.print_bottlenecks()
+                
+                if hasattr(self.rule_engine, 'construction_demands') and self.rule_engine.construction_demands:
+                    from mmp_core import create_geo_entity
+                    demands = list(self.rule_engine.construction_demands.keys())
+                    self.rule_engine.construction_demands.clear() # キューを空にする
+                    
+                    for demand_sig in demands:
+                        p1, p2 = list(demand_sig)
+                        print(f"  💡 [オンデマンド作図] 論理エンジンの要請により {p1.name} と {p2.name} を結ぶ直線を生成します")
+                        new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=f"Line_{p1.name}_{p2.name}_(Demand)", env=self.env, importance=10.0)
+                        if new_line:
+                            self.env.tester.discover_all_mmp_relations(new_line, [p1, p2])
+                            
+                    self.rule_engine.schedule_full_sweep()
+                else:
+                        # 🌟 FIX: 共円未結線フォールバック (双方向探査による完全版)
+                        found_fallback = False
+                        import itertools
+                        from mmp_core import create_geo_entity
+                        
+                        circle_groups = []
+                        # 1. 証明済みの事実から
+                        for fact in self.prover.facts:
+                            if fact.fact_type == "Concyclic" and getattr(fact, 'is_proven', False):
+                                pts = [p.get_rep() for p in fact.objects if hasattr(p, 'get_rep') and getattr(p.get_rep(), 'entity_type', '') == 'Point']
+                                if len(pts) >= 3: circle_groups.append(pts)
+                                
+                        # 2. 物理的な円オブジェクトから (双方向で確実に点を回収)
+                        for n in self.env.nodes:
+                            if n.is_valid() and getattr(n.get_rep(), 'entity_type', '') == 'Circle':
+                                c_rep = n.get_rep()
+                                pts_on_curve = set()
+                                comp = c_rep.get_best_component()
+                                if comp:
+                                    for sub in comp.subobjects:
+                                        if getattr(sub.get_rep(), 'entity_type', '') == 'Point': pts_on_curve.add(sub.get_rep())
+                                    for d in comp.definitions:
+                                        for p in d.parents:
+                                            if getattr(p.get_rep(), 'entity_type', '') == 'Point': pts_on_curve.add(p.get_rep())
+                                if hasattr(c_rep, 'mmp_subobjects'):
+                                    for sub in c_rep.mmp_subobjects:
+                                        if getattr(sub.get_rep(), 'entity_type', '') == 'Point': pts_on_curve.add(sub.get_rep())
+                                if len(pts_on_curve) >= 3: 
+                                    circle_groups.append(list(pts_on_curve))
+                                
+                        # 未結線の点を強制的に結ぶ
+                        for group in circle_groups:
+                            if found_fallback: break
+                            for p1, p2 in itertools.combinations(set(group), 2):
+                                c1, c2 = p1.get_best_component(), p2.get_best_component()
+                                common_lines = [obj for obj in (c1.subobjects & c2.subobjects) if getattr(obj, 'entity_type', '') == "Line"] if c1 and c2 else []
+                                if not common_lines:
+                                    print(f"  💡 [フォールバック作図] 共円グループ内の未結線 {getattr(p1, 'name', str(p1))} と {getattr(p2, 'name', str(p2))} を結ぶ直線を生成します")
+                                    new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=f"Line_{getattr(p1, 'name', str(p1))}_{getattr(p2, 'name', str(p2))}_(Fallback)", env=self.env, importance=10.0)
+                                    if new_line:
+                                        self.env.tester.discover_all_mmp_relations(new_line, [p1, p2])
+                                        self.rule_engine.schedule_full_sweep()
+                                    found_fallback = True
+                                    break
+                                    
+                        if not found_fallback:
+                            print("  -> 要求がなく、共円の未結線もないため、MCTSで補助線を探索中...")
+                            self.agent.run_step(num_simulations=10)
+                
+        print("\n⏳ タイムアウト: 指定された時間内に証明できませんでした。")
+        return False
 
 def analyze_node_utility(env, prover):
     """E-Graph内のノードの「真の貢献度」をプロファイリングする"""
@@ -505,58 +530,48 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # ==========================================
-    # 🌟 NEW: 依存関係の明示的な注入 (Dependency Injection)
+    # 🌟 依存関係の構築と仮定の登録
     # ==========================================
-    # 探索エンジン(HybridEngine)を作る前に、Prover と Tester を作って env に組み込む！
-    # ※インポートが上部にある場合はここは不要ですが、念のため記載しています
-    from proof_manager import LogicProver
-    from mmp_tester import MMPTester
-    from logic_core import UniversalRuleEngine
-    
     prover = LogicProver(env, THEOREMS)
+
+    # 🌟 FIX: 問題で与えられた「仮定」を、確実に証明済みの事実として登録する！
+    if initial_facts:
+        for fact in initial_facts:
+            fact.is_proven = True
+            fact.proof_source = "Given (仮定)"
+            if fact not in prover.facts:
+                prover.facts.append(fact)
+
     tester = MMPTester(env, all_vars, prover)
-    env.tester = tester  # 🎯 ここで土台(env)に電卓(tester)をセット！
+    env.tester = tester  # 🎯 土台(env)に電卓(tester)をセット
 
     # ==========================================
     # 2. エンジンの初期化
     # ==========================================
     engine = HybridEngine(env, all_vars, target_fact, THEOREMS)
     
-    # HybridEngine 内部で古いインスタンスが作られないよう、同じものを向かせる
+    # ProverとTesterをエンジン全体に正しく行き渡らせる
     engine.prover = prover
     engine.tester = tester
-    if hasattr(engine, 'agent'):
-        engine.agent.tester = tester
-        
-    # rule_engine の取得またはセット
     if hasattr(engine, 'rule_engine'):
         engine.rule_engine.prover = prover
-        base_engine = engine.rule_engine
-    else:
-        base_engine = UniversalRuleEngine(env, prover)
-        engine.rule_engine = base_engine
+    if hasattr(engine, 'agent'):
+        engine.agent.tester = tester
 
     # ==========================================
     # 3. 実行フェーズ
     # ==========================================
-    print("▶ 初期状態のMMP大発見を実行中...")
-    for n in list(env.nodes):
-        if getattr(n, 'entity_type', '') in ["Point", "Line"]:
-            engine.agent.tester.discover_all_mmp_relations(n, [])
-
-    # 🌟 FIX: ここにあった手動の FocusSearchEngine の作成と実行は削除！
-    # HybridEngine の run() が、シーディング「後」に最も効果的なタイミングでやってくれます。
-
     print("\n=== ハイブリッド探索 (Seeding + 局所探索 + MCTS) を開始 ===")
-    # 🌟 探索のすべてを HybridEngine に託す！
-    # max_steps はシムソンの定理の深さに合わせて、まずは 50〜100 くらいに設定するのがオススメです
-    engine.run(max_steps=2)
+    
+    # タイムベースの実行ループを呼び出し（デフォルト60秒制限）
+    engine.run(max_time_seconds=30.0)
 
-    # 結果の分析 (engine.prover ではなく直接 prover を渡すことで安全に)
-    try:
-        analyze_node_utility(env, prover)
-    except NameError:
-        pass # もし analyze_node_utility が未インポートならスキップ
+    # 結果の分析
+    #try:
+    #    analyze_node_utility(env, prover)
+    #except NameError:
+    #    pass
+    
     def dump_egraph(env):
         print("\n=== 🧠 E-Graph 内部状態ダンプ ===")
         valid_nodes = [n for n in env.nodes if n.is_valid()]

@@ -77,10 +77,15 @@ class GeoEntity:
     def get_rep(self):
         curr = self
         path = []
+        # 🌟 FIX: 万が一の循環参照によるフリーズを確実に防ぐセーフティネット
+        visited = set()
         while curr._parent != curr:
+            if curr in visited:
+                break
+            visited.add(curr)
             path.append(curr)
             curr = curr._parent
-        # 経路圧縮: 走破した全ノードを直接根に繋ぎ直す (爆速化)
+            
         for node in path:
             node._parent = curr
         return curr
@@ -109,10 +114,11 @@ class GeoEntity:
         # 🌟 2. 既存の数値データ・作図履歴・重要度をターゲットに吸収させる
         root_target.merge_numerical(root_self)
         
-        # 🌟 3. 【修正】参照元の clear() は絶対に行わない！ (ターゲット側のデータまで消滅するため)
-        # 変数の参照先を新しい空リスト/セットに置き換えるだけに留める
+        # 🌟 3. 変数の参照先を新しい空リスト/セットに置き換えるだけに留める
         root_self.components = []
         root_self.mmp_subobjects = set()
+        root_self.shape_members = {}      # 🌟 NEW: 形状メンバーの参照を切る
+        root_self.associated_facts = []   # 🌟 NEW: 関連事実の参照を切る
         
         # 🌟 4. 計算キャッシュのクリア
         if hasattr(root_self, '_calc_cache'):
@@ -333,80 +339,57 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
     def_type = definition.def_type
     parents = definition.parents
 
+    # 🌟 イベントを発火させるための準備
+    from logic_core import EventType
+
     if def_type == "LineThroughPoints":
         link_logical_incidence(parents[0], new_entity)
         link_logical_incidence(parents[1], new_entity)
-    elif def_type == "Intersection":
+
+        dir_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
+        create_geo_entity("DirectionOf", [new_entity], name=dir_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
+        
+    elif def_type in ["Intersection", "OtherLineCircleIntersection", "CirclesIntersection"]:
         link_logical_incidence(new_entity, parents[0])
         link_logical_incidence(new_entity, parents[1])
 
-    elif def_type == "PerpendicularLine":
+    elif def_type in ["PerpendicularLine", "ParallelLine"]:
         ln, pt = parents[0], parents[1]
-        link_logical_incidence(pt, new_entity)
-        if env is not None:
-            if hasattr(env, 'add_right_angle'): 
-                pass
+        link_logical_incidence(pt, new_entity) 
+        
+        dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
+        dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
+        
+        dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
+        dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
+        
+        if getattr(new_entity, 'base_importance', 1.0) > 0.0:
+            if def_type == "PerpendicularLine":
+                env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir1, dir2]))
+                env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir2, dir1]))
+                print(f"  🔗 [Trivial] {new_entity.name}作図により直角をE-Graphに登録しました")
+                if hasattr(env, 'emit'): env.emit(EventType.NODE_MERGED, None)
             else: 
-                dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
-                dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
-                
-                # 🌟 修正: 親の importance を引き継がせ、ゴーストの派生図形も確実にゴーストにする
-                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
-                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
-                
-                # 🌟 修正: ゴーストの場合はグローバル定数（直角）を汚染させない
-                if getattr(new_entity, 'base_importance', 1.0) > 0.0:
-                    env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir1, dir2]))
-                    env.right_angle.get_rep().components[0].definitions.add(Definition("AnglePair", [dir2, dir1]))
-                
-    elif def_type == "ParallelLine":
-        ln, pt = parents[0], parents[1]
-        link_logical_incidence(pt, new_entity)
-        if env is not None:
-            if hasattr(env, 'add_right_angle'): 
-                pass
-            else: 
-                dir1_name = f"Dir_{getattr(ln, 'name', 'Unknown')}_(Auto)"
-                dir2_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
-                
-                # 🌟 ゴーストの重要度を引き継いで派生図形を作る
-                dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
-                dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
-                
-                # 🌟 本物の図形のときだけ、グローバルな平行（0度）ノードに書き込む
-                if getattr(new_entity, 'base_importance', 1.0) > 0.0:
-                    rep1, rep2 = dir1.get_rep(), dir2.get_rep()
-                    if rep1 != rep2:
-                        env.merge_entities_logically(rep1, rep2)
+                rep1, rep2 = dir1.get_rep(), dir2.get_rep()
+                if rep1 != rep2:
+                    env.merge_entities_logically(rep1, rep2)
+                    print(f"  🔗 [Trivial] {new_entity.name}作図により方向 {rep1.name} ≡ {rep2.name} をマージしました")
+                    if hasattr(env, 'emit'): env.emit(EventType.NODE_MERGED, None)
                     
     elif def_type == "TangentLine":
         circle, pt = parents[0], parents[1]
-        link_logical_incidence(new_entity, circle) # Connected(L, C)
-        link_logical_incidence(pt, new_entity)     # Connected(A, L)
-        link_logical_incidence(pt, circle)         # Connected(A, C)
+        link_logical_incidence(new_entity, circle)
+        link_logical_incidence(pt, new_entity)
+        link_logical_incidence(pt, circle)
         
     elif def_type == "Circumcircle":
         for p in parents[:3]: link_logical_incidence(p, new_entity)
-        
-    elif def_type == "OtherLineCircleIntersection":
-        ln, circ, pt_exclude = parents[0], parents[1], parents[2]
-        link_logical_incidence(new_entity, ln)
-        link_logical_incidence(new_entity, circ)
-        
-    elif def_type == "CirclesIntersection":
-        c1, c2, pt_exclude = parents[0], parents[1], parents[2]
-        link_logical_incidence(new_entity, c1)
-        link_logical_incidence(new_entity, c2)
 
-    # ==========================================
-    # 🌟 修正: 重複していた Midpoint を1つに統合！
-    # ==========================================
     elif def_type == "Midpoint":
         A, B = parents[0], parents[1]
         M = new_entity
         c1, c2 = A.get_best_component(), B.get_best_component()
         
-        # 1. A, B を通る直線を取得 (なければ裏で作図する)
         common_lines = []
         if c1 and c2:
             common_lines = [obj for obj in (c1.subobjects & c2.subobjects) if getattr(obj, 'entity_type', '') == "Line"]
@@ -414,20 +397,17 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
         if not common_lines and env is not None:
             line_name = f"Line_{getattr(A, 'name', 'A')}_{getattr(B, 'name', 'B')}_(Auto)"
             line_AB = create_geo_entity("LineThroughPoints", [A, B], name=line_name, env=env)
-            if line_AB: # 退化していなければ
+            if line_AB:
                 line_AB.importance = 0.5
-                env.nodes.append(line_AB)
                 A.get_rep().mmp_subobjects.add(line_AB)
                 B.get_rep().mmp_subobjects.add(line_AB)
                 common_lines = [line_AB]
 
-        # 2. 中点 M をその直線にリンク (これで A, M, B が同一直線に所属する)
         for ln in common_lines:
             link_logical_incidence(M, ln)
 
-        # 3. 作図と同時に「AM/MB = 1」をE-Graphに直結する
         if hasattr(env, 'merge_entities_logically'):
-            from mmp_math import ModInt # 念のためインポート
+            from mmp_math import ModInt
             val_1 = ModInt(1)
             const_1 = None
             for n in env.nodes:
@@ -459,14 +439,10 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
             c_rep = const_1.get_rep()
             r_rep = ratio_ent.get_rep()
             
-            # 🌟 NEW: ここでもゴーストの場合は「比率=1」のグローバル定数へのマージを遮断する
             if c_rep != r_rep and getattr(new_entity, 'base_importance', 1.0) > 0.0:
                 env.merge_entities_logically(c_rep, r_rep)
-
-    # 🌟 FIX: 最後の汎用リンク処理のインデントと安全対策
-    for p in parents:
-        if hasattr(p, 'get_rep'): # GeoEntityなどの図形オブジェクトであれば
-            link_logical_incidence(p, new_entity)
+                # 🌟 マージが発生したことをエンジンに通知
+                if hasattr(env, 'emit'): env.emit(EventType.NODE_MERGED, None)
 
 
 # ==========================================
@@ -563,7 +539,11 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
 
     # 5. エンティティの生成
     new_entity = GeoEntity(entity_type, name)
-    new_entity.base_importance = base_imp 
+
+    if importance is not None:
+        new_entity.base_importance = importance
+    else:
+        new_entity.base_importance = base_imp
     
     new_def = Definition(def_type, parents, naive_degree, depth)
     new_entity.components.append(LogicalComponent(initial_def=new_def))
@@ -571,7 +551,10 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
     # ==========================================
     # 退化テスト（試し斬り）
     # ==========================================
-    if env is not None and getattr(env, 'all_vars', None) and def_type not in ["Point", "Given", "Free", "Constant"]:
+    # 🌟 FIX: AnglePair と DirectionOf は論理的に必ず存在するため、計算エラーによるキャンセルを許さない
+    skip_test_types = ["Point", "Given", "Free", "Constant", "GivenPoint", "FreePoint", "AnglePair", "DirectionOf"]
+    
+    if env is not None and getattr(env, 'all_vars', None) and def_type not in skip_test_types:
         from mmp_math import ModInt
         import numpy as np
         
@@ -582,7 +565,6 @@ def create_geo_entity(def_type: str, parents: List[Any], name: str = "", env=Non
         if not test_val:
             import logging
             logger = logging.getLogger("GeometryProver")
-            # 🌟 NEW: なぜ計算に失敗したのか、エラーの証拠を吐き出させる
             reason = getattr(new_entity, '_calc_err_trace', '理由不明')
             logger.debug(f"    🚫 [生成ブロック] {name} ({def_type}) は生成をキャンセルしました。理由: {reason}")
             return None

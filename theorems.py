@@ -108,7 +108,9 @@ THEOREM_CONVERSE_CYCLIC= TheoremDef(
     ]
 )
 
-# --- 直線の一致条件 ---
+# ==========================================
+# 定理: 直線の一致条件 (Connectedによる堅牢化版)
+# ==========================================
 THEOREM_IDENTICAL_LINES = TheoremDef(
     name="直線の一致条件",
     entities={"P": "Point", "L1": "Line", "L2": "Line", "Dir": "Direction"},
@@ -118,8 +120,9 @@ THEOREM_IDENTICAL_LINES = TheoremDef(
         FactPattern("DefinedBy", ["L2", "Dir"], target_type="DirectionOf"),
         DistinctPattern(["L1", "L2"]),
         
-        # 2. その2直線が共通の交点を持つか確認
-        FactPattern("CommonEntity", ["L1", "L2", "P"], target_type="Point")
+        # 2. 🌟 FIX: 脆い CommonEntity を廃止し、E-Graphの絶対的リンク(Connected)を使って共通点Pを探す
+        FactPattern("Connected", ["P", "L1"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["P", "L2"], target_type="Line", sub_type="Point")
     ],
     conclusions=[
         FactTemplate("Identical", ["L1", "L2"], target_type="Line")
@@ -585,12 +588,39 @@ THEOREM_ALTERNATE_SEGMENT_CONVERSE = TheoremDef(
 )
 
 # ==========================================
+# 定理: 有向角の交替律 (Angle Permutation)
+# ==========================================
+# ∠(D1, D2) ≡ ∠(D3, D4) ならば、∠(D1, D3) ≡ ∠(D2, D4) が成り立つ
+THEOREM_ANGLE_PERMUTATION = TheoremDef(
+    name="有向角の交替律",
+    entities={
+        "D1": "Direction", "D2": "Direction", "D3": "Direction", "D4": "Direction",
+        "Ang12": "Angle", "Ang34": "Angle",
+        "Ang13": "Angle", "Ang24": "Angle"
+    },
+    patterns=[
+        FactPattern("Identical", ["Ang12", "Ang34"], target_type="Angle"),
+        FactPattern("DefinedBy", ["D1", "D2", "Ang12"], target_type="AnglePair", allow_flip=True, flip_group="Perm1"),
+        FactPattern("DefinedBy", ["D3", "D4", "Ang34"], target_type="AnglePair", allow_flip=True, flip_group="Perm1"),
+        DistinctPattern(["D1", "D2", "D3", "D4"]),
+        
+        # 内側同士、外側同士の新しい角度ペアを要求
+        FactPattern("DefinedBy", ["D1", "D3", "Ang13"], target_type="AnglePair", allow_flip=True, flip_group="Perm2"),
+        FactPattern("DefinedBy", ["D2", "D4", "Ang24"], target_type="AnglePair", allow_flip=True, flip_group="Perm2")
+    ],
+    constructions=[],
+    conclusions=[
+        FactTemplate("Identical", ["Ang13", "Ang24"], target_type="Angle")
+    ]
+)
+
+# ==========================================
 # 🌟 登録リスト
 # ==========================================
 THEOREMS = [
     THEOREM_CYCLIC_ANGLES,
     THEOREM_CONVERSE_CYCLIC,
-    THEOREM_ALTERNATE_SEGMENT,           # 🌟 追加
+    THEOREM_ALTERNATE_SEGMENT,
     THEOREM_ALTERNATE_SEGMENT_CONVERSE,
     THEOREM_IDENTICAL_LINES,
     THEOREM_ANGLES_TO_DIR_R,
@@ -604,5 +634,6 @@ THEOREMS = [
     THEOREM_ISOSCELES_CONVERSE,
     THEOREM_PERP_BISECTOR_CONVERSE,
     THEOREM_UNIQUE_INTERSECTION,
-    THEOREM_DIRECTED_ANGLE_ADDITION 
+    THEOREM_DIRECTED_ANGLE_ADDITION,
+    THEOREM_ANGLE_PERMUTATION
 ]

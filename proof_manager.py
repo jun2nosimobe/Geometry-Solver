@@ -43,6 +43,7 @@ class LogicProver:
         self.theorems = theorems
         self.trace_log = [] 
         self.facts = []
+        self.entities_map = {t.name: t.entities for t in theorems}
         
     def record_trace(self, theorem_name, conclusion_str):
         log_entry = f"{conclusion_str} <= {theorem_name}"

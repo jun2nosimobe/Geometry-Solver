@@ -67,6 +67,14 @@ def setup_problem(env):
 
     # 目標は D, E, F が一直線上にあること
     target_fact = Fact("Collinear", [D, E, F])
+
+    # 🌟 FIX: 問題の前提条件を論理事実(Fact)として明記し、Proverに渡す
+    initial_facts = [
+        Fact("Collinear", [B, D, C]),
+        Fact("Collinear", [C, E, A]),
+        Fact("Collinear", [A, F, B]),
+        Fact("Concyclic", [A, B, C, P])
+    ]
     
     # 全てE-Graphに書き込んだため、初期Factリストは空で返す
-    return all_vars, target_fact, []
+    return all_vars, target_fact, initial_facts

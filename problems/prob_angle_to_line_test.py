@@ -42,16 +42,13 @@ def setup_problem(env):
     Ang_A = create_geo_entity("AnglePair", [DirPA, DirPM], "Ang_A", env)
     Ang_B = create_geo_entity("AnglePair", [DirPB, DirPM], "Ang_B", env)
 
-    # 🌟 「角度が等しい」という状態を E-Graph に強制的に注入する
-    if Ang_A and Ang_B:
-        env.merge_entities_logically(
-            Ang_A.get_rep(), 
-            Ang_B.get_rep(), 
-            force_bypass_verify=True, 
-            reason_fact="[テスト用] 角度の強制一致"
-        )
+
+        # 🌟 追加: 「角度が等しい」という前提条件を論理事実(Fact)として明記する
+    initial_facts = [
+        Fact("Identical", [Ang_A, Ang_B])
+    ]
 
     # ターゲット: 角度の一致から「直線PAと直線PBが同一であること」が証明されるか？
     target_fact = Fact("Identical", [LinePA, LinePB])
 
-    return all_vars, target_fact, []
+    return all_vars, target_fact, initial_facts
