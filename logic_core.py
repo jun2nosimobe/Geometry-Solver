@@ -118,29 +118,24 @@ class FactPattern(Pattern):
     def _match_identical(self, current_bind, prover, env, search_nodes):
         v1, v2 = self.args[0], self.args[1]
         if v1 in current_bind and v2 in current_bind:
-            if current_bind[v1].get_rep() == current_bind[v2].get_rep():
-                yield current_bind
+            if current_bind[v1].get_rep() == current_bind[v2].get_rep(): yield current_bind
         elif v1 in current_bind or v2 in current_bind:
             bound_var, unbound_var = (v1, v2) if v1 in current_bind else (v2, v1)
             target_rep = current_bind[bound_var].get_rep()
             for n in search_nodes:
-                if n.get_rep() == target_rep and n.is_valid():
-                    yield from self._try_bind_and_yield(current_bind, {unbound_var: n})
+                if n.get_rep() == target_rep and n.is_valid(): yield from self._try_bind_and_yield(current_bind, {unbound_var: n})
         else:
             nodes = [n for n in search_nodes if getattr(n.get_rep(), 'entity_type', '') == self.target_type and n.is_valid()]
-            for rep in set(n.get_rep() for n in nodes):
-                yield from self._try_bind_and_yield(current_bind, {v1: rep, v2: rep})
-
+            for rep in set(n.get_rep() for n in nodes): yield from self._try_bind_and_yield(current_bind, {v1: rep, v2: rep})
+            
         yield from self._match_generic(current_bind, prover, env, search_nodes)
         
-        # フリップ等価性のチェック (Identical特有の遅延バインド)
         if self.fact_type == "Identical" and len(self.args) == 2:
             for n in search_nodes:
                 if not n.is_valid(): continue
                 rep = n.get_rep()
                 if getattr(rep, 'entity_type', '') == "Angle":
                     for c in getattr(rep, 'components', []):
-                        # 🌟 FIX: RuntimeErrorを防ぐため list() でスナップショットを取る
                         for d in list(c.definitions):
                             if d.def_type == "AnglePair" and len(d.parents) == 2:
                                 d1, d2 = d.parents[0].get_rep(), d.parents[1].get_rep()
@@ -148,7 +143,6 @@ class FactPattern(Pattern):
                                     if not n2.is_valid() or getattr(n2.get_rep(), 'entity_type', '') != "Angle": continue
                                     if n2.get_rep() == rep: continue
                                     for c2 in getattr(n2.get_rep(), 'components', []):
-                                        # 🌟 FIX: ここも list() で保護
                                         for d_flip in list(c2.definitions):
                                             if d_flip.def_type == "AnglePair" and len(d_flip.parents) == 2:
                                                 if d_flip.parents[0].get_rep() == d2 and d_flip.parents[1].get_rep() == d1:
@@ -189,17 +183,13 @@ class FactPattern(Pattern):
                     yield from self._try_bind_and_yield(current_bind, new_binds)
 
     def _match_defined_by(self, current_bind, prover, env, search_nodes):
-        arg_vars = self.args[:-1]
-        result_var = self.args[-1]
-        
+        arg_vars = self.args[:-1]; result_var = self.args[-1]
         unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
         is_unordered = (self.target_type in unordered_types) or (self.sub_type == "Unordered")
         should_permute = is_unordered or getattr(self, 'allow_flip', False)
         entity_map = {
-            "AnglePair": "Angle", "DirectionOf": "Direction",
-            "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
-            "Midpoint": "Point", "Intersection": "Point", "CirclesIntersection": "Point",
-            "LineThroughPoints": "Line", "Circumcircle": "Circle",
+            "AnglePair": "Angle", "DirectionOf": "Direction", "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
+            "Midpoint": "Point", "Intersection": "Point", "CirclesIntersection": "Point", "LineThroughPoints": "Line", "Circumcircle": "Circle",
             "PerpendicularLine": "Line", "ParallelLine": "Line"
         }
         actual_entity_type = entity_map.get(self.target_type, self.target_type)
@@ -245,13 +235,11 @@ class FactPattern(Pattern):
             
         for node in valid_nodes:
             for comp in getattr(node.get_rep(), 'components', []):
-                # 🌟 FIX: RuntimeErrorを防ぐため list() でスナップショットを取る
                 for d in list(comp.definitions):
                     if d.def_type == self.target_type and len(d.parents) == len(arg_vars):
                         reps_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
                         if any(not getattr(p, 'is_valid', lambda: True)() for p in reps_parents): continue
                         perms = list(itertools.permutations(reps_parents)) if should_permute else [reps_parents]
-                        
                         for perm in perms:
                             new_binds = {result_var: node}
                             if self.target_type == "AnglePair" and len(arg_vars) == 2:
@@ -265,8 +253,6 @@ class FactPattern(Pattern):
                                 if indiv_key in current_bind and current_bind[indiv_key] != is_flipped: continue
                                 new_binds[indiv_key] = is_flipped
                             for v_name, p_obj in zip(arg_vars, perm): new_binds[v_name] = p_obj
-                            
-                            # この yield 中に別の角度が作られても、リストのコピーを回しているので安全
                             yield from self._try_bind_and_yield(current_bind, new_binds)
 
     def _match_common_entity(self, current_bind, prover, env, search_nodes):
@@ -283,10 +269,6 @@ class FactPattern(Pattern):
                         for p in d.parents:
                             rep_p = p.get_rep()
                             if getattr(rep_p, 'entity_type', '') == self.target_type and rep_p.is_valid(): pts.add(rep_p)
-                if hasattr(node, 'mmp_subobjects'):
-                    for sub in node.mmp_subobjects:
-                        rep_sub = sub.get_rep()
-                        if getattr(rep_sub, 'entity_type', '') == self.target_type and rep_sub.is_valid(): pts.add(rep_sub)
                 return pts
             common_pts = get_sub_points(p1_node) & get_sub_points(p2_node)
             for pt in common_pts: yield from self._try_bind_and_yield(current_bind, {child_var: pt})
@@ -315,10 +297,6 @@ class FactPattern(Pattern):
                         for p in d.parents:
                             rep_p = p.get_rep()
                             if getattr(rep_p, 'entity_type', '') == "Point" and rep_p.is_valid(): pts_on_curve.add(rep_p)
-                if hasattr(curve, 'mmp_subobjects'):
-                    for sub in curve.mmp_subobjects:
-                        rep_sub = sub.get_rep()
-                        if getattr(rep_sub, 'entity_type', '') == "Point" and rep_sub.is_valid(): pts_on_curve.add(rep_sub)
                 pts_on_curve = list(pts_on_curve)
                 if len(pts_on_curve) >= len(self.args):
                     import itertools
@@ -332,11 +310,8 @@ class FactPattern(Pattern):
             if getattr(fact, 'is_proven', False):
                 if fact.fact_type == self.fact_type:
                     yield from self._try_bind_and_yield(current_bind, {k: v for k, v in zip(self.args, fact.objects)})
-                    
         if env is not None:
-            # 🌟 FIX: 探索中に env.nodes が増えて無限ループになるのを防ぐため、スナップショットを取る
             safe_nodes = list(env.nodes)
-            
             if self.fact_type == "Connected" and len(self.args) == 2:
                 c_var, p_var = self.args[0], self.args[1]
                 for n in safe_nodes:
@@ -351,7 +326,6 @@ class FactPattern(Pattern):
                                 for p in d.parents:
                                     if getattr(p.get_rep(), 'entity_type', '') == "Point": pts.add(p.get_rep())
                         for pt in pts: yield from self._try_bind_and_yield(current_bind, {c_var: pt, p_var: rep})
-
             elif self.fact_type in ["Collinear", "Concyclic"]:
                 target_type = "Line" if self.fact_type == "Collinear" else "Circle"
                 for n in safe_nodes:
@@ -368,7 +342,6 @@ class FactPattern(Pattern):
                         import itertools
                         for perm in itertools.permutations(list(pts), len(self.args)):
                             yield from self._try_bind_and_yield(current_bind, {k: v for k, v in zip(self.args, perm)})
-                            
             elif self.fact_type == "Identical" and len(self.args) == 2:
                 for n in safe_nodes:
                     if not n.is_valid(): continue
@@ -376,29 +349,31 @@ class FactPattern(Pattern):
                     yield from self._try_bind_and_yield(current_bind, {self.args[0]: rep, self.args[1]: rep})
                     if getattr(rep, 'entity_type', '') == "Angle":
                         for c in getattr(rep, 'components', []):
-                            for d in list(c.definitions): 
+                            for d in list(c.definitions):
                                 if d.def_type == "AnglePair" and len(d.parents) == 2:
                                     d1, d2 = d.parents[0].get_rep(), d.parents[1].get_rep()
-                                    for n2 in safe_nodes:  # 🌟 ここもスナップショットを使用
+                                    for n2 in safe_nodes:
                                         if not n2.is_valid() or getattr(n2.get_rep(), 'entity_type', '') != "Angle": continue
                                         if n2.get_rep() == rep: continue
                                         for c2 in getattr(n2.get_rep(), 'components', []):
-                                            for d_flip in list(c2.definitions): 
+                                            for d_flip in list(c2.definitions):
                                                 if d_flip.def_type == "AnglePair" and len(d_flip.parents) == 2:
                                                     if d_flip.parents[0].get_rep() == d2 and d_flip.parents[1].get_rep() == d1:
                                                         yield from self._try_bind_and_yield(current_bind, {self.args[0]: rep, self.args[1]: n2.get_rep()})
+
 class EventType(Enum):
     NEW_CONJECTURE = 1
     FACT_PROVEN = 2
     NODE_MERGED = 3
 
 class PendingMatch:
-    def __init__(self, theorem_name, bind, required_facts, constructions, conclusions):
-        self.theorem_name = theorem_name
+    def __init__(self, theorem, bind, required_facts):
+        self.theorem = theorem
+        self.theorem_name = theorem.name
         self.bind = bind.copy()
         self.required_facts = required_facts
-        self.constructions = constructions
-        self.conclusions = conclusions
+        self.constructions = theorem.constructions
+        self.conclusions = theorem.conclusions
 
     def get_unmet_conditions(self, env):
         unmet = []
@@ -445,9 +420,6 @@ class PendingMatch:
                         for d in comp.definitions:
                             for p in d.parents:
                                 if getattr(p.get_rep(), 'entity_type', '') == "Point": pts_on_curve.add(p.get_rep())
-                    if hasattr(c_rep, 'mmp_subobjects'):
-                        for sub in c_rep.mmp_subobjects:
-                            if getattr(sub.get_rep(), 'entity_type', '') == "Point": pts_on_curve.add(sub.get_rep())
                     if all(pt in pts_on_curve for pt in reps):
                         found = True; break
                 if found: continue
@@ -461,9 +433,6 @@ class PendingMatch:
                         sub_reps = [s.get_rep() for s in comp.subobjects]
                         parent_reps = [p.get_rep() if hasattr(p, 'get_rep') else p for d in comp.definitions for p in d.parents]
                         if child in sub_reps or child in parent_reps: connected = True
-                    if hasattr(parent, 'mmp_subobjects'):
-                        mmp_reps = [s.get_rep() for s in parent.mmp_subobjects]
-                        if child in mmp_reps: connected = True
                     comp_c = child.get_best_component() if hasattr(child, 'get_best_component') else None
                     if comp_c:
                         for d in comp_c.definitions:
@@ -527,15 +496,17 @@ class ParallelBlackboardEngine:
                 else:
                     desc = str(f)
                 unmet_desc.append(desc)
-            
-            # 🌟 究極のデバッグツール: 空欄を許さず、異常を検知する
             if not unmet_desc:
                 print(f"    [{i+1}] ⚠️ 異常検知: {pm.theorem_name} はis_ready=Falseなのに待機理由が見つかりません。")
             else:
                 print(f"    [{i+1}] {pm.theorem_name} は次の証明を待機中: {', '.join(unmet_desc)}")
 
     def _is_conclusion_already_true(self, conc, bind):
-        reps = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in conc.args]
+        try:
+            reps = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in conc.args]
+        except (KeyError, TypeError):
+            return False
+
         if conc.fact_type == "Identical" and len(reps) == 2:
             if reps[0] == reps[1]: return True
             if getattr(reps[0], 'entity_type', '') == "Angle" and getattr(reps[1], 'entity_type', '') == "Angle":
@@ -569,9 +540,6 @@ class ParallelBlackboardEngine:
                     for d in comp.definitions:
                         for p in d.parents:
                             if getattr(p.get_rep(), 'entity_type', '') == "Point": pts_on_curve.add(p.get_rep())
-                if hasattr(c_rep, 'mmp_subobjects'):
-                    for sub in c_rep.mmp_subobjects:
-                        if getattr(sub.get_rep(), 'entity_type', '') == "Point": pts_on_curve.add(sub.get_rep())
                 if all(pt in pts_on_curve for pt in reps): return True
         elif conc.fact_type == "Connected" and len(reps) == 2:
             child, parent = reps[0], reps[1]
@@ -579,9 +547,6 @@ class ParallelBlackboardEngine:
                 sub_reps = [s.get_rep() for s in comp.subobjects]
                 parent_reps = [p.get_rep() if hasattr(p, 'get_rep') else p for d in comp.definitions for p in d.parents]
                 if child in sub_reps or child in parent_reps: return True
-            if hasattr(parent, 'mmp_subobjects'):
-                mmp_reps = [s.get_rep() for s in parent.mmp_subobjects]
-                if child in mmp_reps: return True
             for comp_c in getattr(child, 'components', []):
                 for d in comp_c.definitions:
                     if parent in [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]: return True
@@ -601,17 +566,18 @@ class ParallelBlackboardEngine:
         for theorem in self.prover.theorems:
             if not any(hasattr(p, 'fact_type') and p.fact_type == fact.fact_type for p in theorem.patterns): continue
             gen = self._evaluate_patterns_with_seed_gen(theorem.name, theorem.patterns, fact)
-            heapq.heappush(self.matcher_queue, (priority, TaskCounter.next(), gen, theorem.name))
+            heapq.heappush(self.matcher_queue, (priority, TaskCounter.next(), gen, theorem))
 
     def schedule_full_sweep(self):
         import heapq
         import logging
         logger = logging.getLogger("GeometryProver")
         
-        # 🌟 FIX: 古いスナップショット(記憶)を持ったままのタスクが残っているなら、全て破棄して最新の状態でリセットする！
+        # 🌟 FIX: ジェネレータの「古い記憶(ローカル変数)」による見落としを防ぐため、
+        # E-Graphが更新されたら、待機中の古い全探索タスクを全て破棄して完全にリセットする！
         new_queue = []
         for item in self.matcher_queue:
-            if item[0] != 0:  # 優先度0(Full Sweep)以外の個別タスクだけを残す
+            if item[0] != 0:  # 優先度0(Full Sweep)以外の高優先度タスクは安全のため残す
                 new_queue.append(item)
                 
         self.matcher_queue = new_queue
@@ -621,7 +587,8 @@ class ParallelBlackboardEngine:
         
         for theorem in self.prover.theorems:
             gen = self._evaluate_patterns_dfs_wrapper(theorem.name, theorem.patterns, {})
-            heapq.heappush(self.matcher_queue, (0, TaskCounter.next(), gen, theorem.name))
+            # 🌟 FIX: theorem.name ではなく、theorem オブジェクトそのものを渡す(名前被りバグ防止)
+            heapq.heappush(self.matcher_queue, (0, TaskCounter.next(), gen, theorem))
 
     def run_parallel_loop(self, matcher_budget=100000):
         applied_anything = False
@@ -686,17 +653,13 @@ class ParallelBlackboardEngine:
         if not self.matcher_queue: return False
         calls = 0
         applied = False  
-        # 🌟 FIX: マッチング開始時のE-Graphのノード数を記録しておく
         initial_node_count = len(self.env.nodes)
         
         while self.matcher_queue and calls < budget:
-            priority, task_id, gen, theorem_name = heapq.heappop(self.matcher_queue)
+            priority, task_id, gen, theorem = heapq.heappop(self.matcher_queue)
             try:
                 bind = next(gen)
                 calls += 1
-                
-                theorem = next((t for t in self.prover.theorems if t.name == theorem_name), None)
-                if not theorem: continue
                 
                 type_ok = True
                 for k, v in bind.items():
@@ -704,13 +667,11 @@ class ParallelBlackboardEngine:
                         expected_type = theorem.entities[k]
                         actual_type = getattr(v, 'entity_type', '')
                         if actual_type != expected_type:
-                            if expected_type == "Angle" and actual_type == "Direction":
-                                pass
-                            else:
-                                type_ok = False; break
+                            if expected_type == "Angle" and actual_type == "Direction": pass
+                            else: type_ok = False; break
                             
                 if type_ok:
-                    sig = self._make_signature(theorem_name, bind)
+                    sig = self._make_signature(theorem.name, bind)
                     if sig not in self.processed_signatures:
                         self.processed_signatures.add(sig)
                         
@@ -721,20 +682,18 @@ class ParallelBlackboardEngine:
                         if already_proven: continue
                         
                         required_facts = list(bind.get('__facts__', []))
-                        pm = PendingMatch(theorem.name, bind, required_facts, theorem.constructions, theorem.conclusions)
+                        pm = PendingMatch(theorem, bind, required_facts)
                         self.pending_matches.append(pm)
                         print(f"  🔍 [発見] {theorem.name} のリーチフォーマットをストックしました！")
                         applied = True 
                         
-                        # 🌟 FIX: ストックした定理が「既に発火可能」な場合、メインループが終了しないようにプロバーを叩き起こすダミーイベントを発行！
                         if pm.is_ready(self.env):
                             self.emit(EventType.FACT_PROVEN, None)
                 
-                heapq.heappush(self.matcher_queue, (priority, task_id, gen, theorem_name))
+                heapq.heappush(self.matcher_queue, (priority, task_id, gen, theorem))
             except StopIteration:
                 pass
                 
-        # 🌟 FIX: 新しい発見がなくても、遅延作図によってE-Graphに図形が追加されたなら「進捗あり」としてループを続行させる！
         if len(self.env.nodes) > initial_node_count:
             applied = True
             
@@ -849,7 +808,7 @@ class ParallelBlackboardEngine:
     def apply_conclusions(self, theorem_name, conclusions, bind):
         current_premises = list(bind.values())
         applied_anything = False
-        structural_changed = False  # 🌟 FIX: 物理的な変化があったかどうかのフラグ
+        structural_changed = False
         
         for conc in conclusions:
             if isinstance(conc, FactTemplate):
@@ -879,11 +838,9 @@ class ParallelBlackboardEngine:
                 if self._apply_curve_macro(theorem_name, conc, bind): 
                     applied_anything = True
                     structural_changed = True
-                
-        # 🌟 FIX: 単なる事実の証明(Angleが等しい等)では投げず、物理構造(マージ等)が変わった時のみ投げる
+                    
         if structural_changed:
             self.emit(EventType.NODE_MERGED, None)
-            
         return applied_anything
 
     def _apply_congruence_closure(self):
@@ -927,7 +884,6 @@ class ParallelBlackboardEngine:
         merged = self.env.merge_entities_logically(reps[0], reps[1])
         if merged:
             self.prover.record_trace(theorem_name, f"{reps[0].name} ≡ {reps[1].name}")
-            self.emit(EventType.NODE_MERGED, None)
             return True
         return False
 
@@ -1013,7 +969,4 @@ class ProofEnvironment:
                     if new_parents != d.parents: new_defs.add(Definition(d.def_type, new_parents, d.naive_degree, d.depth))
                     else: new_defs.add(d)
                 comp.definitions = new_defs 
-        if hasattr(self, 'emit'):
-            from logic_core import EventType
-            self.emit(EventType.NODE_MERGED, None)
         return entity1.get_rep()
