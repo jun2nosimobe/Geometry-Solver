@@ -11,16 +11,32 @@ from mmp_core import Definition, GeoEntity, LogicalComponent
 
 logger = logging.getLogger("GeometryProver")
 
+class RelativeTimeFormatter(logging.Formatter):
+    def __init__(self, fmt):
+        super().__init__(fmt)
+        self.start_time = time.time()  # ロガー初期化時を0秒とする
+
+    def format(self, record):
+        elapsed = time.time() - self.start_time
+        mins, secs = divmod(elapsed, 60)
+        # 00:00.000 の形式で relative_time 属性を作成
+        record.relative_time = f"{int(mins):02d}:{secs:06.3f}"
+        return super().format(record)
+
 def setup_proof_logger(problem_name: str, is_debug: bool = False):
     if logger.hasHandlers(): logger.handlers.clear()
     base_name = problem_name.replace("prob_", "") if problem_name.startswith("prob_") else problem_name
     os.makedirs("result", exist_ok=True)
     log_path = os.path.join("result", f"proof_{base_name}.log")
+    
+    # 🌟 FIX: ミリ秒付きのタイムスタンプを付与するフォーマッタ
+    formatter = RelativeTimeFormatter('[%(relative_time)s] %(message)s')
+    
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter('%(message)s'))
+    file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(logging.Formatter('%(message)s'))
+    stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
     logger.setLevel(logging.DEBUG if is_debug else logging.INFO)
     return log_path
@@ -306,7 +322,7 @@ class FactPattern(Pattern):
             yield from self._match_generic(current_bind, prover, env, search_nodes)
 
     def _match_generic(self, current_bind, prover, env, search_nodes=None):
-        for fact in prover.facts:
+        for fact in reversed(prover.facts):
             if getattr(fact, 'is_proven', False):
                 if fact.fact_type == self.fact_type:
                     yield from self._try_bind_and_yield(current_bind, {k: v for k, v in zip(self.args, fact.objects)})
@@ -360,6 +376,30 @@ class FactPattern(Pattern):
                                                 if d_flip.def_type == "AnglePair" and len(d_flip.parents) == 2:
                                                     if d_flip.parents[0].get_rep() == d2 and d_flip.parents[1].get_rep() == d1:
                                                         yield from self._try_bind_and_yield(current_bind, {self.args[0]: rep, self.args[1]: n2.get_rep()})
+
+class OrderPattern(Pattern):
+    """
+    対称性破壊パターン (Symmetry Breaking)
+    変数のバインド結果に対して辞書順(ID順)の制約を課し、無駄な順列探索を N! 分の1に刈り取る。
+    （例：2本の直線を選ぶとき、A-B のみを通し B-A を弾く）
+    """
+    def __init__(self, vars_list):
+        self.vars_list = vars_list
+
+    def match(self, current_bind, prover, env):
+        bound_vars = [current_bind[v] for v in self.vars_list if v in current_bind]
+        # まだ全てバインドされていない場合は一旦パス
+        if len(bound_vars) < len(self.vars_list):
+            yield current_bind
+            return
+            
+        reps = [v.get_rep() if hasattr(v, 'get_rep') else v for v in bound_vars]
+        ids = [id(r) for r in reps]
+        
+        # IDが単調増加(A < B < C...)になっている順列だけを許可する
+        if all(ids[i] < ids[i+1] for i in range(len(ids)-1)):
+            yield current_bind
+
 
 class EventType(Enum):
     NEW_CONJECTURE = 1
@@ -455,7 +495,18 @@ class TaskCounter:
 
 class ParallelBlackboardEngine:
     def __init__(self, env, prover):
-        self.env = env; self.prover = prover; self.prover_queue = deque(); self.matcher_queue = []; self.pending_matches = []; self.processed_signatures = set(); self.start_time = time.time(); self.construction_demands = {}
+        self.env = env; self.prover = prover; self.prover_queue = deque(); self.matcher_queue = []
+        self.pending_matches = []; self.processed_signatures = set(); self.start_time = time.time()
+        self.construction_demands = {}
+        
+        # 🌟 NEW: プロファイリング用の統計データ
+        self.stats = {
+            'time_in_prover': 0.0,
+            'time_in_matcher': 0.0,
+            'dfs_calls': {},
+            'theorem_success': {},
+            'theorem_empty_fires': {}
+        }
 
     def emit(self, event_type: EventType, payload: any=None):
         if payload and hasattr(payload, 'objects'):
@@ -463,7 +514,9 @@ class ParallelBlackboardEngine:
             payload_desc = f"{payload.fact_type}({', '.join(obj_names)})"
         else:
             payload_desc = getattr(payload, 'fact_type', str(payload)) if payload else "None"
-        print(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
+            
+        # 🌟 FIX: print から logger.info に変更し、タイムスタンプを統一
+        logger.info(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
         
         if event_type == EventType.NEW_CONJECTURE:
             if payload is not None: self._schedule_matcher_task(payload)
@@ -474,10 +527,13 @@ class ParallelBlackboardEngine:
             self.prover_queue.append((event_type, payload))
 
     def print_bottlenecks(self):
+        # 🌟 NEW: Stall時にプロファイリングレポートを自動出力
+        self.print_profiling_report()
+        
         if not self.pending_matches:
-            print("  -> リーチ状態の定理はありません。")
+            logger.info("  -> リーチ状態の定理はありません。")
             return
-        print(f"  -> 【ボトルネック分析】現在 {len(self.pending_matches)} 件の定理が待機中です。")
+        logger.info(f"  -> 【ボトルネック分析】現在 {len(self.pending_matches)} 件の定理が待機中です。")
         for i, pm in enumerate(self.pending_matches[:20]):
             unmet = pm.get_unmet_conditions(self.env)
             unmet_desc = []
@@ -497,9 +553,9 @@ class ParallelBlackboardEngine:
                     desc = str(f)
                 unmet_desc.append(desc)
             if not unmet_desc:
-                print(f"    [{i+1}] ⚠️ 異常検知: {pm.theorem_name} はis_ready=Falseなのに待機理由が見つかりません。")
+                logger.info(f"    [{i+1}] ⚠️ 異常検知: {pm.theorem_name} はis_ready=Falseなのに待機理由が見つかりません。")
             else:
-                print(f"    [{i+1}] {pm.theorem_name} は次の証明を待機中: {', '.join(unmet_desc)}")
+                logger.info(f"    [{i+1}] {pm.theorem_name} は次の証明を待機中: {', '.join(unmet_desc)}")
 
     def _is_conclusion_already_true(self, conc, bind):
         try:
@@ -573,11 +629,10 @@ class ParallelBlackboardEngine:
         import logging
         logger = logging.getLogger("GeometryProver")
         
-        # 🌟 FIX: ジェネレータの「古い記憶(ローカル変数)」による見落としを防ぐため、
-        # E-Graphが更新されたら、待機中の古い全探索タスクを全て破棄して完全にリセットする！
         new_queue = []
         for item in self.matcher_queue:
-            if item[0] != 0:  # 優先度0(Full Sweep)以外の高優先度タスクは安全のため残す
+            # 優先度が負の値(個別タスク)のものは残す
+            if item[0] < 0:  
                 new_queue.append(item)
                 
         self.matcher_queue = new_queue
@@ -587,8 +642,12 @@ class ParallelBlackboardEngine:
         
         for theorem in self.prover.theorems:
             gen = self._evaluate_patterns_dfs_wrapper(theorem.name, theorem.patterns, {})
-            # 🌟 FIX: theorem.name ではなく、theorem オブジェクトそのものを渡す(名前被りバグ防止)
-            heapq.heappush(self.matcher_queue, (0, TaskCounter.next(), gen, theorem))
+            # 🌟 FIX: プロファイリングの成功回数を優先度(ヒープは小さい順なのでマイナス)に変換！
+            # 過去に役立った実績のある定理ほど先に評価される
+            succ_count = self.stats.get('theorem_success', {}).get(theorem.name, 0)
+            priority = -succ_count  
+            
+            heapq.heappush(self.matcher_queue, (priority, TaskCounter.next(), gen, theorem))
 
     def run_parallel_loop(self, matcher_budget=100000):
         applied_anything = False
@@ -596,7 +655,27 @@ class ParallelBlackboardEngine:
         if self._run_matcher_agent(matcher_budget): applied_anything = True
         return applied_anything
 
+    def print_profiling_report(self):
+        """🌟 NEW: どこに無駄があるのかを一目で可視化するレポート機能"""
+        logger.info("\n" + "="*50)
+        logger.info(" 📊 探索アーキテクチャ プロファイリングレポート")
+        logger.info("="*50)
+        logger.info(f"⏱️ 累計処理時間: Matcher(探索)={self.stats['time_in_matcher']:.3f}s | Prover(適用)={self.stats['time_in_prover']:.3f}s")
+        
+        logger.info("\n🔍 空間探索の重さ (DFS呼び出し回数 ワースト):")
+        for th, calls in sorted(self.stats['dfs_calls'].items(), key=lambda x: x[1], reverse=True):
+            logger.info(f"  - {th}: {calls:,} 回")
+            
+        logger.info("\n✅ 発火の精度 (成功 vs ⚠️ 空振り):")
+        all_ths = set(self.stats['theorem_success'].keys()) | set(self.stats['theorem_empty_fires'].keys())
+        for th in sorted(all_ths):
+            succ = self.stats['theorem_success'].get(th, 0)
+            fail = self.stats['theorem_empty_fires'].get(th, 0)
+            logger.info(f"  - {th}: 成功 {succ} 回 / 空振り {fail} 回")
+        logger.info("="*50 + "\n")
+
     def _run_prover_agent(self):
+        t_start = time.time()  
         applied = False
         still_pending = []
         for match in self.pending_matches:
@@ -607,29 +686,33 @@ class ParallelBlackboardEngine:
                         already_proven = False; break
                 if already_proven: continue
 
-                elapsed_sec = int(time.time() - self.start_time)
-                m, s = divmod(elapsed_sec, 60)
-                
-                print(f"  [{m:02d}:{s:02d}]⚡ [準備完了] {match.theorem_name} を発火します...")
+                logger.info(f"  ⚡ [準備完了] {match.theorem_name} を発火します...")
                 if not self._execute_constructions(match.theorem_name, match.constructions, match.bind):
-                    print(f"  ❌ [発火失敗] {match.theorem_name} の作図・バインドに失敗しました。")
+                    logger.warning(f"  ❌ [発火失敗] {match.theorem_name} の作図・バインドに失敗しました。")
                     continue
                 
                 applied_now = self.apply_conclusions(match.theorem_name, match.conclusions, match.bind)
                 if applied_now:
-                    print(f"  ✅ [発火成功] {match.theorem_name} が結論を適用しました。")
+                    logger.info(f"  ✅ [発火成功] {match.theorem_name} が結論を適用しました。")
+                    self.stats['theorem_success'][match.theorem_name] = self.stats['theorem_success'].get(match.theorem_name, 0) + 1
                     applied = True
                 else:
-                    print(f"  ⚠️ [発火空振り] {match.theorem_name} は新しい事実を生み出しませんでした。")
+                    logger.info(f"  ⚠️ [発火空振り] {match.theorem_name} は新しい事実を生み出しませんでした。")
+                    self.stats['theorem_empty_fires'][match.theorem_name] = self.stats['theorem_empty_fires'].get(match.theorem_name, 0) + 1
             else:
                 still_pending.append(match)
         self.pending_matches = still_pending
 
+        # 🌟 FIX: 重複した更新イベントをまとめ、フルスキャンを1回だけ呼び出す
+        needs_full_sweep = False
         while self.prover_queue:
             ev_type, payload = self.prover_queue.popleft()
             if ev_type == EventType.NODE_MERGED:
                 if self._apply_congruence_closure(): applied = True
-                self.schedule_full_sweep()
+                needs_full_sweep = True  # ループ内ではフラグを立てるだけ
+                
+        if needs_full_sweep:
+            self.schedule_full_sweep()  # まとめて1回だけスケジュール！
                 
         if applied:
             still_pending_2 = []
@@ -640,16 +723,23 @@ class ParallelBlackboardEngine:
                         if not self._is_conclusion_already_true(conc, match.bind):
                             already_proven = False; break
                     if already_proven: continue
-                    print(f"  ⚡ [準備完了(追撃)] {match.theorem_name} を発火します...")
+                    logger.info(f"  ⚡ [準備完了(追撃)] {match.theorem_name} を発火します...")
                     if not self._execute_constructions(match.theorem_name, match.constructions, match.bind): continue
-                    if self.apply_conclusions(match.theorem_name, match.conclusions, match.bind): applied = True
+                    
+                    if self.apply_conclusions(match.theorem_name, match.conclusions, match.bind): 
+                        self.stats['theorem_success'][match.theorem_name] = self.stats['theorem_success'].get(match.theorem_name, 0) + 1
+                        applied = True
+                    else:
+                        self.stats['theorem_empty_fires'][match.theorem_name] = self.stats['theorem_empty_fires'].get(match.theorem_name, 0) + 1
                 else:
                     still_pending_2.append(match)
             self.pending_matches = still_pending_2
 
+        self.stats['time_in_prover'] += (time.time() - t_start)
         return applied
 
     def _run_matcher_agent(self, budget):
+        t_start = time.time()
         if not self.matcher_queue: return False
         calls = 0
         applied = False  
@@ -660,6 +750,11 @@ class ParallelBlackboardEngine:
             try:
                 bind = next(gen)
                 calls += 1
+                
+                # 🌟 NEW: "PAUSE" 信号を受け取ったら、新しいタスクIDを振って最後尾に並べ直す(ラウンドロビン)
+                if bind == "PAUSE":
+                    heapq.heappush(self.matcher_queue, (priority, TaskCounter.next(), gen, theorem))
+                    continue
                 
                 type_ok = True
                 for k, v in bind.items():
@@ -684,19 +779,22 @@ class ParallelBlackboardEngine:
                         required_facts = list(bind.get('__facts__', []))
                         pm = PendingMatch(theorem, bind, required_facts)
                         self.pending_matches.append(pm)
-                        print(f"  🔍 [発見] {theorem.name} のリーチフォーマットをストックしました！")
+                        logger.info(f"  🔍 [発見] {theorem.name} のリーチフォーマットをストックしました！")
                         applied = True 
                         
                         if pm.is_ready(self.env):
                             self.emit(EventType.FACT_PROVEN, None)
                 
-                heapq.heappush(self.matcher_queue, (priority, task_id, gen, theorem))
+                # 🌟 NEW: 次の探索のために、必ず新しいTaskIDで再キューイングし、他の定理にターンを譲る
+                heapq.heappush(self.matcher_queue, (priority, TaskCounter.next(), gen, theorem))
+                
             except StopIteration:
                 pass
                 
         if len(self.env.nodes) > initial_node_count:
             applied = True
             
+        self.stats['time_in_matcher'] += (time.time() - t_start)
         return applied
 
     def _evaluate_patterns_with_seed_gen(self, theorem_name, patterns, seed_fact):
@@ -713,22 +811,44 @@ class ParallelBlackboardEngine:
                     yield from self._evaluate_patterns_dfs_wrapper(theorem_name, patterns, bind)
 
     def _evaluate_patterns_dfs_wrapper(self, theorem_name, patterns, initial_bind):
-        MAX_DFS_CALLS = 50000 
+        MAX_DFS_CALLS = 100000  # 🌟 上限を緩和(他のタスクをブロックしなくなったため)
         state = {'calls': 0, 'limit_hit': False}
+        failed_paths_cache = set()
+        
         def dfs(pattern_idx, current_bind):
             state['calls'] += 1
+            self.stats['dfs_calls'][theorem_name] = self.stats['dfs_calls'].get(theorem_name, 0) + 1
+            
             if state['calls'] > MAX_DFS_CALLS:
                 if not state['limit_hit']:
                     logger.warning(f"    ⚠️ [{theorem_name}] 探索空間が大きすぎるため打ち切り (上限: {MAX_DFS_CALLS})")
                     state['limit_hit'] = True
                 return
+                
+            # 🌟 NEW (プリエンプション): 100手探索しても結果が出なければ、一旦メインループに制御を返す(息継ぎ)
+            if state['calls'] % 100 == 0:
+                yield "PAUSE"
+                
             if pattern_idx == len(patterns):
-                yield current_bind.copy(); return
+                yield current_bind.copy()
+                return
+
+            bind_ids = []
+            for k, v in sorted(current_bind.items()):
+                if k == '__facts__': continue
+                bind_ids.append(f"{k}:{id(v.get_rep() if hasattr(v, 'get_rep') else v)}")
+            state_sig = f"{pattern_idx}_" + "_".join(bind_ids)
+
+            if state_sig in failed_paths_cache:
+                return
+
             matched_any = False
             for bound_dict in patterns[pattern_idx].match(current_bind, self.prover, self.env):
                 matched_any = True
                 yield from dfs(pattern_idx + 1, bound_dict)
+                
             if not matched_any:
+                failed_paths_cache.add(state_sig)
                 bound_points = [v.get_rep() for k, v in current_bind.items() if k != '__facts__' and hasattr(v, 'get_rep') and getattr(v.get_rep(), 'entity_type', '') == 'Point']
                 if len(bound_points) >= 2:
                     for p1, p2 in itertools.combinations(set(bound_points), 2):
@@ -736,6 +856,7 @@ class ParallelBlackboardEngine:
                         if c1 and c2 and not any(getattr(obj, 'entity_type', '') == "Line" for obj in (c1.subobjects & c2.subobjects)):
                             demand_sig = frozenset([p1, p2])
                             self.construction_demands[demand_sig] = self.construction_demands.get(demand_sig, 0) + 1.0
+
         yield from dfs(0, initial_bind)
 
     def _make_signature(self, theorem_name, bind):
@@ -938,10 +1059,45 @@ class ParallelBlackboardEngine:
         logger.info(f"  🟢 [マクロ構築] {', '.join(p.name for p in reps)} ∈ {new_curve.name} (理由: {theorem_name})")
         self.prover.record_trace(theorem_name, f"{conc.fact_type}({', '.join(p.name for p in reps)})")
         return True
+# ==========================================
+# 🌟 NEW: AttentionManager (動的パラメータ管理)
+# ==========================================
+class AttentionManager:
+    def __init__(self, env):
+        self.env = env
+        self.decay_rate = 0.85
 
+    def inject_heat(self, node, amount):
+        """特定のノードに熱を注入し、O(1)キャッシュのソート順をリセットする"""
+        if getattr(node, 'base_importance', 1.0) <= 0.0: return
+        node.heat_bonus = getattr(node, 'heat_bonus', 0.0) + amount
+        self.env._type_cache_version = -1  # キャッシュを無効化して再ソートを強制
+
+    def cool_down_all(self):
+        """ターン終了時にシステム全体の熱を冷ます"""
+        for n in self.env.nodes:
+            if hasattr(n, 'heat_bonus'):
+                n.heat_bonus *= self.decay_rate
+        self.env._type_cache_version = -1
+
+    def get_heuristic_score(self, node):
+        """3つのパラメータを合成して探索の優先度(有望さ)を算出する"""
+        imp = getattr(node, 'base_importance', 1.0)
+        heat = getattr(node, 'heat_bonus', 0.0)
+        deg = getattr(node, 'numerical_degree', 10)
+        if deg is None: deg = 10
+        return imp + heat - (deg * 0.1)
+
+# ==========================================
+# ProofEnvironment (環境)
+# ==========================================
 class ProofEnvironment:
     def __init__(self, enable_numerical_debug=False):
         self.nodes = []; self.active_search_nodes = None; self.enable_numerical_debug = enable_numerical_debug; self.all_vars = None
+        
+        # 🌟 FIX: AttentionManager を環境にマウント
+        self.attention = AttentionManager(self)
+        
         self.zero_angle = GeoEntity("Angle", "Parallel_0"); self.zero_angle.components.append(LogicalComponent()); self.zero_angle.importance = 10.0
         self.right_angle = GeoEntity("Angle", "Perpendicular_90"); self.right_angle.components.append(LogicalComponent()); self.right_angle.importance = 10.0
         self.nodes.extend([self.zero_angle, self.right_angle])
@@ -970,3 +1126,23 @@ class ProofEnvironment:
                     else: new_defs.add(d)
                 comp.definitions = new_defs 
         return entity1.get_rep()
+
+    def get_valid_nodes_by_type(self, target_type):
+        if not hasattr(self, '_type_cache_version') or getattr(self, '_type_cache_version', -1) != len(self.nodes):
+            self._type_index = {}
+            for n in self.nodes:
+                if not n.is_valid(): continue
+                rep = n.get_rep()
+                e_type = getattr(rep, 'entity_type', '')
+                if e_type not in self._type_index:
+                    self._type_index[e_type] = set()
+                self._type_index[e_type].add(rep)
+                
+            self._sorted_type_index = {}
+            for k, v in self._type_index.items():
+                # 🌟 FIX: AttentionManager を使ってスコア計算
+                self._sorted_type_index[k] = sorted(list(v), key=self.attention.get_heuristic_score, reverse=True)
+                
+            self._type_cache_version = len(self.nodes)
+            
+        return self._sorted_type_index.get(target_type, [])
