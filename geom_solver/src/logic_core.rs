@@ -209,11 +209,10 @@ impl ProverEngine {
                 }
             }
             Pattern::Fact(def) => {
-                // def (FactPatternDef) から fact_type と args を渡す
+                // 🌟 FIX: &def.fact_type と &def.args に分けるのをやめ、def そのものを渡す
                 self.match_fact_pattern(
                     theorem,
-                    &def.fact_type,
-                    &def.args,
+                    &def, 
                     remaining.clone(),
                     &bind,
                     on_match,
@@ -232,18 +231,17 @@ impl ProverEngine {
     pub fn match_fact_pattern<F>(
         &mut self,
         theorem: &TheoremDef,
-        fact_type: &str,
-        args: &[String],
+        def: &FactPatternDef, // 🌟 引数を FactPatternDef に変更
         remaining: Vec<Pattern>,
         bind: &FxHashMap<String, ClassId>,
         on_match: &mut F,
     ) where
         F: FnMut(&FxHashMap<String, ClassId>),
     {
-        match fact_type {
+        match def.fact_type.as_str() {
             "Identical" => {
-                let v1 = &args[0];
-                let v2 = &args[1];
+                let v1 = &def.args[0];
+                let v2 = &def.args[1];
                 let b1 = bind.get(v1).copied();
                 let b2 = bind.get(v2).copied();
 
@@ -272,8 +270,8 @@ impl ProverEngine {
                 }
             },
             "Connected" => {
-                let child_var = &args[0];
-                let parent_var = &args[1];
+                let child_var = &def.args[0];
+                let parent_var = &def.args[1];
                 
                 let b_child = bind.get(child_var).copied();
                 let b_parent = bind.get(parent_var).copied();
@@ -327,11 +325,73 @@ impl ProverEngine {
                     _ => {}
                 }
             },
+            "DefinedBy" => {
+                // 🌟 NEW: E-Graphからの物理探索 (Midpointなどの発火に必須)
+                let target_type = def.target_type.as_deref().unwrap_or("");
+                let result_var = &def.args[def.args.len() - 1];
+                let parent_vars = &def.args[0..def.args.len() - 1];
+                let mut matches = Vec::new();
+
+                for i in 0..self.egraph.entities.len() {
+                    let node_id = ClassId(i);
+                    if self.egraph.get_rep(node_id) != node_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                    
+                    if let Some(comp) = self.egraph.entities[i].components.first() {
+                        for d in &comp.definitions {
+                            if d.get_type_name() == target_type {
+                                let d_parents = d.get_parents();
+                                if d_parents.len() == parent_vars.len() {
+                                    let is_unordered = target_type == "Midpoint" || target_type == "LineThroughPoints" || target_type == "Intersection";
+                                    
+                                    let perms = if is_unordered && d_parents.len() == 2 {
+                                        vec![vec![d_parents[0], d_parents[1]], vec![d_parents[1], d_parents[0]]]
+                                    } else {
+                                        vec![d_parents.clone()]
+                                    };
+                                    
+                                    for p_ids in perms {
+                                        let mut next_bind = bind.clone();
+                                        let mut conflict = false;
+                                        
+                                        // 親のバインド検証
+                                        for (v_name, &p_id) in parent_vars.iter().zip(p_ids.iter()) {
+                                            if let Some(&existing) = next_bind.get(v_name) {
+                                                if self.egraph.get_rep(existing) != self.egraph.get_rep(p_id) {
+                                                    conflict = true; break;
+                                                }
+                                            }
+                                            next_bind.insert(v_name.clone(), p_id);
+                                        }
+                                        
+                                        // 結果ノードのバインド検証
+                                        if let Some(&existing) = next_bind.get(result_var) {
+                                            if self.egraph.get_rep(existing) != node_id { conflict = true; }
+                                        }
+                                        next_bind.insert(result_var.clone(), node_id);
+                                        
+                                        if !conflict { matches.push(next_bind); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // 重複排除してから再帰
+                matches.sort_by_key(|b| {
+                    let mut keys: Vec<_> = b.iter().collect();
+                    keys.sort_by_key(|k| k.0);
+                    format!("{:?}", keys)
+                });
+                matches.dedup();
+                for new_bind in matches {
+                    self.dfs_match(theorem, remaining.clone(), new_bind, on_match);
+                }
+            },
             _ => {
                 // 🌟 FIX: 同様に、Factの走査も Two-Phase (読み取り -> 再帰) に分離する
                 let mut matches = Vec::new();
                 for fact in &self.facts {
-                    if let Some(new_bind) = self.try_bind_fact(fact, fact_type, args, bind) {
+                    if let Some(new_bind) = self.try_bind_fact(fact, &def.fact_type, &def.args, bind) {
                         matches.push(new_bind);
                     }
                 }
@@ -403,6 +463,53 @@ impl ProverEngine {
         // 矛盾があれば None を返す
         None // 実装省略
     }
+
+    // --- logic_core.rs の `impl ProverEngine` 内に追加 ---
+
+    pub fn execute_constructions(
+        &mut self,
+        theorem_name: &str,
+        constructions: &[ConstructTemplate],
+        bind: &mut FxHashMap<String, ClassId>,
+    ) -> bool {
+        for constr in constructions {
+            let mut parent_ids = Vec::new();
+            for arg in &constr.args {
+                if let Some(&id) = bind.get(arg) {
+                    parent_ids.push(self.egraph.get_rep(id));
+                } else {
+                    return false;
+                }
+            }
+            
+            let def = match constr.def_type.as_str() {
+                "LineThroughPoints" => Definition::new_line(parent_ids[0], parent_ids[1]),
+                "DirectionOf" => Definition::DirectionOf(parent_ids[0]),
+                "Midpoint" => {
+                    let (a, b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::Midpoint(a, b)
+                },
+                "AnglePair" => Definition::AnglePair(parent_ids[0], parent_ids[1]),
+                _ => return false,
+            };
+            
+            let entity_type = match constr.target_type.as_str() {
+                "Line" => EntityType::Line,
+                "Direction" => EntityType::Direction,
+                "Point" => EntityType::Point,
+                "Angle" => EntityType::Angle,
+                _ => EntityType::Point,
+            };
+            
+            let name = format!("{}_{}_(Auto)", constr.def_type, theorem_name);
+            let new_id = self.egraph.create_entity(name, def.clone(), entity_type);
+            self.egraph.apply_trivial_relations(new_id, &def);
+            
+            // 🌟 作図したIDをバインド辞書に記録！これが apply_conclusions に渡される
+            bind.insert(constr.bind_to.clone(), new_id);
+        }
+        true
+    }
 }
 
 pub struct BlackboardEngine {
@@ -464,14 +571,11 @@ impl BlackboardEngine {
         let mut calls = 0;
 
         while calls < budget {
-            // 1. 溜まっているイベント（マージや新しいFact）を全て処理する
             while let Some(event) = self.event_queue.pop_front() {
                 match event {
                     Event::NodeMerged => {
-                        // マージが発生したら、連鎖的な合同閉包を走らせる
                         if self.prover.egraph.apply_congruence_closure() {
                             applied_anything = true;
-                            // 合同閉包によりさらにマージが発生した場合、再度イベントを積む
                             self.event_queue.push_back(Event::NodeMerged);
                         }
                     },
@@ -481,19 +585,36 @@ impl BlackboardEngine {
                 }
             }
 
-            // 2. 探索タスク(DFSの1ステップ)を消化する
             if let Some(task) = self.task_queue.pop() {
                 calls += 1;
-
-                // 🌟 ここで prover.dfs_match を呼び出す
-                // 新しい発見があれば self.emit(Event::FactProven(...)) や NodeMerged を呼ぶ
                 
+                // 🌟 FIX: DFSマッチャーを起動し、マッチした結果をベクタに集める
+                let theorem = self.prover.theorems[task.theorem_idx].clone();
+                let mut new_binds = Vec::new();
+
+                self.prover.dfs_match(
+                    &theorem,
+                    task.remaining_patterns,
+                    task.bind,
+                    &mut |bind| {
+                        new_binds.push(bind.clone());
+                    }
+                );
+
+                // 🌟 FIX: 発見された新しいバインディングに対して結論を適用（マージ等）する
+                for mut bind in new_binds {
+                    // 🌟 FIX: 結論(マージ等)を適用する前に、定理に基づく作図(Direction等)を実行する
+                    if self.prover.execute_constructions(&theorem.name, &theorem.constructions, &mut bind) {
+                        if self.prover.apply_conclusions(&theorem.name, &theorem.conclusions, &bind) {
+                            applied_anything = true;
+                            self.emit(Event::NodeMerged);
+                        }
+                    }
+                }
             } else {
-                // タスクもイベントも枯渇したら探索終了（Stall状態）
                 break;
             }
         }
-
         applied_anything
     }
 

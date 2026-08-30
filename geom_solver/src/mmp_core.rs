@@ -25,14 +25,41 @@ pub enum Definition {
     Circumcircle(ClassId, ClassId, ClassId), // 順不同
     DirectionOf(ClassId),
     AnglePair(ClassId, ClassId),
+    Midpoint(ClassId, ClassId),
 }
 
 impl Definition {
-    // 🌟 順不同（Unordered）図形の正規化コンストラクタ
-    // Python版で苦労した sorted() をカプセル化し、呼び出し側で意識させない
     pub fn new_line(mut a: ClassId, mut b: ClassId) -> Self {
         if a.0 > b.0 { std::mem::swap(&mut a, &mut b); }
         Definition::LineThroughPoints(a, b)
+    }
+
+    // 🌟 以下の2つのメソッドを確実に追加する
+    pub fn get_type_name(&self) -> &'static str {
+        match self {
+            Definition::Midpoint(_,_) => "Midpoint",
+            Definition::DirectionOf(_) => "DirectionOf",
+            Definition::LineThroughPoints(_,_) => "LineThroughPoints",
+            Definition::Intersection(_,_) => "Intersection",
+            Definition::AnglePair(_,_) => "AnglePair",
+            Definition::GivenPoint => "GivenPoint",
+            Definition::FreePoint => "FreePoint",
+            Definition::Circumcircle(_,_,_) => "Circumcircle",
+            Definition::PerpendicularLine(_,_) => "PerpendicularLine",
+        }
+    }
+    
+    pub fn get_parents(&self) -> Vec<ClassId> {
+        match self {
+            Definition::Midpoint(a, b) => vec![*a, *b],
+            Definition::DirectionOf(a) => vec![*a],
+            Definition::LineThroughPoints(a, b) => vec![*a, *b],
+            Definition::Intersection(a, b) => vec![*a, *b],
+            Definition::AnglePair(a, b) => vec![*a, *b],
+            Definition::PerpendicularLine(a, b) => vec![*a, *b],
+            Definition::Circumcircle(a, b, c) => vec![*a, *b, *c],
+            _ => vec![],
+        }
     }
 }
 
@@ -220,6 +247,11 @@ impl EGraph {
     /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
     pub fn normalize_definition(&self, def: &Definition) -> Definition {
         match def {
+            Definition::Midpoint(p1, p2) => {
+                let r1 = self.get_rep(*p1);
+                let r2 = self.get_rep(*p2);
+                if r1.0 > r2.0 { Definition::Midpoint(r2, r1) } else { Definition::Midpoint(r1, r2) }
+            },
             Definition::LineThroughPoints(p1, p2) => {
                 Definition::new_line(self.get_rep(*p1), self.get_rep(*p2))
             },
@@ -236,14 +268,10 @@ impl EGraph {
                 arr.sort_unstable();
                 Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
             },
-            // 他の定義も同様に親IDを get_rep() でラップする
             _ => def.clone(),
         }
     }
 
-    /// 🌟 合同閉包 (Congruence Closure)
-    /// グラフ全体の矛盾（同じ定義なのに別々のノードになっているもの）を探し出し、
-    /// 完全にマージされなくなるまでループを回して収束させる。
     pub fn apply_congruence_closure(&mut self) -> bool {
         let mut changed_any = false;
 
@@ -255,10 +283,8 @@ impl EGraph {
                 let current_id = ClassId(i);
                 let rep_id = self.get_rep(current_id);
                 
-                // 既に他のノードに吸収された古いノードはスキップ (ゴースト排除)
                 if current_id != rep_id { continue; }
 
-                // コンポーネント内の定義をクローンしてスキャン
                 let definitions = if let Some(comp) = self.entities[i].components.first() {
                     comp.definitions.clone()
                 } else {
@@ -270,11 +296,10 @@ impl EGraph {
 
                     if let Some(&existing_rep) = def_map.get(&norm_def) {
                         if existing_rep != rep_id {
-                            // 🌟 全く同じ定義を持つ2つの独立した代表元を発見！マージする
                             if self.merge_entities(existing_rep, rep_id) {
                                 changed_this_round = true;
                                 changed_any = true;
-                                break; // self.entities がミューテートされたため、安全にforループを抜けてリスタート
+                                break;
                             }
                         }
                     } else {
@@ -284,7 +309,6 @@ impl EGraph {
                 if changed_this_round { break; }
             }
 
-            // どこもマージされなくなったらグラフは完全に安定(収束)
             if !changed_this_round { break; }
         }
         
