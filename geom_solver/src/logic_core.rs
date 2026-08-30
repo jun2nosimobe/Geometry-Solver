@@ -6,11 +6,40 @@ use std::cmp::Ordering;
 // ==========================================
 // 定理とパターンの定義 (代数的データ型で堅牢に表現)
 // ==========================================
+
+#[derive(Debug, Clone)]
+pub struct FactPatternDef {
+    pub fact_type: String,
+    pub args: Vec<String>,
+    pub target_type: Option<String>,
+    pub sub_type: Option<String>,
+    pub allow_flip: bool,
+    pub flip_group: Option<String>,
+}
+
+
 #[derive(Debug, Clone)]
 pub enum Pattern {
-    Fact { fact_type: String, args: Vec<String> }, // PythonのFactPattern相当
-    Order(String, String),                         // 対称性破壊 (OrderPattern)
-    Distinct(Vec<String>),                         // 否定・非同一制約
+    Fact(FactPatternDef),
+    Distinct(Vec<String>),
+    Order(Vec<String>),
+    Not(Box<Pattern>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstructTemplate {
+    pub def_type: String,
+    pub args: Vec<String>,
+    pub target_type: String,
+    pub bind_to: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactTemplate {
+    pub fact_type: String,
+    pub args: Vec<String>,
+    pub target_type: Option<String>,
+    pub sub_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -18,15 +47,9 @@ pub struct TheoremDef {
     pub name: String,
     pub entities: FxHashMap<String, EntityType>,
     pub patterns: Vec<Pattern>,
+    pub constructions: Vec<ConstructTemplate>,
     pub conclusions: Vec<FactTemplate>,
 }
-
-#[derive(Debug, Clone)]
-pub struct FactTemplate {
-    pub fact_type: String,
-    pub args: Vec<String>,
-}
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -84,37 +107,27 @@ impl ProverEngine {
     // Pythonの estimate_cost 関数をRustで厳密に型付け[cite: 15]
     fn estimate_cost(&self, pat: &Pattern, bind: &FxHashMap<String, ClassId>) -> f64 {
         match pat {
-            Pattern::Fact { fact_type, args } => {
-                let unbound_count = args.iter().filter(|v| !bind.contains_key(*v)).count();
-                
-                // 全てバインド済みなら単なる検証 (O(1))[cite: 15]
-                if unbound_count == 0 {
-                    return 0.0;
-                }
+            Pattern::Fact(def) => {
+                let unbound_count = def.args.iter().filter(|v| !bind.contains_key(*v)).count();
+                if unbound_count == 0 { return 0.0; }
 
-                // 幾何学の「大黒柱」は常に優先的に評価する[cite: 15]
-                if fact_type == "Collinear" || fact_type == "Concyclic" {
-                    if unbound_count < args.len() {
-                        return 5.0; // 一部バインド済みなら高速フィルタ[cite: 15]
-                    }
-                    return 10.0; // ファクト数が増えても重く見せない[cite: 15]
+                if def.fact_type == "Collinear" || def.fact_type == "Concyclic" {
+                    if unbound_count < def.args.len() { return 5.0; }
+                    return 10.0;
                 }
-
-                if fact_type == "Identical" {
+                if def.fact_type == "Identical" {
                     if unbound_count == 1 { return 1.0; }
                     return 15.0;
                 }
-
-                if fact_type == "Connected" {
+                if def.fact_type == "Connected" {
                     if unbound_count == 1 { return 5.0; }
-                    return 10000.0; // Cartesian Product を完全に封殺[cite: 15]
+                    return 10000.0; 
                 }
-
                 100.0
             }
-            Pattern::Order(a, b) => {
-                if !bind.contains_key(a) || !bind.contains_key(b) {
-                    std::f64::INFINITY // 未バインド時は後回し[cite: 15]
+            Pattern::Order(vars) => {
+                if vars.iter().any(|v| !bind.contains_key(v)) {
+                    std::f64::INFINITY 
                 } else {
                     0.0
                 }
@@ -125,6 +138,10 @@ impl ProverEngine {
                 } else {
                     0.0
                 }
+            }
+            Pattern::Not(inner_pat) => {
+                // NotPattern のコスト推定 (内部パターンの未バインド変数をチェック)
+                self.estimate_cost(inner_pat, bind)
             }
         }
     }
@@ -165,18 +182,23 @@ impl ProverEngine {
 
         // パターンの評価と分岐
         match pat_to_eval {
-            Pattern::Order(ref a, ref b) => {
-                let id_a = bind[a];
-                let id_b = bind[b];
-                // ID順の強制による対称性の破壊 (Symmetry Breaking)[cite: 15]
-                if id_a.0 < id_b.0 {
+            Pattern::Order(vars) => {
+                // IDが単調増加 (A < B < C ...) になっている順列だけを許可する対称性破壊
+                let mut is_ordered = true;
+                for i in 0..vars.len().saturating_sub(1) {
+                    if bind[&vars[i]].0 >= bind[&vars[i+1]].0 {
+                        is_ordered = false;
+                        break;
+                    }
+                }
+                if is_ordered {
                     self.dfs_match(theorem, remaining.clone(), bind, on_match);
                 }
             }
-            Pattern::Distinct(ref vars) => {
+            Pattern::Distinct(vars) => {
                 let mut unique_ids = rustc_hash::FxHashSet::default();
                 let mut is_distinct = true;
-                for v in vars {
+                for v in &vars {
                     if !unique_ids.insert(bind[v].0) {
                         is_distinct = false;
                         break;
@@ -186,17 +208,22 @@ impl ProverEngine {
                     self.dfs_match(theorem, remaining.clone(), bind, on_match);
                 }
             }
-            Pattern::Fact { ref fact_type, ref args } => {
-                // ここに E-Graph と existing facts を走査して 
-                // 新しいバインド候補を yield するロジックを実装します。
-                // 見つかった候補ごとに bind をクローンして再帰呼び出しを行います。
-                
-                // (実装例)
-                // for candidate in self.find_candidates(fact_type, args, &bind) {
-                //     let mut next_bind = bind.clone();
-                //     next_bind.insert(args[x].clone(), candidate);
-                //     self.dfs_match(theorem, remaining.clone(), next_bind, on_match);
-                // }
+            Pattern::Fact(def) => {
+                // def (FactPatternDef) から fact_type と args を渡す
+                self.match_fact_pattern(
+                    theorem,
+                    &def.fact_type,
+                    &def.args,
+                    remaining.clone(),
+                    &bind,
+                    on_match,
+                );
+            }
+            Pattern::Not(inner_pat) => {
+                // Python版の NotPattern の実装
+                // (内部パターンが1つもマッチしなかった場合のみ現在の bind を通すロジックをここに記述するか、
+                // ひとまずスキップして `self.dfs_match(theorem, remaining, bind, on_match);` を通します)
+                self.dfs_match(theorem, remaining.clone(), bind, on_match);
             }
         }
         
@@ -392,6 +419,28 @@ impl BlackboardEngine {
             event_queue: VecDeque::new(),
             processed_conjectures: rustc_hash::FxHashSet::default(),
         }
+    }
+
+    pub fn schedule_full_sweep(&mut self) {
+        self.task_queue.clear();
+        println!("  🔄 [Full Sweep] 全定理の探索をリセット・スケジュールします");
+        
+        for (idx, theorem) in self.prover.theorems.iter().enumerate() {
+            let task = MatchTask {
+                priority: 0, // Python版の heuristic cost 等を後で反映可能
+                theorem_idx: idx,
+                bind: rustc_hash::FxHashMap::default(),
+                remaining_patterns: theorem.patterns.clone(),
+            };
+            self.task_queue.push(task);
+        }
+    }
+
+    // 🌟 FIX: 証明完了の判定スタブ (今回はデバッグ用にダミーの false を返すか、特定の Fact を監視する)
+    pub fn check_target_reached(&self) -> bool {
+        // 本来は self.prover.facts の中に target_fact が含まれているかを確認する
+        // 今回はコンパイル・実行ループのデバッグのため false を返して時間切れまで回す
+        false
     }
 
     // イベントの発火 (Pythonの emit に相当)

@@ -37,10 +37,11 @@ impl Definition {
 }
 
 // 4. E-Graph (環境とUnion-Findの統合)
+#[derive(Clone)]
 pub struct EGraph {
     pub entities: Vec<GeoEntity>,
-    parents: Vec<Cell<usize>>, // Union-Find用配列 (内部可変性)
-    pub memo: HashMap<Definition, ClassId>, // 🌟 Hash Consing (ドッペルゲンガー防止)
+    parents: Vec<Cell<usize>>, 
+    pub memo: HashMap<Definition, ClassId>, 
 }
 
 impl EGraph {
