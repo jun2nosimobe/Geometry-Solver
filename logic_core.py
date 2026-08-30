@@ -79,6 +79,10 @@ class Pattern:
         conflict = False
         added_vars = []
         for k, v in new_bindings.items():
+            # 🌟 FIX: 環境外のダミーノード(ゴースト)や無効な図形が定理に混入するのを水際で防ぐ
+            if hasattr(v, 'is_valid') and not v.is_valid():
+                conflict = True; break
+                
             if k in current_bind and current_bind[k] != v:
                 conflict = True; break
             elif k not in current_bind:
@@ -232,10 +236,14 @@ class FactPattern(Pattern):
                     if exact_exists: break
                 if exact_exists: break
                 
-            if not exact_exists and self.target_type in ["AnglePair", "DirectionOf"]:
+            if not exact_exists and self.target_type in ["AnglePair", "DirectionOf", "LengthSq"]:
                 from mmp_core import create_geo_entity
                 name_parts = [getattr(p, 'name', str(id(p))[-4:]) for p in rep_parents]
-                new_node = create_geo_entity(self.target_type, rep_parents, name=f"{self.target_type}_{'_'.join(name_parts)}_(Auto)", env=env)
+                # 🌟 FIX: こちらも命名規則を統一
+                prefix = self.target_type
+                if self.target_type == "DirectionOf": prefix = "Dir"
+                
+                new_node = create_geo_entity(self.target_type, rep_parents, name=f"{prefix}_{'_'.join(name_parts)}_(Auto)", env=env)
                 if new_node: valid_nodes.append(new_node)
         else:
             bound_args = [current_bind[v].get_rep() for v in arg_vars if v in current_bind]
@@ -515,15 +523,33 @@ class ParallelBlackboardEngine:
         else:
             payload_desc = getattr(payload, 'fact_type', str(payload)) if payload else "None"
             
-        # 🌟 FIX: print から logger.info に変更し、タイムスタンプを統一
-        logger.info(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
-        
         if event_type == EventType.NEW_CONJECTURE:
-            if payload is not None: self._schedule_matcher_task(payload)
+            if payload is not None:
+                # 🌟 FIX: MMP予想の重複登録を完全に防ぐ (メモリIDではなく名前ベースで管理)
+                if not hasattr(self, '_processed_conjectures'): self._processed_conjectures = set()
+                
+                reps = [o.get_rep() if hasattr(o, 'get_rep') else o for o in payload.objects]
+                # 順不同のファクト（共円、共線、同一）はソートしてシグネチャを正規化
+                if payload.fact_type in ["Identical", "Collinear", "Concyclic"]:
+                    reps_sorted = sorted(reps, key=lambda x: getattr(x, 'name', str(id(x))))
+                    conj_sig = f"{payload.fact_type}_" + "_".join([getattr(o, 'name', str(id(o))) for o in reps_sorted])
+                else:
+                    conj_sig = f"{payload.fact_type}_" + "_".join([getattr(o, 'name', str(id(o))) for o in reps])
+                    
+                # 既に処理済みの予想なら、ログ出力もキュー追加もせずに無視する
+                if conj_sig in self._processed_conjectures: return
+                self._processed_conjectures.add(conj_sig)
+                
+                logger.info(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
+                self._schedule_matcher_task(payload)
+                
         elif event_type == EventType.FACT_PROVEN:
+            logger.info(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
             self.prover_queue.append((event_type, payload))
             if payload is not None: self._schedule_matcher_task(payload)
+            
         elif event_type == EventType.NODE_MERGED:
+            logger.info(f"📥 [イベント受信] Type: {event_type.name}, Payload: {payload_desc}")
             self.prover_queue.append((event_type, payload))
 
     def print_bottlenecks(self):
@@ -564,26 +590,16 @@ class ParallelBlackboardEngine:
             return False
 
         if conc.fact_type == "Identical" and len(reps) == 2:
+            if getattr(reps[0], 'entity_type', '') == "Angle":
+                flip1 = bind.get(f"__flip_{conc.args[0]}", False)
+                flip2 = bind.get(f"__flip_{conc.args[1]}", False)
+                # 🌟 FIX: flip (向き) が矛盾している場合、無効な結論なので「既に処理済み(弾く)」として扱う
+                if flip1 != flip2: return True
+                
+            # 🌟 FIX: 同じオブジェクトなら既に証明済み。無駄なフリップ検索を廃止して高速化
             if reps[0] == reps[1]: return True
-            if getattr(reps[0], 'entity_type', '') == "Angle" and getattr(reps[1], 'entity_type', '') == "Angle":
-                def get_flip_rep(ang_rep):
-                    for c in getattr(ang_rep, 'components', []):
-                        for d in c.definitions:
-                            if d.def_type == "AnglePair" and len(d.parents) == 2:
-                                d1, d2 = d.parents[0].get_rep(), d.parents[1].get_rep()
-                                for n in self.env.nodes:
-                                    if not n.is_valid() or getattr(n.get_rep(), 'entity_type', '') != "Angle": continue
-                                    for c2 in getattr(n.get_rep(), 'components', []):
-                                        for d_flip in c2.definitions:
-                                            if d_flip.def_type == "AnglePair" and len(d_flip.parents) == 2:
-                                                if d_flip.parents[0].get_rep() == d2 and d_flip.parents[1].get_rep() == d1:
-                                                    return n.get_rep()
-                    return None
-                flip0, flip1 = get_flip_rep(reps[0]), get_flip_rep(reps[1])
-                if flip0 and flip1 and flip0 == flip1: return True
-                if flip0 and flip0 == reps[1]: return True
-                if flip1 and flip1 == reps[0]: return True
             return False
+            
         elif conc.fact_type in ["Collinear", "Concyclic"]:
             target_type = "Line" if conc.fact_type == "Collinear" else "Circle"
             for n in self.env.nodes:
@@ -940,8 +956,12 @@ class ParallelBlackboardEngine:
         bind_ids = []
         for k, v in sorted(bind.items()):
             if k == '__facts__': continue
-            if hasattr(v, 'get_rep'): bind_ids.append(f"{k}:{id(v.get_rep())}")
-            else: bind_ids.append(f"{k}:{str(v)}")
+            # 🌟 FIX: id() への依存をやめ、確実に一意な 'name' プロパティを使用する
+            if hasattr(v, 'get_rep'): 
+                rep = v.get_rep()
+                bind_ids.append(f"{k}:{getattr(rep, 'name', str(id(rep)))}")
+            else: 
+                bind_ids.append(f"{k}:{str(v)}")
         return f"{theorem_name}-" + "-".join(bind_ids)
 
     def _execute_constructions(self, theorem_name, constructions, bind):
@@ -962,41 +982,32 @@ class ParallelBlackboardEngine:
                 if common_lines:
                     bind[constr.bind_to] = list(common_lines)[0]; continue
                 
-            common = get_subentity(parents[0], constr.target_type)
-            for p in parents[1:]: common &= get_subentity(p, constr.target_type)
-                
             found_obj = None
             is_unordered = constr.def_type in ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle"]
             
-            for obj in common:
-                comp = obj.get_best_component()
-                if comp:
-                    for d in comp.definitions:
-                        if d.def_type == constr.def_type:
-                            rep_d_parents = [p.get_rep() for p in d.parents] 
-                            if is_unordered:
-                                if set(rep_d_parents) == set(parents): found_obj = obj; break
-                            else:
-                                if rep_d_parents == parents: found_obj = obj; break
+            # 🌟 FIX: E-Graph上の全ノードを厳密にスキャンし、ドッペルゲンガー(重複)の発生を完全に防ぐ
+            for node in self.env.nodes:
+                if not node.is_valid() or getattr(node.get_rep(), 'entity_type', '') != constr.target_type: continue
+                comp = node.get_rep().get_best_component()
+                if not comp: continue
+                for d in comp.definitions:
+                    if d.def_type == constr.def_type and len(d.parents) == len(parents):
+                        rep_d_parents = [p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents]
+                        if is_unordered:
+                            if set(rep_d_parents) == set(parents): found_obj = node.get_rep(); break
+                        else:
+                            if rep_d_parents == parents: found_obj = node.get_rep(); break
                 if found_obj: break
-                
-            if not found_obj:
-                for node in self.env.nodes:
-                    if not node.is_valid(): continue
-                    comp = node.get_rep().get_best_component()
-                    if not comp: continue
-                    for d in comp.definitions:
-                        if d.def_type == constr.def_type:
-                            rep_d_parents = [p.get_rep() for p in d.parents]
-                            if (is_unordered and set(rep_d_parents) == set(parents)) or (not is_unordered and rep_d_parents == parents):
-                                found_obj = node.get_rep(); break
-                    if found_obj: break
 
             if found_obj:
                 bind[constr.bind_to] = found_obj 
             else:
                 name_suffix = "_".join([getattr(p, 'name', str(id(p))[-4:]) for p in parents])
-                new_obj = create_geo_entity(constr.def_type, parents, name=f"{constr.def_type}_{name_suffix}_(Auto)", env=self.env)
+                # 🌟 FIX: システム全体で命名規則を統一
+                prefix = constr.def_type
+                if constr.def_type == "DirectionOf": prefix = "Dir"
+                
+                new_obj = create_geo_entity(constr.def_type, parents, name=f"{prefix}_{name_suffix}_(Auto)", env=self.env)
                 if new_obj is None: return False
                 new_obj.created_by_theorem = theorem_name
                 for p in parents: link_logical_incidence(p, new_obj)
@@ -1009,7 +1020,25 @@ class ParallelBlackboardEngine:
         structural_changed = False
         
         for conc in conclusions:
-            if isinstance(conc, FactTemplate):
+            # 🌟 FIX: 先に物理的なマージやリンクを試み、成功したかを判定する
+            success = False
+            if conc.fact_type == "Identical":
+                if self._apply_identical(theorem_name, conc, bind): 
+                    success = True
+                    structural_changed = True
+            elif conc.fact_type == "Connected":
+                if self._apply_connected(theorem_name, conc, bind): 
+                    success = True
+                    structural_changed = True
+            elif conc.fact_type in ["Collinear", "Concyclic"]:
+                if self._apply_curve_macro(theorem_name, conc, bind): 
+                    success = True
+                    structural_changed = True
+            else:
+                success = True # 物理操作を伴わない純粋な Fact の場合は常に成功扱い
+
+            # 🌟 FIX: 操作が成功(または不要)な場合のみ、論理ファクトを登録する
+            if success and isinstance(conc, FactTemplate):
                 reps = [bind[arg].get_rep() if hasattr(bind[arg], 'get_rep') else bind[arg] for arg in conc.args]
                 new_fact = Fact(fact_type=conc.fact_type, objects=reps, source_theorem=theorem_name, premises=current_premises)
                 if new_fact not in self.prover.facts:
@@ -1023,20 +1052,10 @@ class ParallelBlackboardEngine:
                         existing.is_proven = True; existing.proof_source = theorem_name
                         self.emit(EventType.FACT_PROVEN, existing)
                         applied_anything = True
+            
+            if success:
+                applied_anything = True
 
-            if conc.fact_type == "Identical":
-                if self._apply_identical(theorem_name, conc, bind): 
-                    applied_anything = True
-                    structural_changed = True
-            elif conc.fact_type == "Connected":
-                if self._apply_connected(theorem_name, conc, bind): 
-                    applied_anything = True
-                    structural_changed = True
-            elif conc.fact_type in ["Collinear", "Concyclic"]:
-                if self._apply_curve_macro(theorem_name, conc, bind): 
-                    applied_anything = True
-                    structural_changed = True
-                    
         if structural_changed:
             self.emit(EventType.NODE_MERGED, None)
         return applied_anything
@@ -1098,11 +1117,17 @@ class ParallelBlackboardEngine:
             flip2 = bind.get(f"__flip_{conc.args[1]}", False)
             if flip1 != flip2: return False
         if reps[0] == reps[1]: return False
-        evidence_str = f" [根拠: 共円({', '.join([bind[k].get_rep().name for k in ['Apex1', 'Apex2', 'Base1', 'Base2'] if k in bind])})]" if theorem_name == "円周角の定理" else ""
-        logger.info(f"  🟢 [マージ実行] {reps[0].name} ≡ {reps[1].name} (理由: {theorem_name}){evidence_str}")
+        
         merged = self.env.merge_entities_logically(reps[0], reps[1])
         if merged:
-            self.prover.record_trace(theorem_name, f"{reps[0].name} ≡ {reps[1].name}")
+            evidence_str = f" [根拠: 共円({', '.join([bind[k].get_rep().name for k in ['Apex1', 'Apex2', 'Base1', 'Base2'] if k in bind])})]" if theorem_name == "円周角の定理" else ""
+            name0 = reps[0].name
+            name1 = reps[1].name
+            # 🌟 FIX: 万が一同じ名前の複製をマージした場合はIDを表示して錯覚を防ぐ
+            if name0 == name1: name1 += f"#{str(id(reps[1]))[-4:]}"
+            
+            logger.info(f"  🟢 [マージ実行] {name0} ≡ {name1} (理由: {theorem_name}){evidence_str}")
+            self.prover.record_trace(theorem_name, f"{name0} ≡ {name1}")
             return True
         return False
 

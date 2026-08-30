@@ -35,22 +35,36 @@ class ModInt:
     def __abs__(self): return abs(self.value)
     def __repr__(self): return str(self.value)
 
-def matrix_rank_mod(matrix_mod):
-    rows, cols = len(matrix_mod), len(matrix_mod[0]) if matrix_mod else 0
+def matrix_rank_mod(M):
+    if not M or not M[0]: return 0
+    rows, cols = len(M), len(M[0])
+    
+    # 🌟 FIX: ローカルインポート文を削除し、直接 ModInt をキャストする
+    for r in range(rows):
+        for c in range(cols):
+            if not hasattr(M[r][c], 'value'):
+                M[r][c] = ModInt(int(M[r][c]))
+                
     rank = 0
-    M = [[matrix_mod[r][c] for c in range(cols)] for r in range(rows)]
     for c in range(cols):
         pivot_r = next((r for r in range(rank, rows) if M[r][c].value != 0), -1)
-        if pivot_r == -1: continue
-        M[rank], M[pivot_r] = M[pivot_r], M[rank]
+        if pivot_r == -1:
+            continue
+            
+        if pivot_r != rank:
+            M[rank], M[pivot_r] = M[pivot_r], M[rank]
+            
         inv_val = ModInt(1) / M[rank][c]
-        for j in range(c, cols): M[rank][j] = M[rank][j] * inv_val
-        for r in range(rows):
-            if r != rank and M[r][c].value != 0:
-                factor = M[r][c]
-                for j in range(c, cols): M[r][j] = M[r][j] - factor * M[rank][j]
+        for j in range(c, cols):
+            M[rank][j] *= inv_val
+            
+        for i in range(rank + 1, rows):
+            factor = M[i][c]
+            if factor.value != 0:
+                for j in range(c, cols):
+                    M[i][j] -= factor * M[rank][j]
         rank += 1
-        if rank == rows: break
+        
     return rank
 
 def get_numerical_degree(t_values, x_values, max_d, mode='mod', tolerance=1e-8):
