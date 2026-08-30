@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Geometry Realtime Visualizer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1e1e1e; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+        canvas:active { cursor: grabbing; }
+        #overlay { position: absolute; top: 15px; left: 15px; pointer-events: none; text-shadow: 1px 1px 2px black; }
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: bold; margin-bottom: 8px;}
+        
+        /* 🌟 FIX: 右側パネルの幅を制限し、文字を折り返す */
+        #side-panel {
+            position: absolute; top: 15px; right: 15px; 
+            width: 280px; max-width: 30vw; 
+            background: rgba(0,0,0,0.7); padding: 12px; 
+            border-radius: 5px; max-height: 90vh; 
+            overflow-y: auto; overflow-x: hidden; 
+            font-size: 11px; box-sizing: border-box; 
+            word-wrap: break-word; text-shadow: 1px 1px 2px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+        <div id="status" class="status-badge" style="background: #e74c3c;">Disconnected</div>
+        <div id="info">Waiting for data...</div>
+    </div>
+    
+    <div id="side-panel">
+        <h4 style="margin: 0 0 5px 0; color: #f1c40f;">Abstract Entities</h4>
+        <div id="entity-list"></div>
+    </div>
+
+    <canvas id="screen"></canvas>
+
+    <script>
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const infoEl = document.getElementById('info');
+
+        let nodesData = [];
+        let focusData = [];
+
+        let camera = { x: 0, y: 0, scale: 1, initialized: false };
+        let isDragging = false;
+        let lastMouse = { x: 0, y: 0 };
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            draw();
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        canvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            camera.x += e.clientX - lastMouse.x;
+            camera.y += e.clientY - lastMouse.y;
+            lastMouse = { x: e.clientX, y: e.clientY };
+            draw();
+        });
+        canvas.addEventListener('wheel', e => {
+            const zoom = e.deltaY > 0 ? 0.9 : 1.1;
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            camera.x = mouseX - (mouseX - camera.x) * zoom;
+            camera.y = mouseY - (mouseY - camera.y) * zoom;
+            camera.scale *= zoom;
+            draw();
+        });
+
+        function mathToCanvas(x, y) {
+            return {
+                X: camera.x + x * camera.scale,
+                Y: camera.y - y * camera.scale
+            };
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const drawnLabels = [];
+
+            nodesData.forEach(n => {
+                if (!n.coords || n.coords.length < 3) return;
+
+                const heatRatio = Math.min(n.heat / 20.0, 1.0);
+                const r = Math.floor(heatRatio * 255);
+                const b = Math.floor((1 - heatRatio) * 255);
+                const color = `rgb(${r}, 180, ${b})`;
+                const isFocused = focusData.includes(n.name);
+
+                ctx.lineWidth = isFocused ? 3 : 1.5;
+                ctx.strokeStyle = isFocused ? '#f1c40f' : (n.heat > 0 ? color : '#555');
+                ctx.fillStyle = ctx.strokeStyle;
+
+                if (n.type === 'Point') {
+                    const z = n.coords[2] === 0 ? 1 : n.coords[2];
+                    const mx = n.coords[0] / z;
+                    const my = n.coords[1] / z;
+                    const { X, Y } = mathToCanvas(mx, my);
+
+                    ctx.beginPath();
+                    ctx.arc(X, Y, isFocused ? 6 : 4, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    let labelY = Y - 10;
+                    while (drawnLabels.some(l => Math.abs(l.X - X) < 15 && Math.abs(l.Y - labelY) < 12)) {
+                        labelY -= 15;
+                    }
+                    ctx.fillStyle = isFocused ? '#f1c40f' : 'white';
+                    ctx.font = isFocused ? "bold 14px sans-serif" : "12px sans-serif";
+                    ctx.fillText(n.name, X + 8, labelY);
+                    drawnLabels.push({ X: X + 8, Y: labelY });
+                }
+
+                if (n.type === 'Line' && n.coords.length >= 3) {
+                    const [a, b, c] = n.coords;
+                    ctx.beginPath();
+                    
+                    const minMathX = -camera.x / camera.scale;
+                    const maxMathX = (canvas.width - camera.x) / camera.scale;
+                    const minMathY = (camera.y - canvas.height) / camera.scale;
+                    const maxMathY = camera.y / camera.scale;
+                    
+                    const extX = Math.abs(maxMathX - minMathX) * 2;
+                    const extY = Math.abs(maxMathY - minMathY) * 2;
+
+                    if (Math.abs(b) > Math.abs(a)) {
+                        const x1 = minMathX - extX;
+                        const x2 = maxMathX + extX;
+                        const y1 = (-c - a * x1) / b;
+                        const y2 = (-c - a * x2) / b;
+                        const p1 = mathToCanvas(x1, y1), p2 = mathToCanvas(x2, y2);
+                        ctx.moveTo(p1.X, p1.Y); ctx.lineTo(p2.X, p2.Y);
+                    } else if (Math.abs(a) > 1e-8) {
+                        const y1 = minMathY - extY;
+                        const y2 = maxMathY + extY;
+                        const x1 = (-c - b * y1) / a;
+                        const x2 = (-c - b * y2) / a;
+                        const p1 = mathToCanvas(x1, y1), p2 = mathToCanvas(x2, y2);
+                        ctx.moveTo(p1.X, p1.Y); ctx.lineTo(p2.X, p2.Y);
+                    }
+                    ctx.stroke();
+                }
+
+                // 🌟 FIX: 円の描画 (浮動小数点誤差による負の平方根を回避)
+                if (n.type === 'Circle' && n.coords.length >= 4) {
+                    const [A, D, E, F] = n.coords;
+                    if (Math.abs(A) > 1e-8) {
+                        const cx_m = -D / (2 * A);
+                        const cy_m = -E / (2 * A);
+                        // 微小なマイナス誤差を 0 にクリップして NaN を防ぐ
+                        const rSq = Math.max(0, (D*D + E*E - 4*A*F) / (4*A*A));
+                        if (rSq > 0) {
+                            const r = Math.sqrt(rSq);
+                            const { X, Y } = mathToCanvas(cx_m, cy_m);
+                            ctx.beginPath();
+                            ctx.arc(X, Y, r * camera.scale, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            });
+        }
+
+        function connect() {
+            const ws = new WebSocket("ws://127.0.0.1:8765");
+            
+            ws.onopen = () => {
+                statusEl.innerText = "Connected";
+                statusEl.style.background = "#2ecc71";
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                nodesData = data.nodes;
+                focusData = data.focus;
+                const currentTheorem = data.current_theorem; // 🌟 追加
+                
+                // 🌟 FIX: 定理名とフォーカス図形を改行して見やすく表示する
+                infoEl.innerHTML = `
+                    <div style="margin-bottom: 3px;">Entities: <b>${nodesData.length}</b></div>
+                    <div style="color: #f1c40f; margin-bottom: 3px;">🔍 <b>${currentTheorem}</b> を探索中...</div>
+                    <div style="color: #aaa; font-size: 0.9em;">Focus: ${focusData.join(', ') || 'None'}</div>
+                `;
+
+                if (!camera.initialized && nodesData.length > 0) {
+                    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                    let ptsCount = 0;
+                    nodesData.forEach(n => {
+                        if (n.type === 'Point' && Math.abs(n.coords[2]) > 1e-5 && n.name.length <= 3) {
+                            const x = n.coords[0] / n.coords[2];
+                            const y = n.coords[1] / n.coords[2];
+                            if (Math.abs(x) < 10000 && Math.abs(y) < 10000) {
+                                minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                                minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                                ptsCount++;
+                            }
+                        }
+                    });
+                    if (ptsCount >= 2) {
+                        const pad = 100; 
+                        const w = maxX - minX || 1;
+                        const h = maxY - minY || 1;
+                        camera.scale = Math.min((canvas.width - pad*2) / w, (canvas.height - pad*2) / h);
+                        camera.x = canvas.width / 2 - ((maxX + minX) / 2) * camera.scale;
+                        camera.y = canvas.height / 2 + ((maxY + minY) / 2) * camera.scale;
+                        camera.initialized = true;
+                    }
+                }
+                draw();
+
+                // 右側パネルの更新
+                const entityListEl = document.getElementById('entity-list');
+                let listHtml = '';
+                
+                const abstractNodes = nodesData.filter(n => ['Angle', 'Direction', 'Scalar', 'Circle'].includes(n.type));
+                abstractNodes.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+                
+                let currentCategory = '';
+                abstractNodes.forEach(n => {
+                    if (currentCategory !== n.type) {
+                        currentCategory = n.type;
+                        listHtml += `<div style="color: #3498db; margin-top: 8px; font-weight: bold; border-bottom: 1px solid #555; padding-bottom: 2px;">${n.type}s</div>`;
+                    }
+                    
+                    const isFocused = focusData.includes(n.name);
+                    const color = isFocused ? '#f1c40f' : (n.heat > 0 ? '#e74c3c' : '#ccc');
+                    
+                    const valStr = n.coords.length > 0 ? `[${n.coords.map(c => c.toFixed(2)).join(', ')}]` : '';
+                    const parentStr = n.parents && n.parents.length > 0 ? `← (${n.parents.join(', ')})` : '';
+                    
+                    listHtml += `<div style="color: ${color}; margin: 3px 0;">
+                        <b>${n.name}</b> <span style="font-size: 0.9em;">${valStr}</span><br>
+                        <span style="color: #888; font-size: 0.85em;">${parentStr}</span>
+                    </div>`;
+                });
+                entityListEl.innerHTML = listHtml;
+            };
+
+            ws.onclose = () => {
+                statusEl.innerText = "Disconnected";
+                statusEl.style.background = "#e74c3c";
+                infoEl.innerText = "Reconnecting in 1s...";
+                camera.initialized = false; 
+                setTimeout(connect, 1000);
+            };
+
+            ws.onerror = () => ws.close();
+        }
+
+        connect();
+    </script>
+</body>
+</html>

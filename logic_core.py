@@ -825,8 +825,12 @@ class ParallelBlackboardEngine:
                     state['limit_hit'] = True
                 return
                 
-            # 🌟 NEW (プリエンプション): 100手探索しても結果が出なければ、一旦メインループに制御を返す(息継ぎ)
+            # 🌟 NEW (プリエンプション): 100手探索しても結果が出なければ息継ぎ
             if state['calls'] % 100 == 0:
+                focus_targets = [v.get_rep() for k, v in current_bind.items() if hasattr(v, 'get_rep')]
+                if hasattr(self.env, 'visualizer'):
+                    # 🌟 FIX: ここで定理名をビジュアライザに渡す
+                    self.env.visualizer.broadcast_state(focus_nodes=focus_targets, current_theorem=theorem_name)
                 yield "PAUSE"
                 
             if pattern_idx == len(patterns):

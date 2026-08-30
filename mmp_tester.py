@@ -12,6 +12,11 @@ def is_zero_mod(v):
     if hasattr(v, 'value'): return v.value == 0
     if hasattr(v, 'val'): return v.val == 0
     if hasattr(v, 'n'): return v.n == 0
+    
+    # 🌟 FIX: 標準のfloatだけでなく、NumPyのすべての実数型(np.floating)もカバーする！
+    if isinstance(v, (float, np.floating)):
+        return abs(float(v)) < 1e-8 
+        
     try: return int(v) == 0
     except: return v == 0
 

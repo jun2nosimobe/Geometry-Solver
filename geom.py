@@ -265,6 +265,15 @@ class HybridEngine:
         self.env.emit = self.rule_engine.emit
         self.EventType = EventType
         
+        # 🌟 FIX: ここで確実にビジュアライザを起動し、envにも紐付ける
+        try:
+            from visualizer import RealtimeVisualizer
+            self.visualizer = RealtimeVisualizer(self.env)
+            self.env.visualizer = self.visualizer
+        except Exception as e:
+            print(f"🚨 [Visualizer] 起動失敗 (モジュールが見つからない等): {e}")
+        
+        # MCTSエンジンで推論エンジンが使われるため、visualizer起動より後に置く
         self.agent = MCTSSearchEngine(self.env, self.all_vars, self.prover)
         
     def check_target_reached(self):
@@ -394,6 +403,10 @@ class HybridEngine:
         while time.time() - start_time < max_time_seconds:
             logic_start = time.time()
             
+            # 🌟 ターンの開始時にもビジュアライザを更新
+            if hasattr(self, 'visualizer'):
+                self.visualizer.broadcast_state()
+
             # フェーズ1: 演繹推論
             while (self.rule_engine.matcher_queue or self.rule_engine.prover_queue) and (time.time() - logic_start < 5.0):
                 self.rule_engine.run_parallel_loop(matcher_budget=10000)

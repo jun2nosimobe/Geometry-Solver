@@ -200,19 +200,20 @@ THEOREM_RIGHT_TRIANGLE_MIDPOINT = TheoremDef(
         "Ang90": "Angle", "Ang_AH_CH": "Angle", "Ang_MH_CH": "Angle", "Ang_CH_CA": "Angle"
     },
     patterns=[
-        FactPattern("Identical", ["Ang_AH_CH", "Ang90"], target_type="Angle"),
+        # 🌟 爆速化: まず「中点」を探す。これでA, C, Mが確定するため残りの探索が激減する
+        FactPattern("DefinedBy", ["A", "C", "M"], target_type="Midpoint"),
         
-        # 🌟 必ず AnglePair を先に！ (1件の直角から、親の方向を O(1) でダイレクトに逆引きする)
+        FactPattern("Identical", ["Ang_AH_CH", "Ang90"], target_type="Angle"),
         FactPattern("DefinedBy", ["Dir_AH", "Dir_CH", "Ang_AH_CH"], target_type="AnglePair"),
         
-        # 🌟 方向が特定されてから、その方向を持つ直線を逆引きする
         FactPattern("DefinedBy", ["L_AH", "Dir_AH"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["L_CH", "Dir_CH"], target_type="DirectionOf"),
         
         FactPattern("CommonEntity", ["L_AH", "L_CH", "H"], target_type="Point"),
-        FactPattern("Connected", [["A"], "L_AH"], target_type="Line", sub_type="Point"),
-        FactPattern("Connected", [["C"], "L_CH"], target_type="Line", sub_type="Point"),
-        FactPattern("DefinedBy", ["A", "C", "M"], target_type="Midpoint"),
+        
+        # 🌟 FIX: [["A"], "L_AH"] というリストの構文バグを修正
+        FactPattern("Connected", ["A", "L_AH"], target_type="Line", sub_type="Point"),
+        FactPattern("Connected", ["C", "L_CH"], target_type="Line", sub_type="Point"),
         DistinctPattern(["A", "C", "H", "M", "L_AH", "L_CH"])
     ],
     constructions=[
@@ -240,8 +241,10 @@ THEOREM_RIGHT_TRIANGLE_MEDIAN = TheoremDef(
         "Ang_A": "Angle", "Ang90": "Angle"
     },
     patterns=[
+        # 🌟 爆速化: レアなファクトである中点を先頭に配置
+        FactPattern("DefinedBy", ["B", "C", "Mid_BC"], target_type="Midpoint"),
+        
         FactPattern("Identical", ["Ang_A", "Ang90"], target_type="Angle"),
-        # 🌟 sub_type="Unordered" を allow_flip=True に変更
         FactPattern("DefinedBy", ["Dir1", "Dir2", "Ang_A"], target_type="AnglePair", allow_flip=True),
         
         FactPattern("DefinedBy", ["L1", "Dir1"], target_type="DirectionOf"),
@@ -250,8 +253,7 @@ THEOREM_RIGHT_TRIANGLE_MEDIAN = TheoremDef(
         FactPattern("Connected", ["A", "L2"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["B", "L1"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["C", "L2"], target_type="Line", sub_type="Point"),
-        DistinctPattern(["A", "B", "C"]),
-        FactPattern("DefinedBy", ["B", "C", "Mid_BC"], target_type="Midpoint")
+        DistinctPattern(["A", "B", "C"])
     ],
     constructions=[
         ConstructTemplate("LineThroughPoints", ["Mid_BC", "A"], "Line", "Line_Median"),
@@ -329,13 +331,12 @@ THEOREM_ISOSCELES_BASE_ANGLES = TheoremDef(
         "Ang_B": "Angle", "Ang_C": "Angle"
     },
     patterns=[
-        # 1. 距離の一致
+        # 🌟 爆速化: 空間全体を探すのをやめ、「既に長さが等しいペア」からO(1)でピンポイント逆引き
+        FactPattern("Identical", ["Dist_AB", "Dist_AC"]),
         FactPattern("DefinedBy", ["A", "B", "Dist_AB"], target_type="LengthSq", sub_type="Unordered"),
         FactPattern("DefinedBy", ["A", "C", "Dist_AC"], target_type="LengthSq", sub_type="Unordered"),
-        FactPattern("Identical", ["Dist_AB", "Dist_AC"]),
         DistinctPattern(["A", "B", "C"]),
         
-        # 2. 直線と方向の特定 (退化三角形を DistinctPattern で排除)
         FactPattern("DefinedBy", ["A", "B", "LineAB"], target_type="LineThroughPoints", sub_type="Unordered"),
         FactPattern("DefinedBy", ["A", "C", "LineAC"], target_type="LineThroughPoints", sub_type="Unordered"),
         FactPattern("DefinedBy", ["B", "C", "LineBC"], target_type="LineThroughPoints", sub_type="Unordered"),
@@ -344,11 +345,10 @@ THEOREM_ISOSCELES_BASE_ANGLES = TheoremDef(
         FactPattern("DefinedBy", ["LineBC", "DirBC"], target_type="DirectionOf"),
         DistinctPattern(["DirAB", "DirAC", "DirBC"]),
         
-        # 3. 🚨 角度の取得 (flip_group を使って向きを完全同期)
         FactPattern("DefinedBy", ["DirAB", "DirBC", "Ang_B"], target_type="AnglePair", allow_flip=True, flip_group="Isosceles"),
         FactPattern("DefinedBy", ["DirBC", "DirAC", "Ang_C"], target_type="AnglePair", allow_flip=True, flip_group="Isosceles")
     ],
-    constructions=[], # 危険な作図は全廃
+    constructions=[],
     conclusions=[
         FactTemplate("Identical", ["Ang_B", "Ang_C"])
     ]
