@@ -629,21 +629,17 @@ class ParallelBlackboardEngine:
         import logging
         logger = logging.getLogger("GeometryProver")
         
-        new_queue = []
-        for item in self.matcher_queue:
-            # 優先度が負の値(個別タスク)のものは残す
-            if item[0] < 0:  
-                new_queue.append(item)
-                
-        self.matcher_queue = new_queue
-        heapq.heapify(self.matcher_queue)
+        # 🌟 FIX: 古いDFSジェネレータがキューに無限に蓄積して重くなるメモリリークを修正
+        self.matcher_queue.clear()
         
         logger.info("  🔄 [Full Sweep] 構造的真実からの定理起動をスケジュールしました (最新の状態で探索リセット)")
         
         for theorem in self.prover.theorems:
-            gen = self._evaluate_patterns_dfs_wrapper(theorem.name, theorem.patterns, {})
-            # 🌟 FIX: プロファイリングの成功回数を優先度(ヒープは小さい順なのでマイナス)に変換！
-            # 過去に役立った実績のある定理ほど先に評価される
+            initial_bind = {}
+            if hasattr(self.env, 'right_angle'): initial_bind["Ang90"] = self.env.right_angle.get_rep()
+            if hasattr(self.env, 'zero_angle'): initial_bind["Ang0"] = self.env.zero_angle.get_rep()
+            
+            gen = self._evaluate_patterns_dfs_wrapper(theorem.name, theorem.patterns, initial_bind)
             succ_count = self.stats.get('theorem_success', {}).get(theorem.name, 0)
             priority = -succ_count  
             
@@ -709,7 +705,11 @@ class ParallelBlackboardEngine:
             ev_type, payload = self.prover_queue.popleft()
             if ev_type == EventType.NODE_MERGED:
                 if self._apply_congruence_closure(): applied = True
-                needs_full_sweep = True  # ループ内ではフラグを立てるだけ
+                
+                # 🌟 FIX: ここを削除！ 
+                # ノードがマージされただけでゼロから全探索をやり直すのをやめる。
+                # 賢い「差分探索キュー(FACT_PROVEN)」と「リーチ発火(PendingMatch)」に任せる。
+                # needs_full_sweep = True  
                 
         if needs_full_sweep:
             self.schedule_full_sweep()  # まとめて1回だけスケジュール！
@@ -811,11 +811,58 @@ class ParallelBlackboardEngine:
                     yield from self._evaluate_patterns_dfs_wrapper(theorem_name, patterns, bind)
 
     def _evaluate_patterns_dfs_wrapper(self, theorem_name, patterns, initial_bind):
-        MAX_DFS_CALLS = 100000  # 🌟 上限を緩和(他のタスクをブロックしなくなったため)
+        MAX_DFS_CALLS = 100000
         state = {'calls': 0, 'limit_hit': False}
         failed_paths_cache = set()
         
-        def dfs(pattern_idx, current_bind):
+        def estimate_cost(pat, bind):
+            """
+            現在のバインド状況から、パターンの探索コスト（分岐数）を動的に推定する
+            """
+            if hasattr(pat, 'fact_type'): 
+                unbound = [v for v in pat.args if isinstance(v, str) and v not in bind]
+                
+                # 1. 既に全変数がバインド済み -> 単なるチェックなのでコスト0 (最優先)
+                if not unbound: return 0.0 
+                
+                # 2. FactPatternの種類とバインド状況に応じたコスト計算
+                if pat.fact_type in ["Collinear", "Concyclic"]:
+                    if len(unbound) < len(pat.args): return 5.0 # 一部バインド済みなら高速フィルタ
+                    
+                    # 🌟 FIX: 共円や共線は幾何推論の「大黒柱」なので、ファクト数が増えても重く見せない
+                    # これにより円周角の定理やパスカルの定理が常に最優先で発火するようになる
+                    return 10.0
+                    
+                if pat.fact_type == "Identical":
+                    if len(unbound) == 1: return 1.0
+                    return 15.0 # Identicalから探すのは少し重いが、DefinedByよりはマシ
+                    
+                if pat.fact_type == "DefinedBy":
+                    if len(unbound) == 1 and pat.args[-1] in unbound: return 1.0
+                    if pat.args[-1] in bind: return 2.0
+                    return 10000.0 # 両方未バインドでの逆引きは絶対に後回し
+                    
+                if pat.fact_type == "Connected" or pat.fact_type == "CommonEntity":
+                    if len(unbound) == 1: return 5.0
+                    return 10000.0 
+                    
+                return 100.0
+                
+            elif hasattr(pat, 'vars_list'): # DistinctPattern や OrderPattern
+                unbound = [v for v in pat.vars_list if v not in bind]
+                if unbound: return float('inf') 
+                return 0.0 
+                
+            elif hasattr(pat, 'pattern'): # NotPattern
+                inner_args = getattr(pat.pattern, 'args', [])
+                unbound = [v for v in inner_args if isinstance(v, str) and v not in bind]
+                if unbound: return float('inf')
+                return 0.0
+                
+            return 100.0
+            
+
+        def dfs(remaining_patterns, current_bind):
             state['calls'] += 1
             self.stats['dfs_calls'][theorem_name] = self.stats['dfs_calls'].get(theorem_name, 0) + 1
             
@@ -825,35 +872,50 @@ class ParallelBlackboardEngine:
                     state['limit_hit'] = True
                 return
                 
-            # 🌟 NEW (プリエンプション): 100手探索しても結果が出なければ息継ぎ
             if state['calls'] % 100 == 0:
                 focus_targets = [v.get_rep() for k, v in current_bind.items() if hasattr(v, 'get_rep')]
                 if hasattr(self.env, 'visualizer'):
-                    # 🌟 FIX: ここで定理名をビジュアライザに渡す
                     self.env.visualizer.broadcast_state(focus_nodes=focus_targets, current_theorem=theorem_name)
                 yield "PAUSE"
                 
-            if pattern_idx == len(patterns):
+            if not remaining_patterns:
                 yield current_bind.copy()
                 return
 
+            # 🌟 オプティマイザ: 現在の bind 状態で「最もコストの低いパターン」を動的に選択
+            best_idx = 0
+            best_cost = float('inf')
+            for i, pat in enumerate(remaining_patterns):
+                cost = estimate_cost(pat, current_bind)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_idx = i
+
+            # 選択したパターンを抽出
+            pat_to_eval = remaining_patterns[best_idx]
+            next_remaining = remaining_patterns[:best_idx] + remaining_patterns[best_idx+1:]
+
+            # 探索のシグネチャ作成 (remaining_patternsのハッシュ値を含めて一意にする)
             bind_ids = []
             for k, v in sorted(current_bind.items()):
                 if k == '__facts__': continue
                 bind_ids.append(f"{k}:{id(v.get_rep() if hasattr(v, 'get_rep') else v)}")
-            state_sig = f"{pattern_idx}_" + "_".join(bind_ids)
+            rem_sig = str(hash(tuple(id(p) for p in next_remaining)))
+            state_sig = f"{rem_sig}_" + "_".join(bind_ids)
 
             if state_sig in failed_paths_cache:
                 return
 
             matched_any = False
-            for bound_dict in patterns[pattern_idx].match(current_bind, self.prover, self.env):
+            for bound_dict in pat_to_eval.match(current_bind, self.prover, self.env):
                 matched_any = True
-                yield from dfs(pattern_idx + 1, bound_dict)
+                yield from dfs(next_remaining, bound_dict)
                 
             if not matched_any:
                 failed_paths_cache.add(state_sig)
                 bound_points = [v.get_rep() for k, v in current_bind.items() if k != '__facts__' and hasattr(v, 'get_rep') and getattr(v.get_rep(), 'entity_type', '') == 'Point']
+                
+                # 直線のデマンド
                 if len(bound_points) >= 2:
                     for p1, p2 in itertools.combinations(set(bound_points), 2):
                         c1, c2 = p1.get_best_component(), p2.get_best_component()
@@ -861,7 +923,18 @@ class ParallelBlackboardEngine:
                             demand_sig = frozenset([p1, p2])
                             self.construction_demands[demand_sig] = self.construction_demands.get(demand_sig, 0) + 1.0
 
-        yield from dfs(0, initial_bind)
+                # 🌟 NEW: 円のデマンド (ミケルの定理など、共円や角度の定理が失敗した時に円を要求する)
+                if len(bound_points) >= 3 and getattr(pat_to_eval, 'fact_type', '') in ["Concyclic", "Connected", "AnglePair", "Collinear"]:
+                    for comb in itertools.combinations(set(bound_points), 3):
+                        p1, p2, p3 = comb
+                        c1, c2, c3 = p1.get_best_component(), p2.get_best_component(), p3.get_best_component()
+                        if c1 and c2 and c3:
+                            common_circs = [obj for obj in (c1.subobjects & c2.subobjects & c3.subobjects) if getattr(obj, 'entity_type', '') == "Circle"]
+                            if not common_circs:
+                                demand_sig = frozenset([p1, p2, p3])
+                                self.construction_demands[demand_sig] = self.construction_demands.get(demand_sig, 0) + 0.5
+        # リストに変換して動的探索を開始
+        yield from dfs(list(patterns), initial_bind)
 
     def _make_signature(self, theorem_name, bind):
         bind_ids = []
@@ -970,31 +1043,52 @@ class ParallelBlackboardEngine:
 
     def _apply_congruence_closure(self):
         start_time = time.time()
-        changed = False; def_map = {}; merge_count = 0
-        for node in list(self.env.nodes):
-            if not node.is_valid(): continue
-            rep = node.get_rep()
-            comp = rep.get_best_component()
-            if not comp: continue
-            for d in comp.definitions:
-                if not d.parents: continue
-                if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "GivenPoint", "FreePoint", "Direction", "Angle", "Scalar", "Constant"]: continue
-                rep_parents = tuple(p.get_rep() for p in d.parents)
-                unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
-                if d.def_type in unordered_types:
+        changed_any = False
+        
+        # 🌟 FIX: マージ対象がなくなるまで完全にループを回して収束させる
+        while True:
+            changed_this_round = False
+            def_map = {}
+            for node in list(self.env.nodes):
+                if not node.is_valid(): continue
+                rep = node.get_rep()
+                comp = rep.get_best_component()
+                if not comp: continue
+                
+                for d in comp.definitions:
+                    if not d.parents: continue
+                    if d.def_type in ["Point", "Line", "Circle", "Given", "Free", "GivenPoint", "FreePoint", "Direction", "Angle", "Scalar", "Constant"]: continue
+                    
                     rep_parents = tuple(p.get_rep() if hasattr(p, 'get_rep') else p for p in d.parents)
-                    rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
-                signature = (d.def_type, rep_parents)
-                if signature in def_map:
-                    existing_node = def_map[signature]
-                    rep_existing = existing_node.get_rep()
-                    rep_current = rep.get_rep()
-                    if rep_existing != rep_current:
-                        logger.debug(f"  🔄 [合同閉包] 同一の親を持つノードを統合: {rep_current.name} ≡ {rep_existing.name}")
-                        merged = self.env.merge_entities_logically(rep_existing, rep_current, force_bypass_verify=True)
-                        if merged: changed = True; merge_count += 1; break
-                else: def_map[signature] = rep.get_rep()
-        return changed
+                    unordered_types = ["LengthSq", "Intersection", "CirclesIntersection", "Midpoint", "LineThroughPoints", "Circumcircle", "OtherLineCircleIntersection"]
+                    
+                    if d.def_type in unordered_types:
+                        rep_parents = tuple(sorted(rep_parents, key=lambda x: getattr(x, 'name', str(id(x)))))
+                        
+                    signature = (d.def_type, rep_parents)
+                    
+                    if signature in def_map:
+                        existing_node = def_map[signature]
+                        rep_existing = existing_node.get_rep()
+                        rep_current = rep.get_rep()
+                        
+                        if rep_existing != rep_current:
+                            logger.debug(f"  🔄 [合同閉包] 同一の親を持つノードを統合: {rep_current.name} ≡ {rep_existing.name}")
+                            merged = self.env.merge_entities_logically(rep_existing, rep_current, force_bypass_verify=True)
+                            if merged: 
+                                changed_this_round = True
+                                changed_any = True
+                                break # リストが変更されたためforループを抜けてリスタート
+                    else: 
+                        def_map[signature] = rep.get_rep()
+                        
+                if changed_this_round:
+                    break # forループを抜けてwhileの先頭から再チェック
+                    
+            if not changed_this_round:
+                break # どこもマージされなくなったら完全収束
+                
+        return changed_any
 
     def _apply_identical(self, theorem_name, conc, bind):
         reps = [bind[arg].get_rep() for arg in conc.args]

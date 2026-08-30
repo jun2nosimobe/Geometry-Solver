@@ -347,7 +347,10 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
         link_logical_incidence(parents[1], new_entity)
 
         dir_name = f"Dir_{getattr(new_entity, 'name', 'Unknown')}_(Auto)"
-        create_geo_entity("DirectionOf", [new_entity], name=dir_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
+        # 🌟 FIX: 自動生成した方向に、必ず直線(new_entity)との論理的リンクを張る！
+        new_dir = create_geo_entity("DirectionOf", [new_entity], name=dir_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
+        if new_dir:
+            link_logical_incidence(new_entity, new_dir)
         
     elif def_type in ["Intersection", "OtherLineCircleIntersection", "CirclesIntersection"]:
         link_logical_incidence(new_entity, parents[0])
@@ -362,6 +365,10 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
         
         dir1 = create_geo_entity("DirectionOf", [ln], name=dir1_name, env=env, importance=getattr(ln, 'base_importance', 1.0))
         dir2 = create_geo_entity("DirectionOf", [new_entity], name=dir2_name, env=env, importance=getattr(new_entity, 'base_importance', 1.0))
+        
+        # 🌟 FIX: 自動生成した方向にも、必ず直線との論理的リンクを張る！
+        if dir1: link_logical_incidence(ln, dir1)
+        if dir2: link_logical_incidence(new_entity, dir2)
         
         if getattr(new_entity, 'base_importance', 1.0) > 0.0:
             if def_type == "PerpendicularLine":
@@ -449,12 +456,14 @@ def apply_trivial_relations(new_entity: GeoEntity, definition: Definition, env):
 # 🌟 図形タイプのマッピング辞書
 # ==========================================
 ENTITY_TYPE_MAP = {
+    # 🌟 FIX: 初期点(FreePoint等)が "Unknown" になり、全定理の型チェックで弾かれるバグを修正
+    "Point": "Point", "FreePoint": "Point", "GivenPoint": "Point",
     "Intersection": "Point", "Midpoint": "Point", "CirclesIntersection": "Point", "PoleOfLine": "Point",
     "LineThroughPoints": "Line", "PerpendicularLine": "Line", "ParallelLine": "Line", "TangentLine": "Line",
     "Circumcircle": "Circle",
     "DirectionOf": "Direction",
     "AnglePair": "Angle",
-    "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar",
+    "LengthSq": "Scalar", "AffineRatio": "Scalar", "Constant": "Scalar", "Free": "Scalar", "Given": "Scalar",
     "Triangle": "Triangle",
     "ShapeOf": "Shape"
 }

@@ -65,10 +65,18 @@ def setup_problem(env):
     Perp_P_AB = create_geo_entity("PerpendicularLine", [LineAB, P], "Perp_P_AB", env)
     F = create_geo_entity("Intersection", [LineAB, Perp_P_AB], "F", env)
 
-    # 目標は D, E, F が一直線上にあること
-    target_fact = Fact("Collinear", [D, E, F])
+    # ==========================================
+    # 🌟 FIX: シムソン線の欠片を初期作図し、エンジンに「この方向を調べて！」と明示する
+    # ==========================================
+    Line_DE = create_geo_entity("LineThroughPoints", [D, E], "Line_DE", env)
+    Line_FD = create_geo_entity("LineThroughPoints", [F, D], "Line_FD", env)
 
-    # 🌟 FIX: 問題の前提条件を論理事実(Fact)として明記し、Proverに渡す
+    Dir_DE = create_geo_entity("DirectionOf", [Line_DE], "Dir_DE", env)
+    Dir_FD = create_geo_entity("DirectionOf", [Line_FD], "Dir_FD", env)
+
+    # 🌟 FIX: D, E, F が一直線上にあること = DEの方向とFDの方向が一致すること
+    target_fact = Fact("Identical", [Dir_DE, Dir_FD])
+
     initial_facts = [
         Fact("Collinear", [B, D, C]),
         Fact("Collinear", [C, E, A]),
@@ -76,5 +84,4 @@ def setup_problem(env):
         Fact("Concyclic", [A, B, C, P])
     ]
     
-    # 全てE-Graphに書き込んだため、初期Factリストは空で返す
     return all_vars, target_fact, initial_facts

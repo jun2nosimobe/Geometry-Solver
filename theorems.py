@@ -2,7 +2,7 @@
 
 from logic_core import (
     TheoremDef, FactPattern, NotPattern, CustomPattern,
-    ConstructTemplate, FactTemplate,  get_subentity, DistinctPattern,
+    ConstructTemplate, FactTemplate,  get_subentity, DistinctPattern, OrderPattern
 )
 
 def get_constant_value(scalar_entity):
@@ -33,6 +33,8 @@ THEOREM_CYCLIC_ANGLES = TheoremDef(
     patterns=[
         FactPattern("Concyclic", ["Apex1", "Apex2", "Base1", "Base2"], sub_type="Unordered"),
         DistinctPattern(["Apex1", "Apex2", "Base1", "Base2"]),
+        #OrderPattern(["Apex1", "Apex2"]),
+        #OrderPattern(["Base1", "Base2"]),
         
         FactPattern("Connected", ["Apex1", "L_A1_B1"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["Base1", "L_A1_B1"], target_type="Line", sub_type="Point"),
@@ -503,17 +505,14 @@ THEOREM_ALTERNATE_SEGMENT = TheoremDef(
         "Ang_L_AB": "Angle", "Ang_AD_BD": "Angle"
     },
     patterns=[
-        # 1. 円と点の接続
         FactPattern("Connected", ["A", "C"], target_type="Circle", sub_type="Point"),
         FactPattern("Connected", ["B", "C"], target_type="Circle", sub_type="Point"),
         FactPattern("Connected", ["D", "C"], target_type="Circle", sub_type="Point"),
         
-        # 2. 直線Lが円Cに接しており、接点がAであること
         FactPattern("Connected", ["L", "C"], target_type="Circle", sub_type="Line"),
         FactPattern("Connected", ["A", "L"], target_type="Line", sub_type="Point"),
         DistinctPattern(["A", "B", "D"]),
         
-        # 3. 弦となる直線とその接続
         FactPattern("Connected", ["A", "Line_AB"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["B", "Line_AB"], target_type="Line", sub_type="Point"),
         FactPattern("Connected", ["A", "Line_AD"], target_type="Line", sub_type="Point"),
@@ -522,22 +521,19 @@ THEOREM_ALTERNATE_SEGMENT = TheoremDef(
         FactPattern("Connected", ["D", "Line_BD"], target_type="Line", sub_type="Point"),
         DistinctPattern(["L", "Line_AB", "Line_AD", "Line_BD"]),
         
-        # 4. 方向ベクトルの取得
         FactPattern("DefinedBy", ["L", "Dir_L"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_AB", "Dir_AB"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_AD", "Dir_AD"], target_type="DirectionOf"),
         FactPattern("DefinedBy", ["Line_BD", "Dir_BD"], target_type="DirectionOf"),
         
-        # 5. 🌟 角度の同期マッチング (flip_group を使って反転を許容・同期させる)
         FactPattern("DefinedBy", ["Dir_L", "Dir_AB", "Ang_L_AB"], target_type="AnglePair", allow_flip=True, flip_group="AltSeg"),
         FactPattern("DefinedBy", ["Dir_AD", "Dir_BD", "Ang_AD_BD"], target_type="AnglePair", allow_flip=True, flip_group="AltSeg"),
 
-        
         DistinctPattern(["L", "Line_AB"]),
         DistinctPattern(["L", "Line_AD"]),
         DistinctPattern(["L", "Line_BD"]),
         
-        # 6. 無駄な自己マージ弾き
+        # 🌟 FIX: 無駄な自己マージ(Angle ≡ Angle)を探索段階で完全に弾く
         DistinctPattern(["Ang_L_AB", "Ang_AD_BD"])
     ],
     constructions=[],

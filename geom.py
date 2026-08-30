@@ -322,19 +322,112 @@ class HybridEngine:
             return False
             
         from mmp_core import create_geo_entity
-        demands = list(self.rule_engine.construction_demands.keys())
+        # 🌟 FIX: 要求を需要が高い(スコア順)にソートし、上位5件のみ作図する(組み合わせ爆発防止)
+        demands = sorted(self.rule_engine.construction_demands.items(), key=lambda x: x[1], reverse=True)[:5]
         self.rule_engine.construction_demands.clear()
         
-        for demand_sig in demands:
-            p1, p2 = list(demand_sig)
-            print(f"  💡 [オンデマンド作図] 論理エンジンの要請により {p1.name} と {p2.name} を結ぶ直線を生成します")
-            new_line = create_geo_entity("LineThroughPoints", [p1, p2], name=f"Line_{p1.name}_{p2.name}_(Demand)", env=self.env, importance=10.0)
-            if new_line:
-                self.env.tester.discover_all_mmp_relations(new_line, [p1, p2])
+        applied = False
+        for demand_sig, score in demands:
+            pts = list(demand_sig)
+            new_obj = None
+            if len(pts) == 2:
+                p1, p2 = pts
+                print(f"  💡 [オンデマンド作図] 要請により {p1.name} と {p2.name} を結ぶ直線を生成 (需要: {score:.1f})")
+                new_obj = create_geo_entity("LineThroughPoints", [p1, p2], name=f"Line_{p1.name}_{p2.name}_(Demand)", env=self.env, importance=10.0)
+            #elif len(pts) == 3:
+            #    p1, p2, p3 = pts
+            #    print(f"  💡 [オンデマンド作図] 要請により {p1.name}, {p2.name}, {p3.name} を通る円を生成 (需要: {score:.1f})")
+            #    new_obj = create_geo_entity("Circumcircle", [p1, p2, p3], name=f"Circ_{p1.name}_{p2.name}_{p3.name}_(Demand)", env=self.env, importance=10.0)
+            
+            if new_obj:
+                self.env.tester.discover_all_mmp_relations(new_obj, pts)
+                applied = True
                 
-        self.rule_engine.schedule_full_sweep()
-        return True
+        if applied:
+            self.rule_engine.schedule_full_sweep()
+        return applied
 
+    def resolve_angle_demands(self):
+        """フェーズ1.5: 欠落Directionの補完と、意味のある有向角(交点を持つ直線のペア)のみを生成"""
+        from mmp_core import create_geo_entity
+        import itertools
+        
+        applied = False
+        
+        # 🌟 1. Directionの欠落を補完 (直線があるのに方向がないものを救済)
+        for n in self.env.nodes:
+            if n.is_valid() and getattr(n.get_rep(), 'entity_type', '') == 'Line':
+                line_rep = n.get_rep()
+                has_dir = False
+                comp = line_rep.get_best_component()
+                if comp:
+                    for sub in comp.subobjects:
+                        if getattr(sub.get_rep(), 'entity_type', '') == 'Direction':
+                            has_dir = True; break
+                if not has_dir:
+                    dir_name = f"Dir_{getattr(line_rep, 'name', 'Unknown')}_(Fallback)"
+                    new_dir = create_geo_entity("DirectionOf", [line_rep], name=dir_name, env=self.env, importance=2.0)
+                    if new_dir: applied = True
+
+        # 🌟 2. 筋の良い角度生成: 「共通の交点を持つ2直線」の方向ペアだけを抽出
+        valid_angle_pairs = set()
+        for pt in self.env.nodes:
+            if not pt.is_valid() or getattr(pt.get_rep(), 'entity_type', '') != 'Point': continue
+            
+            # この点(交点)を通る直線をすべて集める
+            lines_on_pt = []
+            for n in self.env.nodes:
+                if not n.is_valid() or getattr(n.get_rep(), 'entity_type', '') != 'Line': continue
+                l_rep = n.get_rep()
+                comp = l_rep.get_best_component()
+                if comp:
+                    # Line の構成要素や定義の中にこの点が含まれているか
+                    pts_on_line = [s.get_rep() for s in comp.subobjects if getattr(s.get_rep(), 'entity_type', '') == 'Point']
+                    pts_on_line += [p.get_rep() for d in comp.definitions for p in d.parents if hasattr(p, 'get_rep') and getattr(p.get_rep(), 'entity_type', '') == 'Point']
+                    if pt.get_rep() in pts_on_line:
+                        lines_on_pt.append(l_rep)
+            
+            # その点を通る2直線の方向ペアを有効リストに追加
+            if len(lines_on_pt) >= 2:
+                for l1, l2 in itertools.combinations(lines_on_pt, 2):
+                    d1, d2 = None, None
+                    for sub in l1.get_best_component().subobjects:
+                        if getattr(sub.get_rep(), 'entity_type', '') == 'Direction': d1 = sub.get_rep()
+                    for sub in l2.get_best_component().subobjects:
+                        if getattr(sub.get_rep(), 'entity_type', '') == 'Direction': d2 = sub.get_rep()
+                    if d1 and d2:
+                        valid_angle_pairs.add(frozenset([d1, d2]))
+
+        # 3. 既に存在するAnglePairをハッシュ化して高速チェック
+        existing_pairs = set()
+        for n in self.env.nodes:
+            if n.is_valid() and getattr(n.get_rep(), 'entity_type', '') == 'Angle':
+                comp = n.get_rep().get_best_component()
+                if comp:
+                    for d in comp.definitions:
+                        if d.def_type == "AnglePair" and len(d.parents) == 2:
+                            p1 = d.parents[0].get_rep() if hasattr(d.parents[0], 'get_rep') else d.parents[0]
+                            p2 = d.parents[1].get_rep() if hasattr(d.parents[1], 'get_rep') else d.parents[1]
+                            existing_pairs.add(frozenset([p1, p2]))
+
+        # 4. 未生成の意味のあるペアだけを実際に作図
+        sorted_pairs = sorted(list(valid_angle_pairs), key=lambda x: str([getattr(d, 'name', '') for d in x]))
+        for pair in sorted_pairs:
+            if pair not in existing_pairs:
+                d1, d2 = tuple(pair)
+                name = f"AnglePair_{getattr(d1, 'name', 'D1')}_{getattr(d2, 'name', 'D2')}_(Auto)"
+                new_ang = create_geo_entity("AnglePair", [d1, d2], name=name, env=self.env, importance=2.0)
+                if new_ang:
+                    existing_pairs.add(pair)
+                    self.env.tester.discover_all_mmp_relations(new_ang, [d1, d2])
+                    applied = True
+                    
+        if applied:
+            print(f"  💡 [スマート補完] 欠落Directionと、交点を持つ意味のある有向角のみを自動生成しました。")
+            self.rule_engine.schedule_full_sweep()
+            
+        return applied
+    
     def resolve_fallbacks(self):
         """フェーズ3: 共円グループの未結線補完"""
         found_fallback = False
@@ -376,6 +469,7 @@ class HybridEngine:
                     break
                     
         return found_fallback
+    
 
     def run(self, max_time_seconds=60.0):
         import time
@@ -423,8 +517,20 @@ class HybridEngine:
                 print(f"\n⏳ [Time: {time.time()-start_time:.1f}s] ロジックがStallしました。リカバリーフェーズに移行します...")
                 self.rule_engine.print_bottlenecks()
                 
-                # フェーズ2: オンデマンド作図
-                if self.resolve_demands(): continue
+                # 🌟 FIX: オンデマンド作図(直線/円)とスマート角度生成を「両方とも」実行する
+                recovered = False
+                
+                # フェーズ2: まず論理エンジンが切望している補助線や円を引く
+                if self.resolve_demands():
+                    recovered = True
+                
+                # フェーズ1.5: その新しく引かれた線も含めて、意味のある角度を網羅する
+                if self.resolve_angle_demands():
+                    recovered = True
+                
+                # どちらか一方でも作図・生成が行われていれば推論ループに戻る
+                if recovered:
+                    continue
                 
                 # フェーズ3: フォールバック作図
                 if self.resolve_fallbacks(): continue
