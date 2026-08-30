@@ -93,11 +93,13 @@ impl EGraph {
 
     // 🌟 Hash Consingによる図形の生成
     pub fn create_entity(&mut self, name: String, def: Definition, e_type: EntityType) -> ClassId {
-        // 既に同じ定義が存在すれば、既存の代表元を返す (O(1))
-        if let Some(&existing_id) = self.memo.get(&def) {
-            return self.get_rep(existing_id);
+        let should_memoize = !matches!(def, Definition::FreePoint | Definition::GivenPoint);
+        if should_memoize {
+            // 既に同じ定義が存在すれば、既存の代表元を返す (O(1))
+            if let Some(&existing_id) = self.memo.get(&def) {
+                return self.get_rep(existing_id);
+            }
         }
-
         let id = ClassId(self.entities.len());
         let entity = GeoEntity {
             id,
@@ -113,7 +115,10 @@ impl EGraph {
 
         self.entities.push(entity);
         self.parents.push(Cell::new(id.0));
-        self.memo.insert(def, id);
+        
+        if should_memoize {
+            self.memo.insert(def, id);
+        }
         id
     }
 }
