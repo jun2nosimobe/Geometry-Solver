@@ -1,0 +1,8 @@
+[package]
+name = "geom_solver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustc-hash = "1.1.0"
+itertools = "0.11.0"
