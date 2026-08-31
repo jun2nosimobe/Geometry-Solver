@@ -83,3 +83,33 @@ pub fn calc_parallel(l: &[ModInt], p: &[ModInt]) -> Vec<ModInt> {
     let inf_pt = [-l[1], l[0], ModInt::new(0)];
     normalize(&cross_product(&inf_pt, p))
 }
+
+pub fn calc_squared_distance(v1: &[ModInt], v2: &[ModInt]) -> ModInt {
+    let x1 = v1[0] / v1[2];
+    let y1 = v1[1] / v1[2];
+    let x2 = v2[0] / v2[2];
+    let y2 = v2[1] / v2[2];
+    let dx = x1 - x2;
+    let dy = y1 - y2;
+    dx * dx + dy * dy
+}
+
+
+pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
+    // vc: [D, E, F, A] (A(x^2+y^2) + Dx + Ey + F = 0)
+    // vp: [x, y, z] (接点)
+    let d = vc[0];
+    let e = vc[1];
+    let f = vc[2];
+    let a_val = vc[3];
+    
+    let x0 = vp[0] / vp[2];
+    let y0 = vp[1] / vp[2];
+    
+    let two = ModInt::new(2);
+    let a = a_val * x0 + d / two;
+    let b = a_val * y0 + e / two;
+    let c = (d / two) * x0 + (e / two) * y0 + f;
+    
+    normalize(&[a, b, c])
+}

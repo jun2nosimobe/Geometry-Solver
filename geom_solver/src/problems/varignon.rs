@@ -23,5 +23,6 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     ProblemSetup {
         target_fact: Some(("Identical".to_string(), vec![dir_pq, dir_sr])),
+        initial_facts: vec![],
     }
 }

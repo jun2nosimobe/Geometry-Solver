@@ -35,5 +35,6 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     ProblemSetup {
         target_fact: Some(("Identical".to_string(), vec![ang1, ang2])),
+        initial_facts: vec![],
     }
 }
