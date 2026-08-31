@@ -18,8 +18,8 @@ fn main() {
     let mut egraph = EGraph::new();
     let tester = MMPTester::new();
 
-    // 🌟 問題を動的にロード (今回は cyclic_quad)
-    let problem = problems::load_problem("cyclic_quad", &mut egraph);
+    // 🌟 問題を動的にロード
+    let problem = problems::load_problem("tangent_orthic", &mut egraph);
 
     let mut prover = ProverEngine::new(egraph);
     prover.theorems = theorems::get_all_theorems();

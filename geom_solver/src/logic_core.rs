@@ -396,13 +396,20 @@ impl ProverEngine {
         }
     }
 
-    pub fn execute_constructions(&mut self, theorem_name: &str, constructions: &[ConstructTemplate], bind: &mut FxHashMap<String, ClassId>) -> bool {
+    pub fn execute_constructions(
+        &mut self,
+        theorem_name: &str,
+        constructions: &[ConstructTemplate],
+        bind: &mut FxHashMap<String, ClassId>,
+    ) -> bool {
         for constr in constructions {
             let mut parent_ids = Vec::new();
             for arg in &constr.args {
                 if let Some(&id) = bind.get(arg) {
                     parent_ids.push(self.egraph.get_rep(id));
-                } else { return false; }
+                } else {
+                    return false;
+                }
             }
             
             let def = match constr.def_type.as_str() {
@@ -413,17 +420,45 @@ impl ProverEngine {
                     Definition::Midpoint(a, b)
                 },
                 "AnglePair" => Definition::AnglePair(parent_ids[0], parent_ids[1]),
+                "Intersection" => {
+                    let (l1, l2) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::Intersection(l1, l2)
+                },
+                "PerpendicularLine" => Definition::PerpendicularLine(parent_ids[0], parent_ids[1]),
+                "TangentLine" => Definition::TangentLine(parent_ids[0], parent_ids[1]),
+                "Circumcircle" => {
+                    let mut arr = [parent_ids[0].0, parent_ids[1].0, parent_ids[2].0];
+                    arr.sort_unstable();
+                    Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
+                },
                 _ => return false,
             };
-            
-            let entity_type = match constr.target_type.as_str() {
-                "Line" => EntityType::Line, "Direction" => EntityType::Direction,
-                "Angle" => EntityType::Angle, _ => EntityType::Point,
+
+            // 🌟 FIX: 既に同じ定義のエンティティがキャッシュ（memo）に存在する場合は、
+            // 新規作成せずに既存のIDを再利用して無限ループ・ゴミ生成を防ぐ
+            let new_id = if let Some(&existing_id) = self.egraph.memo.get(&def) {
+                self.egraph.get_rep(existing_id)
+            } else {
+                let entity_type = match constr.target_type.as_str() {
+                    "Line" => EntityType::Line, 
+                    "Direction" => EntityType::Direction,
+                    "Angle" => EntityType::Angle, 
+                    "Circle" => EntityType::Circle,
+                    _ => EntityType::Point,
+                };
+                
+                // ネストした変数を防ぐために、定理名が既に含まれていたらそのまま使う
+                let name = if theorem_name.contains("(Auto)") {
+                    format!("{}_Auto", constr.def_type)
+                } else {
+                    format!("{}_{}_(Auto)", constr.def_type, theorem_name)
+                };
+                
+                let id = self.egraph.create_entity(name, def.clone(), entity_type);
+                self.egraph.apply_trivial_relations(id, &def);
+                id
             };
             
-            let name = format!("{}_{}_(Auto)", constr.def_type, theorem_name);
-            let new_id = self.egraph.create_entity(name, def.clone(), entity_type);
-            self.egraph.apply_trivial_relations(new_id, &def);
             bind.insert(constr.bind_to.clone(), new_id);
         }
         true

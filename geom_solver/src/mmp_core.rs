@@ -29,6 +29,7 @@ pub enum Definition {
     AnglePair(ClassId, ClassId),
     Midpoint(ClassId, ClassId),
     LengthSq(ClassId, ClassId),
+    TangentLine(ClassId, ClassId),
 }
 
 impl Definition {
@@ -50,6 +51,7 @@ impl Definition {
             Definition::Circumcircle(_,_,_) => "Circumcircle",
             Definition::PerpendicularLine(_,_) => "PerpendicularLine",
             Definition::LengthSq(_,_) => "LengthSq",
+            Definition::TangentLine(_,_) => "TangentLine",
         }
     }
     
@@ -63,6 +65,7 @@ impl Definition {
             Definition::PerpendicularLine(a, b) => vec![*a, *b],
             Definition::Circumcircle(a, b, c) => vec![*a, *b, *c],
             Definition::LengthSq(a, b) => vec![*a, *b],
+            Definition::TangentLine(c, p) => vec![*c, *p],
             _ => vec![],
         }
     }
@@ -280,6 +283,12 @@ impl EGraph {
                 let r1 = self.get_rep(*p1);
                 let r2 = self.get_rep(*p2);
                 if r1.0 > r2.0 { Definition::LengthSq(r2, r1) } else { Definition::LengthSq(r1, r2) }
+            },
+            Definition::TangentLine(c, p) => {
+                Definition::TangentLine(self.get_rep(*c), self.get_rep(*p))
+            },
+            Definition::PerpendicularLine(l, p) => {
+                Definition::PerpendicularLine(self.get_rep(*l), self.get_rep(*p))
             },
             _ => def.clone(),
         }

@@ -85,23 +85,26 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "直線の一致条件".to_string(),
             entities: entities(&[
-                ("P", EntityType::Point), ("L1", EntityType::Line),
-                ("L2", EntityType::Line), ("Dir", EntityType::Direction),
+                ("P", EntityType::Point),
+                ("L1", EntityType::Line), ("L2", EntityType::Line),
+                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction)
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["L1", "Dir"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L2", "Dir"], Some("DirectionOf"), None, false, None),
-                distinct(&["L1", "L2"]),
-                fact_ext("Connected", &["P", "L1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P", "L2"], Some("Line"), Some("Point"), false, None),
+                // 🌟 必須条件: 2つの直線が「共通の点P」を通っていること
+                fact_ext("Connected", &["P", "L1"], None, None, false, None),
+                fact_ext("Connected", &["P", "L2"], None, None, false, None),
+                
+                fact_ext("DefinedBy", &["L1", "Dir1"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["L2", "Dir2"], Some("DirectionOf"), None, false, None),
+                fact_ext("Identical", &["Dir1", "Dir2"], None, None, false, None),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate {
-                    fact_type: "Identical".to_string(),
-                    args: vec!["L1".to_string(), "L2".to_string()],
-                    target_type: Some("Line".to_string()),
-                    sub_type: None,
+                FactTemplate { 
+                    fact_type: "Identical".to_string(), 
+                    args: vec!["L1".to_string(), "L2".to_string()], 
+                    target_type: Some("Line".to_string()), 
+                    sub_type: None 
                 }
             ],
         },
@@ -112,28 +115,22 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
                 ("M1", EntityType::Point), ("M2", EntityType::Point),
-                ("L_BC", EntityType::Line), ("L_M1M2", EntityType::Line),
-                ("Dir_BC", EntityType::Direction), ("Dir_M1M2", EntityType::Direction),
+                ("LineBC", EntityType::Line), ("LineM1M2", EntityType::Line),
+                ("DirBC", EntityType::Direction), ("DirM1M2", EntityType::Direction),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["A", "B", "M1"], Some("Midpoint"), None, false, None),
-                fact_ext("DefinedBy", &["A", "C", "M2"], Some("Midpoint"), None, false, None),
+                fact_ext("DefinedBy", &["A", "B", "M1"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "M2"], Some("Midpoint"), Some("Unordered"), false, None),
                 distinct(&["A", "B", "C", "M1", "M2"]),
-                not(fact("Collinear", &["A", "B", "C"])),
+                
+                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["M1", "M2", "LineM1M2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineM1M2", "DirM1M2"], Some("DirectionOf"), None, false, None),
             ],
-            constructions: vec![
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["B".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "L_BC".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["M1".to_string(), "M2".to_string()], target_type: "Line".to_string(), bind_to: "L_M1M2".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_BC".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_BC".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_M1M2".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_M1M2".to_string() },
-            ],
+            constructions: vec![],
             conclusions: vec![
-                FactTemplate {
-                    fact_type: "Identical".to_string(),
-                    args: vec!["Dir_BC".to_string(), "Dir_M1M2".to_string()],
-                    target_type: Some("Direction".to_string()),
-                    sub_type: None,
-                }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["DirBC".to_string(), "DirM1M2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
             ],
         },
 
@@ -173,6 +170,39 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                     target_type: Some("Angle".to_string()),
                     sub_type: None,
                 }
+            ],
+        },
+
+        TheoremDef {
+            name: "接弦定理".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
+                ("Circ", EntityType::Circle), ("TanA", EntityType::Line),
+                ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
+                ("DirTan", EntityType::Direction), ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirBC", EntityType::Direction),
+                ("AngTan", EntityType::Angle), ("AngBCA", EntityType::Angle),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["A", "B", "C", "Circ"], Some("Circumcircle"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["Circ", "A", "TanA"], Some("TangentLine"), None, false, None),
+                distinct(&["A", "B", "C"]),
+                
+                fact_ext("DefinedBy", &["A", "B", "LineAB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "LineAC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                
+                fact_ext("DefinedBy", &["TanA", "DirTan"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineAB", "DirAB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineAC", "DirAC"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
+                
+                // 接線とABのなす角 ≡ 弧ABに対する円周角(C)
+                fact_ext("DefinedBy", &["DirTan", "DirAB", "AngTan"], Some("AnglePair"), None, true, Some("TanGrp")),
+                fact_ext("DefinedBy", &["DirAC", "DirBC", "AngBCA"], Some("AnglePair"), None, true, Some("TanGrp")),
+            ],
+            constructions: vec![],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngTan".to_string(), "AngBCA".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
             ],
         },
     ]
