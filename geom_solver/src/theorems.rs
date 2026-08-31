@@ -44,44 +44,37 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "円周角の定理".to_string(),
             entities: entities(&[
-                ("Apex1", EntityType::Point), ("Apex2", EntityType::Point),
-                ("Base1", EntityType::Point), ("Base2", EntityType::Point),
-                ("L_A1_B1", EntityType::Line), ("L_A1_B2", EntityType::Line),
-                ("L_A2_B1", EntityType::Line), ("L_A2_B2", EntityType::Line),
-                ("Dir_A1_B1", EntityType::Direction), ("Dir_A1_B2", EntityType::Direction),
-                ("Dir_A2_B1", EntityType::Direction), ("Dir_A2_B2", EntityType::Direction),
-                ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point),
+                ("Circ", EntityType::Circle),
+                ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineDB", EntityType::Line), ("LineDC", EntityType::Line),
+                ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirDB", EntityType::Direction), ("DirDC", EntityType::Direction),
+                ("Ang_BAC", EntityType::Angle), ("Ang_BDC", EntityType::Angle),
             ]),
             patterns: vec![
-                fact_ext("Concyclic", &["Apex1", "Apex2", "Base1", "Base2"], None, Some("Unordered"), false, None),
-                distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
+                // 🌟 A,B,Cを通る円(Circ)上に、点Dも乗っている(Connected)という条件
+                fact_ext("DefinedBy", &["A", "B", "C", "Circ"], Some("Circumcircle"), Some("Unordered"), false, None),
+                fact_ext("Connected", &["D", "Circ"], None, None, false, None),
+                distinct(&["A", "B", "C", "D"]),
                 
-                fact_ext("Connected", &["Apex1", "L_A1_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base1", "L_A1_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Apex1", "L_A1_B2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base2", "L_A1_B2"], Some("Line"), Some("Point"), false, None),
-                distinct(&["L_A1_B1", "L_A1_B2"]),
+                fact_ext("DefinedBy", &["A", "B", "LineAB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "LineAC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["D", "B", "LineDB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["D", "C", "LineDC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 
-                fact_ext("Connected", &["Apex2", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base1", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Apex2", "L_A2_B2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base2", "L_A2_B2"], Some("Line"), Some("Point"), false, None),
-                distinct(&["L_A2_B1", "L_A2_B2"]),
+                fact_ext("DefinedBy", &["LineAB", "DirAB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineAC", "DirAC"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineDB", "DirDB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineDC", "DirDC"], Some("DirectionOf"), None, false, None),
                 
-                fact_ext("DefinedBy", &["L_A1_B1", "Dir_A1_B1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A1_B2", "Dir_A1_B2"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A2_B1", "Dir_A2_B1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A2_B2", "Dir_A2_B2"], Some("DirectionOf"), None, false, None),
-                
-                fact_ext("DefinedBy", &["Dir_A1_B1", "Dir_A1_B2", "Ang1"], Some("AnglePair"), None, true, Some("Cyclic")),
-                fact_ext("DefinedBy", &["Dir_A2_B1", "Dir_A2_B2", "Ang2"], Some("AnglePair"), None, true, Some("Cyclic")),
-                distinct(&["Ang1", "Ang2"]),
+                // 🌟 角度のフリップ同期 ("CircGroup" として向きを揃える)
+                fact_ext("DefinedBy", &["DirAB", "DirAC", "Ang_BAC"], Some("AnglePair"), None, true, Some("CircGroup")),
+                fact_ext("DefinedBy", &["DirDB", "DirDC", "Ang_BDC"], Some("AnglePair"), None, true, Some("CircGroup")),
             ],
             constructions: vec![],
             conclusions: vec![
                 FactTemplate {
                     fact_type: "Identical".to_string(),
-                    args: vec!["Ang1".to_string(), "Ang2".to_string()],
+                    args: vec!["Ang_BAC".to_string(), "Ang_BDC".to_string()],
                     target_type: Some("Angle".to_string()),
                     sub_type: None,
                 }
@@ -139,6 +132,45 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                     fact_type: "Identical".to_string(),
                     args: vec!["Dir_BC".to_string(), "Dir_M1M2".to_string()],
                     target_type: Some("Direction".to_string()),
+                    sub_type: None,
+                }
+            ],
+        },
+
+        TheoremDef {
+            name: "二等辺三角形の底角".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
+                ("Dist_AB", EntityType::Scalar), ("Dist_AC", EntityType::Scalar),
+                ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
+                ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirBC", EntityType::Direction),
+                ("Ang_B", EntityType::Angle), ("Ang_C", EntityType::Angle),
+            ]),
+            patterns: vec![
+                fact_ext("Identical", &["Dist_AB", "Dist_AC"], None, None, false, None),
+                fact_ext("DefinedBy", &["A", "B", "Dist_AB"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "Dist_AC"], Some("LengthSq"), Some("Unordered"), false, None),
+                distinct(&["A", "B", "C"]),
+                
+                fact_ext("DefinedBy", &["A", "B", "LineAB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "LineAC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                
+                fact_ext("DefinedBy", &["LineAB", "DirAB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineAC", "DirAC"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
+                distinct(&["DirAB", "DirAC", "DirBC"]),
+                
+                // 🌟 フリップ同期グループ "Isosceles" を適用
+                fact_ext("DefinedBy", &["DirAB", "DirBC", "Ang_B"], Some("AnglePair"), None, true, Some("Isosceles")),
+                fact_ext("DefinedBy", &["DirBC", "DirAC", "Ang_C"], Some("AnglePair"), None, true, Some("Isosceles")),
+            ],
+            constructions: vec![],
+            conclusions: vec![
+                FactTemplate {
+                    fact_type: "Identical".to_string(),
+                    args: vec!["Ang_B".to_string(), "Ang_C".to_string()],
+                    target_type: Some("Angle".to_string()),
                     sub_type: None,
                 }
             ],
