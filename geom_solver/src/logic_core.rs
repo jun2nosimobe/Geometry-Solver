@@ -103,8 +103,14 @@ impl ProverEngine {
         }
     }
 
-    pub fn dfs_match<F>(&mut self, theorem: &TheoremDef, mut remaining: Vec<Pattern>, mut bind: FxHashMap<String, ClassId>, on_match: &mut F) 
-    where F: FnMut(&FxHashMap<String, ClassId>) {
+    // 🌟 FIX: <F> ジェネリクスを削除し、引数を &mut dyn FnMut に変更
+    pub fn dfs_match(
+        &mut self, 
+        theorem: &TheoremDef, 
+        mut remaining: Vec<Pattern>, 
+        mut bind: FxHashMap<String, ClassId>, 
+        on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>)
+    ) {
         self.dfs_calls += 1;
         if self.dfs_calls > 100_000 { return; }
 
@@ -121,7 +127,7 @@ impl ProverEngine {
         }
 
         let pat_to_eval = remaining.remove(best_idx);
-
+        
         match pat_to_eval {
             Pattern::Order(vars) => {
                 let mut is_ordered = true;
@@ -135,34 +141,41 @@ impl ProverEngine {
             Pattern::Distinct(vars) => {
                 let mut unique_ids = rustc_hash::FxHashSet::default();
                 let mut is_distinct = true;
-                let mut debug_binds = Vec::new(); // デバッグ用
 
                 for v in &vars {
                     if let Some(&id) = bind.get(v) {
-                        // 🌟 FIX: 未正規化のIDではなく、常に get_rep(id) で代表元を比較して重複を判定する
                         let rep_id = self.egraph.get_rep(id);
-                        debug_binds.push((v.clone(), rep_id.0));
                         if !unique_ids.insert(rep_id.0) { is_distinct = false; break; }
                     }
                 }
-                
-                if theorem.name == "中点連結定理" {
-                    println!("  [DFS Step] Distinct判定: {:?} -> {}", debug_binds, is_distinct);
-                }
-
                 if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, on_match); }
             }
             Pattern::Fact(def) => {
                 self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, on_match);
             }
-            Pattern::Not(_) => {
-                self.dfs_match(theorem, remaining.clone(), bind, on_match);
+            Pattern::Not(inner_pat) => {
+                // 🌟 先ほど追加したクロージャでの再帰呼び出しが、これで安全にコンパイル通るようになります
+                let mut matched_any = false;
+                self.dfs_match(theorem, vec![*inner_pat.clone()], bind.clone(), &mut |_| {
+                    matched_any = true;
+                });
+                
+                if !matched_any {
+                    self.dfs_match(theorem, remaining.clone(), bind, on_match);
+                }
             }
         }
     }
-
-    pub fn match_fact_pattern<F>(&mut self, theorem: &TheoremDef, def: &FactPatternDef, remaining: Vec<Pattern>, bind: &FxHashMap<String, ClassId>, on_match: &mut F) 
-    where F: FnMut(&FxHashMap<String, ClassId>) {
+    
+    // 🌟 FIX: こちらも同様に <F> ジェネリクスを削除し、引数を &mut dyn FnMut に変更
+    pub fn match_fact_pattern(
+        &mut self, 
+        theorem: &TheoremDef, 
+        def: &FactPatternDef, 
+        remaining: Vec<Pattern>, 
+        bind: &FxHashMap<String, ClassId>, 
+        on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>)
+    ) {
         match def.fact_type.as_str() {
             "DefinedBy" => {
                 let target_type = def.target_type.as_deref().unwrap_or("");
@@ -264,8 +277,10 @@ impl ProverEngine {
         true
     }
 
-    pub fn apply_conclusions(&mut self, theorem_name: &str, conclusions: &[FactTemplate], bind: &FxHashMap<String, ClassId>) -> bool {
+    // 🌟 FIX: 戻り値に (bool, Vec<Fact>) を返し、新しく生成されたFactをイベントキューへ送る
+    pub fn apply_conclusions(&mut self, theorem_name: &str, conclusions: &[FactTemplate], bind: &FxHashMap<String, ClassId>) -> (bool, Vec<Fact>) {
         let mut applied_anything = false;
+        let mut new_facts = Vec::new();
 
         for conc in conclusions {
             match conc.fact_type.as_str() {
@@ -277,10 +292,22 @@ impl ProverEngine {
                         }
                     }
                 },
+                "Collinear" => {
+                    if let (Some(&a), Some(&b), Some(&c)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2])) {
+                        let fact = Fact::new_collinear(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c));
+                        if !self.facts.contains(&fact) {
+                            self.facts.push(fact.clone());
+                            new_facts.push(fact);
+                            applied_anything = true;
+                            println!("  🟢 [ファクト生成] Collinear 発見 (理由: {})", theorem_name);
+                        }
+                    }
+                },
+                // Concyclic, Parallel 等も同様に追加可能
                 _ => {}
             }
         }
-        applied_anything
+        (applied_anything, new_facts)
     }
 
     fn try_bind_fact(&self, _fact: &Fact, _fact_type: &str, _args: &[String], _current_bind: &FxHashMap<String, ClassId>) -> Option<FxHashMap<String, ClassId>> {
@@ -307,6 +334,34 @@ impl BlackboardEngine {
         }
     }
 
+    /// 🌟 NEW: 新しいFactが証明(または予想)された時、それをトリガーに発火しうる定理だけをキューに積む
+    fn schedule_matcher_task(&mut self, fact: &Fact) {
+        let fact_type = match fact {
+            Fact::Collinear(..) => "Collinear",
+            Fact::Concyclic(..) => "Concyclic",
+            Fact::Identical(..) => "Identical",
+            Fact::Connected(..) => "Connected",
+            Fact::Parallel(..) => "Parallel",
+        };
+
+        for (idx, theorem) in self.prover.theorems.iter().enumerate() {
+            let contains_pattern = theorem.patterns.iter().any(|pat| {
+                if let Pattern::Fact(def) = pat {
+                    def.fact_type == fact_type
+                } else { false }
+            });
+
+            if contains_pattern {
+                self.task_queue.push(MatchTask {
+                    priority: 10, // 新規ファクト起因のタスクは優先的に処理
+                    theorem_idx: idx,
+                    bind: rustc_hash::FxHashMap::default(),
+                    remaining_patterns: theorem.patterns.clone(),
+                });
+            }
+        }
+    }
+
     pub fn emit(&mut self, event: Event) {
         self.event_queue.push_back(event);
     }
@@ -317,10 +372,19 @@ impl BlackboardEngine {
 
         while calls < budget {
             while let Some(event) = self.event_queue.pop_front() {
-                if let Event::NodeMerged = event {
-                    if self.prover.egraph.apply_congruence_closure() {
-                        applied_anything = true;
-                        self.event_queue.push_back(Event::NodeMerged);
+                match event {
+                    Event::NodeMerged => {
+                        if self.prover.egraph.apply_congruence_closure() {
+                            applied_anything = true;
+                            self.event_queue.push_back(Event::NodeMerged);
+                        }
+                    },
+                    Event::FactProven(fact) => {
+                        // 🌟 FIX: キューから来たFactが未登録なら、知識ベースに追加してからタスクをスケジュールする
+                        if !self.prover.facts.contains(&fact) {
+                            self.prover.facts.push(fact.clone());
+                            self.schedule_matcher_task(&fact);
+                        }
                     }
                 }
             }
@@ -331,15 +395,19 @@ impl BlackboardEngine {
                 let mut new_binds = Vec::new();
 
                 self.prover.dfs_match(&theorem, task.remaining_patterns, task.bind, &mut |bind| {
-                    println!("  🚀 リーチ！定理 '{}' のパターンが全てマッチしました", theorem.name);
                     new_binds.push(bind.clone());
                 });
 
                 for mut bind in new_binds {
                     if self.prover.execute_constructions(&theorem.name, &theorem.constructions, &mut bind) {
-                        if self.prover.apply_conclusions(&theorem.name, &theorem.conclusions, &bind) {
+                        // 🌟 FIX: 戻り値から新ファクトを受け取り、イベントキューに流す
+                        let (applied, generated_facts) = self.prover.apply_conclusions(&theorem.name, &theorem.conclusions, &bind);
+                        if applied {
                             applied_anything = true;
-                            self.emit(Event::NodeMerged);
+                            self.emit(Event::NodeMerged); 
+                            for f in generated_facts {
+                                self.emit(Event::FactProven(f));
+                            }
                         }
                     }
                 }

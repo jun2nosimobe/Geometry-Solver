@@ -1,4 +1,7 @@
 use crate::mmp_math::{ModInt};
+use crate::mmp_core::{ClassId, EGraph, EntityType, Fact};
+use rustc_hash::FxHashMap;
+use rand::seq::SliceRandom;
 
 pub struct MMPTester {
     pub t_samples: Vec<ModInt>,
@@ -72,5 +75,58 @@ impl MMPTester {
             return d1[0].0 < d2[0].0;
         }
         cross.0 < (998244353 / 2)
+    }
+
+
+    /// 🌟 グラフ内の全ての有効図形をスキャンし、MMPによる隠れた関係を発見する
+    pub fn discover_relations(&self, egraph: &EGraph, all_vars: &[String]) -> Vec<Fact> {
+        let mut conjectures = Vec::new();
+        let mut rng = rand::thread_rng();
+
+        // 5回分のテスト環境（乱数とキャッシュ）を事前生成
+        let mut environments = Vec::new();
+        for _ in 0..5 {
+            let mut vars = FxHashMap::default();
+            for var in all_vars {
+                let sample = *self.t_samples.choose(&mut rng).unwrap();
+                vars.insert(var.clone(), sample);
+            }
+            environments.push((vars, FxHashMap::default()));
+        }
+
+        let valid_nodes: Vec<ClassId> = (0..egraph.entities.len())
+            .map(ClassId)
+            .filter(|&id| egraph.get_rep(id) == id && egraph.entities[id.0].base_importance > 0.0)
+            .collect();
+
+        // Identical (同一性) のテスト[cite: 3]
+        for i in 0..valid_nodes.len() {
+            for j in (i + 1)..valid_nodes.len() {
+                let n1 = valid_nodes[i];
+                let n2 = valid_nodes[j];
+                let e1 = &egraph.entities[n1.0];
+                let e2 = &egraph.entities[n2.0];
+
+                if e1.entity_type != e2.entity_type { continue; }
+
+                let mut match_count = 0;
+                for (vars, cache) in &mut environments {
+                    if let (Some(v1), Some(v2)) = (egraph.evaluate_node(n1, vars, cache), egraph.evaluate_node(n2, vars, cache)) {
+                        if self.verify_identical(&v1, &v2) {
+                            match_count += 1;
+                        }
+                    }
+                }
+
+                if match_count == 5 {
+                    println!("  🟡 MMP予想(同一): {} ≡ {}", e1.name, e2.name);
+                    conjectures.push(Fact::new_identical(n1, n2));
+                }
+            }
+        }
+
+        
+        // Collinear, Concyclic の判定ロジックも同様に追加可能...
+        conjectures
     }
 }

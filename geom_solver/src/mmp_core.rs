@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::cell::Cell;
 use rustc_hash::FxHashMap;
+use crate::mmp_math::ModInt;
+use crate::mmp_calculators;
 
 // 1. 強力な型付きID (Newtype Pattern)
 // オブジェクトの直接参照（ポインタ）を廃止し、すべてこのIDで管理する
@@ -246,9 +248,7 @@ impl EGraph {
             _ => {}
         }
     }
-}
-
-impl EGraph {
+    
     /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
     pub fn normalize_definition(&self, def: &Definition) -> Definition {
         match def {
@@ -297,6 +297,11 @@ impl EGraph {
                 };
 
                 for def in definitions {
+                    // 🌟 FIX: FreePoint や GivenPoint は独立した存在なので、合同閉包のマージ対象外にする
+                    if matches!(def, Definition::FreePoint | Definition::GivenPoint) {
+                        continue;
+                    }
+
                     let norm_def = self.normalize_definition(&def);
 
                     if let Some(&existing_rep) = def_map.get(&norm_def) {
@@ -318,5 +323,58 @@ impl EGraph {
         }
         
         changed_any
+    }
+
+    /// 🌟 数値評価環境 (MMPテスト用)
+    pub fn evaluate_node(
+        &self,
+        node_id: ClassId,
+        vars: &FxHashMap<String, ModInt>,
+        cache: &mut FxHashMap<usize, Vec<ModInt>>,
+    ) -> Option<Vec<ModInt>> {
+        let rep_id = self.get_rep(node_id);
+        if let Some(val) = cache.get(&rep_id.0) {
+            return Some(val.clone());
+        }
+
+        let entity = &self.entities[rep_id.0];
+        let def = entity.components.first()?.definitions.first()?;
+
+        let val = match def {
+            Definition::FreePoint => {
+                // 自由点は変数からランダムな座標を割り当て
+                let x = vars.get(&format!("{}_x", entity.name)).copied().unwrap_or(ModInt::new(0));
+                let y = vars.get(&format!("{}_y", entity.name)).copied().unwrap_or(ModInt::new(0));
+                Some(vec![x, y, ModInt::new(1)])
+            }
+            Definition::Midpoint(p1, p2) => {
+                let v1 = self.evaluate_node(*p1, vars, cache)?;
+                let v2 = self.evaluate_node(*p2, vars, cache)?;
+                Some(mmp_calculators::calc_midpoint(&v1, &v2))
+            }
+            Definition::LineThroughPoints(p1, p2) => {
+                let v1 = self.evaluate_node(*p1, vars, cache)?;
+                let v2 = self.evaluate_node(*p2, vars, cache)?;
+                Some(mmp_calculators::calc_line_through_points(&v1, &v2))
+            }
+            Definition::Intersection(l1, l2) => {
+                let v1 = self.evaluate_node(*l1, vars, cache)?;
+                let v2 = self.evaluate_node(*l2, vars, cache)?;
+                Some(mmp_calculators::calc_intersection(&v1, &v2))
+            }
+            Definition::DirectionOf(l) => {
+                let v = self.evaluate_node(*l, vars, cache)?;
+                if v.len() >= 3 {
+                    Some(mmp_calculators::normalize(&[v[1], -v[0]]))
+                } else { None }
+            }
+            // 他の計算ロジックも同様に紐付ける...
+            _ => None,
+        };
+
+        if let Some(ref v) = val {
+            cache.insert(rep_id.0, v.clone());
+        }
+        val
     }
 }
