@@ -91,10 +91,30 @@ impl MCTSSearchEngine {
         }
 
         // 最良の手を本番環境 (egraph) に適用
-        if let Some(&best_child) = self.nodes[0].children.iter().max_by_key(|&&c| self.nodes[c].visits) {
-            if let Some(action) = &self.nodes[best_child].action {
-                println!("🤖 [MCTS] 最良の手を採用: {:?}", action);
-                egraph.create_entity("MCTS_Adopted".to_string(), action.clone(), EntityType::Line);
+        if let Some(&best_child) = self.nodes[0].children.iter().max_by_key(|&&c| self.nodes[c].visits) { //[cite: 7]
+            if let Some(action) = &self.nodes[best_child].action { //[cite: 7]
+                println!("🤖 [MCTS] 最良の手を採用: {:?}", action); //[cite: 7]
+                
+                if !egraph.memo.contains_key(action) {
+                    // 🌟 FIX: MCTSが何を作ったか分かるように、親図形の名前を引き継ぐ
+                    let parent_names: Vec<String> = action.get_parents().iter()
+                        .map(|id| egraph.entities[egraph.get_rep(*id).0].name.clone())
+                        .collect();
+                    
+                    let prefix = action.get_type_name();
+                    let name = format!("{}_{}_(MCTS)", prefix, parent_names.join("_"));
+                    
+                    // 🌟 FIX: 直線か点かを定義から正確に判定する
+                    let entity_type = match action {
+                        crate::mmp_core::Definition::Intersection(_, _) => crate::mmp_core::EntityType::Point,
+                        crate::mmp_core::Definition::Midpoint(_, _) => crate::mmp_core::EntityType::Point,
+                        _ => crate::mmp_core::EntityType::Line,
+                    };
+                    
+                    let id = egraph.create_entity(name, action.clone(), entity_type);
+                    // 🌟 FIX: 物理リンクや有向角を生成するために必須
+                    egraph.apply_trivial_relations(id, action);
+                }
             }
         }
     }

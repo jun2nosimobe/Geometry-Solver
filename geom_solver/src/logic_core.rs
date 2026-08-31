@@ -2,6 +2,7 @@ use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, Fact};
 use rustc_hash::FxHashMap;
 use std::collections::{BinaryHeap, VecDeque};
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
@@ -98,6 +99,16 @@ impl ProverEngine {
             construction_demands: FxHashMap::default(), // 🌟 追加
         }
     }
+    fn calc_bind_heat(&self, bind: &FxHashMap<String, ClassId>) -> f64 {
+        let mut heat = 0.0;
+        for &id in bind.values() {
+            let rep = self.egraph.get_rep(id);
+            let e = &self.egraph.entities[rep.0];
+            // 熱(heat_bonus) + 基本重要度 + 次数(uses.len()による依存度)
+            heat += e.base_importance + e.heat_bonus + (e.uses.len() as f64 * 0.5);
+        }
+        heat
+    }
 
     fn estimate_cost(&self, pat: &Pattern, bind: &FxHashMap<String, ClassId>) -> f64 {
         match pat {
@@ -105,32 +116,39 @@ impl ProverEngine {
                 let unbound_count = def.args.iter().filter(|v| !bind.contains_key(*v)).count();
                 if unbound_count == 0 { return 0.0; }
                 
-                if def.fact_type == "Identical" {
-                    if unbound_count == 1 { return 1.0; }
-                    return 15.0; 
-                }
-                if def.fact_type == "Connected" {
-                    if unbound_count == 1 { return 5.0; }
-                    return 10000.0; 
-                }
-                if def.fact_type == "DefinedBy" {
+                let base_cost = if def.fact_type == "Identical" {
+                    if unbound_count == 1 { 1.0 } else { 15.0 }
+                } else if def.fact_type == "Connected" {
+                    if unbound_count == 1 { 5.0 } else { 10000.0 }
+                } else if def.fact_type == "DefinedBy" {
                     if unbound_count == def.args.len() { 
-                        // 🌟 FIX: 点の作図を最優先し、線や角度からの逆算にペナルティを与える
                         let penalty = match def.target_type.as_deref().unwrap_or("") {
                             "Midpoint" | "LengthSq" | "Intersection" => 0.0,
                             "LineThroughPoints" | "PerpendicularLine" | "TangentLine" => 10.0,
                             "DirectionOf" | "AnglePair" | "Circumcircle" => 20.0,
                             _ => 5.0,
                         };
-                        return 100.0 + (unbound_count as f64) + penalty; 
+                        100.0 + (unbound_count as f64) + penalty 
+                    } else {
+                        10.0 + (unbound_count as f64) * 20.0
                     }
-                    return 10.0 + (unbound_count as f64) * 20.0;
+                } else if def.fact_type == "Collinear" || def.fact_type == "Concyclic" {
+                    if unbound_count < def.args.len() { 5.0 } else { 10.0 }
+                } else {
+                    100.0
+                };
+
+                // バインド済み変数の熱と次数が高いほどコストを下げる(優先探索)
+                let mut heat = 0.0;
+                for v in &def.args {
+                    if let Some(&id) = bind.get(v) {
+                        let rep = self.egraph.get_rep(id);
+                        let e = &self.egraph.entities[rep.0];
+                        heat += e.base_importance + e.heat_bonus + (e.uses.len() as f64 * 0.5);
+                    }
                 }
-                if def.fact_type == "Collinear" || def.fact_type == "Concyclic" {
-                    if unbound_count < def.args.len() { return 5.0; }
-                    return 10.0;
-                }
-                100.0
+                
+                (base_cost - heat).max(0.1) // 完全に0にはせず僅かなコストを残す[cite: 5]
             }
             Pattern::Order(vars) | Pattern::Distinct(vars) => {
                 if vars.iter().any(|v| !bind.contains_key(v)) { std::f64::INFINITY } else { 0.0 }
@@ -138,28 +156,92 @@ impl ProverEngine {
             Pattern::Not(inner_pat) => self.estimate_cost(inner_pat, bind),
         }
     }
+    
+    pub fn is_already_proven(&self, conclusions: &[FactTemplate], bind: &FxHashMap<String, ClassId>, flips: &FxHashMap<String, bool>) -> bool {
+        for conc in conclusions {
+            match conc.fact_type.as_str() {
+                "Identical" => {
+                    if let (Some(&id1), Some(&id2)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
+                        let rep1 = self.egraph.get_rep(id1);
+                        let rep2 = self.egraph.get_rep(id2);
+                        // 🌟 FIX: 型に関わらず、代表元が同じなら証明済みとみなす
+                        if rep1 != rep2 { return false; } 
+                        
+                        // 角の場合はフリップの向きも一致しているか確認
+                        if self.egraph.entities[rep1.0].entity_type == crate::mmp_core::EntityType::Angle {
+                            let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
+                            let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
+                            if f1 != f2 { return false; }
+                        }
+                    } else { return false; }
+                },
+                "Collinear" => {
+                    if let (Some(&a), Some(&b), Some(&c)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2])) {
+                        let fact = Fact::new_collinear(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c));
+                        if !self.facts.contains(&fact) { return false; }
+                    } else { return false; }
+                },
+                "Concyclic" => {
+                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2]), bind.get(&conc.args[3])) {
+                        let fact = Fact::new_concyclic(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c), self.egraph.get_rep(d));
+                        if !self.facts.contains(&fact) { return false; }
+                    } else { return false; }
+                },
+                "Connected" => {
+                    if let (Some(&child), Some(&parent)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
+                        if !self.egraph.is_connected(child, parent) { return false; }
+                    } else { return false; }
+                },
+                _ => return false,
+            }
+        }
+        true
+    }
 
     pub fn dfs_match(
         &mut self, 
         theorem: &TheoremDef, 
         mut remaining: Vec<Pattern>, 
-        mut bind: FxHashMap<String, ClassId>, 
-        mut flip_states: FxHashMap<String, bool>,
+        bind: FxHashMap<String, ClassId>, 
+        flip_states: FxHashMap<String, bool>,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>, // 🌟 追加
         on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
     ) {
         self.dfs_calls += 1;
         if self.dfs_calls > 100_000 { return; }
 
+        // 🌟 失敗パスのキャッシュチェック
+        let state_sig = {
+            let mut hasher = rustc_hash::FxHasher::default();
+            remaining.len().hash(&mut hasher);
+            
+            let mut pairs: Vec<_> = bind.iter().collect();
+            pairs.sort_unstable_by_key(|k| k.0);
+            for (k, v) in pairs {
+                k.hash(&mut hasher);
+                self.egraph.get_rep(*v).0.hash(&mut hasher);
+            }
+            
+            // 🌟 FIX: フリップ状態もハッシュに含めないと、向き違いの正当な探索が枝刈りされてしまう
+            let mut flips: Vec<_> = flip_states.iter().collect();
+            flips.sort_unstable_by_key(|k| k.0);
+            for (k, v) in flips {
+                k.hash(&mut hasher);
+                v.hash(&mut hasher);
+            }
+            
+            hasher.finish()
+        };
+
+        if failed_paths.contains(&state_sig) { return; }
+
         if remaining.is_empty() {
-            // 定理が要求する型（Point等）と実際の型が違う場合は絶対に発火させない
             for (v_name, id) in &bind {
                 if let Some(expected_type) = theorem.entities.get(v_name) {
                     let actual_type = self.egraph.entities[self.egraph.get_rep(*id).0].entity_type;
                     if *expected_type != actual_type { return; }
                 }
             }
-            
-            // 🌟 FIX: 第2引数として `&flip_states` を渡す
             on_match(&bind, &flip_states);
             return;
         }
@@ -172,6 +254,13 @@ impl ProverEngine {
         }
 
         let pat_to_eval = remaining.remove(best_idx);
+        let mut matched_any = false;
+
+        // クロージャをラップして、1度でもマッチしたかを記録する
+        let mut wrapped_on_match = |b: &FxHashMap<String, ClassId>, f: &FxHashMap<String, bool>| {
+            matched_any = true;
+            on_match(b, f);
+        };
 
         match pat_to_eval {
             Pattern::Order(vars) => {
@@ -181,7 +270,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 >= self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
-                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, on_match); }
+                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
             }
             Pattern::Distinct(vars) => {
                 let mut unique_ids = rustc_hash::FxHashSet::default();
@@ -192,24 +281,27 @@ impl ProverEngine {
                         if !unique_ids.insert(rep_id.0) { is_distinct = false; break; }
                     }
                 }
-                if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, flip_states, on_match); }
+                if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
             }
             Pattern::Fact(def) => {
-                self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, flip_states, on_match);
+                self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, flip_states, failed_paths, &mut wrapped_on_match);
             }
             Pattern::Not(inner_pat) => {
-                let mut matched_any = false;
-                // 🌟 FIX: クロージャの引数を |_, _| (2つ) に変更
-                self.dfs_match(theorem, vec![*inner_pat.clone()], bind.clone(), flip_states.clone(), &mut |_, _| {
-                    matched_any = true;
+                let mut inner_matched = false;
+                self.dfs_match(theorem, vec![*inner_pat.clone()], bind.clone(), flip_states.clone(), failed_paths, &mut |_, _| {
+                    inner_matched = true;
                 });
-                if !matched_any {
-                    self.dfs_match(theorem, remaining.clone(), bind, flip_states, on_match);
+                if !inner_matched {
+                    self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match);
                 }
             }
         }
-    }
 
+        // 🌟 どこにも進めなかった場合、この状態を失敗として記録する
+        if !matched_any {
+            failed_paths.insert(state_sig);
+        }
+    }
     pub fn match_fact_pattern(
         &mut self, 
         theorem: &TheoremDef, 
@@ -217,8 +309,10 @@ impl ProverEngine {
         remaining: Vec<Pattern>, 
         bind: &FxHashMap<String, ClassId>, 
         flip_states: FxHashMap<String, bool>,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>,
         on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
     ) {
+        
         match def.fact_type.as_str() {
             "Identical" => {
                 let v1 = &def.args[0];
@@ -228,14 +322,14 @@ impl ProverEngine {
                 match (bind.get(v1).copied(), bind.get(v2).copied()) {
                     (Some(id1), Some(id2)) => {
                         if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
-                            self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), on_match);
+                            self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
                         }
                     }
                     (Some(id), None) | (None, Some(id)) => {
                         let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
                         let mut next_bind = bind.clone();
                         next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
-                        self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), on_match);
+                        self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                     }
                     (None, None) => {
                         let mut matches = Vec::new();
@@ -265,25 +359,23 @@ impl ProverEngine {
                                 }
                             }
                         }
-                        for new_bind in matches { self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), on_match); }
+                        for new_bind in matches { self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match); 
+                        }
                     }
                 }
             },
             "Connected" => {
                 let child_var = &def.args[0];
                 let parent_var = &def.args[1];
-                let expected_c_type = theorem.entities.get(child_var).copied(); // 🌟 型情報取得
+                let expected_c_type = theorem.entities.get(child_var).copied(); 
                 let expected_p_type = theorem.entities.get(parent_var).copied();
 
                 match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
                     (Some(c_id), Some(p_id)) => {
-                        let p_rep = self.egraph.get_rep(p_id);
-                        let c_rep = self.egraph.get_rep(c_id);
-                        let mut found = false;
-                        for comp in &self.egraph.entities[p_rep.0].components {
-                            if comp.subobjects.contains(&c_rep) { found = true; break; }
+                        // 🌟 FIX
+                        if self.egraph.is_connected(c_id, p_id) { 
+                            self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match); 
                         }
-                        if found { self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), on_match); }
                     }
                     (Some(c_id), None) => {
                         let c_rep = self.egraph.get_rep(c_id);
@@ -291,18 +383,15 @@ impl ProverEngine {
                             let p_id = ClassId(i);
                             let p_rep = self.egraph.get_rep(p_id);
                             if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-                            // 🌟 型フィルター
+                            
                             if let Some(et) = expected_p_type {
                                 if self.egraph.entities[p_rep.0].entity_type != et { continue; }
                             }
-                            let mut found = false;
-                            for comp in &self.egraph.entities[p_rep.0].components {
-                                if comp.subobjects.contains(&c_rep) { found = true; break; }
-                            }
-                            if found {
+                            // 🌟 FIX
+                            if self.egraph.is_connected(c_rep, p_rep) {
                                 let mut next_bind = bind.clone();
                                 next_bind.insert(parent_var.clone(), p_rep);
-                                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), on_match);
+                                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                             }
                         }
                     }
@@ -310,18 +399,19 @@ impl ProverEngine {
                         let p_rep = self.egraph.get_rep(p_id);
                         let mut child_candidates = rustc_hash::FxHashSet::default();
                         for comp in &self.egraph.entities[p_rep.0].components {
-                            for &c_rep in &comp.subobjects {
-                                if self.egraph.entities[c_rep.0].base_importance > 0.0 { child_candidates.insert(c_rep); }
+                            for &sub in &comp.subobjects {
+                                // 🌟 FIX: 必ず rep を通す
+                                let s_rep = self.egraph.get_rep(sub);
+                                if self.egraph.entities[s_rep.0].base_importance > 0.0 { child_candidates.insert(s_rep); }
                             }
                         }
                         for c_rep in child_candidates {
-                            // 🌟 型フィルター
                             if let Some(et) = expected_c_type {
                                 if self.egraph.entities[c_rep.0].entity_type != et { continue; }
                             }
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), on_match);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                         }
                     }
                     _ => {}
@@ -332,25 +422,44 @@ impl ProverEngine {
                 let result_var = &def.args[def.args.len() - 1];
                 let parent_vars = &def.args[0..def.args.len() - 1];
                 let expected_r_type = theorem.entities.get(result_var).copied();
+
+                
                 
                 let mut valid_nodes = Vec::new();
 
                 if let Some(&res_id) = bind.get(result_var) {
                     valid_nodes.push(self.egraph.get_rep(res_id));
                 }
+                
                 // 🌟 FIX: *v ではなく v をそのまま渡す
                 else if parent_vars.iter().all(|v| bind.contains_key(v)) {
-                    // 🌟 FIX: 添字アクセスも v をそのまま渡す
                     let parent_ids: Vec<ClassId> = parent_vars.iter().map(|v| self.egraph.get_rep(bind[v])).collect();
                     
+                    // 🌟 FIX: 全ての DefinedBy 対象型を網羅する
                     let temp_def = match target_type {
                         "AnglePair" => Definition::AnglePair(parent_ids[0], parent_ids[1]),
                         "DirectionOf" => Definition::DirectionOf(parent_ids[0]),
+                        "LineThroughPoints" => Definition::new_line(parent_ids[0], parent_ids[1]),
+                        "Midpoint" => {
+                            let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                            Definition::Midpoint(a, b)
+                        },
+                        "Intersection" => {
+                            let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                            Definition::Intersection(a, b)
+                        },
                         "LengthSq" => {
                             let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
                             Definition::LengthSq(a, b)
                         },
-                        "LineThroughPoints" => Definition::new_line(parent_ids[0], parent_ids[1]),
+                        "PerpendicularLine" => Definition::PerpendicularLine(parent_ids[0], parent_ids[1]),
+                        "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
+                        "TangentLine" => Definition::TangentLine(parent_ids[0], parent_ids[1]),
+                        "Circumcircle" => {
+                            let mut arr = [parent_ids[0].0, parent_ids[1].0, parent_ids[2].0];
+                            arr.sort_unstable();
+                            Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
+                        }
                         _ => Definition::GivenPoint, 
                     };
 
@@ -402,7 +511,17 @@ impl ProverEngine {
                                     let perms = if is_unordered {
                                         if d_parents.len() == 2 {
                                             vec![(vec![d_parents[0], d_parents[1]], None), (vec![d_parents[1], d_parents[0]], None)]
-                                        } else { vec![(d_parents.clone(), None)] } // 3変数などは略
+                                        } else if d_parents.len() == 3 {
+                                            // 🌟 FIX: Python版にあった3変数の全順列展開を復活
+                                            vec![
+                                                (vec![d_parents[0], d_parents[1], d_parents[2]], None),
+                                                (vec![d_parents[0], d_parents[2], d_parents[1]], None),
+                                                (vec![d_parents[1], d_parents[0], d_parents[2]], None),
+                                                (vec![d_parents[1], d_parents[2], d_parents[0]], None),
+                                                (vec![d_parents[2], d_parents[0], d_parents[1]], None),
+                                                (vec![d_parents[2], d_parents[1], d_parents[0]], None),
+                                            ]
+                                        } else { vec![(d_parents.clone(), None)] }
                                     } else if target_type == "AnglePair" && def.allow_flip && d_parents.len() == 2 {
                                         let mut valid_perms = Vec::new();
                                         let state = def.flip_group.as_ref().and_then(|g| flip_states.get(g).copied());
@@ -445,6 +564,7 @@ impl ProverEngine {
                     }
                 }
                 
+                
                 if matches.is_empty() && target_type == "LineThroughPoints" && parent_vars.len() == 2 {
                     if let (Some(&p1), Some(&p2)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
                         let r1 = self.egraph.get_rep(p1);
@@ -455,10 +575,16 @@ impl ProverEngine {
                     }
                 }
 
-                matches.sort_by_key(|(b, _)| {
-                    let mut keys: Vec<_> = b.iter().collect();
-                    keys.sort_by_key(|k| k.0);
-                    format!("{:?}", keys)
+                matches.sort_by(|(b1, _), (b2, _)| {
+                    let heat1 = self.calc_bind_heat(b1);
+                    let heat2 = self.calc_bind_heat(b2);
+                    // 熱が高い(降順)ものを優先し、同値の場合はIDで決定論的にソート[cite: 5]
+                    heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
+                        .then_with(|| {
+                            let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
+                            let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
+                            format!("{:?}", k1).cmp(&format!("{:?}", k2))
+                        })
                 });
                 matches.dedup_by_key(|(b, _)| {
                     let mut keys: Vec<_> = b.iter().collect();
@@ -466,7 +592,7 @@ impl ProverEngine {
                     format!("{:?}", keys)
                 });
                 for (new_bind, new_flip) in matches { 
-                    self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, on_match); 
+                    self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, on_match); 
                 }
             },
             _ => {
@@ -475,10 +601,15 @@ impl ProverEngine {
                     matches.extend(self.get_fact_bindings(theorem, fact, &def.fact_type, &def.args, bind));
                 }
                 
-                matches.sort_by_key(|b| {
-                    let mut keys: Vec<_> = b.iter().collect();
-                    keys.sort_by_key(|k| k.0);
-                    format!("{:?}", keys)
+                matches.sort_by(|b1, b2| {
+                    let heat1 = self.calc_bind_heat(b1);
+                    let heat2 = self.calc_bind_heat(b2);
+                    heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
+                        .then_with(|| {
+                            let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
+                            let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
+                            format!("{:?}", k1).cmp(&format!("{:?}", k2))
+                        })
                 });
                 matches.dedup_by_key(|b| {
                     let mut keys: Vec<_> = b.iter().collect();
@@ -487,7 +618,7 @@ impl ProverEngine {
                 });
 
                 for new_bind in matches { 
-                    self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), on_match); 
+                    self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match); 
                 }
             }
         }
@@ -528,6 +659,12 @@ impl ProverEngine {
                     arr.sort_unstable();
                     Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
                 },
+                // 🌟 FIX: 不足していた作図定義を追加（これがないと return false で沈黙する）
+                "LengthSq" => {
+                    let (a, b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::LengthSq(a, b)
+                },
+                "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
                 _ => return false,
             };
 
@@ -541,15 +678,12 @@ impl ProverEngine {
                     "Direction" => EntityType::Direction,
                     "Angle" => EntityType::Angle, 
                     "Circle" => EntityType::Circle,
+                    "Scalar" => EntityType::Scalar, // 🌟 スカラー型の追加
                     _ => EntityType::Point,
                 };
                 
-                // ネストした変数を防ぐために、定理名が既に含まれていたらそのまま使う
-                let name = if theorem_name.contains("(Auto)") {
-                    format!("{}_Auto", constr.def_type)
-                } else {
-                    format!("{}_{}_(Auto)", constr.def_type, theorem_name)
-                };
+                // 定理名と要求された変数名を組み合わせて一意な名前をつける
+                let name = format!("{}_{}_(Auto)", constr.bind_to, theorem_name.replace(" ", ""));
                 
                 let id = self.egraph.create_entity(name, def.clone(), entity_type);
                 self.egraph.apply_trivial_relations(id, &def);
@@ -570,21 +704,27 @@ impl ProverEngine {
                 "Identical" => {
                     if let (Some(&id1), Some(&id2)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
                         
-                        // 角の場合は向き(フリップ)が矛盾していないかチェック
-                        if self.egraph.entities[self.egraph.get_rep(id1).0].entity_type == EntityType::Angle {
+                        let r1 = self.egraph.get_rep(id1);
+                        let r2 = self.egraph.get_rep(id2);
+                        if r1 == r2 { continue; } // 既にマージ済みならスキップ
+
+                        // 🌟 FIX: EntityType::Angle 以外の図形 (Scalar, Direction等) はそのまま無条件でマージする
+                        if self.egraph.entities[r1.0].entity_type == EntityType::Angle {
                             let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
                             let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
                             if f1 != f2 { continue; } // 向きが違うならマージしない
                         }
                         
-                        let name1 = self.egraph.entities[id1.0].name.clone();
-                        let name2 = self.egraph.entities[id2.0].name.clone();
-                        if self.egraph.merge_entities(id1, id2) {
+                        let name1 = self.egraph.entities[r1.0].name.clone();
+                        let name2 = self.egraph.entities[r2.0].name.clone();
+                        if self.egraph.merge_entities(r1, r2) {
                             println!("  🟢 [マージ実行] {} ≡ {} (理由: {})", name1, name2, theorem_name);
+                            // 🌟 マージされた代表元の熱を上げて今後のDFSで優先させる[cite: 5]
+                            self.egraph.entities[r1.0].heat_bonus += 1.5; 
                             applied_anything = true;
                         }
                     }
-                },
+                }
                 "Collinear" => {
                     if let (Some(&a), Some(&b), Some(&c)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2])) {
                         let fact = Fact::new_collinear(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c));
@@ -595,17 +735,23 @@ impl ProverEngine {
                         }
                     }
                 },
-                // 🌟 FIX: 捨てられていた Concyclic の生成ロジックを追加
                 "Concyclic" => {
                     if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2]), bind.get(&conc.args[3])) {
-                        let fact = Fact::new_concyclic(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c), self.egraph.get_rep(d));
+                        let rep_a = self.egraph.get_rep(a);
+                        let rep_b = self.egraph.get_rep(b);
+                        let rep_c = self.egraph.get_rep(c);
+                        let rep_d = self.egraph.get_rep(d);
+                        let fact = Fact::new_concyclic(rep_a, rep_b, rep_c, rep_d);
                         if !self.facts.contains(&fact) {
                             self.facts.push(fact.clone());
                             new_facts.push(fact);
                             applied_anything = true;
-                            println!("  🟢 [ファクト追加] 共円({}, {}, {}, {}) (理由: {})", 
-                                self.egraph.entities[self.egraph.get_rep(a).0].name, self.egraph.entities[self.egraph.get_rep(b).0].name, 
-                                self.egraph.entities[self.egraph.get_rep(c).0].name, self.egraph.entities[self.egraph.get_rep(d).0].name, theorem_name);
+                            
+                            // 🌟 ヒューリスティック: 新発見に関わった図形の熱を上げる
+                            self.egraph.entities[rep_a.0].heat_bonus += 2.0;
+                            self.egraph.entities[rep_b.0].heat_bonus += 2.0;
+                            self.egraph.entities[rep_c.0].heat_bonus += 2.0;
+                            self.egraph.entities[rep_d.0].heat_bonus += 2.0;
                         }
                     }
                 },
@@ -636,6 +782,17 @@ impl ProverEngine {
         };
 
         if f_type != fact_type || f_objs.len() != args.len() { return vec![]; }
+
+        // 🌟 爆速化: 事実探索の段階でターゲット型と異なるエンティティを即座に破棄
+        for (i, arg_name) in args.iter().enumerate() {
+            if f_type == "Connected" {
+                if let Some(expected_type) = theorem.entities.get(arg_name).copied() {
+                    if self.egraph.entities[self.egraph.get_rep(f_objs[i]).0].entity_type != expected_type {
+                        return vec![]; 
+                    }
+                }
+            }
+        }
 
         let is_unordered = f_type == "Collinear" || f_type == "Concyclic" || f_type == "Identical";
         let perms = if is_unordered { get_permutations(&f_objs) } else { vec![f_objs.clone()] };
@@ -777,20 +934,47 @@ impl BlackboardEngine {
                 }
             }
 
-            if let Some(task) = self.task_queue.pop() {
+            if let Some(mut task) = self.task_queue.pop() {
                 calls += 1;
                 self.prover.dfs_calls = 0; 
                 let theorem = self.prover.theorems[task.theorem_idx].clone();
                 let mut new_binds = Vec::new();
+                let mut failed_paths = rustc_hash::FxHashSet::default();
 
-                self.prover.dfs_match(&theorem, task.remaining_patterns, task.bind, task.flip_states, &mut |bind, flips| {
-                    new_binds.push((bind.clone(), flips.clone()));
-                });
+                self.prover.dfs_match(
+                    &theorem, 
+                    task.remaining_patterns.clone(), // 一旦cloneして渡す
+                    task.bind.clone(), 
+                    task.flip_states.clone(), 
+                    &mut failed_paths,
+                    &mut |bind, flips| {
+                        new_binds.push((bind.clone(), flips.clone()));
+                    }
+                );
+
+                // 🌟 スケジューリング工夫: DFSが上限(100,000)に張り付いた場合、
+                // このタスクは重すぎるためペナルティを与えて後回しにする
+                if self.prover.dfs_calls >= 99_000 {
+                    task.priority -= 5;
+                    if task.priority >= -20 { // 諦める閾値
+                        self.task_queue.push(task);
+                    }
+                }
 
                 for (mut bind, flips) in new_binds {
+                    // 🌟 1. まず現在のE-Graphの状態で、この結論がすでに満たされているかチェックする
+                    if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) {
+                        continue;
+                    }
+
+                    // 🌟 2. 結論が満たされていない場合のみ、足りない図形を作図する
                     if self.prover.execute_constructions(&theorem.name, &theorem.constructions, &mut bind) {
                         
-                        // 🌟 【追加】リーチ状態（前提が揃って発火スタンバイ状態）になったことを詳細に通知する
+                        // 🌟 3. 作図後、もう一度チェック。ここで真になるなら「作図しただけでマージ済み」なのでスキップ
+                        if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) {
+                            continue;
+                        }
+
                         println!("  🎯 [リーチ通知] 定理「{}」の前提条件がすべて満たされました！", theorem.name);
                         for (var_name, class_id) in &bind {
                             if var_name.starts_with("__") { continue; }
@@ -816,12 +1000,14 @@ impl BlackboardEngine {
         let mut applied = false;
         let mut angle_pairs_to_create = Vec::new();
 
+        // 🌟 処理前にグラフを最新状態に正規化し、直線の重複を完全に消す
+        self.prover.egraph.apply_congruence_closure();
+
         for i in 0..self.prover.egraph.entities.len() {
             let pt_id = ClassId(i);
             if self.prover.egraph.get_rep(pt_id) != pt_id { continue; }
             if self.prover.egraph.entities[i].entity_type != EntityType::Point { continue; }
 
-            // この点を通る直線を収集
             let mut lines_on_pt = Vec::new();
             for comp in &self.prover.egraph.entities[i].components {
                 for &sub_id in &comp.subobjects {
@@ -837,20 +1023,35 @@ impl BlackboardEngine {
             if lines_on_pt.len() >= 2 {
                 for l1 in 0..lines_on_pt.len() {
                     for l2 in (l1 + 1)..lines_on_pt.len() {
-                        // 2直線のDirectionを取得してペアにする
                         let d1 = self.get_or_create_direction(lines_on_pt[l1]);
                         let d2 = self.get_or_create_direction(lines_on_pt[l2]);
-                        angle_pairs_to_create.push((d1, d2));
+                        
+                        let r_d1 = self.prover.egraph.get_rep(d1);
+                        let r_d2 = self.prover.egraph.get_rep(d2);
+
+                        // 🌟 FIX: 方向が同じ(平行/同一)な直線のペアで0度角を生成しない
+                        if r_d1 == r_d2 { continue; }
+
+                        // 🌟 FIX: allow_flip があるため、ID順でソートして片方のみを生成（数を半分に！）
+                        let (d_min, d_max) = if r_d1.0 < r_d2.0 { (r_d1, r_d2) } else { (r_d2, r_d1) };
+                        angle_pairs_to_create.push((d_min, d_max));
                     }
                 }
             }
         }
+
+        angle_pairs_to_create.sort_unstable_by_key(|(d1, d2)| (d1.0, d2.0));
+        angle_pairs_to_create.dedup();
 
         for (d1, d2) in angle_pairs_to_create {
             let def = Definition::AnglePair(d1, d2);
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("AnglePair_{}_{}_(Auto)", self.prover.egraph.entities[d1.0].name, self.prover.egraph.entities[d2.0].name);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Angle);
+                
+                // 🌟 FIX: Auto生成されたAngleの重要度を下げ、無駄なヒューリスティック探索を抑制
+                self.prover.egraph.entities[new_id.0].base_importance = 0.2;
+                
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
                 applied = true;
             }
@@ -886,11 +1087,14 @@ impl BlackboardEngine {
         
         for (&(p1, p2), &score) in demands.into_iter() {
             let def = Definition::new_line(p1, p2);
-            // 🌟 FIX: 「まだ作図されていない線」だけをカウントして3件処理する
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("Line_{}_{}_(Demand)", self.prover.egraph.entities[p1.0].name, self.prover.egraph.entities[p2.0].name);
                 println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1})", name, score);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Line);
+                
+                // 🌟 FIX: Demand線の重要度を下げ、推論の主軸がブレるのを防ぐ
+                self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+                
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
                 applied = true;
                 count += 1;
@@ -899,7 +1103,11 @@ impl BlackboardEngine {
         }
         
         self.prover.construction_demands.clear();
-        if applied { self.schedule_full_sweep(); }
+        if applied { 
+            // 🌟 FIX: 作図直後に合同閉包を強制実行し、既存の直線と即座にマージさせる！
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep(); 
+        }
         applied
     }
 

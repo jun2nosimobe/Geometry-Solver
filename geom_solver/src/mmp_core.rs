@@ -115,36 +115,42 @@ impl EGraph {
     // 🌟 Hash Consingによる図形の生成
     pub fn create_entity(&mut self, name: String, def: Definition, e_type: EntityType) -> ClassId {
         let should_memoize = !matches!(def, Definition::FreePoint | Definition::GivenPoint);
+        
+        // 🌟 FIX: キャッシュを検索する前に必ず定義を正規化（ソート）する
+        let norm_def = if should_memoize {
+            self.normalize_definition(&def)
+        } else {
+            def.clone()
+        };
+
         if should_memoize {
-            // 既に同じ定義が存在すれば、既存の代表元を返す (O(1))
-            if let Some(&existing_id) = self.memo.get(&def) {
+            // 正規化済みのシグネチャで検索するため、順序逆転による重複生成が完全に防がれる
+            if let Some(&existing_id) = self.memo.get(&norm_def) {
                 return self.get_rep(existing_id);
             }
         }
+        
         let id = ClassId(self.entities.len());
         let entity = GeoEntity {
             id, name, entity_type: e_type,
             base_importance: 1.0, heat_bonus: 0.0,
-            components: vec![LogicalComponent { definitions: vec![def.clone()], subobjects: HashSet::new() }],
-            uses: rustc_hash::FxHashSet::default(), // 🌟 初期化
+            components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: std::collections::HashSet::new() }],
+            uses: rustc_hash::FxHashSet::default(),
         };
 
         self.entities.push(entity);
         self.parents.push(Cell::new(id.0));
         
-        for p in def.get_parents() {
+        for p in norm_def.get_parents() {
             let p_rep = self.get_rep(p);
             self.entities[p_rep.0].uses.insert(id);
         }
         
         if should_memoize {
-            self.memo.insert(def.clone(), id);
+            self.memo.insert(norm_def.clone(), id);
         }
 
-        // 🌟 重要: 作図した図形はその定義に応じて自動的に incidence/方向関係を張る
-        // これを怠ると、Theorem pattern の Connected / DirectionOf が空振りし、
-        // `tangent_orthic` のような問題で何も推論が進まなくなる。
-        self.apply_trivial_relations(id, &def);
+        self.apply_trivial_relations(id, &norm_def);
         id
     }
 }
@@ -212,29 +218,93 @@ impl EGraph {
             comp2.subobjects.insert(rep1);
         }
     }
+    
+
+    /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
+    pub fn normalize_definition(&self, def: &Definition) -> Definition {
+        match def {
+            Definition::Midpoint(a, b) => {
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                if r_a.0 > r_b.0 { Definition::Midpoint(r_b, r_a) } else { Definition::Midpoint(r_a, r_b) }
+            },
+            Definition::LineThroughPoints(a, b) => {
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                if r_a.0 > r_b.0 { Definition::LineThroughPoints(r_b, r_a) } else { Definition::LineThroughPoints(r_a, r_b) }
+            },
+            Definition::Intersection(a, b) => {
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                if r_a.0 > r_b.0 { Definition::Intersection(r_b, r_a) } else { Definition::Intersection(r_a, r_b) }
+            },
+            Definition::LengthSq(a, b) => {
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                if r_a.0 > r_b.0 { Definition::LengthSq(r_b, r_a) } else { Definition::LengthSq(r_a, r_b) }
+            },
+            Definition::Circumcircle(a, b, c) => {
+                let mut reps = [self.get_rep(*a), self.get_rep(*b), self.get_rep(*c)];
+                reps.sort_unstable_by_key(|id| id.0);
+                Definition::Circumcircle(reps[0], reps[1], reps[2])
+            },
+            Definition::AnglePair(d1, d2) => Definition::AnglePair(self.get_rep(*d1), self.get_rep(*d2)),
+            Definition::PerpendicularLine(l, p) => Definition::PerpendicularLine(self.get_rep(*l), self.get_rep(*p)),
+            Definition::ParallelLine(l, p) => Definition::ParallelLine(self.get_rep(*l), self.get_rep(*p)),
+            Definition::TangentLine(c, p) => Definition::TangentLine(self.get_rep(*c), self.get_rep(*p)),
+            Definition::DirectionOf(l) => Definition::DirectionOf(self.get_rep(*l)),
+            _ => def.clone(),
+        }
+    }
+
 
     // 🌟 マージロジック (merge_numerical)
     pub fn merge_entities(&mut self, id1: ClassId, id2: ClassId) -> bool {
         let root1 = self.get_rep(id1);
         let root2 = self.get_rep(id2);
-        if root1 == root2 { return false; } // 既に同じ同値類
+        if root1 == root2 { return false; } 
 
-        // Union-Find のポインタを繋ぐ
         self.parents[root2.0].set(root1.0);
 
-        // Rust特有の魔法 `std::mem::take`
-        // root2 の中身を空にして奪い取り、root1 に結合する (クローン不要で爆速)
         let mut root2_comps = std::mem::take(&mut self.entities[root2.0].components);
         let root2_heat = self.entities[root2.0].heat_bonus;
         let root2_imp = self.entities[root2.0].base_importance;
         let root2_name = std::mem::take(&mut self.entities[root2.0].name);
+        let mut root2_uses = std::mem::take(&mut self.entities[root2.0].uses);
 
+        // 🌟 FIX: root1のコンポーネントも一度takeし、mutable borrowの競合を回避する
+        let mut root1_comps = std::mem::take(&mut self.entities[root1.0].components);
+
+        let mut merged_defs = std::collections::HashSet::new();
+        let mut merged_subs = std::collections::HashSet::new();
+
+        for comp in root1_comps.drain(..) {
+            for def in comp.definitions {
+                merged_defs.insert(self.normalize_definition(&def));
+            }
+            for sub in comp.subobjects {
+                merged_subs.insert(self.get_rep(sub));
+            }
+        }
+        for comp in root2_comps {
+            for def in comp.definitions {
+                merged_defs.insert(self.normalize_definition(&def));
+            }
+            for sub in comp.subobjects {
+                merged_subs.insert(self.get_rep(sub));
+            }
+        }
+
+        // ここで再度 root1_entity の可変参照を取得
         let root1_entity = &mut self.entities[root1.0];
-        root1_entity.components.append(&mut root2_comps);
         root1_entity.heat_bonus = root1_entity.heat_bonus.max(root2_heat);
         root1_entity.base_importance = root1_entity.base_importance.max(root2_imp);
+        
+        root1_entity.components = vec![LogicalComponent {
+            definitions: merged_defs.into_iter().collect(),
+            subobjects: merged_subs,
+        }];
 
-        // 最短名戦略 (Shortest Name Strategy)
         if root2_name.len() < root1_entity.name.len() {
             root1_entity.name = root2_name;
         } else if root2_name.len() == root1_entity.name.len() 
@@ -242,10 +312,8 @@ impl EGraph {
             && root1_entity.name.contains("(Ghost)") {
             root1_entity.name = root2_name;
         }
-        let mut root2_uses = std::mem::take(&mut self.entities[root2.0].uses);
         self.entities[root1.0].uses.extend(root2_uses);
         
-        // 🌟 マージされた代表元を再評価キューに積む (O(1))
         self.worklist.push(root1);
         true
     }
@@ -256,8 +324,6 @@ impl EGraph {
             Definition::LineThroughPoints(p1, p2) => {
                 self.link_logical_incidence(*p1, new_id);
                 self.link_logical_incidence(*p2, new_id);
-
-                // 自動的に方向 (Dir_...) を作図してリンクする
                 let name = format!("Dir_{}_(Auto)", self.entities[new_id.0].name);
                 let dir_def = Definition::DirectionOf(new_id);
                 let dir_id = self.create_entity(name, dir_def, EntityType::Direction);
@@ -272,41 +338,11 @@ impl EGraph {
                 self.link_logical_incidence(*p2, new_id);
                 self.link_logical_incidence(*p3, new_id);
             },
-            Definition::PerpendicularLine(l, p) => {
-                self.link_logical_incidence(*l, new_id);
-                self.link_logical_incidence(*p, new_id);
-
-                let dir1_def = Definition::DirectionOf(*l);
-                let dir1_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[l.0].name), dir1_def, EntityType::Direction);
-                
-                let dir2_def = Definition::DirectionOf(new_id);
-                let dir2_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir2_def, EntityType::Direction);
-
-                self.link_logical_incidence(*l, dir1_id);
-                self.link_logical_incidence(new_id, dir2_id);
-
-                // 🌟 自動生成した角を「直角 (ang90)」としてE-Graph上でマージする
-                let ang1_def = Definition::AnglePair(dir1_id, dir2_id);
-                let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Angle);
-                self.merge_entities(ang1_id, self.ang90);
-                
-                let ang2_def = Definition::AnglePair(dir2_id, dir1_id);
-                let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Angle);
-                self.merge_entities(ang2_id, self.ang90);
-            },
-            Definition::TangentLine(c, p) => {
-                self.link_logical_incidence(*c, new_id);
-                self.link_logical_incidence(*p, new_id);
-
-                let name = format!("Dir_{}_(Auto)", self.entities[new_id.0].name);
-                let dir_def = Definition::DirectionOf(new_id);
-                let dir_id = self.create_entity(name, dir_def, EntityType::Direction);
-                self.link_logical_incidence(new_id, dir_id);
-            },
             Definition::AnglePair(d1, d2) => {
                 self.link_logical_incidence(*d1, new_id);
                 self.link_logical_incidence(*d2, new_id);
             },
+            // 🌟 FIX: PerpendicularLine の独立したマッチブロックを削除し、この結合ブロックに一任
             Definition::PerpendicularLine(l, p) | Definition::ParallelLine(l, p) => {
                 self.link_logical_incidence(*l, new_id);
                 self.link_logical_incidence(*p, new_id);
@@ -320,7 +356,6 @@ impl EGraph {
                 self.link_logical_incidence(new_id, dir2_id);
 
                 if matches!(def, Definition::PerpendicularLine(_, _)) {
-                    // 垂線の場合は有向角を90度(ang90)にマージ
                     let ang1_def = Definition::AnglePair(dir1_id, dir2_id);
                     let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Angle);
                     self.merge_entities(ang1_id, self.ang90);
@@ -329,14 +364,12 @@ impl EGraph {
                     let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Angle);
                     self.merge_entities(ang2_id, self.ang90);
                 } else {
-                    // 平行線の場合は方向ベクトルを同一視
                     self.merge_entities(dir1_id, dir2_id);
                 }
             },
             Definition::TangentLine(c, p) => {
                 self.link_logical_incidence(*c, new_id);
                 self.link_logical_incidence(*p, new_id);
-
                 let dir_def = Definition::DirectionOf(new_id);
                 let dir_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir_def, EntityType::Direction);
                 self.link_logical_incidence(new_id, dir_id);
@@ -344,58 +377,17 @@ impl EGraph {
             Definition::Midpoint(a, b) => {
                 self.link_logical_incidence(*a, new_id);
                 self.link_logical_incidence(*b, new_id);
-                
-                // MはAB上に乗っているという論理リンクを生成
                 let line_def = Definition::new_line(*a, *b);
                 let line_id = self.create_entity(format!("Line_{}_{}_(Auto)", self.entities[a.0].name, self.entities[b.0].name), line_def, EntityType::Line);
                 self.link_logical_incidence(new_id, line_id);
             },
+            Definition::LengthSq(a, b) => {
+                self.link_logical_incidence(*a, new_id);
+                self.link_logical_incidence(*b, new_id);
+            },
             _ => {}
         }
     }
-
-    /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
-    pub fn normalize_definition(&self, def: &Definition) -> Definition {
-        match def {
-            Definition::Midpoint(p1, p2) => {
-                let r1 = self.get_rep(*p1);
-                let r2 = self.get_rep(*p2);
-                if r1.0 > r2.0 { Definition::Midpoint(r2, r1) } else { Definition::Midpoint(r1, r2) }
-            },
-            Definition::LineThroughPoints(p1, p2) => {
-                Definition::new_line(self.get_rep(*p1), self.get_rep(*p2))
-            },
-            Definition::Intersection(l1, l2) => {
-                let r1 = self.get_rep(*l1);
-                let r2 = self.get_rep(*l2);
-                if r1.0 > r2.0 { Definition::Intersection(r2, r1) } else { Definition::Intersection(r1, r2) }
-            },
-            Definition::AnglePair(d1, d2) => {
-                Definition::AnglePair(self.get_rep(*d1), self.get_rep(*d2))
-            },
-            Definition::Circumcircle(p1, p2, p3) => {
-                let mut arr = [self.get_rep(*p1).0, self.get_rep(*p2).0, self.get_rep(*p3).0];
-                arr.sort_unstable();
-                Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
-            },
-            Definition::LengthSq(p1, p2) => {
-                let r1 = self.get_rep(*p1);
-                let r2 = self.get_rep(*p2);
-                if r1.0 > r2.0 { Definition::LengthSq(r2, r1) } else { Definition::LengthSq(r1, r2) }
-            },
-            Definition::TangentLine(c, p) => {
-                Definition::TangentLine(self.get_rep(*c), self.get_rep(*p))
-            },
-            Definition::PerpendicularLine(l, p) => {
-                Definition::PerpendicularLine(self.get_rep(*l), self.get_rep(*p))
-            },
-            Definition::ParallelLine(l, p) => {
-                Definition::ParallelLine(self.get_rep(*l), self.get_rep(*p))
-            },
-            _ => def.clone(),
-        }
-    }
-
 
     pub fn apply_congruence_closure(&mut self) -> bool {
         let mut changed_any = false;
@@ -419,18 +411,29 @@ impl EGraph {
                 
                 for def in &definitions {
                     if matches!(def, Definition::FreePoint | Definition::GivenPoint) { continue; }
-                    
                     let norm_def = self.normalize_definition(def);
-                    if let Some(&existing_rep) = def_map.get(&norm_def) {
+                    
+                    // 🌟 1. グローバルな memo (既存図形) との照合
+                    if let Some(&global_existing) = self.memo.get(&norm_def) {
+                        let g_rep = self.get_rep(global_existing);
+                        if g_rep != u_rep {
+                            if self.merge_entities(g_rep, u_rep) {
+                                changed_any = true;
+                                break;
+                            }
+                        }
+                    } 
+                    // 🌟 2. 現在のループ内で新しく生成された同一定義との照合
+                    else if let Some(&existing_rep) = def_map.get(&norm_def) {
                         if existing_rep != u_rep {
-                            // これで安全に可変メソッドを呼び出せます
                             if self.merge_entities(existing_rep, u_rep) {
                                 changed_any = true;
                                 break; 
                             }
                         }
                     } else {
-                        def_map.insert(norm_def, u_rep);
+                        def_map.insert(norm_def.clone(), u_rep);
+                        self.memo.insert(norm_def, u_rep); // 🌟 グローバルにも登録
                     }
                 }
             }
@@ -459,16 +462,13 @@ impl EGraph {
                 let l1 = lines[x];
                 let l2 = lines[y];
                 let mut shared_points = 0;
-                
                 for p_idx in 0..self.entities.len() {
                     let pt = ClassId(p_idx);
                     if self.get_rep(pt) == pt && self.entities[p_idx].entity_type == EntityType::Point {
-                        let c1 = self.entities[pt.0].components.iter().any(|c| c.subobjects.contains(&l1))
-                              || self.entities[l1.0].components.iter().any(|c| c.subobjects.contains(&pt));
-                        let c2 = self.entities[pt.0].components.iter().any(|c| c.subobjects.contains(&l2))
-                              || self.entities[l2.0].components.iter().any(|c| c.subobjects.contains(&pt));
-                        
-                        if c1 && c2 { shared_points += 1; }
+                        // 🌟 FIX: is_connected を使って確実に incidence を判定する
+                        if self.is_connected(pt, l1) && self.is_connected(pt, l2) {
+                            shared_points += 1;
+                        }
                     }
                 }
                 
@@ -578,5 +578,255 @@ impl EGraph {
             cache.insert(rep_id.0, v.clone());
         }
         val
+    }
+
+    pub fn is_connected(&self, id1: ClassId, id2: ClassId) -> bool {
+        let r1 = self.get_rep(id1);
+        let r2 = self.get_rep(id2);
+        
+        for comp in &self.entities[r1.0].components {
+            if comp.subobjects.iter().any(|&s| self.get_rep(s) == r2) { return true; }
+        }
+        for comp in &self.entities[r2.0].components {
+            if comp.subobjects.iter().any(|&s| self.get_rep(s) == r1) { return true; }
+        }
+        false
+    }
+
+    pub fn format_definition(&self, def: &Definition) -> String {
+        let get_name = |id: &ClassId| self.entities[self.get_rep(*id).0].name.clone();
+        match def {
+            Definition::GivenPoint => "GivenPoint".to_string(),
+            Definition::FreePoint => "FreePoint".to_string(),
+            Definition::Intersection(a, b) => format!("Intersection({}, {})", get_name(a), get_name(b)),
+            Definition::LineThroughPoints(a, b) => format!("LineThrough({}, {})", get_name(a), get_name(b)),
+            Definition::Midpoint(a, b) => format!("Midpoint({}, {})", get_name(a), get_name(b)),
+            Definition::DirectionOf(a) => format!("DirectionOf({})", get_name(a)),
+            Definition::AnglePair(a, b) => format!("AnglePair({}, {})", get_name(a), get_name(b)),
+            Definition::PerpendicularLine(l, p) => format!("Perpendicular({} ⟂ {})", get_name(l), get_name(p)),
+            Definition::ParallelLine(l, p) => format!("Parallel({} ∥ {})", get_name(l), get_name(p)),
+            Definition::LengthSq(a, b) => format!("LengthSq({}, {})", get_name(a), get_name(b)),
+            Definition::Circumcircle(a, b, c) => format!("Circumcircle({}, {}, {})", get_name(a), get_name(b), get_name(c)),
+            Definition::TangentLine(c, p) => format!("TangentLine({}, {})", get_name(c), get_name(p)),
+        }
+    }
+    /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
+    pub fn dump_state(&self) {
+        println!("\n=== 📊 E-Graph State Dump ===");
+        let mut active_nodes = Vec::new();
+        for i in 0..self.entities.len() {
+            let id = ClassId(i);
+            if self.get_rep(id) == id { // 代表元のみを抽出
+                active_nodes.push(id);
+            }
+        }
+
+        println!("Active Equivalence Classes: {}", active_nodes.len());
+        
+        // 型ごとにソートして出力すると見やすい
+        active_nodes.sort_by_key(|&id| format!("{:?}", self.entities[id.0].entity_type));
+
+        for &id in &active_nodes {
+            let e = &self.entities[id.0];
+            println!("🔹 [{:?}] {}", e.entity_type, e.name);
+            
+            for comp in &e.components {
+                // 定義（どうやって作られたか）
+                for def in &comp.definitions {
+                    if !matches!(def, Definition::FreePoint | Definition::GivenPoint) {
+                        println!("    └─ Def: {}", self.format_definition(def));
+                    }
+                }
+                // 所属・接続関係 (Incidence)
+                if !comp.subobjects.is_empty() {
+                    let mut subs: Vec<String> = comp.subobjects.iter()
+                        .map(|s| self.entities[self.get_rep(*s).0].name.clone())
+                        .collect();
+                    subs.sort();
+                    subs.dedup();
+                    println!("    └─ Contains/On: {:?}", subs);
+                }
+            }
+        }
+        println!("=============================\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_line_merge_by_two_points() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        
+        let l1 = egraph.create_entity("L1".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let l2 = egraph.create_entity("L2".into(), Definition::new_line(p_b, p_a), EntityType::Line);
+        
+        egraph.apply_congruence_closure();
+        assert_eq!(egraph.get_rep(l1), egraph.get_rep(l2), "2点を共有する直線はマージされるべき");
+    }
+
+    #[test]
+    fn test_incidence_preservation_after_merge() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        
+        let l1 = egraph.create_entity("L1".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let l2 = egraph.create_entity("L2".into(), Definition::FreePoint, EntityType::Line); // 仮の独立した直線
+        
+        // CをL2上に乗せる (論理リンク)
+        egraph.link_logical_incidence(p_c, l2);
+        assert!(egraph.is_connected(p_c, l2), "リンク直後は接続されている");
+
+        // L1とL2を強制的にマージ
+        egraph.merge_entities(l1, l2);
+        egraph.apply_congruence_closure();
+
+        // L2の代表元はL1になっているはずなので、CはL1に乗っていると判定されるべき
+        assert!(egraph.is_connected(p_c, l1), "マージ後、所属関係(Incidence)が代表元に引き継がれるべき");
+    }
+
+    #[test]
+    fn test_line_merge_by_point_and_direction() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        
+        let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let l_ac = egraph.create_entity("L_AC".into(), Definition::new_line(p_a, p_c), EntityType::Line);
+        
+        let dir_ab = egraph.create_entity("Dir_AB".into(), Definition::DirectionOf(l_ab), EntityType::Direction);
+        let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Direction);
+        
+        // 強制的に方向を同じにする (例えば同位角の定理などで証明されたと仮定)
+        egraph.merge_entities(dir_ab, dir_ac);
+        egraph.apply_congruence_closure(); // ここで直線の自動マージが走るはず
+
+        // Aという1点を共有し、かつ方向が同じになったので、L_AB と L_AC は同一の直線になるべき
+        assert_eq!(egraph.get_rep(l_ab), egraph.get_rep(l_ac), "1点と方向を共有する直線はマージされるべき");
+    }
+
+    #[test]
+    fn test_perpendicular_creates_ang90() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        
+        let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        
+        // CからABへ垂線を下ろす
+        let perp = egraph.create_entity("Perp_C_AB".into(), Definition::PerpendicularLine(l_ab, p_c), EntityType::Line);
+        egraph.apply_congruence_closure();
+
+        // 垂線と元の直線の方向からなる有向角を取得
+        let dir_ab = egraph.memo.get(&Definition::DirectionOf(l_ab)).unwrap();
+        let dir_perp = egraph.memo.get(&Definition::DirectionOf(perp)).unwrap();
+        
+        let ang = egraph.memo.get(&Definition::AnglePair(*dir_ab, *dir_perp)).unwrap();
+        
+        // 自動的にAng90とマージされているはず
+        assert_eq!(egraph.get_rep(*ang), egraph.get_rep(egraph.ang90), "垂線から作られた有向角は自動的にAng90にマージされるべき");
+    }
+
+    #[test]
+    fn test_parallel_merges_directions() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        
+        let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let para = egraph.create_entity("Para_C_AB".into(), Definition::ParallelLine(l_ab, p_c), EntityType::Line);
+        egraph.apply_congruence_closure();
+
+        let dir_ab = egraph.memo.get(&Definition::DirectionOf(l_ab)).unwrap();
+        let dir_para = egraph.memo.get(&Definition::DirectionOf(para)).unwrap();
+        
+        assert_eq!(egraph.get_rep(*dir_ab), egraph.get_rep(*dir_para), "平行線として作図された直線の方向はマージされるべき");
+    }
+
+    #[test]
+    fn test_midpoint_symmetry_and_incidence() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        
+        let m1 = egraph.create_entity("M1".into(), Definition::Midpoint(p_a, p_b), EntityType::Point);
+        let m2 = egraph.create_entity("M2".into(), Definition::Midpoint(p_b, p_a), EntityType::Point);
+        egraph.apply_congruence_closure();
+
+        assert_eq!(egraph.get_rep(m1), egraph.get_rep(m2), "引数の順序が逆の中点はマージされるべき");
+
+        // 中点を作図すると自動的にその2点を結ぶ直線が作られ、中点がその上に乗る
+        let l_ab = egraph.memo.get(&Definition::LineThroughPoints(p_a, p_b)).expect("ABを結ぶ直線が自動生成されているべき");
+        assert!(egraph.is_connected(m1, *l_ab), "中点は元の2点を結ぶ直線上にあるべき");
+    }
+    #[test]
+    fn test_angle_pair_symmetry_and_normalization() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+        let l1 = egraph.create_entity("L1".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let l2 = egraph.create_entity("L2".into(), Definition::new_line(p_b, p_c), EntityType::Line);
+
+        // 🌟 FIX: `*` でデリファレンスして値(ClassId)としてコピーし、借用を即座に終わらせる
+        let d1 = *egraph.memo.get(&Definition::DirectionOf(l1)).unwrap();
+        let d2 = *egraph.memo.get(&Definition::DirectionOf(l2)).unwrap();
+
+        // 異なる順序で有向角を作成
+        let ang1 = egraph.create_entity("Ang1".into(), Definition::AnglePair(d1, d2), EntityType::Angle);
+        let ang2 = egraph.create_entity("Ang2".into(), Definition::AnglePair(d1, d2), EntityType::Angle);
+
+        egraph.apply_congruence_closure();
+        assert_eq!(egraph.get_rep(ang1), egraph.get_rep(ang2), "同一の方向ペアから作られた有向角は一意にマージされるべき");
+    }
+
+    #[test]
+    fn test_ang90_constant_propagation() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+        let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        
+        let perp = egraph.create_entity("Perp".into(), Definition::PerpendicularLine(l_ab, p_c), EntityType::Line);
+        egraph.apply_congruence_closure();
+
+        // 🌟 FIX: 同様に値としてコピー
+        let dir_ab = *egraph.memo.get(&Definition::DirectionOf(l_ab)).unwrap();
+        let dir_perp = *egraph.memo.get(&Definition::DirectionOf(perp)).unwrap();
+
+        let ang_test = egraph.create_entity("AngTest".into(), Definition::AnglePair(dir_ab, dir_perp), EntityType::Angle);
+        egraph.apply_congruence_closure();
+
+        assert_eq!(egraph.get_rep(ang_test), egraph.get_rep(egraph.ang90), "垂直な2直線の有向角はグローバルなang90と一致するべき");
+    }
+
+    #[test]
+    fn test_parallel_direction_angle_zero() {
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+        let l1 = egraph.create_entity("L1".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let l2 = egraph.create_entity("L2".into(), Definition::ParallelLine(l1, p_c), EntityType::Line);
+        egraph.apply_congruence_closure();
+
+        // 🌟 FIX: 同様に値としてコピー
+        let d1 = *egraph.memo.get(&Definition::DirectionOf(l1)).unwrap();
+        let d2 = *egraph.memo.get(&Definition::DirectionOf(l2)).unwrap();
+
+        assert_eq!(egraph.get_rep(d1), egraph.get_rep(d2), "平行線作図により方向ベクトルがマージされるべき");
     }
 }

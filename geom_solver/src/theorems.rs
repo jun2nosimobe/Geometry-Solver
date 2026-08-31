@@ -250,32 +250,36 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "同位角による平行判定(右共通)".to_string(),
             entities: entities(&[
-                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction), ("DirM", EntityType::Direction),
+                ("D1", EntityType::Direction), ("D2", EntityType::Direction), ("D3", EntityType::Direction),
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["Dir1", "DirM", "Ang1"], Some("AnglePair"), None, true, Some("DirR")),
-                fact_ext("DefinedBy", &["Dir2", "DirM", "Ang2"], Some("AnglePair"), None, true, Some("DirR")),
-                distinct(&["Dir1", "Dir2", "DirM"]),
+                fact_ext("DefinedBy", &["D1", "D3", "Ang1"], Some("AnglePair"), None, true, Some("P1")),
+                fact_ext("DefinedBy", &["D2", "D3", "Ang2"], Some("AnglePair"), None, true, Some("P1")),
+                distinct(&["D1", "D2", "D3"]),
             ],
             constructions: vec![],
-            conclusions: vec![FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dir1".to_string(), "Dir2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
+            ],
         },
         TheoremDef {
             name: "同位角による平行判定(左共通)".to_string(),
             entities: entities(&[
-                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction), ("DirM", EntityType::Direction),
+                ("D1", EntityType::Direction), ("D2", EntityType::Direction), ("D3", EntityType::Direction),
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["DirM", "Dir1", "Ang1"], Some("AnglePair"), None, true, Some("DirL")),
-                fact_ext("DefinedBy", &["DirM", "Dir2", "Ang2"], Some("AnglePair"), None, true, Some("DirL")),
-                distinct(&["Dir1", "Dir2", "DirM"]),
+                fact_ext("DefinedBy", &["D3", "D1", "Ang1"], Some("AnglePair"), None, true, Some("P2")),
+                fact_ext("DefinedBy", &["D3", "D2", "Ang2"], Some("AnglePair"), None, true, Some("P2")),
+                distinct(&["D1", "D2", "D3"]),
             ],
             constructions: vec![],
-            conclusions: vec![FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dir1".to_string(), "Dir2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
+            ],
         },
         // ==========================================
         // 🌟 有向角の加法性
@@ -336,6 +340,53 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang13".to_string(), "Ang24".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
             ],
         },
+        // ==========================================
+        // 🌟 定理: 直角三角形の斜辺の中線 (角度版)
+        // ==========================================
+        TheoremDef {
+            name: "直角三角形の斜辺の中線".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("C", EntityType::Point), ("H", EntityType::Point), ("M", EntityType::Point),
+                ("L_AH", EntityType::Line), ("L_CH", EntityType::Line), ("L_MH", EntityType::Line), ("L_CA", EntityType::Line),
+                ("Dir_AH", EntityType::Direction), ("Dir_CH", EntityType::Direction), ("Dir_MH", EntityType::Direction), ("Dir_CA", EntityType::Direction),
+                ("Ang90", EntityType::Angle), ("Ang_AH_CH", EntityType::Angle), ("Ang_MH_CH", EntityType::Angle), ("Ang_CH_CA", EntityType::Angle),
+            ]),
+            patterns: vec![
+                // 爆速化: まず中点を探す
+                fact_ext("DefinedBy", &["A", "C", "M"], Some("Midpoint"), None, false, None),
+                
+                fact_ext("Identical", &["Ang_AH_CH", "Ang90"], Some("Angle"), None, false, None),
+                fact_ext("DefinedBy", &["Dir_AH", "Dir_CH", "Ang_AH_CH"], Some("AnglePair"), None, false, None),
+                
+                fact_ext("DefinedBy", &["L_AH", "Dir_AH"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["L_CH", "Dir_CH"], Some("DirectionOf"), None, false, None),
+                
+                // CommonEntity の代用: Hが両方の直線に乗っていること
+                fact_ext("Connected", &["H", "L_AH"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["H", "L_CH"], Some("Line"), Some("Point"), false, None),
+                
+                fact_ext("Connected", &["A", "L_AH"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["C", "L_CH"], Some("Line"), Some("Point"), false, None),
+                
+                distinct(&["A", "C", "H", "M"]),
+                distinct(&["L_AH", "L_CH"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["M".to_string(), "H".to_string()], target_type: "Line".to_string(), bind_to: "L_MH".to_string() },
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["C".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "L_CA".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_MH".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_MH".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_CA".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_CA".to_string() },
+                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_MH".to_string(), "Dir_CH".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_MH_CH".to_string() },
+                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_CH".to_string(), "Dir_CA".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_CH_CA".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_MH_CH".to_string(), "Ang_CH_CA".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+            ],
+        },
+
+        // ==========================================
+        // 🌟 定理: 直角三角形の斜辺の中線 (直線と距離の完全作図版)
+        // ==========================================
         TheoremDef {
             name: "直角三角形の斜辺の中線 (距離版)".to_string(),
             entities: entities(&[
@@ -343,11 +394,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("L1", EntityType::Line), ("L2", EntityType::Line),
                 ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction),
                 ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
+                ("Line_Median", EntityType::Line), ("Dir_Median", EntityType::Direction), // 🌟 復活
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), None, false, None),
                 fact_ext("Identical", &["Ang_A", "Ang90"], Some("Angle"), None, false, None),
+                // 🌟 allow_flip = true
                 fact_ext("DefinedBy", &["Dir1", "Dir2", "Ang_A"], Some("AnglePair"), None, true, None),
                 
                 fact_ext("DefinedBy", &["L1", "Dir1"], Some("DirectionOf"), None, false, None),
@@ -359,11 +412,15 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 distinct(&["A", "B", "C"]),
             ],
             constructions: vec![
+                // 🌟 FIX: 直線と方向をE-Graphに物理的に作図し、他の定理への架け橋を作る
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "Line_Median".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["Line_Median".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_Median".to_string() },
+                
                 ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MB".to_string() },
                 ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MA".to_string() },
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_MB".to_string(), "Dist_MA".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_MB".to_string(), "Dist_MA".to_string()], target_type: None, sub_type: None }
             ],
         },
     ]

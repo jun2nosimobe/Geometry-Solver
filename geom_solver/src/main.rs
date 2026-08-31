@@ -35,11 +35,22 @@ fn main() {
     prover.theorems = theorems::get_all_theorems();
     let mut engine = BlackboardEngine::new(prover);
     let mut mcts = MCTSSearchEngine::new();
+    
     for fact in &problem.initial_facts {
-        engine.prover.facts.push(fact.clone());
+        match fact {
+            crate::mmp_core::Fact::Identical(id1, id2) => {
+                engine.prover.egraph.merge_entities(*id1, *id2);
+                engine.emit(logic_core::Event::NodeMerged);
+            },
+            crate::mmp_core::Fact::Connected(c, p) => {
+                engine.prover.egraph.link_logical_incidence(*c, *p);
+            },
+            _ => {}
+        }
         engine.emit(logic_core::Event::FactProven(fact.clone()));
     }
     let start_time = Instant::now();
+
     engine.schedule_full_sweep();
 
     while start_time.elapsed() < std::time::Duration::from_secs(5) {
@@ -80,4 +91,5 @@ fn main() {
             }
         }
     }
+    engine.prover.egraph.dump_state();
 }
