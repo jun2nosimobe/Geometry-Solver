@@ -9,6 +9,8 @@ pub mod test_right_midpoint;
 pub mod orthocenter;
 pub mod circumcenter;
 pub mod thales;
+pub mod two_circles_reim;
+pub mod orthic_incenter;
 
 use crate::mmp_core::{ClassId, EGraph, Fact}; // Factを追加
 
@@ -30,6 +32,8 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "orthocenter" => orthocenter::setup(egraph),
         "circumcenter" => circumcenter::setup(egraph),
         "thales" => thales::setup(egraph),
+        "two_circles_reim" => two_circles_reim::setup(egraph),
+        "orthic_incenter" => orthic_incenter::setup(egraph),
         _ => panic!("未知の問題名です: {}", name),
     }
 }
