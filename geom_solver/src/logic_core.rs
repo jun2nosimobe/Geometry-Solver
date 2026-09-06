@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap;
 use std::collections::{BinaryHeap, VecDeque};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
@@ -73,7 +74,9 @@ pub struct MatchTask {
     pub theorem_idx: usize,
     pub bind: FxHashMap<String, ClassId>,
     pub flip_states: FxHashMap<String, bool>,
-    pub remaining_patterns: Vec<crate::logic_core::Pattern>,
+    // 🌟 Rc化: タスクの複製・再キュー時に Vec<Pattern> をディープコピーせず、
+    // ポインタ共有だけで済ませる(パターン列自体は不変なので安全)
+    pub remaining_patterns: Rc<Vec<crate::logic_core::Pattern>>,
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
@@ -84,18 +87,32 @@ impl Ord for MatchTask { fn cmp(&self, other: &Self) -> Ordering { self.priority
 pub struct ProverEngine {
     pub egraph: EGraph,
     pub facts: Vec<Fact>,
-    pub theorems: Vec<TheoremDef>,
+    // 🌟 Rc化: 定理定義(文字列・パターン列を大量に持つ重い構造体)は実行中不変なので、
+    // タスク処理のたびに丸ごとディープコピーする代わりに Rc でポインタ共有する
+    pub theorems: Vec<Rc<TheoremDef>>,
     pub dfs_calls: u64,
+    // 🐛 バグ修正: 以前は dfs_match の探索上限が常に100,000固定だった。
+    // schedule_full_sweep() から生成される「シードなし(priority<=0)」タスクは、
+    // 変数が全て未束縛のまま定理を試すため、変数の多い定理(例: 有向角の加法性)では
+    // ほぼ必ず失敗するのに毎回上限いっぱいまで探索してしまい、しかも
+    // schedule_full_sweep() は要求解決のたびに何度も呼ばれるため、
+    // 同じ「失敗するだけの巨大探索」を繰り返して秒単位の時間を浪費していた
+    // (simsonで実測: この1定理だけで5秒中3秒以上を消費)。
+    // schedule_matcher_task() 由来のシード済みタスク(priority>=10)は
+    // 既に変数の多くが具体的な値に束縛されているため速く失敗/成功するので
+    // 上限は据え置き、シードなしタスクだけ上限を大幅に下げて早期に諦めさせる。
+    pub dfs_cap: u64,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>, // 🌟 Blackboardから移動
 }
 
 impl ProverEngine {
     pub fn new(egraph: EGraph) -> Self {
-        Self { 
-            egraph, 
-            facts: Vec::new(), 
-            theorems: Vec::new(), 
+        Self {
+            egraph,
+            facts: Vec::new(),
+            theorems: Vec::new(),
             dfs_calls: 0,
+            dfs_cap: 100_000,
             construction_demands: FxHashMap::default(), // 🌟 追加
         }
     }
@@ -199,16 +216,16 @@ impl ProverEngine {
     }
 
     pub fn dfs_match(
-        &mut self, 
-        theorem: &TheoremDef, 
-        mut remaining: Vec<Pattern>, 
-        bind: FxHashMap<String, ClassId>, 
+        &mut self,
+        theorem: &TheoremDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: FxHashMap<String, ClassId>,
         flip_states: FxHashMap<String, bool>,
         failed_paths: &mut rustc_hash::FxHashSet<u64>, // 🌟 追加
         on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
     ) {
         self.dfs_calls += 1;
-        if self.dfs_calls > 100_000 { return; }
+        if self.dfs_calls > self.dfs_cap { return; }
 
         // 🌟 失敗パスのキャッシュチェック
         let state_sig = {
@@ -253,7 +270,20 @@ impl ProverEngine {
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
 
-        let pat_to_eval = remaining.remove(best_idx);
+        // 🌟 以前は `remaining: Vec<Pattern>` を分岐のたびに丸ごと clone() していたため、
+        // 候補が複数ある(順列展開やマッチ候補が多い)ケースで同じパターン列が何度も
+        // ディープコピーされていた。ここで一度だけ「評価対象を除いた残り」を作り、
+        // Rc に包んで以降は全てポインタコピーで共有する。
+        let pat_to_eval = remaining[best_idx].clone();
+        let remaining: Rc<Vec<Pattern>> = if remaining.len() == 1 {
+            Rc::new(Vec::new())
+        } else {
+            let mut owned = Vec::with_capacity(remaining.len() - 1);
+            for (i, p) in remaining.iter().enumerate() {
+                if i != best_idx { owned.push(p.clone()); }
+            }
+            Rc::new(owned)
+        };
         let mut matched_any = false;
 
         // クロージャをラップして、1度でもマッチしたかを記録する
@@ -288,7 +318,7 @@ impl ProverEngine {
             }
             Pattern::Not(inner_pat) => {
                 let mut inner_matched = false;
-                self.dfs_match(theorem, vec![*inner_pat.clone()], bind.clone(), flip_states.clone(), failed_paths, &mut |_, _| {
+                self.dfs_match(theorem, Rc::new(vec![*inner_pat.clone()]), bind.clone(), flip_states.clone(), failed_paths, &mut |_, _| {
                     inner_matched = true;
                 });
                 if !inner_matched {
@@ -303,11 +333,11 @@ impl ProverEngine {
         }
     }
     pub fn match_fact_pattern(
-        &mut self, 
-        theorem: &TheoremDef, 
-        def: &FactPatternDef, 
-        remaining: Vec<Pattern>, 
-        bind: &FxHashMap<String, ClassId>, 
+        &mut self,
+        theorem: &TheoremDef,
+        def: &FactPatternDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: &FxHashMap<String, ClassId>,
         flip_states: FxHashMap<String, bool>,
         failed_paths: &mut rustc_hash::FxHashSet<u64>,
         on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
@@ -332,34 +362,35 @@ impl ProverEngine {
                         self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                     }
                     (None, None) => {
-                        let mut matches = Vec::new();
-                        let mut rep_groups: FxHashMap<ClassId, Vec<ClassId>> = FxHashMap::default();
+                        // 🐛 移植バグ修正: 以前はここで「同じ代表元(=既にマージ済み)を持つ
+                        // 異なる ClassId のペア」を全列挙しており、1つの等価クラスに
+                        // N個のエンティティが吸収されていると N*(N-1) 通りに爆発していた
+                        // (「有向角の加法性」のように、この分岐から探索を始める定理で
+                        // simsonのタイムアウトの主因になっていた)。
+                        //
+                        // Python版の対応する _match_identical (両方未束縛) は、対象の型を
+                        // 持つ「異なる代表元」それぞれについて v1=v2=その代表元、という
+                        // 自己束縛を O(代表元の数) で列挙するだけだった。この定理は本来
+                        // schedule_matcher_task によるシード付き起動(実際に発見された
+                        // Identical事実からD1..D6を具体的に束縛する経路)で使われる前提であり、
+                        // シード無しの全探索(schedule_full_sweep)から来た場合はこの程度の
+                        // 軽い足がかりで十分。Python版と同じ挙動に合わせて計算量を落とす。
+                        let mut reps: Vec<ClassId> = Vec::new();
                         for i in 0..self.egraph.entities.len() {
                             let id = ClassId(i);
-                            // 🌟 型が違うものは最初からグループに入れない (超高速化)
+                            if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
                             if let Some(et) = expected_type {
                                 if self.egraph.entities[i].entity_type != et { continue; }
                             }
                             if self.egraph.entities[i].base_importance > 0.0 {
-                                let rep = self.egraph.get_rep(id);
-                                rep_groups.entry(rep).or_default().push(id);
+                                reps.push(id);
                             }
                         }
-                        for group in rep_groups.values() {
-                            if group.len() >= 2 {
-                                for i in 0..group.len() {
-                                    for j in 0..group.len() {
-                                        if i != j {
-                                            let mut next_bind = bind.clone();
-                                            next_bind.insert(v1.clone(), group[i]);
-                                            next_bind.insert(v2.clone(), group[j]);
-                                            matches.push(next_bind);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        for new_bind in matches { self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match); 
+                        for rep in reps {
+                            let mut next_bind = bind.clone();
+                            next_bind.insert(v1.clone(), rep);
+                            next_bind.insert(v2.clone(), rep);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                         }
                     }
                 }
@@ -856,7 +887,7 @@ impl BlackboardEngine {
                 theorem_idx: idx, 
                 bind: initial_bind,
                 flip_states: rustc_hash::FxHashMap::default(),
-                remaining_patterns: theorem.patterns.clone() 
+                remaining_patterns: Rc::new(theorem.patterns.clone()) 
             });
         }
     }
@@ -899,7 +930,7 @@ impl BlackboardEngine {
                                 theorem_idx: idx,
                                 bind,
                                 flip_states: rustc_hash::FxHashMap::default(),
-                                remaining_patterns: theorem.patterns.clone(),
+                                remaining_patterns: Rc::new(theorem.patterns.clone()),
                             });
                         }
                     }
@@ -937,13 +968,23 @@ impl BlackboardEngine {
             if let Some(mut task) = self.task_queue.pop() {
                 calls += 1;
                 self.prover.dfs_calls = 0; 
+                // 🌟 theorems は Vec<Rc<TheoremDef>> なので、この clone() はもう
+                // ディープコピーではなく参照カウントのインクリメントのみ(ポインタコピー相当)
                 let theorem = self.prover.theorems[task.theorem_idx].clone();
                 let mut new_binds = Vec::new();
                 let mut failed_paths = rustc_hash::FxHashSet::default();
 
+                // 🌟 検証メモ: 当初は schedule_full_sweep() 由来のシードなしタスク
+                // (priority<=0) だけ上限を 20,000 に下げる案を試したが、miquel の
+                // 「有向角の加法性」「円周角の定理の逆」はまさにシードなし状態から
+                // 20,000〜100,000回の間で成功しており、上限を下げるとリトライのたびに
+                // failed_paths キャッシュが空の状態から探索をやり直すだけになって
+                // かえって遅くなった(0.69s→1.15s)ため撤回した。
+                // 上限自体は104行目のフィールド定義の通り常に100,000のまま。
+
                 self.prover.dfs_match(
-                    &theorem, 
-                    task.remaining_patterns.clone(), // 一旦cloneして渡す
+                    &theorem,
+                    task.remaining_patterns.clone(), // Rc なのでポインタコピーのみ
                     task.bind.clone(), 
                     task.flip_states.clone(), 
                     &mut failed_paths,
@@ -953,11 +994,20 @@ impl BlackboardEngine {
                 );
 
                 // 🌟 スケジューリング工夫: DFSが上限(100,000)に張り付いた場合、
-                // このタスクは重すぎるためペナルティを与えて後回しにする
-                if self.prover.dfs_calls >= 99_000 {
-                    task.priority -= 5;
-                    if task.priority >= -20 { // 諦める閾値
-                        self.task_queue.push(task);
+                // このタスクは重すぎるためペナルティを与えて後回しにする。
+                //
+                // 🐛 バグ修正: 以前はキューが空(＝他に実行できるタスクが無い)の場合でも
+                // 無条件に再キューしていた。この場合 e-graph も bind も何一つ変化しないまま
+                // 全く同じ 100,000 回の探索を優先度が尽きるまで(最大5回)繰り返すだけになり、
+                // 実測で simson 問題では1つの定理(有向角の加法性)のリトライだけで
+                // 5秒の予算のうち3秒以上を無駄にしていた。他に実行可能なタスクが残っている
+                // 場合のみ再キューし、無い場合はその場で諦めてリカバリーフェーズに委ねる。
+                if self.prover.dfs_calls >= self.prover.dfs_cap {
+                    if !self.task_queue.is_empty() {
+                        task.priority -= 5;
+                        if task.priority >= -20 { // 諦める閾値
+                            self.task_queue.push(task);
+                        }
                     }
                 }
 

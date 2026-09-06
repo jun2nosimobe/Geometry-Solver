@@ -32,9 +32,14 @@ fn main() {
     let problem = problems::load_problem(problem_name, &mut egraph);
 
     let mut prover = ProverEngine::new(egraph);
-    prover.theorems = theorems::get_all_theorems();
+    // 🌟 Rc化: theorems は Vec<Rc<TheoremDef>>。定理は実行中不変なので、
+    // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
+    prover.theorems = theorems::get_all_theorems().into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
-    let mut mcts = MCTSSearchEngine::new();
+    // 🌟 MCTSは現状ほぼ使われておらず、しかもe-graph全体を毎回cloneするだけで
+    // 実際のロールアウト評価をしていない(スコア固定)ため、性能検証のあいだ一旦無効化する。
+    // TODO: e-graphをcloneしないクローンフリーな実装に書き換えてから再有効化する。
+    let mut _mcts = MCTSSearchEngine::new();
     
     for fact in &problem.initial_facts {
         match fact {
@@ -85,9 +90,11 @@ fn main() {
                 recovered = true;
             }
             if !recovered {
-                println!("  -> 要求がないため、MCTSでランダムな補助線を探索中...");
-                mcts.run_step(&mut engine.prover.egraph, &_tester, 100);
-                engine.schedule_full_sweep();
+                // 🌟 MCTSは一旦スキップ(理由は上記コメント参照)。
+                // 需要による作図もMCTSによる補助線もどちらも打てない = これ以上進めないので、
+                // 残り時間を無駄なスピンで消費せずここで打ち切る。
+                println!("  -> 要求がなく、MCTSも無効化中のため探索を打ち切ります。");
+                break;
             }
         }
     }
