@@ -3,6 +3,7 @@ pub mod varignon;
 pub mod tangent_orthic;
 pub mod miquel;
 pub mod nine_point;
+pub mod nine_point_full;
 pub mod simson;
 pub mod test_parallel;
 pub mod test_right_midpoint;
@@ -26,6 +27,7 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "tangent_orthic" => tangent_orthic::setup(egraph),
         "miquel" => miquel::setup(egraph),
         "nine_point" => nine_point::setup(egraph),
+        "nine_point_full" => nine_point_full::setup(egraph),
         "simson" => simson::setup(egraph),
         "test_parallel" => test_parallel::setup(egraph),
         "test_right_midpoint" => test_right_midpoint::setup(egraph),

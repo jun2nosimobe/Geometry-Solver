@@ -60,8 +60,17 @@ fn main() {
     // MCTSの無方向な探索がそこを突く可能性を完全には排除できないという
     // 慎重さによるもの。
     let use_mcts = args.iter().any(|a| a == "--mcts");
+    // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
+    // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
+    // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
+    // 確認したい場合や、UCB1バンディットの学習(schedule_full_sweepの
+    // 呼び出し回数)をより多く積ませて効果を見たい場合に必要になる。
+    let time_budget_secs: u64 = args.iter()
+        .find_map(|a| a.strip_prefix("--time="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
 
-    println!("🚀 幾何ソルバーを起動します (対象問題: {})", problem_name);
+    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒)", problem_name, time_budget_secs);
 
     let mut egraph = EGraph::new();
     let tester = MMPTester::new();
@@ -101,7 +110,7 @@ fn main() {
 
     engine.schedule_full_sweep();
 
-    while start_time.elapsed() < std::time::Duration::from_secs(5) {
+    while start_time.elapsed() < std::time::Duration::from_secs(time_budget_secs) {
         let applied_logic = engine.run_step(10000);
 
         // 🌟 FIX: & をつけて参照としてパターンマッチし、所有権の移動（move）を防ぐ
