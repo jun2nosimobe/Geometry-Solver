@@ -800,6 +800,17 @@ impl EGraph {
             if line == other_line { continue; }
 
             if shared.len() >= 2 {
+                // 🌟 健全性の穴の修正: マージを確定する前に、ランダムな座標での
+                // 具体例で本当にこの2直線が等しいかを検算する。数値的に明確に
+                // 矛盾する場合(Some(false))はこの偶然の一致を却下し、このペアは
+                // マージしない(判定不能なSome(true)/Noneの場合は従来通り進める)。
+                if self.numeric_plausibility_check(line, other_line, 2) == Some(false) {
+                    let name1 = self.entities[line.0].name.clone();
+                    let name2 = self.entities[other_line.0].name.clone();
+                    println!("  🚫 [健全性チェック] {} と {} は共有点={}だが数値的に別の直線のため結合を却下",
+                        name1, name2, shared.len());
+                    continue;
+                }
                 let name1 = self.entities[line.0].name.clone();
                 let name2 = self.entities[other_line.0].name.clone();
                 let justification = Justification::LineUniqueness { shared_points: shared.clone() };
@@ -856,6 +867,15 @@ impl EGraph {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
             if existing_rep != point_rep {
+                // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
+                // 確定する前に数値的な裏付けを取る。
+                if self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {
+                    let name1 = self.entities[existing_rep.0].name.clone();
+                    let name2 = self.entities[point_rep.0].name.clone();
+                    println!("  🚫 [健全性チェック] {} と {} は2直線の交点として一致するはずだが数値的に別の点のため結合を却下",
+                        name1, name2);
+                    continue;
+                }
                 let name1 = self.entities[existing_rep.0].name.clone();
                 let name2 = self.entities[point_rep.0].name.clone();
                 let justification = Justification::PointUniqueness { via_lines: (via_l1, via_l2) };
@@ -957,8 +977,15 @@ impl EGraph {
             Definition::DirectionOf(l) => {
                 let v = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
                 if v.len() >= 3 {
-                    // 直線 ax + by + c = 0 の方向ベクトルは (b, -a)
-                    Some(mmp_calculators::normalize(&[v[1], -v[0]]))
+                    // 直線 ax + by + c = 0 の方向ベクトルは (b, -a)。
+                    // 🐛 FIX: 以前は2要素[dx,dy]のまま返していたが、これだと
+                    // 「無限遠直線との交点」として計算される3要素の同次座標
+                    // (Intersection(Line_infinity, l) = cross_product([0,0,1], v))
+                    // と要素数が食い違い、数値サニティチェック(numeric_plausibility_check)
+                    // が両者を「別の値」と誤判定してしまう(この2つは設計上、
+                    // 常に同じ点=方向を表すべきもの)。z成分0を付けた3要素の
+                    // 同次座標として統一する。
+                    Some(mmp_calculators::normalize(&[v[1], -v[0], ModInt::new(0)]))
                 } else {
                     None
                 }
@@ -985,6 +1012,25 @@ impl EGraph {
                 let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_perpendicular(&vl, &vp))
             }
+            // 🌟 以前は未実装で、ParallelLine型のエンティティ(まだ他の定義と
+            // マージされていないもの)を数値サニティチェック(numeric_plausibility_check)
+            // で評価できず、健全性チェックが素通りしてしまう抜け穴になっていた。
+            Definition::ParallelLine(l, p) => {
+                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
+                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
+                Some(mmp_calculators::calc_parallel(&vl, &vp))
+            }
+            // 🌟 同上の理由でPerpDirectionOfも実装する。方向ベクトル(dx,dy)を
+            // 90度回転させるだけ((dx,dy) -> (-dy,dx))。
+            Definition::PerpDirectionOf(d) => {
+                let v = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
+                if v.len() >= 2 {
+                    // DirectionOfと同じ理由でz成分0を付けた3要素の同次座標に統一する。
+                    Some(mmp_calculators::normalize(&[-v[1], v[0], ModInt::new(0)]))
+                } else {
+                    None
+                }
+            }
             Definition::Circumcircle(p1, p2, p3) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
@@ -1004,6 +1050,150 @@ impl EGraph {
             }
             _ => None,
         }
+    }
+
+    /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化
+    /// 方式が定義の種類によって異なる(FreePointは[x,y,1]のまま、他の多くは
+    /// 「最初の非ゼロ成分を1にする」方式)ため、単純な要素比較ではなく
+    /// 外積(クロス積)がゼロかどうかで比較する(mmp_tester.rsのverify_identicalと
+    /// 同じロジック。EGraphからmmp_tester.rsに依存させたくないのでここに複製する)。
+    fn numeric_values_proportional(v1: &[ModInt], v2: &[ModInt]) -> bool {
+        if v1.len() != v2.len() || v1.is_empty() { return false; }
+        if v1.len() == 3 {
+            let z1 = v1[0] * v2[1] - v1[1] * v2[0];
+            let z2 = v1[1] * v2[2] - v1[2] * v2[1];
+            let z3 = v1[2] * v2[0] - v1[0] * v2[2];
+            return z1.0 == 0 && z2.0 == 0 && z3.0 == 0;
+        }
+        if v1.len() == 2 {
+            let cross = v1[0] * v2[1] - v1[1] * v2[0];
+            return cross.0 == 0;
+        }
+        v1.iter().zip(v2.iter()).all(|(a, b)| a.0 == b.0)
+    }
+
+    /// 🌟 健全性の穴を塞ぐための数値的裏付けチェック。
+    ///
+    /// propagate_line_uniqueness / propagate_point_uniqueness の
+    /// 「十分な数の接続関係を共有していれば同一とみなす」ショートカットは、
+    /// 手作りの定理適用や素直な作図からしか合流が起きない前提では
+    /// ほぼ常に正しいが、MCTSのような無方向な探索が持ち込む偶然の一致が
+    /// 重なると、本来別々であるべき直線・点を誤って同一視してしまうことが
+    /// 実際にあった(orthocenter問題で"垂線 ≡ 辺"のような偽の等式が生成され、
+    /// 三角形が1本の直線に潰れる退化が発生した)。
+    ///
+    /// マージを確定する前に、FreePointにランダムな座標を割り当てた具体例で
+    /// 両者が本当に等しい値になるかを検算し(Schwartz-Zippel的な考え方)、
+    /// 明確に矛盾するならSome(false)を返して却下する。有向角(Ang90など)の
+    /// ように座標を持たない記号的な定義しか無く判定不能な場合はNoneを返し、
+    /// 呼び出し側は(従来通り)構造的な証明をそのまま信用してよい。
+    ///
+    /// これは証明の主経路に座標計算を持ち込むものではなく、あくまで
+    /// 「安すぎて信用しすぎていたショートカットに対する事後検証」であり、
+    /// このチェック自体が新しい事実を証明するわけではない。
+    /// 🌟 idの祖先(Definitionの親を再帰的に辿った先)にあるFreePointを全て集める。
+    /// 定数(GivenPoint)はそこで打ち切る(座標を持たないので祖先探索の対象外)。
+    /// マージ後は1つのエンティティが複数のDefinitionを持ち得るので、
+    /// 「安全側」に倒して全てのDefinitionの親を辿る(いずれか1つでも構造的にしか
+    /// 保証されていないFreePointに触れたら、そちら経由の値かもしれないとみなし
+    /// 用心する)。
+    /// 🌟 直線/円curveへのpointの接続(incidence)が、curve自身の定義から
+    /// 自然に(座標的に矛盾なく)従うものかどうかを判定する。
+    /// 例: Line_AB=LineThroughPoints(A,B) に対する A の接続は、AがLine_ABの
+    /// 定義の親そのものなので「自然」(常に座標的に正しい)。一方、
+    /// Line_CAD=LineThroughPoints(C,A) に対する D の接続(miquel.rs等の
+    /// 「DはこのCircle上にある」のような直接のlink_logical_incidence)は、
+    /// Dがその定義の親に含まれないので「自然ではない」(座標的な裏付けがない、
+    /// 構造だけの前提)。
+    fn is_natural_incidence(&self, point: ClassId, curve: ClassId) -> bool {
+        let point_rep = self.get_rep(point);
+        let curve_rep = self.get_rep(curve);
+        let curve_defs = match self.entities[curve_rep.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => return false,
+        };
+        curve_defs.iter().any(|def| {
+            def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep)
+        })
+    }
+
+    /// 🌟 このFreePointが、自身の座標では裏付けられない接続(incidence)を
+    /// 1つでも持っているか(=numeric_plausibility_checkがこの点に依存する
+    /// 数値評価を信用してよいか)を判定する。
+    fn has_extraneous_incidence(&self, free_point: ClassId) -> bool {
+        let rep = self.get_rep(free_point);
+        let comp = match self.entities[rep.0].components.first() {
+            Some(c) => c,
+            None => return false,
+        };
+        comp.subobjects.iter()
+            .map(|&s| self.get_rep(s))
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle))
+            .any(|curve| !self.is_natural_incidence(rep, curve))
+    }
+
+    fn collect_free_point_ancestors(&self, id: ClassId, visited: &mut std::collections::HashSet<usize>, out: &mut Vec<ClassId>) {
+        let rep = self.get_rep(id);
+        if !visited.insert(rep.0) { return; }
+        let defs = match self.entities[rep.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => return,
+        };
+        for def in &defs {
+            match def {
+                Definition::FreePoint => out.push(rep),
+                Definition::GivenPoint => {} // Ang90/Ang0/Line_infinity等の定数。座標を持たないので対象外
+                _ => {
+                    for p in def.get_parents() {
+                        self.collect_free_point_ancestors(p, visited, out);
+                    }
+                }
+            }
+        }
+    }
+
+    fn numeric_plausibility_check(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
+        // 🐛 FIX: このプロジェクトの問題設定は、しばしば「PはこのCircleに乗っている」
+        // 「D,A,Cはこの順に一直線上」のような前提を、実際の座標制約としてではなく
+        // link_logical_incidenceによる純粋に構造的な事実として直接与える
+        // (simson.rs, miquel.rs, two_circles_reim.rs、あるいはMCTSの調和共役点の
+        // 補助点P,Q等)。これは代数計算を避けるという設計方針そのものであり
+        // 正しい設計だが、そのようなFreePointに完全に無作為な座標を割り当てると、
+        // 本来満たすべき構造的な前提を満たさない具体例になってしまい、この
+        // 健全性チェックが正しいマージまで誤って却下してしまう
+        // (miquel/two_circles_reimで実際に発生した)。
+        // a, b それぞれの祖先(依存する図形)だけを辿り、そこに構造的前提を持つ
+        // FreePointが1つでもあれば、この特定の比較だけを信用せずNone
+        // (判定不能)を返す。グラフ全体を見て一律に諦めるのではなく、
+        // 実際にa, bの値に影響し得る範囲だけで判断することで、無関係な箇所に
+        // 構造的前提があるだけの他のケース(orthocenter問題など)では
+        // 引き続きチェックが働くようにしている。
+        let mut visited = std::collections::HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(a, &mut visited, &mut ancestors);
+        self.collect_free_point_ancestors(b, &mut visited, &mut ancestors);
+
+        let has_structurally_constrained_free_point = ancestors.iter().any(|&fp| self.has_extraneous_incidence(fp));
+        if has_structurally_constrained_free_point { return None; }
+
+        let free_point_names: Vec<String> = ancestors.iter().map(|&fp| self.entities[fp.0].name.clone()).collect();
+        if free_point_names.is_empty() { return None; }
+
+        for _ in 0..trials {
+            let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+            for name in &free_point_names {
+                vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
+                vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
+            }
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            match (self.evaluate_node(a, &vars, &mut cache), self.evaluate_node(b, &vars, &mut cache)) {
+                (Some(va), Some(vb)) => {
+                    if !Self::numeric_values_proportional(&va, &vb) { return Some(false); }
+                }
+                _ => return None,
+            }
+        }
+        Some(true)
     }
 
     pub fn is_connected(&self, id1: ClassId, id2: ClassId) -> bool {
@@ -1109,9 +1299,16 @@ impl EGraph {
         // 1. 補助点 P (直線ABC上にない自由点)
         let p = self.create_entity(format!("P_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::FreePoint, EntityType::Point);
         // 2. 補助点 Q (直線PC上の、P,Cと異なる自由点)
-        let line_pc = self.create_entity(format!("Line_{}_{}_(Aux)", name(p, self), name(c, self)), Definition::new_line(p, c), EntityType::Line);
-        let q = self.create_entity(format!("Q_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::FreePoint, EntityType::Point);
-        self.link_logical_incidence(q, line_pc);
+        // 🐛 FIX: 以前はQをFreePointとして作り、link_logical_incidenceで
+        // 直線PC上にあることを構造的にだけ主張していた。これだとQの座標は
+        // 完全に無拘束のままなので、健全性チェック(numeric_plausibility_check)が
+        // 「Qは本当に直線PC上にあるか」を検証できず、Qに依存する数値評価を
+        // 一律に信用しない扱いにせざるを得なくなってしまう。P,Cの中点を
+        // 採用すれば、Q,Cとは異なる(P≠Cである限り)直線PC上の点という要件を
+        // 満たしつつ、実際に座標から導出可能になる。
+        // (Midpointのapply_trivial_relationsが、PC間の直線を自動的に生成/再利用して
+        // Qをその直線上にリンクしてくれるので、ここで直線を明示的に作る必要はない)
+        let q = self.create_entity(format!("Q_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::Midpoint(p, c), EntityType::Point);
 
         // 3. R = AQ ∩ PB
         let line_aq = self.create_entity(format!("Line_{}_{}_(Aux)", name(a, self), name(q, self)), Definition::new_line(a, q), EntityType::Line);
@@ -1338,23 +1535,26 @@ mod tests {
 
     #[test]
     fn test_line_merge_by_point_and_direction() {
+        // 🐛 FIX: 以前はA,B,Cを完全に独立な自由点にした上で
+        // merge_entities(dir_ab, dir_ac) により方向の一致を「強制的に(検証なしで)」
+        // 仮定していた。これは健全性チェック(numeric_plausibility_check)導入後は
+        // 矛盾する(ランダムなA,B,Cの座標では、無関係な方向を強制一致させても
+        // 実際の直線の式までは一致しないため、数値的には「別の直線」に見えて
+        // しまい、正しく却下されてテストが失敗する)。
+        // 代わりに、Aを通りL_ABに平行な直線(ParallelLine)を作る、という
+        // 現実的かつ数値的にも常に真になるシナリオに置き換えた: Aは既にL_AB上に
+        // あるので、「Aを通りL_ABに平行な直線」は幾何学的に必ずL_AB自身になる。
         let mut egraph = EGraph::new();
         let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
         let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
-        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
-        
+
         let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(p_a, p_b), EntityType::Line);
-        let l_ac = egraph.create_entity("L_AC".into(), Definition::new_line(p_a, p_c), EntityType::Line);
-        
-        let dir_ab = egraph.create_entity("Dir_AB".into(), Definition::DirectionOf(l_ab), EntityType::Direction);
-        let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Direction);
-        
-        // 強制的に方向を同じにする (例えば同位角の定理などで証明されたと仮定)
-        egraph.merge_entities(dir_ab, dir_ac);
+        let l_para = egraph.create_entity("L_para".into(), Definition::ParallelLine(l_ab, p_a), EntityType::Line);
         egraph.apply_congruence_closure(); // ここで直線の自動マージが走るはず
 
-        // Aという1点を共有し、かつ方向が同じになったので、L_AB と L_AC は同一の直線になるべき
-        assert_eq!(egraph.get_rep(l_ab), egraph.get_rep(l_ac), "1点と方向を共有する直線はマージされるべき");
+        // Aという1点を共有し、かつ平行線の定義により方向も一致するので、
+        // L_AB と L_para は同一の直線になるべき
+        assert_eq!(egraph.get_rep(l_ab), egraph.get_rep(l_para), "1点を共有し、平行線の定義で方向も一致する直線はマージされるべき");
     }
 
     #[test]

@@ -41,17 +41,24 @@ fn main() {
         "cyclic_quad" // 引数がない場合のデフォルト
     };
     // 🌟 MCTSはデフォルトでは無効(--mctsで明示的に有効化)。
-    // 理由: MCTSの実験中、propagate_line_uniqueness/propagate_point_uniqueness
+    // 経緯: MCTSの実験中、propagate_line_uniqueness/propagate_point_uniqueness
     // (「2直線が2点を共有していれば同一とみなす」等の局所ショートカット)が、
     // MCTSの無方向な探索が持ち込む偶然の一致の連鎖によって、本来別々であるべき
     // 直線(例:三角形の辺と、それとは無関係な頂点からの垂線)を誤って同一視して
-    // しまうケースが実際に見つかった(orthocenter問題)。この時、証明目標の
-    // 結論自体が(垂心の存在のように)常に真である定理だと、数値サニティチェック
-    // (sanity_check_identical)でも「たまたま正しい値に一致してしまう」ため
-    // 検出できず、誤った推論経路のまま「証明成立」と表示されてしまう。
-    // これはpropagate_line_uniqueness/point_uniqueness自体に数値的な裏付け
-    // チェックを組み込む、より踏み込んだ修正が必要な既知の課題であり、
-    // 現状の実装のままデフォルトで自動的に使うのは安全とは言えないと判断した。
+    // しまうケースが実際に見つかった(orthocenter問題)。証明目標の結論自体が
+    // (垂心の存在のように)常に真である定理だと、最終的な数値サニティチェック
+    // (tester.sanity_check_identical、下記)だけでは「たまたま正しい値に
+    // 一致してしまう」ため検出できなかった。
+    // → その後、propagate_line_uniqueness/propagate_point_uniqueness自身に
+    // マージ確定前の数値的裏付けチェック(EGraph::numeric_plausibility_check)を
+    // 組み込んで根本修正済み(このメソッドが実際に不健全なマージをその場で
+    // 却下するので、上記のorthocenter問題は再現しなくなったことをMCTS有効時の
+    // 繰り返し実行で確認済み)。それでもなおMCTSをデフォルト無効のままにして
+    // いるのは、この安全網が「座標を持たない構造的前提(例: PがこのCircle上に
+    // あるとlink_logical_incidenceで直接与えるパターン)にしか依存しない
+    // 比較」では判定不能(None)を返して素通りする既知の限界を残しているため、
+    // MCTSの無方向な探索がそこを突く可能性を完全には排除できないという
+    // 慎重さによるもの。
     let use_mcts = args.iter().any(|a| a == "--mcts");
 
     println!("🚀 幾何ソルバーを起動します (対象問題: {})", problem_name);
