@@ -78,10 +78,18 @@ impl Definition {
 #[derive(Clone)]
 pub struct EGraph {
     pub entities: Vec<GeoEntity>,
-    parents: Vec<Cell<usize>>, 
-    pub memo: HashMap<Definition, ClassId>, 
+    parents: Vec<Cell<usize>>,
+    pub memo: HashMap<Definition, ClassId>,
     pub ang90: ClassId,
     pub ang0: ClassId,
+    // 🌟 無限遠直線: 全ての「方向(Direction)」エンティティをこの直線上の点として
+    // 構造的にリンクしておくための定数ノード。これにより「2直線が平行」は
+    // 「無限遠直線上の同じ点(=同じ方向)を共有している」という、通常の点の
+    // 共有と全く同じ形の関係として扱えるようになり、propagate_line_uniqueness /
+    // propagate_point_uniqueness の局所伝播をそのまま使い回せる。
+    // 定理(有向角の加法性・交替律・円周角の定理など)は Definition::DirectionOf
+    // を通じて方向をそのまま参照し続けるので、この追加はパターンには一切影響しない。
+    pub line_infinity: ClassId,
     pub worklist: Vec<ClassId>, // 🌟 NEW: マージが発生して再評価が必要なIDキュー
 }
 
@@ -93,11 +101,13 @@ impl EGraph {
             memo: HashMap::new(),
             ang90: ClassId(0), // ダミー初期化
             ang0: ClassId(0),
+            line_infinity: ClassId(0),
             worklist: Vec::new()
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
         egraph.ang0 = egraph.create_entity("Ang0".to_string(), Definition::GivenPoint, EntityType::Angle);
+        egraph.line_infinity = egraph.create_entity("Line_infinity".to_string(), Definition::GivenPoint, EntityType::Line);
         egraph
     }
 
@@ -321,6 +331,12 @@ impl EGraph {
     // 🌟 Trivial Relations (作図時のおまけリンクと方向生成)
     pub fn apply_trivial_relations(&mut self, new_id: ClassId, def: &Definition) {
         match def {
+            // 🌟 方向(Direction)は create_entity 経由なら生成元を問わず必ずここを通るので、
+            // ここ一箇所で「無限遠直線上の点」として構造的にリンクしておけば、
+            // 定理・問題ファイル側のコードは一切変更せずに済む。
+            Definition::DirectionOf(_) => {
+                self.link_logical_incidence(new_id, self.line_infinity);
+            },
             Definition::LineThroughPoints(p1, p2) => {
                 self.link_logical_incidence(*p1, new_id);
                 self.link_logical_incidence(*p2, new_id);
@@ -460,7 +476,9 @@ impl EGraph {
                 EntityType::Line => {
                     if self.propagate_line_uniqueness(rep_id) { changed_any = true; }
                 }
-                EntityType::Point => {
+                // 🌟 Directionは「無限遠直線上の点」として扱うので、通常の点と同じく
+                // propagate_point_uniquenessの対象にする。
+                EntityType::Point | EntityType::Direction => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
                 }
                 _ => {}
@@ -472,20 +490,30 @@ impl EGraph {
 
     /// 🌟 「直線の一致条件」の局所伝播版。
     /// line 自身が乗っている点(局所・少数)だけを見て、それらの点が他に
-    /// 乗っている直線との共有点数・方向一致を調べる。全直線を舐めない。
+    /// 乗っている直線との共有点数を調べる。全直線を舐めない。
+    ///
+    /// Direction(方向)は「無限遠直線上の点」として扱うので、この関数では
+    /// 通常の点と全く区別しない。これにより「2直線が1点を共有しかつ方向が
+    /// 同じなら同一直線」という以前の特別扱い(same_dir)は、単に
+    /// 「無限遠直線上の共有点も含めて2点共有」という同じルールに統合される
+    /// (平行なだけの別々の直線は無限遠点1つしか共有しないので誤ってマージ
+    /// されない。同一直線は通常の点+無限遠点の2つを共有するので正しく
+    /// マージされる)。
     fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool {
         let mut line = self.get_rep(line);
+        let is_point_like = |et: EntityType| et == EntityType::Point || et == EntityType::Direction;
 
-        // 🐛 FIX: 共有点を数える前に、この直線上の点どうしの「2直線の交点の
-        // 一意性」を先に局所的な不動点まで確定させておく。これをやらないと、
-        // 本来は同一点になるはずだがまだ別IDのままの2点(例: 外心の候補
-        // O1とO2)を「別々の2つの共有点」と誤認し、方向も違う別々の直線を
-        // 誤ってマージしてしまうことがある(外心の証明で実際に発生した)。
+        // 🐛 FIX: 共有点を数える前に、この直線上の点(方向を含む)どうしの
+        // 「2直線の交点の一意性」を先に局所的な不動点まで確定させておく。
+        // これをやらないと、本来は同一になるはずだがまだ別IDのままの2つ
+        // (例: 外心の候補O1とO2、あるいはまだ別々に導出された同じ方向)を
+        // 「別々の2つの共有点」と誤認し、無関係な直線を誤ってマージして
+        // しまうことがある(外心の証明で実際に発生した)。
         loop {
             let points: Vec<ClassId> = match self.entities[line.0].components.first() {
                 Some(c) => c.subobjects.iter()
                     .map(|&id| self.get_rep(id))
-                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
+                    .filter(|&id| is_point_like(self.entities[id.0].entity_type))
                     .collect(),
                 None => return false,
             };
@@ -504,12 +532,12 @@ impl EGraph {
         let points: std::collections::HashSet<ClassId> = match self.entities[line.0].components.first() {
             Some(c) => c.subobjects.iter()
                 .map(|&id| self.get_rep(id))
-                .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
+                .filter(|&id| is_point_like(self.entities[id.0].entity_type))
                 .collect(),
             None => return false,
         };
 
-        // line上の各点について、その点が他に乗っている直線ごとに共有点数を数える。
+        // line上の各点(方向を含む)について、他に乗っている直線ごとに共有数を数える。
         // 🐛 FIX: 1点につき同じ他直線への加算は高々1にする(重複subobjectsで
         // 1点しか共有していないのに2点共有と誤カウントするのを防ぐ)。
         let mut shared_counts: FxHashMap<ClassId, usize> = FxHashMap::default();
@@ -530,18 +558,12 @@ impl EGraph {
             let other_line = self.get_rep(other_line);
             if line == other_line { continue; }
 
-            let same_dir = {
-                let d1 = self.memo.get(&Definition::DirectionOf(line)).map(|&id| self.get_rep(id));
-                let d2 = self.memo.get(&Definition::DirectionOf(other_line)).map(|&id| self.get_rep(id));
-                d1.is_some() && d1 == d2
-            };
-
-            if shared >= 2 || (shared >= 1 && same_dir) {
+            if shared >= 2 {
                 let name1 = self.entities[line.0].name.clone();
                 let name2 = self.entities[other_line.0].name.clone();
                 if self.merge_entities(line, other_line) {
-                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}/同方向={})により直線を結合: {} ≡ {}",
-                        shared, same_dir, name1, name2);
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により直線を結合: {} ≡ {}",
+                        shared, name1, name2);
                     return true;
                 }
             }
@@ -550,8 +572,13 @@ impl EGraph {
     }
 
     /// 🌟 「2直線の交点の一意性」の局所伝播版。
-    /// point 自身が乗っている直線(局所・少数)のペアについて、その交点が
-    /// memoに既に登録されていないかをO(1)参照するだけ。全点を舐めない。
+    /// point(方向を含む)自身が乗っている直線(局所・少数)のペアについて、
+    /// その交点が memo に既に登録されていないかをO(1)参照するだけ。全点を舐めない。
+    ///
+    /// 方向(Direction)は Definition::Intersection(line, 無限遠直線) ではなく
+    /// Definition::DirectionOf(line) という別のDefinitionで登録されている
+    /// (定理側のパターンを変えずに済ませるため、あえて既存の表現のままにしてある)。
+    /// そのため、ペアのどちらかが無限遠直線のときは DirectionOf での読み替えも試す。
     fn propagate_point_uniqueness(&mut self, point: ClassId) -> bool {
         let point = self.get_rep(point);
         // 🐛 FIX: subobjects の重複エントリを rep 化した後に除いてから使う(理由は
@@ -567,20 +594,31 @@ impl EGraph {
             None => return false,
         };
 
+        let mut candidates: Vec<ClassId> = Vec::new();
         for i in 0..lines.len() {
             for j in (i + 1)..lines.len() {
-                let inter_def = self.normalize_definition(&Definition::Intersection(lines[i], lines[j]));
-                if let Some(&existing) = self.memo.get(&inter_def) {
-                    let existing_rep = self.get_rep(existing);
-                    let point_rep = self.get_rep(point);
-                    if existing_rep != point_rep {
-                        let name1 = self.entities[existing_rep.0].name.clone();
-                        let name2 = self.entities[point_rep.0].name.clone();
-                        if self.merge_entities(existing_rep, point_rep) {
-                            println!("  ⚙️ [E-Graph自動マージ] 2直線の交点の一意性により点を結合: {} ≡ {}", name1, name2);
-                            return true;
-                        }
-                    }
+                let (l1, l2) = (lines[i], lines[j]);
+                let inter_def = self.normalize_definition(&Definition::Intersection(l1, l2));
+                if let Some(&existing) = self.memo.get(&inter_def) { candidates.push(existing); }
+
+                if l1 == self.line_infinity {
+                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l2)) { candidates.push(existing); }
+                }
+                if l2 == self.line_infinity {
+                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l1)) { candidates.push(existing); }
+                }
+            }
+        }
+
+        for existing in candidates {
+            let existing_rep = self.get_rep(existing);
+            let point_rep = self.get_rep(point);
+            if existing_rep != point_rep {
+                let name1 = self.entities[existing_rep.0].name.clone();
+                let name2 = self.entities[point_rep.0].name.clone();
+                if self.merge_entities(existing_rep, point_rep) {
+                    println!("  ⚙️ [E-Graph自動マージ] 2直線の交点の一意性により点を結合: {} ≡ {}", name1, name2);
+                    return true;
                 }
             }
         }

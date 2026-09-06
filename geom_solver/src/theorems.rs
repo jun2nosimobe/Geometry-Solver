@@ -91,72 +91,15 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             conclusions: vec![FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang1".to_string(), "Ang2".to_string()], target_type: Some("Angle".to_string()), sub_type: None }],
         },
 
-        // 2. 直線の一致条件
-        TheoremDef {
-            name: "直線の一致条件".to_string(),
-            entities: entities(&[
-                ("P", EntityType::Point),
-                ("L1", EntityType::Line), ("L2", EntityType::Line),
-                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction)
-            ]),
-            patterns: vec![
-                // 🌟 必須条件: 2つの直線が「共通の点P」を通っていること
-                fact_ext("Connected", &["P", "L1"], None, None, false, None),
-                fact_ext("Connected", &["P", "L2"], None, None, false, None),
-                
-                fact_ext("DefinedBy", &["L1", "Dir1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L2", "Dir2"], Some("DirectionOf"), None, false, None),
-                fact_ext("Identical", &["Dir1", "Dir2"], None, None, false, None),
-            ],
-            constructions: vec![],
-            conclusions: vec![
-                FactTemplate {
-                    fact_type: "Identical".to_string(),
-                    args: vec!["L1".to_string(), "L2".to_string()],
-                    target_type: Some("Line".to_string()),
-                    sub_type: None
-                }
-            ],
-        },
-
-        // ==========================================
-        // 🌟 2直線の交点の一意性 (「直線の一致条件」の点バージョン)
-        // ==========================================
-        // 2本の相異なる直線 L1, L2 の交点として既に P_Int が存在しているとき、
-        // 別の点 P_Test も L1, L2 の両方に乗っている(Connected)と分かれば、
-        // 2直線は高々1点でしか交わらないので P_Int と P_Test は同一点である。
-        //
-        // 垂心・外心・重心のような「3本の直線が1点で交わる」ことを示す証明で
-        // 中心的な役割を持つ定理。例えば「2本の垂線の交点」に「3本目の垂線が
-        // 通る」ことさえ角度追跡等で(Connectedとして)示せれば、この定理が
-        // それらを同一点だと結論づける。垂心・外心の存在(orthocenter/circumcenter)
-        // が進まなかったのは、角度に関する定理は揃っていても、この「点の一致」を
-        // 結論づける定理そのものが移植時に抜けていたことが直接の原因だった。
-        TheoremDef {
-            name: "2直線の交点の一意性".to_string(),
-            entities: entities(&[
-                ("L1", EntityType::Line), ("L2", EntityType::Line),
-                ("P_Int", EntityType::Point), ("P_Test", EntityType::Point),
-            ]),
-            patterns: vec![
-                // 1. すでにグラフ上に、L1とL2の交点(P_Int)が存在している
-                fact_ext("DefinedBy", &["L1", "L2", "P_Int"], Some("Intersection"), Some("Unordered"), false, None),
-                // 2. P_Test が L1 と L2 の両方に乗っている
-                fact_ext("Connected", &["P_Test", "L1"], None, None, false, None),
-                fact_ext("Connected", &["P_Test", "L2"], None, None, false, None),
-                distinct(&["L1", "L2"]),
-                distinct(&["P_Int", "P_Test"]),
-            ],
-            constructions: vec![],
-            conclusions: vec![
-                FactTemplate {
-                    fact_type: "Identical".to_string(),
-                    args: vec!["P_Int".to_string(), "P_Test".to_string()],
-                    target_type: Some("Point".to_string()),
-                    sub_type: None
-                }
-            ],
-        },
+        // 🌟 「直線の一致条件」(2直線が2点を共有、または1点+同方向を共有するなら
+        // 同一直線)と「2直線の交点の一意性」(2直線の交点として既知の点と、同じ
+        // 2直線にConnectedな別の点があれば同一点)は、以前はここに専用の
+        // TheoremDefとして存在していたが、e-graphの合同閉包(mmp_core.rsの
+        // propagate_line_uniqueness / propagate_point_uniqueness)に局所伝播
+        // として統合済み。dfs_matchによる全探索より遥かに軽く、Direction
+        // (無限遠直線上の点として扱う)も同じ経路で扱えるようになったため、
+        // このBlackboard定理としての実装は不要になり削除した。
+        // 実装は commit ea75ca3 (追加) / a66efdb (伝播への統合) を参照。
 
         // ==========================================
         // 🌟 垂直二等分線の距離の等価性 (順方向)
