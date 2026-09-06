@@ -5,6 +5,18 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+// 🌟 dfs_matchの探索木を1ノード進むたびに bind/flip_states を丸ごと
+// ディープコピーしていた問題を解消するため、通常のHashMapではなく
+// 構造共有型(永続データ構造)のHashMapを使う。要素を1つ追加しても
+// 変更されたごく一部のノードだけを複製し、残りは元のインスタンスと
+// ポインタ(Rc)を共有するので、.clone()の実質コストがO(1)に近くなる。
+// 呼び出し側の書き方(.clone()や.insert())は通常のHashMapと同じままで良い。
+// 🌟 検証メモ: FxHashに差し替えると(im::HashMap<..., FxBuild>)、内部のHAMT構造との
+// 相性が悪いのか実測でむしろ悪化した(miquel: 0.36s→1.12s)。既定のハッシャーの
+// ままにしている。
+pub type Bind = im::HashMap<String, ClassId>;
+pub type FlipStates = im::HashMap<String, bool>;
+
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
     let mut result = Vec::new();
@@ -72,8 +84,8 @@ pub enum Event {
 pub struct MatchTask {
     pub priority: i32,
     pub theorem_idx: usize,
-    pub bind: FxHashMap<String, ClassId>,
-    pub flip_states: FxHashMap<String, bool>,
+    pub bind: Bind,
+    pub flip_states: FlipStates,
     // 🌟 Rc化: タスクの複製・再キュー時に Vec<Pattern> をディープコピーせず、
     // ポインタ共有だけで済ませる(パターン列自体は不変なので安全)
     pub remaining_patterns: Rc<Vec<crate::logic_core::Pattern>>,
@@ -116,7 +128,7 @@ impl ProverEngine {
             construction_demands: FxHashMap::default(), // 🌟 追加
         }
     }
-    fn calc_bind_heat(&self, bind: &FxHashMap<String, ClassId>) -> f64 {
+    fn calc_bind_heat(&self, bind: &Bind) -> f64 {
         let mut heat = 0.0;
         for &id in bind.values() {
             let rep = self.egraph.get_rep(id);
@@ -127,7 +139,7 @@ impl ProverEngine {
         heat
     }
 
-    fn estimate_cost(&self, pat: &Pattern, bind: &FxHashMap<String, ClassId>, theorem: &TheoremDef) -> f64 {
+    fn estimate_cost(&self, pat: &Pattern, bind: &Bind, theorem: &TheoremDef) -> f64 {
         match pat {
             Pattern::Fact(def) => {
                 let unbound_count = def.args.iter().filter(|v| !bind.contains_key(*v)).count();
@@ -190,7 +202,7 @@ impl ProverEngine {
         }
     }
     
-    pub fn is_already_proven(&self, conclusions: &[FactTemplate], bind: &FxHashMap<String, ClassId>, flips: &FxHashMap<String, bool>) -> bool {
+    pub fn is_already_proven(&self, conclusions: &[FactTemplate], bind: &Bind, flips: &FlipStates) -> bool {
         for conc in conclusions {
             match conc.fact_type.as_str() {
                 "Identical" => {
@@ -223,10 +235,10 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         remaining: Rc<Vec<Pattern>>,
-        bind: FxHashMap<String, ClassId>,
-        flip_states: FxHashMap<String, bool>,
+        bind: Bind,
+        flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashSet<u64>, // 🌟 追加
-        on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         self.dfs_calls += 1;
         if self.dfs_calls > self.dfs_cap { return; }
@@ -291,7 +303,7 @@ impl ProverEngine {
         let mut matched_any = false;
 
         // クロージャをラップして、1度でもマッチしたかを記録する
-        let mut wrapped_on_match = |b: &FxHashMap<String, ClassId>, f: &FxHashMap<String, bool>| {
+        let mut wrapped_on_match = |b: &Bind, f: &FlipStates| {
             matched_any = true;
             on_match(b, f);
         };
@@ -341,10 +353,10 @@ impl ProverEngine {
         theorem: &TheoremDef,
         def: &FactPatternDef,
         remaining: Rc<Vec<Pattern>>,
-        bind: &FxHashMap<String, ClassId>,
-        flip_states: FxHashMap<String, bool>,
+        bind: &Bind,
+        flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashSet<u64>,
-        on_match: &mut dyn FnMut(&FxHashMap<String, ClassId>, &FxHashMap<String, bool>)
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         
         match def.fact_type.as_str() {
@@ -701,7 +713,7 @@ impl ProverEngine {
         &mut self,
         theorem_name: &str,
         constructions: &[ConstructTemplate],
-        bind: &mut FxHashMap<String, ClassId>,
+        bind: &mut Bind,
     ) -> bool {
         for constr in constructions {
             let mut parent_ids = Vec::new();
@@ -768,7 +780,7 @@ impl ProverEngine {
         true
     }
 
-    pub fn apply_conclusions(&mut self, theorem_name: &str, conclusions: &[FactTemplate], bind: &FxHashMap<String, ClassId>, flips: &FxHashMap<String, bool>) -> (bool, Vec<Fact>) {
+    pub fn apply_conclusions(&mut self, theorem_name: &str, conclusions: &[FactTemplate], bind: &Bind, flips: &FlipStates) -> (bool, Vec<Fact>) {
         let mut applied_anything = false;
         let mut new_facts = Vec::new();
 
@@ -831,7 +843,7 @@ impl ProverEngine {
         (applied_anything, new_facts)
     }
 
-    fn get_fact_bindings(&self, theorem: &TheoremDef, fact: &Fact, fact_type: &str, args: &[String], current_bind: &FxHashMap<String, ClassId>) -> Vec<FxHashMap<String, ClassId>> {
+    fn get_fact_bindings(&self, theorem: &TheoremDef, fact: &Fact, fact_type: &str, args: &[String], current_bind: &Bind) -> Vec<Bind> {
         let (f_type, f_objs) = match fact {
             Fact::Identical(a, b) => ("Identical", vec![*a, *b]),
             Fact::Connected(c, p) => ("Connected", vec![*c, *p]),
@@ -904,15 +916,15 @@ impl BlackboardEngine {
         self.task_queue = BinaryHeap::from(keep);
 
         for (idx, theorem) in self.prover.theorems.iter().enumerate() {
-            let mut initial_bind = rustc_hash::FxHashMap::default();
+            let mut initial_bind = Bind::new();
             initial_bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
             initial_bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
-            
-            self.task_queue.push(MatchTask { 
-                priority: 0, 
-                theorem_idx: idx, 
+
+            self.task_queue.push(MatchTask {
+                priority: 0,
+                theorem_idx: idx,
                 bind: initial_bind,
-                flip_states: rustc_hash::FxHashMap::default(),
+                flip_states: FlipStates::new(),
                 remaining_patterns: Rc::new(theorem.patterns.clone()) 
             });
         }
@@ -938,22 +950,22 @@ impl BlackboardEngine {
                         };
 
                         for perm in perms {
-                            let mut bind = rustc_hash::FxHashMap::default();
+                            let mut bind = Bind::new();
                             // 定数ノードの事前バインド
                             bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
                             bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
-                            
+
                             // 🌟 シードの注入
                             for (i, v_name) in def.args.iter().enumerate() {
                                 bind.insert(v_name.clone(), perm[i]);
                             }
-                            
+
                             // シード済みリーチフォーマットとしてタスクを積む
                             self.task_queue.push(MatchTask {
                                 priority: 10,
                                 theorem_idx: idx,
                                 bind,
-                                flip_states: rustc_hash::FxHashMap::default(),
+                                flip_states: FlipStates::new(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                             });
                         }
