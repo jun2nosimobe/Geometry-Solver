@@ -348,6 +348,10 @@ impl ProverEngine {
             failed_paths.insert(state_sig);
         }
     }
+    /// 🌟 match_fact_pattern はfact_typeごとの処理を振り分けるだけの薄いディスパッチャ。
+    /// 以前はこの関数自体が360行あり(Identical/Connected/DefinedBy/汎用の4種の
+    /// マッチングロジックが全て1つのmatchの中に同居していた)、可読性の観点から
+    /// fact_typeごとの専用メソッドに分割した。挙動は一切変えていない。
     pub fn match_fact_pattern(
         &mut self,
         theorem: &TheoremDef,
@@ -358,354 +362,437 @@ impl ProverEngine {
         failed_paths: &mut rustc_hash::FxHashSet<u64>,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
-        
         match def.fact_type.as_str() {
-            "Identical" => {
-                let v1 = &def.args[0];
-                let v2 = &def.args[1];
-                let expected_type = theorem.entities.get(v1).copied(); // 🌟 型情報取得
+            "Identical" => self.match_identical_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
+            "Connected" => self.match_connected_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
+            "DefinedBy" => self.match_defined_by_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
+            _ => self.match_generic_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
+        }
+    }
 
-                match (bind.get(v1).copied(), bind.get(v2).copied()) {
-                    (Some(id1), Some(id2)) => {
-                        if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
-                            self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
-                        }
+    /// 🌟 "Identical" パターン: v1, v2 の束縛状況(両方束縛済み/片方だけ/どちらも未束縛)
+    /// に応じて分岐する。
+    fn match_identical_fact(
+        &mut self,
+        theorem: &TheoremDef,
+        def: &FactPatternDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: &Bind,
+        flip_states: FlipStates,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
+    ) {
+        let v1 = &def.args[0];
+        let v2 = &def.args[1];
+        let expected_type = theorem.entities.get(v1).copied(); // 🌟 型情報取得
+
+        match (bind.get(v1).copied(), bind.get(v2).copied()) {
+            (Some(id1), Some(id2)) => {
+                if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
+                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
+                }
+            }
+            (Some(id), None) | (None, Some(id)) => {
+                let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
+                let mut next_bind = bind.clone();
+                next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
+                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+            }
+            (None, None) => {
+                // 🐛 移植バグ修正: 以前はここで「同じ代表元(=既にマージ済み)を持つ
+                // 異なる ClassId のペア」を全列挙しており、1つの等価クラスに
+                // N個のエンティティが吸収されていると N*(N-1) 通りに爆発していた
+                // (「有向角の加法性」のように、この分岐から探索を始める定理で
+                // simsonのタイムアウトの主因になっていた)。
+                //
+                // Python版の対応する _match_identical (両方未束縛) は、対象の型を
+                // 持つ「異なる代表元」それぞれについて v1=v2=その代表元、という
+                // 自己束縛を O(代表元の数) で列挙するだけだった。この定理は本来
+                // schedule_matcher_task によるシード付き起動(実際に発見された
+                // Identical事実からD1..D6を具体的に束縛する経路)で使われる前提であり、
+                // シード無しの全探索(schedule_full_sweep)から来た場合はこの程度の
+                // 軽い足がかりで十分。Python版と同じ挙動に合わせて計算量を落とす。
+                let mut reps: Vec<ClassId> = Vec::new();
+                for i in 0..self.egraph.entities.len() {
+                    let id = ClassId(i);
+                    if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
+                    if let Some(et) = expected_type {
+                        if self.egraph.entities[i].entity_type != et { continue; }
                     }
-                    (Some(id), None) | (None, Some(id)) => {
-                        let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
+                    if self.egraph.entities[i].base_importance > 0.0 {
+                        reps.push(id);
+                    }
+                }
+                for rep in reps {
+                    let mut next_bind = bind.clone();
+                    next_bind.insert(v1.clone(), rep);
+                    next_bind.insert(v2.clone(), rep);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                }
+            }
+        }
+    }
+
+    /// 🌟 "Connected" パターン: child/parent の束縛状況の4通り(両方/片方×2/どちらも未束縛)
+    /// で分岐する。
+    fn match_connected_fact(
+        &mut self,
+        theorem: &TheoremDef,
+        def: &FactPatternDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: &Bind,
+        flip_states: FlipStates,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
+    ) {
+        let child_var = &def.args[0];
+        let parent_var = &def.args[1];
+        let expected_c_type = theorem.entities.get(child_var).copied();
+        let expected_p_type = theorem.entities.get(parent_var).copied();
+
+        match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
+            (Some(c_id), Some(p_id)) => {
+                // 🌟 FIX
+                if self.egraph.is_connected(c_id, p_id) {
+                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
+                }
+            }
+            (Some(c_id), None) => {
+                let c_rep = self.egraph.get_rep(c_id);
+                for i in 0..self.egraph.entities.len() {
+                    let p_id = ClassId(i);
+                    let p_rep = self.egraph.get_rep(p_id);
+                    if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+
+                    if let Some(et) = expected_p_type {
+                        if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                    }
+                    // 🌟 FIX
+                    if self.egraph.is_connected(c_rep, p_rep) {
                         let mut next_bind = bind.clone();
-                        next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
+                        next_bind.insert(parent_var.clone(), p_rep);
                         self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                     }
-                    (None, None) => {
-                        // 🐛 移植バグ修正: 以前はここで「同じ代表元(=既にマージ済み)を持つ
-                        // 異なる ClassId のペア」を全列挙しており、1つの等価クラスに
-                        // N個のエンティティが吸収されていると N*(N-1) 通りに爆発していた
-                        // (「有向角の加法性」のように、この分岐から探索を始める定理で
-                        // simsonのタイムアウトの主因になっていた)。
-                        //
-                        // Python版の対応する _match_identical (両方未束縛) は、対象の型を
-                        // 持つ「異なる代表元」それぞれについて v1=v2=その代表元、という
-                        // 自己束縛を O(代表元の数) で列挙するだけだった。この定理は本来
-                        // schedule_matcher_task によるシード付き起動(実際に発見された
-                        // Identical事実からD1..D6を具体的に束縛する経路)で使われる前提であり、
-                        // シード無しの全探索(schedule_full_sweep)から来た場合はこの程度の
-                        // 軽い足がかりで十分。Python版と同じ挙動に合わせて計算量を落とす。
-                        let mut reps: Vec<ClassId> = Vec::new();
-                        for i in 0..self.egraph.entities.len() {
-                            let id = ClassId(i);
-                            if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
-                            if let Some(et) = expected_type {
-                                if self.egraph.entities[i].entity_type != et { continue; }
-                            }
-                            if self.egraph.entities[i].base_importance > 0.0 {
-                                reps.push(id);
-                            }
-                        }
-                        for rep in reps {
-                            let mut next_bind = bind.clone();
-                            next_bind.insert(v1.clone(), rep);
-                            next_bind.insert(v2.clone(), rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
-                        }
+                }
+            }
+            (None, Some(p_id)) => {
+                let p_rep = self.egraph.get_rep(p_id);
+                let mut child_candidates = rustc_hash::FxHashSet::default();
+                for comp in &self.egraph.entities[p_rep.0].components {
+                    for &sub in &comp.subobjects {
+                        // 🌟 FIX: 必ず rep を通す
+                        let s_rep = self.egraph.get_rep(sub);
+                        if self.egraph.entities[s_rep.0].base_importance > 0.0 { child_candidates.insert(s_rep); }
                     }
                 }
-            },
-            "Connected" => {
-                let child_var = &def.args[0];
-                let parent_var = &def.args[1];
-                let expected_c_type = theorem.entities.get(child_var).copied(); 
-                let expected_p_type = theorem.entities.get(parent_var).copied();
-
-                match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
-                    (Some(c_id), Some(p_id)) => {
-                        // 🌟 FIX
-                        if self.egraph.is_connected(c_id, p_id) { 
-                            self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match); 
-                        }
+                for c_rep in child_candidates {
+                    if let Some(et) = expected_c_type {
+                        if self.egraph.entities[c_rep.0].entity_type != et { continue; }
                     }
-                    (Some(c_id), None) => {
-                        let c_rep = self.egraph.get_rep(c_id);
-                        for i in 0..self.egraph.entities.len() {
-                            let p_id = ClassId(i);
-                            let p_rep = self.egraph.get_rep(p_id);
-                            if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-                            
-                            if let Some(et) = expected_p_type {
-                                if self.egraph.entities[p_rep.0].entity_type != et { continue; }
-                            }
-                            // 🌟 FIX
-                            if self.egraph.is_connected(c_rep, p_rep) {
-                                let mut next_bind = bind.clone();
-                                next_bind.insert(parent_var.clone(), p_rep);
-                                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
-                            }
-                        }
-                    }
-                    (None, Some(p_id)) => {
-                        let p_rep = self.egraph.get_rep(p_id);
-                        let mut child_candidates = rustc_hash::FxHashSet::default();
-                        for comp in &self.egraph.entities[p_rep.0].components {
-                            for &sub in &comp.subobjects {
-                                // 🌟 FIX: 必ず rep を通す
-                                let s_rep = self.egraph.get_rep(sub);
-                                if self.egraph.entities[s_rep.0].base_importance > 0.0 { child_candidates.insert(s_rep); }
-                            }
-                        }
-                        for c_rep in child_candidates {
-                            if let Some(et) = expected_c_type {
-                                if self.egraph.entities[c_rep.0].entity_type != et { continue; }
-                            }
-                            let mut next_bind = bind.clone();
-                            next_bind.insert(child_var.clone(), c_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
-                        }
-                    }
-                    // 🐛 FIX: 以前は子・親どちらも未束縛の場合に何もせず候補ゼロで
-                    // 諦めていた(Concyclicを専用Factから「N点が同じ円にConnected」
-                    // という形に置き換えたことで、この分岐が実際に必要になり発覚した)。
-                    // 親の型(例:Circle)で絞り込み、各親候補についてはその親自身が
-                    // 繋がっている子(局所的で少数)だけを見る形で列挙する。
-                    (None, None) => {
-                        let mut parent_candidates: Vec<ClassId> = Vec::new();
-                        for i in 0..self.egraph.entities.len() {
-                            let p_id = ClassId(i);
-                            let p_rep = self.egraph.get_rep(p_id);
-                            if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-                            if let Some(et) = expected_p_type {
-                                if self.egraph.entities[p_rep.0].entity_type != et { continue; }
-                            }
-                            parent_candidates.push(p_rep);
-                        }
-
-                        for p_rep in parent_candidates {
-                            let child_candidates: Vec<ClassId> = match self.egraph.entities[p_rep.0].components.first() {
-                                Some(comp) => comp.subobjects.iter()
-                                    .map(|&id| self.egraph.get_rep(id))
-                                    .filter(|&id| {
-                                        if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
-                                        match expected_c_type {
-                                            Some(et) => self.egraph.entities[id.0].entity_type == et,
-                                            None => true,
-                                        }
-                                    })
-                                    .collect(),
-                                None => vec![],
-                            };
-                            for c_rep in child_candidates {
-                                let mut next_bind = bind.clone();
-                                next_bind.insert(child_var.clone(), c_rep);
-                                next_bind.insert(parent_var.clone(), p_rep);
-                                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
-                            }
-                        }
-                    }
+                    let mut next_bind = bind.clone();
+                    next_bind.insert(child_var.clone(), c_rep);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                 }
-            },
-            "DefinedBy" => {
-                let target_type = def.target_type.as_deref().unwrap_or("");
-                let result_var = &def.args[def.args.len() - 1];
-                let parent_vars = &def.args[0..def.args.len() - 1];
-                let expected_r_type = theorem.entities.get(result_var).copied();
-
-                
-                
-                let mut valid_nodes = Vec::new();
-
-                if let Some(&res_id) = bind.get(result_var) {
-                    valid_nodes.push(self.egraph.get_rep(res_id));
+            }
+            // 🐛 FIX: 以前は子・親どちらも未束縛の場合に何もせず候補ゼロで
+            // 諦めていた(Concyclicを専用Factから「N点が同じ円にConnected」
+            // という形に置き換えたことで、この分岐が実際に必要になり発覚した)。
+            // 親の型(例:Circle)で絞り込み、各親候補についてはその親自身が
+            // 繋がっている子(局所的で少数)だけを見る形で列挙する。
+            (None, None) => {
+                let mut parent_candidates: Vec<ClassId> = Vec::new();
+                for i in 0..self.egraph.entities.len() {
+                    let p_id = ClassId(i);
+                    let p_rep = self.egraph.get_rep(p_id);
+                    if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                    if let Some(et) = expected_p_type {
+                        if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                    }
+                    parent_candidates.push(p_rep);
                 }
-                
-                // 🌟 FIX: *v ではなく v をそのまま渡す
-                else if parent_vars.iter().all(|v| bind.contains_key(v)) {
-                    let parent_ids: Vec<ClassId> = parent_vars.iter().map(|v| self.egraph.get_rep(bind[v])).collect();
-                    
-                    // 🌟 FIX: 全ての DefinedBy 対象型を網羅する
-                    let temp_def = match target_type {
-                        "AnglePair" => Definition::AnglePair(parent_ids[0], parent_ids[1]),
-                        "DirectionOf" => Definition::DirectionOf(parent_ids[0]),
-                        "LineThroughPoints" => Definition::new_line(parent_ids[0], parent_ids[1]),
-                        "Midpoint" => {
-                            let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
-                            Definition::Midpoint(a, b)
-                        },
-                        "Intersection" => {
-                            let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
-                            Definition::Intersection(a, b)
-                        },
-                        "LengthSq" => {
-                            let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
-                            Definition::LengthSq(a, b)
-                        },
-                        "PerpendicularLine" => Definition::PerpendicularLine(parent_ids[0], parent_ids[1]),
-                        "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
-                        "TangentLine" => Definition::TangentLine(parent_ids[0], parent_ids[1]),
-                        "Circumcircle" => {
-                            let mut arr = [parent_ids[0].0, parent_ids[1].0, parent_ids[2].0];
-                            arr.sort_unstable();
-                            Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
-                        }
-                        _ => Definition::GivenPoint, 
+
+                for p_rep in parent_candidates {
+                    let child_candidates: Vec<ClassId> = match self.egraph.entities[p_rep.0].components.first() {
+                        Some(comp) => comp.subobjects.iter()
+                            .map(|&id| self.egraph.get_rep(id))
+                            .filter(|&id| {
+                                if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
+                                match expected_c_type {
+                                    Some(et) => self.egraph.entities[id.0].entity_type == et,
+                                    None => true,
+                                }
+                            })
+                            .collect(),
+                        None => vec![],
                     };
-
-                    if let Some(&existing) = self.egraph.memo.get(&temp_def) {
-                        valid_nodes.push(self.egraph.get_rep(existing));
-                    } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq") {
-                        let e_type = match target_type { 
-                            "AnglePair" => EntityType::Angle, 
-                            "DirectionOf" => EntityType::Direction, 
-                            _ => EntityType::Scalar 
-                        };
-                        
-                        // 🌟 FIX: 親図形の名前を取得して結合し、誰と誰の角(方向)なのかを明示する
-                        let p_names: Vec<String> = parent_ids.iter()
-                            .map(|&id| self.egraph.entities[id.0].name.clone())
-                            .collect();
-                        
-                        let prefix = if target_type == "DirectionOf" { "Dir" } else { target_type };
-                        let name = format!("{}_{}_(Auto)", prefix, p_names.join("_"));
-                        
-                        let new_id = self.egraph.create_entity(name, temp_def.clone(), e_type);
-                        self.egraph.apply_trivial_relations(new_id, &temp_def);
-                        valid_nodes.push(new_id);
+                    for c_rep in child_candidates {
+                        let mut next_bind = bind.clone();
+                        next_bind.insert(child_var.clone(), c_rep);
+                        next_bind.insert(parent_var.clone(), p_rep);
+                        self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                     }
                 }
-                // 🌟 FIX 3: どちらも未バインドの場合のみフルスキャン
-                else {
-                    for i in 0..self.egraph.entities.len() {
-                        let id = ClassId(i);
-                        if self.egraph.get_rep(id) == id {
-                            if let Some(et) = expected_r_type {
-                                if self.egraph.entities[id.0].entity_type == et { valid_nodes.push(id); }
+            }
+        }
+    }
+
+    /// 🌟 "DefinedBy" パターン: result_var(定義された図形そのもの)の束縛状況から
+    /// 候補ノードを絞り込み(defined_by_valid_nodes)、それぞれの候補が実際に
+    /// target_type型の定義を持っているかを親変数との整合性込みで展開する
+    /// (defined_by_collect_matches)。どちらも元は1つの巨大なmatchアームだった。
+    fn match_defined_by_fact(
+        &mut self,
+        theorem: &TheoremDef,
+        def: &FactPatternDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: &Bind,
+        flip_states: FlipStates,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
+    ) {
+        let target_type = def.target_type.as_deref().unwrap_or("");
+        let result_var = &def.args[def.args.len() - 1];
+        let parent_vars = &def.args[0..def.args.len() - 1];
+        let expected_r_type = theorem.entities.get(result_var).copied();
+
+        let valid_nodes = self.defined_by_valid_nodes(target_type, result_var, parent_vars, expected_r_type, bind);
+        let mut matches = self.defined_by_collect_matches(def, target_type, parent_vars, result_var, &valid_nodes, bind, &flip_states);
+
+        if matches.is_empty() && target_type == "LineThroughPoints" && parent_vars.len() == 2 {
+            if let (Some(&p1), Some(&p2)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
+                let r1 = self.egraph.get_rep(p1);
+                let r2 = self.egraph.get_rep(p2);
+                if r1 != r2 {
+                    *self.construction_demands.entry((r1, r2)).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+
+        matches.sort_by(|(b1, _), (b2, _)| {
+            let heat1 = self.calc_bind_heat(b1);
+            let heat2 = self.calc_bind_heat(b2);
+            // 熱が高い(降順)ものを優先し、同値の場合はIDで決定論的にソート[cite: 5]
+            heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
+                .then_with(|| {
+                    let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
+                    let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
+                    format!("{:?}", k1).cmp(&format!("{:?}", k2))
+                })
+        });
+        matches.dedup_by_key(|(b, _)| {
+            let mut keys: Vec<_> = b.iter().collect();
+            keys.sort_by_key(|k| k.0);
+            format!("{:?}", keys)
+        });
+        for (new_bind, new_flip) in matches {
+            self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, on_match);
+        }
+    }
+
+    /// 🌟 "DefinedBy" の候補ノード列挙: result_var が既に束縛されていればそれ1つ、
+    /// 親変数が全て束縛されていれば対応する定義をmemoから探す(無ければ
+    /// AnglePair/DirectionOf/LengthSqに限り新規生成する)、どちらでもなければ
+    /// 型が合う全エンティティをフルスキャンする。
+    fn defined_by_valid_nodes(
+        &mut self,
+        target_type: &str,
+        result_var: &String,
+        parent_vars: &[String],
+        expected_r_type: Option<EntityType>,
+        bind: &Bind,
+    ) -> Vec<ClassId> {
+        let mut valid_nodes = Vec::new();
+
+        if let Some(&res_id) = bind.get(result_var) {
+            valid_nodes.push(self.egraph.get_rep(res_id));
+        }
+        // 🌟 FIX: *v ではなく v をそのまま渡す
+        else if parent_vars.iter().all(|v| bind.contains_key(v)) {
+            let parent_ids: Vec<ClassId> = parent_vars.iter().map(|v| self.egraph.get_rep(bind[v])).collect();
+
+            // 🌟 FIX: 全ての DefinedBy 対象型を網羅する
+            let temp_def = match target_type {
+                "AnglePair" => Definition::AnglePair(parent_ids[0], parent_ids[1]),
+                "DirectionOf" => Definition::DirectionOf(parent_ids[0]),
+                "LineThroughPoints" => Definition::new_line(parent_ids[0], parent_ids[1]),
+                "Midpoint" => {
+                    let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::Midpoint(a, b)
+                },
+                "Intersection" => {
+                    let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::Intersection(a, b)
+                },
+                "LengthSq" => {
+                    let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::LengthSq(a, b)
+                },
+                "PerpendicularLine" => Definition::PerpendicularLine(parent_ids[0], parent_ids[1]),
+                "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
+                "TangentLine" => Definition::TangentLine(parent_ids[0], parent_ids[1]),
+                "Circumcircle" => {
+                    let mut arr = [parent_ids[0].0, parent_ids[1].0, parent_ids[2].0];
+                    arr.sort_unstable();
+                    Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
+                }
+                _ => Definition::GivenPoint,
+            };
+
+            if let Some(&existing) = self.egraph.memo.get(&temp_def) {
+                valid_nodes.push(self.egraph.get_rep(existing));
+            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq") {
+                let e_type = match target_type {
+                    "AnglePair" => EntityType::Angle,
+                    "DirectionOf" => EntityType::Direction,
+                    _ => EntityType::Scalar
+                };
+
+                // 🌟 FIX: 親図形の名前を取得して結合し、誰と誰の角(方向)なのかを明示する
+                let p_names: Vec<String> = parent_ids.iter()
+                    .map(|&id| self.egraph.entities[id.0].name.clone())
+                    .collect();
+
+                let prefix = if target_type == "DirectionOf" { "Dir" } else { target_type };
+                let name = format!("{}_{}_(Auto)", prefix, p_names.join("_"));
+
+                let new_id = self.egraph.create_entity(name, temp_def.clone(), e_type);
+                self.egraph.apply_trivial_relations(new_id, &temp_def);
+                valid_nodes.push(new_id);
+            }
+        }
+        // 🌟 FIX 3: どちらも未バインドの場合のみフルスキャン
+        else {
+            for i in 0..self.egraph.entities.len() {
+                let id = ClassId(i);
+                if self.egraph.get_rep(id) == id {
+                    if let Some(et) = expected_r_type {
+                        if self.egraph.entities[id.0].entity_type == et { valid_nodes.push(id); }
+                    } else {
+                        valid_nodes.push(id);
+                    }
+                }
+            }
+        }
+
+        valid_nodes
+    }
+
+    /// 🌟 "DefinedBy" の候補ノードそれぞれについて、実際にtarget_type型の定義を
+    /// 持っているかを確認し、親変数との束縛の整合性(順不同図形は順列展開、
+    /// 有向角のフリップ許可時は両方向)を取りながら (Bind, FlipStates) の
+    /// 候補列を作る。読み取り専用(egraphを変更しない)。
+    fn defined_by_collect_matches(
+        &self,
+        def: &FactPatternDef,
+        target_type: &str,
+        parent_vars: &[String],
+        result_var: &String,
+        valid_nodes: &[ClassId],
+        bind: &Bind,
+        flip_states: &FlipStates,
+    ) -> Vec<(Bind, FlipStates)> {
+        let mut matches = Vec::new();
+        for &node_id in valid_nodes {
+            for comp in &self.egraph.entities[node_id.0].components {
+                for d in &comp.definitions {
+                    if d.get_type_name() == target_type {
+                        let d_parents = d.get_parents();
+                        if d_parents.len() == parent_vars.len() {
+                            let is_unordered = matches!(target_type, "Midpoint" | "LineThroughPoints" | "Intersection" | "LengthSq" | "Circumcircle");
+
+                            let perms = if is_unordered {
+                                if d_parents.len() == 2 {
+                                    vec![(vec![d_parents[0], d_parents[1]], None), (vec![d_parents[1], d_parents[0]], None)]
+                                } else if d_parents.len() == 3 {
+                                    // 🌟 FIX: Python版にあった3変数の全順列展開を復活
+                                    vec![
+                                        (vec![d_parents[0], d_parents[1], d_parents[2]], None),
+                                        (vec![d_parents[0], d_parents[2], d_parents[1]], None),
+                                        (vec![d_parents[1], d_parents[0], d_parents[2]], None),
+                                        (vec![d_parents[1], d_parents[2], d_parents[0]], None),
+                                        (vec![d_parents[2], d_parents[0], d_parents[1]], None),
+                                        (vec![d_parents[2], d_parents[1], d_parents[0]], None),
+                                    ]
+                                } else { vec![(d_parents.clone(), None)] }
+                            } else if target_type == "AnglePair" && def.allow_flip && d_parents.len() == 2 {
+                                let mut valid_perms = Vec::new();
+                                let state = def.flip_group.as_ref().and_then(|g| flip_states.get(g).copied());
+                                if state != Some(true) { valid_perms.push((vec![d_parents[0], d_parents[1]], Some(false))); }
+                                if state != Some(false) { valid_perms.push((vec![d_parents[1], d_parents[0]], Some(true))); }
+                                valid_perms
                             } else {
-                                valid_nodes.push(id);
-                            }
-                        }
-                    }
-                }
+                                vec![(d_parents.clone(), None)]
+                            };
 
-                let mut matches = Vec::new();
-                for node_id in valid_nodes {
-                    for comp in &self.egraph.entities[node_id.0].components {
-                        for d in &comp.definitions {
-                            if d.get_type_name() == target_type {
-                                let d_parents = d.get_parents();
-                                if d_parents.len() == parent_vars.len() {
-                                    let is_unordered = matches!(target_type, "Midpoint" | "LineThroughPoints" | "Intersection" | "LengthSq" | "Circumcircle");
-                                    
-                                    let perms = if is_unordered {
-                                        if d_parents.len() == 2 {
-                                            vec![(vec![d_parents[0], d_parents[1]], None), (vec![d_parents[1], d_parents[0]], None)]
-                                        } else if d_parents.len() == 3 {
-                                            // 🌟 FIX: Python版にあった3変数の全順列展開を復活
-                                            vec![
-                                                (vec![d_parents[0], d_parents[1], d_parents[2]], None),
-                                                (vec![d_parents[0], d_parents[2], d_parents[1]], None),
-                                                (vec![d_parents[1], d_parents[0], d_parents[2]], None),
-                                                (vec![d_parents[1], d_parents[2], d_parents[0]], None),
-                                                (vec![d_parents[2], d_parents[0], d_parents[1]], None),
-                                                (vec![d_parents[2], d_parents[1], d_parents[0]], None),
-                                            ]
-                                        } else { vec![(d_parents.clone(), None)] }
-                                    } else if target_type == "AnglePair" && def.allow_flip && d_parents.len() == 2 {
-                                        let mut valid_perms = Vec::new();
-                                        let state = def.flip_group.as_ref().and_then(|g| flip_states.get(g).copied());
-                                        if state != Some(true) { valid_perms.push((vec![d_parents[0], d_parents[1]], Some(false))); }
-                                        if state != Some(false) { valid_perms.push((vec![d_parents[1], d_parents[0]], Some(true))); }
-                                        valid_perms
-                                    } else {
-                                        vec![(d_parents.clone(), None)]
-                                    };
-                                    
-                                    for (p_ids, flip_val) in perms {
-                                        let mut next_bind = bind.clone();
-                                        let mut conflict = false;
-                                        for (v_name, &p_id) in parent_vars.iter().zip(p_ids.iter()) {
-                                            if let Some(&existing) = next_bind.get(v_name) {
-                                                if self.egraph.get_rep(existing) != self.egraph.get_rep(p_id) { conflict = true; break; }
-                                            }
-                                            next_bind.insert(v_name.clone(), p_id);
-                                        }
-                                        if let Some(&existing) = next_bind.get(result_var) {
-                                            if self.egraph.get_rep(existing) != node_id { conflict = true; }
-                                        }
-                                        next_bind.insert(result_var.clone(), node_id);
-                                        
-                                        if !conflict {
-                                            let mut next_flip = flip_states.clone();
-                                            if let (Some(group), Some(val)) = (&def.flip_group, flip_val) {
-                                                next_flip.insert(group.clone(), val);
-                                            }
-                                            // 🌟 個別の角度のフリップ状態も記憶させる
-                                            if let Some(val) = flip_val {
-                                                next_flip.insert(result_var.clone(), val);
-                                            }
-                                            matches.push((next_bind, next_flip)); 
-                                        }
+                            for (p_ids, flip_val) in perms {
+                                let mut next_bind = bind.clone();
+                                let mut conflict = false;
+                                for (v_name, &p_id) in parent_vars.iter().zip(p_ids.iter()) {
+                                    if let Some(&existing) = next_bind.get(v_name) {
+                                        if self.egraph.get_rep(existing) != self.egraph.get_rep(p_id) { conflict = true; break; }
                                     }
+                                    next_bind.insert(v_name.clone(), p_id);
+                                }
+                                if let Some(&existing) = next_bind.get(result_var) {
+                                    if self.egraph.get_rep(existing) != node_id { conflict = true; }
+                                }
+                                next_bind.insert(result_var.clone(), node_id);
+
+                                if !conflict {
+                                    let mut next_flip = flip_states.clone();
+                                    if let (Some(group), Some(val)) = (&def.flip_group, flip_val) {
+                                        next_flip.insert(group.clone(), val);
+                                    }
+                                    // 🌟 個別の角度のフリップ状態も記憶させる
+                                    if let Some(val) = flip_val {
+                                        next_flip.insert(result_var.clone(), val);
+                                    }
+                                    matches.push((next_bind, next_flip));
                                 }
                             }
                         }
                     }
                 }
-                
-                
-                if matches.is_empty() && target_type == "LineThroughPoints" && parent_vars.len() == 2 {
-                    if let (Some(&p1), Some(&p2)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
-                        let r1 = self.egraph.get_rep(p1);
-                        let r2 = self.egraph.get_rep(p2);
-                        if r1 != r2 {
-                            *self.construction_demands.entry((r1, r2)).or_insert(0.0) += 1.0;
-                        }
-                    }
-                }
-
-                matches.sort_by(|(b1, _), (b2, _)| {
-                    let heat1 = self.calc_bind_heat(b1);
-                    let heat2 = self.calc_bind_heat(b2);
-                    // 熱が高い(降順)ものを優先し、同値の場合はIDで決定論的にソート[cite: 5]
-                    heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
-                        .then_with(|| {
-                            let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
-                            let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
-                            format!("{:?}", k1).cmp(&format!("{:?}", k2))
-                        })
-                });
-                matches.dedup_by_key(|(b, _)| {
-                    let mut keys: Vec<_> = b.iter().collect();
-                    keys.sort_by_key(|k| k.0);
-                    format!("{:?}", keys)
-                });
-                for (new_bind, new_flip) in matches { 
-                    self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, on_match); 
-                }
-            },
-            _ => {
-                let mut matches = Vec::new();
-                for fact in &self.facts {
-                    matches.extend(self.get_fact_bindings(theorem, fact, &def.fact_type, &def.args, bind));
-                }
-                
-                matches.sort_by(|b1, b2| {
-                    let heat1 = self.calc_bind_heat(b1);
-                    let heat2 = self.calc_bind_heat(b2);
-                    heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
-                        .then_with(|| {
-                            let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
-                            let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
-                            format!("{:?}", k1).cmp(&format!("{:?}", k2))
-                        })
-                });
-                matches.dedup_by_key(|b| {
-                    let mut keys: Vec<_> = b.iter().collect();
-                    keys.sort_by_key(|k| k.0);
-                    format!("{:?}", keys)
-                });
-
-                for new_bind in matches { 
-                    self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match); 
-                }
             }
+        }
+        matches
+    }
+
+    /// 🌟 "Identical"/"Connected"/"DefinedBy" 以外の汎用フォールバック:
+    /// 既知の事実(self.facts)一覧から get_fact_bindings で束縛候補を集める。
+    fn match_generic_fact(
+        &mut self,
+        theorem: &TheoremDef,
+        def: &FactPatternDef,
+        remaining: Rc<Vec<Pattern>>,
+        bind: &Bind,
+        flip_states: FlipStates,
+        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        on_match: &mut dyn FnMut(&Bind, &FlipStates)
+    ) {
+        let mut matches = Vec::new();
+        for fact in &self.facts {
+            matches.extend(self.get_fact_bindings(theorem, fact, &def.fact_type, &def.args, bind));
+        }
+
+        matches.sort_by(|b1, b2| {
+            let heat1 = self.calc_bind_heat(b1);
+            let heat2 = self.calc_bind_heat(b2);
+            heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
+                .then_with(|| {
+                    let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
+                    let mut k2: Vec<_> = b2.iter().collect(); k2.sort_by_key(|k| k.0);
+                    format!("{:?}", k1).cmp(&format!("{:?}", k2))
+                })
+        });
+        matches.dedup_by_key(|b| {
+            let mut keys: Vec<_> = b.iter().collect();
+            keys.sort_by_key(|k| k.0);
+            format!("{:?}", keys)
+        });
+
+        for new_bind in matches {
+            self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match);
         }
     }
 
