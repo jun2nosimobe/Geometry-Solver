@@ -103,12 +103,104 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { 
-                    fact_type: "Identical".to_string(), 
-                    args: vec!["L1".to_string(), "L2".to_string()], 
-                    target_type: Some("Line".to_string()), 
-                    sub_type: None 
+                FactTemplate {
+                    fact_type: "Identical".to_string(),
+                    args: vec!["L1".to_string(), "L2".to_string()],
+                    target_type: Some("Line".to_string()),
+                    sub_type: None
                 }
+            ],
+        },
+
+        // ==========================================
+        // 🌟 2直線の交点の一意性 (「直線の一致条件」の点バージョン)
+        // ==========================================
+        // 2本の相異なる直線 L1, L2 の交点として既に P_Int が存在しているとき、
+        // 別の点 P_Test も L1, L2 の両方に乗っている(Connected)と分かれば、
+        // 2直線は高々1点でしか交わらないので P_Int と P_Test は同一点である。
+        //
+        // 垂心・外心・重心のような「3本の直線が1点で交わる」ことを示す証明で
+        // 中心的な役割を持つ定理。例えば「2本の垂線の交点」に「3本目の垂線が
+        // 通る」ことさえ角度追跡等で(Connectedとして)示せれば、この定理が
+        // それらを同一点だと結論づける。垂心・外心の存在(orthocenter/circumcenter)
+        // が進まなかったのは、角度に関する定理は揃っていても、この「点の一致」を
+        // 結論づける定理そのものが移植時に抜けていたことが直接の原因だった。
+        TheoremDef {
+            name: "2直線の交点の一意性".to_string(),
+            entities: entities(&[
+                ("L1", EntityType::Line), ("L2", EntityType::Line),
+                ("P_Int", EntityType::Point), ("P_Test", EntityType::Point),
+            ]),
+            patterns: vec![
+                // 1. すでにグラフ上に、L1とL2の交点(P_Int)が存在している
+                fact_ext("DefinedBy", &["L1", "L2", "P_Int"], Some("Intersection"), Some("Unordered"), false, None),
+                // 2. P_Test が L1 と L2 の両方に乗っている
+                fact_ext("Connected", &["P_Test", "L1"], None, None, false, None),
+                fact_ext("Connected", &["P_Test", "L2"], None, None, false, None),
+                distinct(&["L1", "L2"]),
+                distinct(&["P_Int", "P_Test"]),
+            ],
+            constructions: vec![],
+            conclusions: vec![
+                FactTemplate {
+                    fact_type: "Identical".to_string(),
+                    args: vec!["P_Int".to_string(), "P_Test".to_string()],
+                    target_type: Some("Point".to_string()),
+                    sub_type: None
+                }
+            ],
+        },
+
+        // ==========================================
+        // 🌟 垂直二等分線の距離の等価性 (順方向)
+        // ==========================================
+        // 線分BCの垂直二等分線上の点Pは、B,Cから等距離にある。
+        // 外心(3辺の垂直二等分線の共点性)の証明で使う。
+        TheoremDef {
+            name: "垂直二等分線の距離の等価性".to_string(),
+            entities: entities(&[
+                ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
+                ("LineBC", EntityType::Line), ("PerpMid", EntityType::Line), ("P", EntityType::Point),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["LineBC", "Mid_BC", "PerpMid"], Some("PerpendicularLine"), None, false, None),
+                fact_ext("Connected", &["P", "PerpMid"], None, None, false, None),
+                distinct(&["B", "C", "P"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_PB".to_string() },
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "C".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_PC".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_PB".to_string(), "Dist_PC".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+            ],
+        },
+
+        // ==========================================
+        // 🌟 垂直二等分線の距離の等価性の逆
+        // ==========================================
+        // B,Cから等距離にある点Pは、線分BCの垂直二等分線上にある(Connected)。
+        TheoremDef {
+            name: "垂直二等分線の距離の等価性の逆".to_string(),
+            entities: entities(&[
+                ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
+                ("LineBC", EntityType::Line), ("PerpMid", EntityType::Line), ("P", EntityType::Point),
+                ("Dist_PB", EntityType::Scalar), ("Dist_PC", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["LineBC", "Mid_BC", "PerpMid"], Some("PerpendicularLine"), None, false, None),
+                fact_ext("DefinedBy", &["P", "B", "Dist_PB"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["P", "C", "Dist_PC"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("Identical", &["Dist_PB", "Dist_PC"], Some("Scalar"), None, false, None),
+                distinct(&["B", "C", "P"]),
+            ],
+            constructions: vec![],
+            conclusions: vec![
+                FactTemplate { fact_type: "Connected".to_string(), args: vec!["P".to_string(), "PerpMid".to_string()], target_type: Some("Line".to_string()), sub_type: None }
             ],
         },
 
