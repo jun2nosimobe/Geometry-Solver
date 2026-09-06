@@ -1097,15 +1097,20 @@ pub struct BlackboardEngine {
     pub task_queue: BinaryHeap<MatchTask>,
     pub event_queue: VecDeque<Event>,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>,
+    // 🌟 UCB1バンディットの効果測定用のA/Bスイッチ。false にすると
+    // schedule_full_sweep がシードなしタスクの優先度を常に0固定にする
+    // (バンディット導入前の挙動に戻す)。既定は有効(true)。
+    pub bandit_enabled: bool,
 }
 
 impl BlackboardEngine {
     pub fn new(prover: ProverEngine) -> Self {
-        Self { 
-            prover, 
-            task_queue: BinaryHeap::new(), 
+        Self {
+            prover,
+            task_queue: BinaryHeap::new(),
             event_queue: VecDeque::new(),
             construction_demands: FxHashMap::default(), // 🌟 初期化
+            bandit_enabled: true,
         }
     }
 
@@ -1125,10 +1130,14 @@ impl BlackboardEngine {
         // self.prover.theorems.iter() で theorems を借用したまま
         // self.prover.theorem_priority_bonus(&mut self.prover) は呼べない
         // (借用の競合)ため、先にインデックスごとの優先度だけを計算しておく。
+        // bandit_enabled=false の場合は全定理を優先度0固定にし、導入前と
+        // 同じ挙動に戻す(A/B比較用)。
         let theorem_count = self.prover.theorems.len();
-        let priorities: Vec<i32> = (0..theorem_count)
-            .map(|idx| self.prover.theorem_priority_bonus(idx))
-            .collect();
+        let priorities: Vec<i32> = if self.bandit_enabled {
+            (0..theorem_count).map(|idx| self.prover.theorem_priority_bonus(idx)).collect()
+        } else {
+            vec![0; theorem_count]
+        };
 
         for (idx, theorem) in self.prover.theorems.iter().enumerate() {
             let mut initial_bind = Bind::new();

@@ -69,8 +69,13 @@ fn main() {
         .find_map(|a| a.strip_prefix("--time="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
+    // 🌟 UCB1バンディットの効果測定用A/Bスイッチ。--no-banditを付けると
+    // schedule_full_sweepのシードなしタスクの優先度を常に0固定にし、
+    // バンディット導入前と同じ挙動に戻す。既定はバンディット有効。
+    let bandit_enabled = !args.iter().any(|a| a == "--no-bandit");
 
-    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒)", problem_name, time_budget_secs);
+    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {})",
+        problem_name, time_budget_secs, if bandit_enabled { "有効" } else { "無効" });
 
     let mut egraph = EGraph::new();
     let tester = MMPTester::new();
@@ -83,6 +88,7 @@ fn main() {
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
     prover.theorems = theorems::get_all_theorems().into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
+    engine.bandit_enabled = bandit_enabled;
     // 🌟 MCTSを再有効化。以前は実際のロールアウト評価をせずスコア固定
     // (=常に1.0)だったが、合同閉包による実際のマージ数と、構造的な
     // ヒューリスティック(次数・作図の種類・目標への近さ)による本物の
