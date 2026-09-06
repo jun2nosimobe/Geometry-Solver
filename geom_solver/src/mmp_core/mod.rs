@@ -250,7 +250,7 @@ impl EGraph {
         let entity = GeoEntity {
             id, original_name: name.clone(), name, entity_type: e_type,
             base_importance: 1.0, heat_bonus: 0.0,
-            components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: std::collections::HashSet::new() }],
+            components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: Vec::new() }],
             uses: rustc_hash::FxHashSet::default(),
         };
 
@@ -275,7 +275,28 @@ impl EGraph {
 #[derive(Debug, Clone)]
 pub struct LogicalComponent {
     pub definitions: Vec<Definition>,
-    pub subobjects: HashSet<ClassId>,
+    // 🌟 以前は std::collections::HashSet<ClassId>(標準のRandomState、
+    // プロセスごとに異なるランダムシード)だった。重複除去自体は必要だが、
+    // その反復順序がプロセス起動のたびに変わってしまうため、これに依存する
+    // 局所伝播(propagate_line_uniqueness/propagate_point_uniqueness)や
+    // 定理マッチングの候補列挙の探索順序までプロセスごとに変わってしまい、
+    // 同じ問題・同じロジックでも実行時間が実行のたびに大きくばらつく
+    // (実測: miquelで0.35秒/1.05秒の二峰性)原因になっていた。挿入順を保持する
+    // Vecに変え、重複除去はlink_logical_incidence/merge_entities側で
+    // 明示的に行う(小規模なので線形探索で十分)ことで、探索順序を完全に
+    // 再現可能にする。
+    pub subobjects: Vec<ClassId>,
+}
+
+/// 🌟 ClassId列から重複を除き、ClassId昇順に整列した決定的な順序のVecを作る。
+/// 内部で使うHashSetは`.insert()`による所属判定だけに使い、絶対に反復しない
+/// (反復するとその時点でHashSetのランダムな順序に逆戻りしてしまう)。
+/// 最終的な順序は入力側の反復順にも依存しない、完全に再現可能なものになる。
+pub(crate) fn dedup_sorted_ids(ids: impl IntoIterator<Item = ClassId>) -> Vec<ClassId> {
+    let mut seen = HashSet::new();
+    let mut out: Vec<ClassId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+    out.sort_by_key(|id| id.0);
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -330,10 +351,10 @@ impl EGraph {
         let rep2 = self.get_rep(id2);
 
         if let Some(comp1) = self.entities[rep1.0].components.first_mut() {
-            comp1.subobjects.insert(rep2);
+            if !comp1.subobjects.contains(&rep2) { comp1.subobjects.push(rep2); }
         }
         if let Some(comp2) = self.entities[rep2.0].components.first_mut() {
-            comp2.subobjects.insert(rep1);
+            if !comp2.subobjects.contains(&rep1) { comp2.subobjects.push(rep1); }
         }
 
         // 🌟 新しい接続関係(incidence)ができたので、apply_congruence_closure の

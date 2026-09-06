@@ -4,7 +4,7 @@
 //! マージを確定する前に eval.rs の numeric_plausibility_check で
 //! 数値的な裏付けを取ってから merge_entities_justified を呼ぶ。
 
-use super::{ClassId, Definition, EntityType, EGraph, Justification, LogicalComponent, ProofEdge};
+use super::{dedup_sorted_ids, ClassId, Definition, EntityType, EGraph, Justification, LogicalComponent, ProofEdge};
 use rustc_hash::FxHashMap;
 
 impl EGraph {
@@ -26,14 +26,17 @@ impl EGraph {
         let mut root1_comps = std::mem::take(&mut self.entities[root1.0].components);
 
         let mut merged_defs = std::collections::HashSet::new();
-        let mut merged_subs = std::collections::HashSet::new();
+        // 🌟 subobjectsは重複除去だけでなく順序も決定的にしたいので、
+        // Vecに集めてから dedup_sorted_ids で仕上げる(生のHashSetを
+        // そのまま最終的な順序として使わない)。
+        let mut merged_subs_raw: Vec<ClassId> = Vec::new();
 
         for comp in root1_comps.drain(..) {
             for def in comp.definitions {
                 merged_defs.insert(self.normalize_definition(&def));
             }
             for sub in comp.subobjects {
-                merged_subs.insert(self.get_rep(sub));
+                merged_subs_raw.push(self.get_rep(sub));
             }
         }
         for comp in root2_comps {
@@ -41,9 +44,10 @@ impl EGraph {
                 merged_defs.insert(self.normalize_definition(&def));
             }
             for sub in comp.subobjects {
-                merged_subs.insert(self.get_rep(sub));
+                merged_subs_raw.push(self.get_rep(sub));
             }
         }
+        let merged_subs = dedup_sorted_ids(merged_subs_raw);
 
         // ここで再度 root1_entity の可変参照を取得
         let root1_entity = &mut self.entities[root1.0];
@@ -211,12 +215,11 @@ impl EGraph {
         // 🐛 FIX: subobjects は merge 前の生のIDをそのまま持ち続けるため、
         // 同じ代表元を指す複数のエントリが残ることがある(例えばLineとその
         // Demand版が別々に同じ点へリンクされ、後で合流した場合)。
-        // rep化した後に必ず重複を除いてから使う。
-        let points: std::collections::HashSet<ClassId> = match self.entities[line.0].components.first() {
-            Some(c) => c.subobjects.iter()
+        // rep化した後に必ず重複を除いてから使う(dedup_sorted_idsで順序も決定的にする)。
+        let points: Vec<ClassId> = match self.entities[line.0].components.first() {
+            Some(c) => dedup_sorted_ids(c.subobjects.iter()
                 .map(|&id| self.get_rep(id))
-                .filter(|&id| is_point_like(self.entities[id.0].entity_type))
-                .collect(),
+                .filter(|&id| is_point_like(self.entities[id.0].entity_type))),
             None => return false,
         };
 
@@ -226,10 +229,9 @@ impl EGraph {
         let mut shared_points: FxHashMap<ClassId, Vec<ClassId>> = FxHashMap::default();
         for &p in &points {
             if let Some(comp) = self.entities[p.0].components.first() {
-                let other_lines_of_p: std::collections::HashSet<ClassId> = comp.subobjects.iter()
+                let other_lines_of_p: Vec<ClassId> = dedup_sorted_ids(comp.subobjects.iter()
                     .map(|&id| self.get_rep(id))
-                    .filter(|&id| id != line && self.entities[id.0].entity_type == EntityType::Line)
-                    .collect();
+                    .filter(|&id| id != line && self.entities[id.0].entity_type == EntityType::Line));
                 for other in other_lines_of_p {
                     shared_points.entry(other).or_default().push(p);
                 }
@@ -277,15 +279,11 @@ impl EGraph {
     fn propagate_point_uniqueness(&mut self, point: ClassId) -> bool {
         let point = self.get_rep(point);
         // 🐛 FIX: subobjects の重複エントリを rep 化した後に除いてから使う(理由は
-        // propagate_line_uniqueness と同様)。
+        // propagate_line_uniqueness と同様。dedup_sorted_idsで順序も決定的にする)。
         let lines: Vec<ClassId> = match self.entities[point.0].components.first() {
-            Some(c) => {
-                let set: std::collections::HashSet<ClassId> = c.subobjects.iter()
-                    .map(|&id| self.get_rep(id))
-                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Line)
-                    .collect();
-                set.into_iter().collect()
-            },
+            Some(c) => dedup_sorted_ids(c.subobjects.iter()
+                .map(|&id| self.get_rep(id))
+                .filter(|&id| self.entities[id.0].entity_type == EntityType::Line)),
             None => return false,
         };
 
