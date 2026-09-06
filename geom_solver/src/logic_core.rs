@@ -789,15 +789,37 @@ impl ProverEngine {
         true
     }
 
-    pub fn apply_conclusions(&mut self, theorem_name: &str, conclusions: &[FactTemplate], bind: &Bind, flips: &FlipStates) -> (bool, Vec<Fact>) {
+    /// 🌟 証明復元(explain)用: この定理が実際に使った前提事実だけを、
+    /// bindを通じて具体的なClassIdに解決して集める。
+    /// Python版はbind.values()を丸ごと前提として記録していたため、
+    /// マッチの過程でたまたま一緒に束縛されていただけの無関係な図形まで
+    /// 証明ツリーに混入していた(ユーザー指摘の「不要な定理が多く含まれる」原因)。
+    /// ここではtheorem.patterns中のPattern::Fact節(実際に検証された前提)だけを
+    /// 辿るので、そのような無関係な図形は含まれない。
+    fn compute_theorem_premises(theorem: &TheoremDef, bind: &Bind) -> Vec<(String, Vec<ClassId>)> {
+        let mut premises = Vec::new();
+        for pat in &theorem.patterns {
+            if let Pattern::Fact(fpd) = pat {
+                let resolved: Option<Vec<ClassId>> = fpd.args.iter().map(|a| bind.get(a).copied()).collect();
+                if let Some(args) = resolved {
+                    premises.push((fpd.fact_type.clone(), args));
+                }
+            }
+        }
+        premises
+    }
+
+    pub fn apply_conclusions(&mut self, theorem: &TheoremDef, bind: &Bind, flips: &FlipStates) -> (bool, Vec<Fact>) {
         let mut applied_anything = false;
         let mut new_facts = Vec::new();
+        let theorem_name = theorem.name.as_str();
+        let premises = Self::compute_theorem_premises(theorem, bind);
 
-        for conc in conclusions {
+        for conc in &theorem.conclusions {
             match conc.fact_type.as_str() {
                 "Identical" => {
                     if let (Some(&id1), Some(&id2)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
-                        
+
                         let r1 = self.egraph.get_rep(id1);
                         let r2 = self.egraph.get_rep(id2);
                         if r1 == r2 { continue; } // 既にマージ済みならスキップ
@@ -808,13 +830,17 @@ impl ProverEngine {
                             let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
                             if f1 != f2 { continue; } // 向きが違うならマージしない
                         }
-                        
+
                         let name1 = self.egraph.entities[r1.0].name.clone();
                         let name2 = self.egraph.entities[r2.0].name.clone();
-                        if self.egraph.merge_entities(r1, r2) {
+                        let justification = crate::mmp_core::Justification::Theorem {
+                            name: theorem_name.to_string(),
+                            premises: premises.clone(),
+                        };
+                        if self.egraph.merge_entities_justified(r1, r2, justification) {
                             println!("  🟢 [マージ実行] {} ≡ {} (理由: {})", name1, name2, theorem_name);
                             // 🌟 マージされた代表元の熱を上げて今後のDFSで優先させる[cite: 5]
-                            self.egraph.entities[r1.0].heat_bonus += 1.5; 
+                            self.egraph.entities[r1.0].heat_bonus += 1.5;
                             applied_anything = true;
                         }
                     }
@@ -826,7 +852,11 @@ impl ProverEngine {
                     if let (Some(&child), Some(&parent)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
                         let c_rep = self.egraph.get_rep(child);
                         let p_rep = self.egraph.get_rep(parent);
-                        self.egraph.link_logical_incidence(c_rep, p_rep);
+                        let justification = crate::mmp_core::Justification::Theorem {
+                            name: theorem_name.to_string(),
+                            premises: premises.clone(),
+                        };
+                        self.egraph.link_logical_incidence_justified(c_rep, p_rep, justification);
                         applied_anything = true;
                         println!("  🟢 [リンク構築] {} ∈ {} (理由: {})",
                             self.egraph.entities[c_rep.0].name, self.egraph.entities[p_rep.0].name, theorem_name);
@@ -1077,7 +1107,7 @@ impl BlackboardEngine {
                             println!("      - 割り当て: {} = {}", var_name, entity_name);
                         }
 
-                        let (applied, generated_facts) = self.prover.apply_conclusions(&theorem.name, &theorem.conclusions, &bind, &flips);
+                        let (applied, generated_facts) = self.prover.apply_conclusions(&theorem, &bind, &flips);
                         if applied {
                             applied_anything = true;
                             self.emit(Event::NodeMerged); 

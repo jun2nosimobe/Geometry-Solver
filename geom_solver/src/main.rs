@@ -14,6 +14,24 @@ use mmp_tester::MMPTester;
 use mcts::MCTSSearchEngine;
 use std::time::Instant;
 use std::env;
+use std::fs;
+
+/// 🌟 証明復元(generate_proof)の結果を、コンソールとファイル(result/proof_<問題名>.txt)
+/// の両方に出力する。ファイルに残しておくことで、ターミナルのログをスクロールして
+/// 探さなくても後から見返せるようにする。
+fn output_proof(egraph: &EGraph, problem_name: &str, fact_type: &str, target_args: &[mmp_core::ClassId]) {
+    let proof_text = egraph.generate_proof(fact_type, target_args);
+    println!("\n{}", proof_text);
+
+    let dir = "result";
+    if fs::create_dir_all(dir).is_ok() {
+        let path = format!("{}/proof_{}.txt", dir, problem_name);
+        match fs::write(&path, &proof_text) {
+            Ok(_) => println!("📄 証明を '{}' に保存しました。", path),
+            Err(e) => println!("⚠️ 証明ファイルの書き込みに失敗しました ({}): {}", path, e),
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -62,11 +80,11 @@ fn main() {
     for fact in &problem.initial_facts {
         match fact {
             crate::mmp_core::Fact::Identical(id1, id2) => {
-                engine.prover.egraph.merge_entities(*id1, *id2);
+                engine.prover.egraph.merge_entities_justified(*id1, *id2, crate::mmp_core::Justification::Given);
                 engine.emit(logic_core::Event::NodeMerged);
             },
             crate::mmp_core::Fact::Connected(c, p) => {
-                engine.prover.egraph.link_logical_incidence(*c, *p);
+                engine.prover.egraph.link_logical_incidence_justified(*c, *p, crate::mmp_core::Justification::Given);
             },
             _ => {}
         }
@@ -102,6 +120,7 @@ fn main() {
                         }
                         _ => {
                             println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                            output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
                             break;
                         }
                     }
@@ -116,6 +135,7 @@ fn main() {
                 let reps: Vec<_> = target_args.iter().map(|&id| engine.prover.egraph.get_rep(id)).collect();
                 if engine.prover.egraph.points_share_a_circle(&reps) {
                     println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                    output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
                     break;
                 }
             }

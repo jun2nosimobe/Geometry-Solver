@@ -52,8 +52,7 @@ impl Definition {
         if a.0 > b.0 { std::mem::swap(&mut a, &mut b); }
         Definition::LineThroughPoints(a, b)
     }
-
-    // 🌟 以下の2つのメソッドを確実に追加する
+    
     pub fn get_type_name(&self) -> &'static str {
         match self {
             Definition::Midpoint(_,_) => "Midpoint",
@@ -132,6 +131,55 @@ pub struct EGraph {
     // を通じて方向をそのまま参照し続けるので、この追加はパターンには一切影響しない。
     pub line_infinity: ClassId,
     pub worklist: Vec<ClassId>, // 🌟 NEW: マージが発生して再評価が必要なIDキュー
+
+    // 🌟 証明復元(explain)のための「証明の森」。
+    // 通常のunion-find(parents)は経路圧縮するため、最終的な代表元は分かっても
+    // 「なぜ」その2つが同じになったのかという履歴は失われる。そこで union が
+    // 実際に起きるたびに、吸収された側(root2)から生き残った側(root1)への
+    // 有向辺として、その理由(Justification)を別に記録しておく。
+    // キーは「吸収された側」の(union-find上の)生スロット番号なので、
+    // 一度書き込まれたら二度と上書きされない(その番号が再びrootになることはない)。
+    // ある2つのエンティティが同値であることを説明したい時は、両方から
+    // この森を根に向かって辿り、共通の根で合流させれば良い(explain_identical)。
+    pub proof_edges: rustc_hash::FxHashMap<usize, ProofEdge>,
+    // 🌟 「点PはこのCircleに乗っている」のような接続関係(incidence)がいつ・なぜ
+    // 成り立ったかの記録。Concyclicの目標(共円であることの証明)を復元する時に使う。
+    // キーは(小さい方のClassId, 大きい方のClassId)。
+    pub incidence_provenance: rustc_hash::FxHashMap<(ClassId, ClassId), Justification>,
+}
+
+/// 🌟 なぜこの等式(またはこの接続関係)が成り立つのかの理由。
+/// 証明復元(generate_proof)がこれを人間可読な文字列に変換する。
+#[derive(Debug, Clone)]
+pub enum Justification {
+    /// 問題の初期条件・作図の前提として直接与えられた
+    Given,
+    /// 定理の結論として導かれた。premisesはこの定理が実際に使った前提事実
+    /// (パターン中のFact節をbindで解決したもの)だけを保持し、
+    /// そのマッチで偶然一緒に束縛されていただけの無関係な図形は含まない
+    /// (Python版がbind.values()を丸ごと前提として記録し、無関係な図形まで
+    /// 証明ツリーに混入していた問題への対処)。
+    Theorem {
+        name: String,
+        premises: Vec<(String, Vec<ClassId>)>,
+    },
+    /// 通常の合同閉包: 同じ定義(Definition)が正規化した結果一致した
+    /// (f(a)=f(b) if a=b)。
+    Congruence { definition: String },
+    /// 「直線の一致条件」局所伝播: 2直線が十分な数の点/方向を共有していた
+    LineUniqueness { shared_points: Vec<ClassId> },
+    /// 「2直線の交点の一意性」局所伝播
+    PointUniqueness { via_lines: (ClassId, ClassId) },
+    /// apply_trivial_relations由来の構造的な結合(垂線→Ang90、
+    /// PerpDirectionOf/HarmonicConjugateOfの対合性など、定義から機械的に従うもの)
+    Trivial { reason: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ProofEdge {
+    pub from: ClassId,
+    pub to: ClassId,
+    pub justification: Justification,
 }
 
 impl EGraph {
@@ -143,7 +191,9 @@ impl EGraph {
             ang90: ClassId(0), // ダミー初期化
             ang0: ClassId(0),
             line_infinity: ClassId(0),
-            worklist: Vec::new()
+            worklist: Vec::new(),
+            proof_edges: rustc_hash::FxHashMap::default(),
+            incidence_provenance: rustc_hash::FxHashMap::default(),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
@@ -183,7 +233,7 @@ impl EGraph {
         
         let id = ClassId(self.entities.len());
         let entity = GeoEntity {
-            id, name, entity_type: e_type,
+            id, original_name: name.clone(), name, entity_type: e_type,
             base_importance: 1.0, heat_bonus: 0.0,
             components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: std::collections::HashSet::new() }],
             uses: rustc_hash::FxHashSet::default(),
@@ -216,7 +266,18 @@ pub struct LogicalComponent {
 #[derive(Debug, Clone)]
 pub struct GeoEntity {
     pub id: ClassId,
+    // 🌟 表示用の名前。merge_entitiesで「短い方が勝つ」ヒューリスティックにより、
+    // 生き残った側(union-find上のroot)のものであっても後から書き換わることがある
+    // (例: "Ang_APB"というrootが"Ang90"を吸収すると、rootの.nameが短い"Ang90"に
+    // 上書きされる)。そのため「このClassIdは元々何という名前だったか」を
+    // 証明復元(generate_proof)で正確に知りたい場合はoriginal_nameを使うこと。
     pub name: String,
+    // 🌟 create_entity時に一度だけ設定され、以後マージが起きても絶対に
+    // 書き換えられない、そのスロット固有の不変な名前。証明復元が
+    // 「そのステップの時点でこの図形が何と呼ばれていたか」を正確に表示するために
+    // 導入した(これが無いと、生き残った側の名前が後から短い名前に上書きされて
+    // しまい、証明の途中経過が実際の推論内容と食い違って見えることがあった)。
+    pub original_name: String,
     pub entity_type: EntityType,
     pub base_importance: f64,
     pub heat_bonus: f64,
@@ -269,7 +330,17 @@ impl EGraph {
         self.worklist.push(rep1);
         self.worklist.push(rep2);
     }
-    
+
+    /// 🌟 link_logical_incidenceに加えて、「なぜこの接続関係が成り立つか」を
+    /// incidence_provenanceに記録する版。Concyclicの証明復元(explain_concyclic)
+    /// で使う。既に記録済みなら上書きしない(最初に見つかった経路を採用する)。
+    pub fn link_logical_incidence_justified(&mut self, id1: ClassId, id2: ClassId, justification: Justification) {
+        self.link_logical_incidence(id1, id2);
+        let rep1 = self.get_rep(id1);
+        let rep2 = self.get_rep(id2);
+        let key = if rep1.0 < rep2.0 { (rep1, rep2) } else { (rep2, rep1) };
+        self.incidence_provenance.entry(key).or_insert(justification);
+    }
 
     /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
     pub fn normalize_definition(&self, def: &Definition) -> Definition {
@@ -377,6 +448,96 @@ impl EGraph {
         true
     }
 
+    /// 🌟 merge_entitiesに加えて、「なぜこの2つが同一なのか」をproof_edgesに
+    /// 記録する版。証明復元(explain_identical/generate_proof)で使う。
+    /// マージが実際に起きた場合のみ記録する(既に同じ代表元なら何もしない)。
+    pub fn merge_entities_justified(&mut self, id1: ClassId, id2: ClassId, justification: Justification) -> bool {
+        let root1 = self.get_rep(id1);
+        let root2 = self.get_rep(id2);
+        if root1 == root2 { return false; }
+        let did_merge = self.merge_entities(id1, id2);
+        if did_merge {
+            // root2は吸収された側(union-find上、二度とrootに戻らない)なので、
+            // このキーへの書き込みは実質的に一度きり。表示名はoriginal_name
+            // (create_entity時に一度だけ設定され、以後マージで書き換わらない)
+            // 経由で常に安定して引けるので、ここではraw ClassIdだけ持てば十分。
+            self.proof_edges.entry(root2.0).or_insert(ProofEdge { from: root2, to: root1, justification });
+        }
+        did_merge
+    }
+
+    /// 🌟 証明復元の中核: id からproof_edgesを根に向かって辿り、経路上の
+    /// (辺の出発点, 辺の到達点, 理由) を根に近い側が末尾になる順で返す。
+    fn proof_path_to_root(&self, mut id: ClassId) -> Vec<ProofEdge> {
+        let mut path = Vec::new();
+        let mut guard = 0usize;
+        while let Some(edge) = self.proof_edges.get(&id.0) {
+            path.push(edge.clone());
+            id = edge.to;
+            guard += 1;
+            if guard > self.entities.len() + 10 { break; } // 循環防止の安全弁
+        }
+        path
+    }
+
+    /// 🌟 idの「一番最初に確認できる名前」。idが後にマージで吸収された
+    /// (union-find上でrootでなくなった)場合、その.nameフィールドは
+    /// merge_entities内でstd::mem::takeされて空文字になってしまうため、
+    /// 現在のself.entities[id.0].nameを見ても意味がない。
+    /// 代わりに、idが最初に吸収された瞬間に記録されたfrom_nameスナップショット
+    /// (proof_path_to_rootの最初の要素)を使う。一度も吸収されていない
+    /// (=今なお現在の代表元そのもの)場合は、素直に現在の名前を使う。
+    /// 🌟 このClassIdが最初に(create_entity時に)何と名付けられたかを返す。
+    /// .nameは「短い方が勝つ」ヒューリスティックにより、たとえこのIDが
+    /// union-find上のrootのまま(一度も吸収されていない)でも、後から吸収した
+    /// 側の方が短ければ書き換わってしまうことがある。original_nameは
+    /// create_entity時に一度だけ設定されそれ以降は絶対に変わらないので、
+    /// 証明復元では常にこちらを使う。
+    fn earliest_known_name(&self, id: ClassId) -> String {
+        self.entities[id.0].original_name.clone()
+    }
+
+    /// 🌟 a ≡ b であることの証明を、実際にそう判明した合流点(union-findの
+    /// 「証明の森」)まで遡って復元する。a, b が同じ同値類でなければ空を返す。
+    /// 返り値は a → (中間の合流点) → b という順の証明ステップ列。
+    pub fn explain_identical(&self, a: ClassId, b: ClassId) -> Vec<ProofEdge> {
+        if self.get_rep(a) != self.get_rep(b) { return Vec::new(); }
+        let path_a = self.proof_path_to_root(a);
+        let mut path_b = self.proof_path_to_root(b);
+        path_b.reverse();
+        // 🌟 b側の経路は元々「bの根に向かう向き」で記録されているので、
+        // 逆順にした後は表示上の from/to も入れ替えて、
+        // a → ... → 合流点 → ... → b と読める自然な順序にする。
+        // (等式自体は対称なので、元の向きのままでも数学的には正しいが、
+        // 読みやすさのための整形。名前はoriginal_name経由でraw ClassIdから
+        // 常に安定して引けるので、入れ替えが必要なのはfrom/toそのものだけ)。
+        for edge in &mut path_b {
+            std::mem::swap(&mut edge.from, &mut edge.to);
+        }
+        let mut result = path_a;
+        result.extend(path_b);
+        result
+    }
+
+    /// 🌟 pointがcircle(またはline)に乗っている理由を、直接記録された
+    /// incidence_provenanceの中から探す(repベースで照合するので、記録時と
+    /// 違うエンティティ経由で同じ代表元に辿り着いた場合も見つかる)。
+    /// 見つかった場合、その記録に使われた「元のid」も一緒に返す
+    /// (pointやcircle自体がその後マージで代表元が変わっていることがあるため、
+    /// 呼び出し側がexplain_identicalで橋渡しの説明を追加できるように)。
+    pub fn find_incidence_justification(&self, point: ClassId, circle_or_line: ClassId) -> Option<(ClassId, ClassId, Justification)> {
+        let p_rep = self.get_rep(point);
+        let c_rep = self.get_rep(circle_or_line);
+        for (&(x, y), just) in &self.incidence_provenance {
+            let (rx, ry) = (self.get_rep(x), self.get_rep(y));
+            if (rx == p_rep && ry == c_rep) || (rx == c_rep && ry == p_rep) {
+                let (orig_point, orig_circle) = if rx == p_rep { (x, y) } else { (y, x) };
+                return Some((orig_point, orig_circle, just.clone()));
+            }
+        }
+        None
+    }
+
     // 🌟 Trivial Relations (作図時のおまけリンクと方向生成)
     pub fn apply_trivial_relations(&mut self, new_id: ClassId, def: &Definition) {
         match def {
@@ -399,9 +560,10 @@ impl EGraph {
                 self.link_logical_incidence(new_id, *l2);
             },
             Definition::Circumcircle(p1, p2, p3) => {
-                self.link_logical_incidence(*p1, new_id);
-                self.link_logical_incidence(*p2, new_id);
-                self.link_logical_incidence(*p3, new_id);
+                let reason = "外接円の定義より、生成元の3点はこの円に乗っている".to_string();
+                self.link_logical_incidence_justified(*p1, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p2, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p3, new_id, Justification::Trivial { reason });
             },
             Definition::AnglePair(d1, d2) => {
                 self.link_logical_incidence(*d1, new_id);
@@ -426,11 +588,11 @@ impl EGraph {
                     // 引き続き動くよう、そのまま残す。
                     let ang1_def = Definition::AnglePair(dir1_id, dir2_id);
                     let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Angle);
-                    self.merge_entities(ang1_id, self.ang90);
+                    self.merge_entities_justified(ang1_id, self.ang90, Justification::Trivial { reason: "垂線の定義より2方向のなす角は90度".to_string() });
 
                     let ang2_def = Definition::AnglePair(dir2_id, dir1_id);
                     let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Angle);
-                    self.merge_entities(ang2_id, self.ang90);
+                    self.merge_entities_justified(ang2_id, self.ang90, Justification::Trivial { reason: "垂線の定義より2方向のなす角は90度(逆順)".to_string() });
 
                     // 🌟 射影的な表現を追加: dir2 は「dir1に垂直な方向」そのものとして
                     // PerpDirectionOfでも構造的に登録しておく(対合性 perp(perp(D))=D
@@ -449,15 +611,15 @@ impl EGraph {
                     let perp1_id = self.create_entity(
                         format!("PerpDir_{}_(Auto)", dir1_name),
                         Definition::PerpDirectionOf(dir1_id), EntityType::Direction);
-                    self.merge_entities(perp1_id, dir2_id);
+                    self.merge_entities_justified(perp1_id, dir2_id, Justification::Trivial { reason: "垂線の対合性(PerpDirectionOf): dir1に垂直な方向がdir2そのもの".to_string() });
 
                     let dir2_name = self.entities[self.get_rep(dir2_id).0].name.clone();
                     let perp2_id = self.create_entity(
                         format!("PerpDir_{}_(Auto)", dir2_name),
                         Definition::PerpDirectionOf(dir2_id), EntityType::Direction);
-                    self.merge_entities(perp2_id, dir1_id);
+                    self.merge_entities_justified(perp2_id, dir1_id, Justification::Trivial { reason: "垂線の対合性(PerpDirectionOf): dir2に垂直な方向がdir1そのもの".to_string() });
                 } else {
-                    self.merge_entities(dir1_id, dir2_id);
+                    self.merge_entities_justified(dir1_id, dir2_id, Justification::Trivial { reason: "平行線の定義より2直線の方向は一致".to_string() });
                 }
             },
             Definition::TangentLine(c, p) => {
@@ -510,7 +672,8 @@ impl EGraph {
                     if let Some(&global_existing) = self.memo.get(&norm_def) {
                         let g_rep = self.get_rep(global_existing);
                         if g_rep != u_rep {
-                            if self.merge_entities(g_rep, u_rep) {
+                            let justification = Justification::Congruence { definition: self.format_definition(&norm_def) };
+                            if self.merge_entities_justified(g_rep, u_rep, justification) {
                                 changed_any = true;
                                 break;
                             }
@@ -519,7 +682,8 @@ impl EGraph {
                     // 🌟 2. 現在のループ内で新しく生成された同一定義との照合
                     else if let Some(&existing_rep) = def_map.get(&norm_def) {
                         if existing_rep != u_rep {
-                            if self.merge_entities(existing_rep, u_rep) {
+                            let justification = Justification::Congruence { definition: self.format_definition(&norm_def) };
+                            if self.merge_entities_justified(existing_rep, u_rep, justification) {
                                 changed_any = true;
                                 break;
                             }
@@ -617,7 +781,7 @@ impl EGraph {
         // line上の各点(方向を含む)について、他に乗っている直線ごとに共有数を数える。
         // 🐛 FIX: 1点につき同じ他直線への加算は高々1にする(重複subobjectsで
         // 1点しか共有していないのに2点共有と誤カウントするのを防ぐ)。
-        let mut shared_counts: FxHashMap<ClassId, usize> = FxHashMap::default();
+        let mut shared_points: FxHashMap<ClassId, Vec<ClassId>> = FxHashMap::default();
         for &p in &points {
             if let Some(comp) = self.entities[p.0].components.first() {
                 let other_lines_of_p: std::collections::HashSet<ClassId> = comp.subobjects.iter()
@@ -625,22 +789,23 @@ impl EGraph {
                     .filter(|&id| id != line && self.entities[id.0].entity_type == EntityType::Line)
                     .collect();
                 for other in other_lines_of_p {
-                    *shared_counts.entry(other).or_insert(0) += 1;
+                    shared_points.entry(other).or_default().push(p);
                 }
             }
         }
 
-        for (other_line, shared) in shared_counts {
+        for (other_line, shared) in shared_points {
             let line = self.get_rep(line); // 途中のマージでrepが変わっている可能性
             let other_line = self.get_rep(other_line);
             if line == other_line { continue; }
 
-            if shared >= 2 {
+            if shared.len() >= 2 {
                 let name1 = self.entities[line.0].name.clone();
                 let name2 = self.entities[other_line.0].name.clone();
-                if self.merge_entities(line, other_line) {
+                let justification = Justification::LineUniqueness { shared_points: shared.clone() };
+                if self.merge_entities_justified(line, other_line, justification) {
                     println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により直線を結合: {} ≡ {}",
-                        shared, name1, name2);
+                        shared.len(), name1, name2);
                     return true;
                 }
             }
@@ -671,29 +836,30 @@ impl EGraph {
             None => return false,
         };
 
-        let mut candidates: Vec<ClassId> = Vec::new();
+        let mut candidates: Vec<(ClassId, ClassId, ClassId)> = Vec::new();
         for i in 0..lines.len() {
             for j in (i + 1)..lines.len() {
                 let (l1, l2) = (lines[i], lines[j]);
                 let inter_def = self.normalize_definition(&Definition::Intersection(l1, l2));
-                if let Some(&existing) = self.memo.get(&inter_def) { candidates.push(existing); }
+                if let Some(&existing) = self.memo.get(&inter_def) { candidates.push((existing, l1, l2)); }
 
                 if l1 == self.line_infinity {
-                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l2)) { candidates.push(existing); }
+                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l2)) { candidates.push((existing, l1, l2)); }
                 }
                 if l2 == self.line_infinity {
-                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l1)) { candidates.push(existing); }
+                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l1)) { candidates.push((existing, l1, l2)); }
                 }
             }
         }
 
-        for existing in candidates {
+        for (existing, via_l1, via_l2) in candidates {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
             if existing_rep != point_rep {
                 let name1 = self.entities[existing_rep.0].name.clone();
                 let name2 = self.entities[point_rep.0].name.clone();
-                if self.merge_entities(existing_rep, point_rep) {
+                let justification = Justification::PointUniqueness { via_lines: (via_l1, via_l2) };
+                if self.merge_entities_justified(existing_rep, point_rep, justification) {
                     println!("  ⚙️ [E-Graph自動マージ] 2直線の交点の一意性により点を結合: {} ≡ {}", name1, name2);
                     return true;
                 }
@@ -966,25 +1132,129 @@ impl EGraph {
         // 抽象的な調和共役点エンティティを作り、具体的な作図結果に結びつける
         let hc_def = self.normalize_definition(&Definition::HarmonicConjugateOf(a, b, c));
         let d_abstract = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(a, self), name(b, self), name(c, self)), hc_def, EntityType::Point);
-        self.merge_entities(d_abstract, d_concrete);
+        self.merge_entities_justified(d_abstract, d_concrete, Justification::Trivial {
+            reason: "調和共役点の完全四辺形作図により、抽象的な調和共役点と実際の交点が一致".to_string(),
+        });
         let d = self.get_rep(d_abstract);
         self.link_logical_incidence(d, line_abc);
 
         // 対合性: H(A,B,D) ≡ C
         let inv_def = self.normalize_definition(&Definition::HarmonicConjugateOf(a, b, d));
         let inv_id = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(a, self), name(b, self), name(d, self)), inv_def, EntityType::Point);
-        self.merge_entities(inv_id, c);
+        self.merge_entities_justified(inv_id, c, Justification::Trivial {
+            reason: "調和共役点の対合性: H(A,B,H(A,B,C)) は C に一致する".to_string(),
+        });
 
         // 交叉比のペア交換対称性: (A,B;C,D)=-1 ⟹ (C,D;A,B)=-1 つまり H(C,D,A) ≡ B
         let c_after = self.get_rep(c);
         let d_after = self.get_rep(d);
         let swap_def = self.normalize_definition(&Definition::HarmonicConjugateOf(c_after, d_after, a));
         let swap_id = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(c_after, self), name(d_after, self), name(a, self)), swap_def, EntityType::Point);
-        self.merge_entities(swap_id, b);
+        self.merge_entities_justified(swap_id, b, Justification::Trivial {
+            reason: "交叉比のペア交換対称性: (A,B;C,D)=-1 ⟹ (C,D;A,B)=-1".to_string(),
+        });
 
         self.apply_congruence_closure();
         self.get_rep(d)
     }
+
+    /// 🌟 pointsの全てが乗っている共通の円を(あれば)1つ返す。
+    pub fn find_shared_circle(&self, points: &[ClassId]) -> Option<ClassId> {
+        if points.is_empty() { return None; }
+        for i in 0..self.entities.len() {
+            let cand = ClassId(i);
+            if self.get_rep(cand) != cand { continue; }
+            if self.entities[i].entity_type != EntityType::Circle { continue; }
+            if points.iter().all(|&p| self.is_connected(p, cand)) {
+                return Some(cand);
+            }
+        }
+        None
+    }
+
+    fn format_justification(&self, j: &Justification) -> String {
+        let name = |id: ClassId| self.earliest_known_name(id);
+        match j {
+            Justification::Given => "問題の初期条件(前提)として与えられている".to_string(),
+            Justification::Theorem { name: theorem_name, premises } => {
+                if premises.is_empty() {
+                    format!("定理「{}」", theorem_name)
+                } else {
+                    let ps: Vec<String> = premises.iter()
+                        .map(|(ft, args)| format!("{}({})", ft, args.iter().map(|&a| name(a)).collect::<Vec<_>>().join(", ")))
+                        .collect();
+                    format!("定理「{}」 (前提: {})", theorem_name, ps.join(" ∧ "))
+                }
+            }
+            Justification::Congruence { definition } => format!("合同閉包: どちらも {} として定義される", definition),
+            Justification::LineUniqueness { shared_points } => format!(
+                "2直線が{}点を共有({})しているため同一直線",
+                shared_points.len(),
+                shared_points.iter().map(|&p| name(p)).collect::<Vec<_>>().join(", ")
+            ),
+            Justification::PointUniqueness { via_lines } => format!(
+                "直線 {} と直線 {} の交点として一意に定まる",
+                name(via_lines.0), name(via_lines.1)
+            ),
+            Justification::Trivial { reason } => reason.clone(),
+        }
+    }
+
+    /// 🌟 ユーザー要望: 「e-graphのマージ履歴から証明を作ってresultに出力する
+    /// 仕組み」。Python版のextract_proof.pyは全ログを無差別にダンプするだけ
+    /// だったため無関係な定理まで大量に混入していたが、こちらはexplain_identical/
+    /// find_incidence_justificationで「実際に目標へ辿り着くのに使われた
+    /// ステップだけ」を証明の森から遡って再構成するので、不要な定理は
+    /// 原理的に混入しない。
+    pub fn generate_proof(&self, fact_type: &str, target_args: &[ClassId]) -> String {
+        let mut out = String::new();
+        out.push_str("========================================\n");
+        out.push_str("✨ 証明 (E-Graphのマージ履歴から復元) ✨\n");
+        out.push_str("========================================\n\n");
+
+        match fact_type {
+            "Identical" if target_args.len() == 2 => {
+                let edges = self.explain_identical(target_args[0], target_args[1]);
+                if edges.is_empty() {
+                    out.push_str("(まだ証明されていません、またはこの2つは元から同一の図形です)\n");
+                } else {
+                    for (i, edge) in edges.iter().enumerate() {
+                        out.push_str(&format!("Step {:2}: {} ≡ {}\n", i + 1,
+                            self.earliest_known_name(edge.from), self.earliest_known_name(edge.to)));
+                        out.push_str(&format!("         └─ 理由: {}\n\n", self.format_justification(&edge.justification)));
+                    }
+                    let g1 = self.earliest_known_name(target_args[0]);
+                    let g2 = self.earliest_known_name(target_args[1]);
+                    out.push_str(&format!("∴ {} ≡ {} ∎\n", g1, g2));
+                }
+            }
+            "Concyclic" => {
+                if let Some(circle) = self.find_shared_circle(target_args) {
+                    out.push_str(&format!("共通の円: {}\n\n", self.entities[circle.0].name));
+                    for &p in target_args {
+                        let p_name = self.earliest_known_name(p);
+                        match self.find_incidence_justification(p, circle) {
+                            Some((_, _, just)) => {
+                                out.push_str(&format!("- {} ∈ {}\n", p_name, self.entities[circle.0].name));
+                                out.push_str(&format!("    └─ 理由: {}\n\n", self.format_justification(&just)));
+                            }
+                            None => {
+                                out.push_str(&format!("- {} ∈ {} (直接の根拠が記録されていません)\n\n", p_name, self.entities[circle.0].name));
+                            }
+                        }
+                    }
+                    out.push_str("∴ 上記の点はすべて同じ円に乗っている ∎\n");
+                } else {
+                    out.push_str("(共通の円がまだ見つかっていません)\n");
+                }
+            }
+            _ => {
+                out.push_str(&format!("(目標タイプ「{}」の証明復元には未対応です)\n", fact_type));
+            }
+        }
+        out
+    }
+
     /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
     pub fn dump_state(&self) {
         println!("\n=== 📊 E-Graph State Dump ===");
