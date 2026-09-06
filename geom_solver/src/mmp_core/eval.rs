@@ -247,6 +247,166 @@ impl EGraph {
             .any(|curve| !self.is_natural_incidence(rep, curve))
     }
 
+    /// 🌟 has_extraneous_incidenceが真だったFreePointについて、その前提の
+    /// 相手となる直線/円を1つ選ぶ(自身の定義からは自然に従わない、
+    /// link_logical_incidenceだけに由来する接続のうち最初に見つかったもの)。
+    /// 1点が複数の構造的前提を同時に持つ場合、ここでは最初の1つしか満たさない
+    /// (全部を同時に満たす座標は一般には存在しないので、これは近似的な
+    /// 対処にとどまる)。
+    fn find_incidence_constraint(&self, free_point: ClassId) -> Option<ClassId> {
+        let rep = self.get_rep(free_point);
+        let comp = self.entities[rep.0].components.first()?;
+        comp.subobjects.iter()
+            .map(|&s| self.get_rep(s))
+            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle)
+                && !self.is_natural_incidence(rep, s))
+    }
+
+    /// 🌟 idの祖先(FreePoint)がすべてvarsに座標を持っているか。
+    /// evaluate_node/evaluate_definitionはFreePointの座標がvarsに無くても
+    /// (0,0)にフォールバックして黙って計算を続けてしまう(既存の呼び出しは
+    /// 必ず全自由点の座標を事前に埋めてから呼ぶ前提のため、これが問題に
+    /// ならなかった)。ここでの用途では「まだ座標が決まっていない自由点に
+    /// 依存する評価」を(0,0)で誤魔化さず確実に弾く必要があるため、
+    /// evaluate_nodeを呼ぶ前に明示的にチェックする。
+    fn free_point_ancestors_ready(&self, id: ClassId, vars: &FxHashMap<String, ModInt>) -> bool {
+        let mut visited = HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(id, &mut visited, &mut ancestors);
+        ancestors.iter().all(|&fp| vars.contains_key(&format!("{}_x", self.entities[fp.0].name)))
+    }
+
+    /// 🌟 直線の係数(a,b,c: a*x+b*y+c=0)を満たすランダムな点(x,y)を1つ選ぶ。
+    fn sample_point_on_line_coeffs(a: ModInt, b: ModInt, c: ModInt) -> Option<(ModInt, ModInt)> {
+        if b.0 != 0 {
+            let x = ModInt::new(rand::random::<i64>());
+            let y = -(a * x + c) / b;
+            Some((x, y))
+        } else if a.0 != 0 {
+            let y = ModInt::new(rand::random::<i64>());
+            let x = -c / a;
+            Some((x, y))
+        } else {
+            None // 縮退した直線(0=0)。理論上起こらないはずだが安全側に倒す
+        }
+    }
+
+    /// 🌟 直線lineの上にあるランダムな点を1つサンプリングする。
+    /// lineが依存する自由点の座標がまだ決まっていなければNone(呼び出し側で
+    /// 後の反復に回してもらう)。
+    fn sample_point_on_line(&self, line: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
+        if !self.free_point_ancestors_ready(line, vars) { return None; }
+        let coeffs = self.evaluate_node(line, vars, cache)?;
+        if coeffs.len() < 3 { return None; }
+        Self::sample_point_on_line_coeffs(coeffs[0], coeffs[1], coeffs[2])
+    }
+
+    /// 🌟 Circumcircleの定義から、その円に(定義上)乗っていることが保証されている
+    /// 点を1つ返す(3つの生成元のうち最初のもの)。
+    fn circle_definition_known_point(&self, circle: ClassId) -> Option<ClassId> {
+        let rep = self.get_rep(circle);
+        let comp = self.entities[rep.0].components.first()?;
+        comp.definitions.iter().find_map(|def| {
+            if let Definition::Circumcircle(p1, _, _) = def { Some(*p1) } else { None }
+        })
+    }
+
+    /// 🌟 円circleの上にあるランダムな点を1つサンプリングする。
+    /// 円の方程式 A(x²+y²)+Dx+Ey+F=0 に対し、円自身の定義から既に乗っていると
+    /// 分かっている点(known_point)を通るランダムな直線を引き、その直線と
+    /// 円のもう一方の交点を求める。known_pointに対応する解(t=0)が既知なので、
+    /// Vietaの公式から残りの解が線形に求まり、平方剰余(sqrt)を一切必要としない
+    /// (このプロジェクトの法 998244353 は p≡1 (mod 4) でTonelli-Shanksが
+    /// 面倒になる法なので、これは実装上都合が良い)。
+    /// 🐛 注意: calc_circumcircle/calc_tangent_lineのコメントは係数の並びを
+    /// [D,E,F,A]と書いているが、実際にcalc_circumcircleがこの順で返す値を
+    /// 検証したところ [A,D,E,F] (0番目がx²+y²の係数)だった(コメント自体が
+    /// 誤りだが、calc_tangent_line側は数値評価経路でしか使われず既存12問題の
+    /// 症状として顕在化していなかったので、ここではそちらには触れず、
+    /// 実際に検証した正しい並びだけをこの関数で使う)。
+    fn sample_point_on_circle(&self, circle: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
+        if !self.free_point_ancestors_ready(circle, vars) { return None; }
+        let coeffs = self.evaluate_node(circle, vars, cache)?;
+        if coeffs.len() < 4 { return None; }
+        let (a_coef, d, e, f) = (coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
+
+        if a_coef.0 == 0 {
+            // 退化(3生成点が同一直線上など): 実質的に直線 Dx+Ey+F=0 として扱う
+            return Self::sample_point_on_line_coeffs(d, e, f);
+        }
+
+        let known_point = self.circle_definition_known_point(circle)?;
+        // known_pointはcircleの生成元自身なので、free_point_ancestors_ready(circle, ..)が
+        // 真であれば必ずその祖先もvarsに揃っている(部分集合関係)。
+        let kp = self.evaluate_node(known_point, vars, cache)?;
+        if kp.len() < 3 || kp[2].0 == 0 { return None; }
+        let (x1, y1) = (kp[0] / kp[2], kp[1] / kp[2]);
+
+        let two = ModInt::new(2);
+        for _ in 0..8 {
+            let dx = ModInt::new(rand::random::<i64>());
+            let dy = ModInt::new(rand::random::<i64>());
+            let a1 = a_coef * (dx * dx + dy * dy);
+            if a1.0 == 0 { continue; } // 縮退方向(理論上ごく低確率)。引き直す
+            let b1 = a_coef * two * (x1 * dx + y1 * dy) + d * dx + e * dy;
+            let t = -(b1 / a1);
+            return Some((x1 + t * dx, y1 + t * dy));
+        }
+        None
+    }
+
+    /// 🌟 has_extraneous_incidence(fp)が真の自由点について、find_incidence_constraintで
+    /// 選んだ直線/円の上に乗るランダムな座標をサンプリングする。
+    fn sample_point_on_constraint(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
+        let rep = self.get_rep(fp);
+        let curve = self.find_incidence_constraint(rep)?;
+        match self.entities[curve.0].entity_type {
+            EntityType::Line => self.sample_point_on_line(curve, vars, cache),
+            EntityType::Circle => self.sample_point_on_circle(curve, vars, cache),
+            _ => None,
+        }
+    }
+
+    /// 🌟 numeric_plausibility_check用に、祖先の自由点それぞれへ座標を割り当てる。
+    /// 構造的前提を持たない自由点には単純な乱数座標を、持つ自由点にはその前提
+    /// (直線/円の上にあること)を実際に満たす座標を割り当てる。前提を満たす
+    /// 座標は、前提の相手(直線/円)が依存する自由点の座標が先に決まっている
+    /// 必要があるため、複数パスで「計算できるものから確定させる」不動点反復を
+    /// 行う。全ての制約点を解決できればtrue、対応できない構造的前提や
+    /// 循環依存が残ればfalseを返す(呼び出し側は判定不能(None)に倒すこと)。
+    fn assign_free_point_coords(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>) -> bool {
+        let mut pending: Vec<ClassId> = Vec::new();
+        for &fp in ancestors {
+            if self.has_extraneous_incidence(fp) {
+                pending.push(fp);
+            } else {
+                let name = self.entities[fp.0].name.clone();
+                vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
+                vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
+            }
+        }
+
+        let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+        loop {
+            if pending.is_empty() { return true; }
+            let mut progressed = false;
+            let mut still_pending = Vec::new();
+            for fp in pending.drain(..) {
+                match self.sample_point_on_constraint(fp, vars, &mut cache) {
+                    Some((x, y)) => {
+                        let name = self.entities[fp.0].name.clone();
+                        vars.insert(format!("{}_x", name), x);
+                        vars.insert(format!("{}_y", name), y);
+                        progressed = true;
+                    }
+                    None => still_pending.push(fp),
+                }
+            }
+            pending = still_pending;
+            if !progressed { return false; }
+        }
+    }
+
     /// 🌟 idの祖先(Definitionの親を再帰的に辿った先)にあるFreePointを全て集める。
     /// 定数(GivenPoint)はそこで打ち切る(座標を持たないので祖先探索の対象外)。
     /// マージ後は1つのエンティティが複数のDefinitionを持ち得るので、
@@ -286,29 +446,22 @@ impl EGraph {
         // 本来満たすべき構造的な前提を満たさない具体例になってしまい、この
         // 健全性チェックが正しいマージまで誤って却下してしまう
         // (miquel/two_circles_reimで実際に発生した)。
-        // a, b それぞれの祖先(依存する図形)だけを辿り、そこに構造的前提を持つ
-        // FreePointが1つでもあれば、この特定の比較だけを信用せずNone
-        // (判定不能)を返す。グラフ全体を見て一律に諦めるのではなく、
-        // 実際にa, bの値に影響し得る範囲だけで判断することで、無関係な箇所に
-        // 構造的前提があるだけの他のケース(orthocenter問題など)では
-        // 引き続きチェックが働くようにしている。
+        // 以前はここでNone(判定不能)を返して検証そのものを諦めていたが、
+        // 現在はassign_free_point_coordsが、構造的前提を持つ自由点には
+        // その前提(直線/円の上にあること)を実際に満たす座標をサンプリングする
+        // (sample_point_on_line/sample_point_on_circle)。前提を満たす座標を
+        // 組み立てられなかった場合(未対応の前提や循環依存)だけ、従来通り
+        // Noneに倒す。
         let mut visited = HashSet::new();
         let mut ancestors = Vec::new();
         self.collect_free_point_ancestors(a, &mut visited, &mut ancestors);
         self.collect_free_point_ancestors(b, &mut visited, &mut ancestors);
-
-        let has_structurally_constrained_free_point = ancestors.iter().any(|&fp| self.has_extraneous_incidence(fp));
-        if has_structurally_constrained_free_point { return None; }
-
-        let free_point_names: Vec<String> = ancestors.iter().map(|&fp| self.entities[fp.0].name.clone()).collect();
-        if free_point_names.is_empty() { return None; }
+        if ancestors.is_empty() { return None; }
 
         for _ in 0..trials {
             let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
-            for name in &free_point_names {
-                vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
-                vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
-            }
+            if !self.assign_free_point_coords(&ancestors, &mut vars) { return None; }
+
             let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
             match (self.evaluate_node(a, &vars, &mut cache), self.evaluate_node(b, &vars, &mut cache)) {
                 (Some(va), Some(vb)) => {

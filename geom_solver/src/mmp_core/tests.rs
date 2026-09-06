@@ -272,3 +272,77 @@ fn test_harmonic_conjugate_is_an_involution() {
     let &swap_id = egraph.memo.get(&swap_def).expect("ペア交換の像も既にmemoに登録済みのはず");
     assert_eq!(egraph.get_rep(swap_id), egraph.get_rep(b), "(A,B;C,D)=-1 ⟹ (C,D;A,B)=-1 つまり H(C,D,A)=B であるべき");
 }
+
+/// 🌟 numeric_plausibility_checkが、直線への構造的前提(link_logical_incidenceだけ
+/// による接続、自身のDefinitionからは自然に従わないもの)を持つ自由点についても、
+/// 以前のように問答無用でNone(判定不能)に倒すのではなく、実際にその前提を
+/// 満たす座標をサンプリングして検証を続けられることを確認する。
+#[test]
+fn test_numeric_check_samples_consistent_point_on_line() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let line_ab = egraph.create_entity("L_AB".into(), Definition::new_line(a, b), EntityType::Line);
+
+    // QはFreePointのまま(定義上はL_ABと無関係)だが、「L_AB上にある」という
+    // 前提だけをlink_logical_incidenceで直接与える(simson.rs等と同じパターン)。
+    let q = egraph.create_entity("Q".into(), Definition::FreePoint, EntityType::Point);
+    egraph.link_logical_incidence(q, line_ab);
+
+    // AとQを通る直線は、Qが本当にL_AB上にあるなら幾何学的に必ずL_ABそのものになる。
+    let line_aq = egraph.create_entity("L_AQ".into(), Definition::new_line(a, q), EntityType::Line);
+
+    // 🐛 以前の実装: has_extraneous_incidence(q) が真になるため、この比較は
+    // 問答無用でNone(判定不能)を返していた。現在はQに「L_AB上にある」という
+    // 前提を満たす座標を実際にサンプリングして検証できるので、Some(true)が返るべき。
+    assert_eq!(
+        egraph.numeric_plausibility_check(line_ab, line_aq, 5),
+        Some(true),
+        "Qが構造的にL_AB上にあるなら、L_AQはL_ABと数値的に一致するべき"
+    );
+
+    // 対照実験: 何の前提も無い(単なる自由点)Rを使うと、AとRを通る直線は
+    // 一般にL_ABとは別の直線になるはず(こちらは以前から動いていた既存の経路)。
+    let r = egraph.create_entity("R".into(), Definition::FreePoint, EntityType::Point);
+    let line_ar = egraph.create_entity("L_AR".into(), Definition::new_line(a, r), EntityType::Line);
+    assert_eq!(
+        egraph.numeric_plausibility_check(line_ab, line_ar, 5),
+        Some(false),
+        "何の前提も無い自由点Rを通る直線は、一般にL_ABとは数値的に別の直線であるべき"
+    );
+}
+
+/// 🌟 同様に、円への構造的前提を持つ自由点についても座標をサンプリングして
+/// 検証を続けられることを確認する(sample_point_on_circle)。
+#[test]
+fn test_numeric_check_samples_consistent_point_on_circle() {
+    let mut egraph = EGraph::new();
+    let p1 = egraph.create_entity("P1".into(), Definition::FreePoint, EntityType::Point);
+    let p2 = egraph.create_entity("P2".into(), Definition::FreePoint, EntityType::Point);
+    let p3 = egraph.create_entity("P3".into(), Definition::FreePoint, EntityType::Point);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(p1, p2, p3), EntityType::Circle);
+
+    // QはFreePointのまま(定義上はCircと無関係)だが、「Circ上にある」という
+    // 前提だけをlink_logical_incidenceで直接与える(simson.rs/cyclic_quad.rs等と同じ)。
+    let q = egraph.create_entity("Q".into(), Definition::FreePoint, EntityType::Point);
+    egraph.link_logical_incidence(q, circ);
+
+    // P1,P2,Qを通る外接円は、Qが本当にCirc上にあるなら幾何学的に必ずCircそのものになる
+    // (円は同一直線上にない3点で一意に決まるため)。
+    let circ2 = egraph.create_entity("Circ2".into(), Definition::Circumcircle(p1, p2, q), EntityType::Circle);
+
+    assert_eq!(
+        egraph.numeric_plausibility_check(circ, circ2, 5),
+        Some(true),
+        "QがCirc上にあるなら、P1,P2,Qを通る外接円はCircと数値的に一致するべき"
+    );
+
+    // 対照実験: 何の前提も無い自由点Rでは、P1,P2,Rを通る外接円は一般にCircとは別の円になる。
+    let r = egraph.create_entity("R".into(), Definition::FreePoint, EntityType::Point);
+    let circ3 = egraph.create_entity("Circ3".into(), Definition::Circumcircle(p1, p2, r), EntityType::Circle);
+    assert_eq!(
+        egraph.numeric_plausibility_check(circ, circ3, 5),
+        Some(false),
+        "何の前提も無い自由点Rを使った外接円は、一般にCircとは数値的に別の円であるべき"
+    );
+}
