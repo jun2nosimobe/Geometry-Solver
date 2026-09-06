@@ -177,7 +177,7 @@ impl MCTSSearchEngine {
         num_simulations: usize,
     ) -> bool {
         self.nodes.clear();
-        let root_actions = self.action_gen.get_possible_actions(egraph, false);
+        let root_actions = self.action_gen.get_possible_actions(egraph, false, target);
         if root_actions.is_empty() {
             println!("  🤖 [MCTS] 候補となる作図アクションが見つかりませんでした。");
             return false;
@@ -218,7 +218,7 @@ impl MCTSSearchEngine {
 
                 let depth = self.nodes[curr].depth + 1;
                 let untried = if depth < MAX_DEPTH && reward < 999.0 {
-                    self.action_gen.get_possible_actions(&sim_egraph, true)
+                    self.action_gen.get_possible_actions(&sim_egraph, true, target)
                 } else {
                     vec![]
                 };
@@ -239,7 +239,7 @@ impl MCTSSearchEngine {
                 let mut d = depth;
                 let mut found_target = reward >= 999.0;
                 while !found_target && d < MAX_DEPTH {
-                    let acts = self.action_gen.get_possible_actions(&sim_egraph, true);
+                    let acts = self.action_gen.get_possible_actions(&sim_egraph, true, target);
                     if acts.is_empty() { break; }
                     let pick = (rand::random::<u32>() as usize) % acts.len();
                     let a = acts[pick].clone();
