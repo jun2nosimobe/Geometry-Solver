@@ -89,12 +89,49 @@ pub struct MatchTask {
     // 🌟 Rc化: タスクの複製・再キュー時に Vec<Pattern> をディープコピーせず、
     // ポインタ共有だけで済ませる(パターン列自体は不変なので安全)
     pub remaining_patterns: Rc<Vec<crate::logic_core::Pattern>>,
+    // 🌟 UCB1バンディット用: このタスクが schedule_matcher_task 由来の
+    // シード済みタスク(発見済みの事実から変数の多くを具体的に束縛済み、
+    // 速く失敗/成功する)か、schedule_full_sweep 由来のシードなしタスク
+    // (変数が全て未束縛、定理によっては膨大な探索の末にしか成否が
+    // 分からない)かを区別する。priorityはcap到達時のペナルティで
+    // 実行中に減算されて変動するため、"どちらの経路で生まれたか"という
+    // 由来はpriorityの値から逆算せず、この専用フラグで明示的に持つ。
+    // バンディット統計(TheoremBanditStats)はシードなしタスクの成否だけを
+    // 学習対象にする(シード済みタスクは既に高確率で成功するとわかっている
+    // 別種の試行なので、混ぜると「シードでよく呼ばれるが素の全探索では
+    // ほぼ失敗する定理」の見込みスコアを不当に引き上げてしまう)。
+    pub is_seeded: bool,
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
 impl Eq for MatchTask {}
 impl PartialOrd for MatchTask { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
 impl Ord for MatchTask { fn cmp(&self, other: &Self) -> Ordering { self.priority.cmp(&other.priority) } }
+
+/// 🌟 定理マッチングのUCB1バンディット統計。theorem_idxごとに、
+/// schedule_full_sweep由来のシードなしタスクを実際にdfs_matchまで走らせた
+/// 回数(attempts)と、そのうち少なくとも1つの結論を実際に適用できた
+/// 回数(successes)を数える。「有向角の加法性」のように変数が多く、
+/// シードなし状態からだと(成功するにせよ失敗するにせよ)dfs_cap一杯まで
+/// 巨大な探索を要する定理を、経験的な成功率が低いと分かった時点で
+/// 自動的に後回しにできるようにするための土台。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TheoremBanditStats {
+    pub attempts: u64,
+    pub successes: u64,
+}
+
+impl TheoremBanditStats {
+    /// UCB1スコア = 経験的成功率 + 探索ボーナス。一度も試していない定理は
+    /// 常に無限大を返し、必ず一度は(素の全探索からでも)試されるようにする
+    /// (標準的なUCB1の初期化: 全アームを1回ずつ引いてから本題に入る)。
+    fn ucb1_score(&self, total_attempts: u64, exploration_c: f64) -> f64 {
+        if self.attempts == 0 { return f64::INFINITY; }
+        let mean = self.successes as f64 / self.attempts as f64;
+        let bonus = exploration_c * ((total_attempts.max(1) as f64).ln() / self.attempts as f64).sqrt();
+        mean + bonus
+    }
+}
 
 pub struct ProverEngine {
     pub egraph: EGraph,
@@ -115,6 +152,11 @@ pub struct ProverEngine {
     // 上限は据え置き、シードなしタスクだけ上限を大幅に下げて早期に諦めさせる。
     pub dfs_cap: u64,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>, // 🌟 Blackboardから移動
+    // 🌟 UCB1バンディット統計。theorems と同じインデックス(theorem_idx)で
+    // 引く。theoremsはProverEngine::new後にmain.rs側で流し込まれるため、
+    // ここでは空のまま初期化し、実際に使う直前にensure_theorem_statsで
+    // theorems.len()に合わせてリサイズする。
+    pub theorem_stats: Vec<TheoremBanditStats>,
 }
 
 impl ProverEngine {
@@ -126,6 +168,40 @@ impl ProverEngine {
             dfs_calls: 0,
             dfs_cap: 100_000,
             construction_demands: FxHashMap::default(), // 🌟 追加
+            theorem_stats: Vec::new(),
+        }
+    }
+
+    fn ensure_theorem_stats(&mut self) {
+        if self.theorem_stats.len() != self.theorems.len() {
+            self.theorem_stats.resize(self.theorems.len(), TheoremBanditStats::default());
+        }
+    }
+
+    /// 🌟 UCB1スコアを MatchTask.priority (i32) に足し込める小さな整数
+    /// ボーナスに変換する。schedule_matcher_task由来のシード済みタスク
+    /// (priority=10)よりは必ず低くなるレンジ(-5..=5)にクランプすることで、
+    /// 「発見済みの事実に基づく具体的な一手」を常に最優先しつつ、
+    /// 同格のシードなし全探索タスクどうしの中では経験的に見込みの高い
+    /// 定理から先に試せるようにする。
+    pub fn theorem_priority_bonus(&mut self, idx: usize) -> i32 {
+        self.ensure_theorem_stats();
+        if idx >= self.theorem_stats.len() { return 0; }
+        let total: u64 = self.theorem_stats.iter().map(|s| s.attempts).sum();
+        let score = self.theorem_stats[idx].ucb1_score(total, 1.0);
+        if !score.is_finite() { return 5; } // 未試行の定理は最優先で一度試す
+        ((score * 5.0).round() as i32).clamp(-5, 5)
+    }
+
+    /// 🌟 schedule_full_sweep由来のシードなしタスクを実際にdfs_matchまで
+    /// 走らせた結果(少なくとも1つの結論を適用できたか)をバンディット統計に
+    /// 反映する。シード済みタスク(is_seeded=true)はここでは記録しない
+    /// (MatchTask::is_seededのドキュメント参照)。
+    pub fn record_theorem_attempt(&mut self, idx: usize, succeeded: bool) {
+        self.ensure_theorem_stats();
+        if let Some(stats) = self.theorem_stats.get_mut(idx) {
+            stats.attempts += 1;
+            if succeeded { stats.successes += 1; }
         }
     }
     fn calc_bind_heat(&self, bind: &Bind) -> f64 {
@@ -1034,12 +1110,25 @@ impl BlackboardEngine {
     }
 
     pub fn schedule_full_sweep(&mut self) {
-        // 🌟 FIX: シード注入済みの優先タスク(priority > 0)は消さずに保持する！
+        // 🌟 FIX: シード注入済みのタスクは消さずに保持する!
+        // 🐛 以前は「priority > 0」で判定していたが、UCB1バンディットの
+        // 導入でシードなしタスクの優先度も +5 まで上がり得るようになったため、
+        // priorityの値ではなく専用フラグ(is_seeded)で由来を判定する。
         let mut keep = Vec::new();
         for task in self.task_queue.drain() {
-            if task.priority > 0 { keep.push(task); }
+            if task.is_seeded { keep.push(task); }
         }
         self.task_queue = BinaryHeap::from(keep);
+
+        // 🌟 UCB1バンディット: シードなし全探索タスクどうしの優先度を、
+        // これまでの経験的な成功率(+探索ボーナス)で差別化する。
+        // self.prover.theorems.iter() で theorems を借用したまま
+        // self.prover.theorem_priority_bonus(&mut self.prover) は呼べない
+        // (借用の競合)ため、先にインデックスごとの優先度だけを計算しておく。
+        let theorem_count = self.prover.theorems.len();
+        let priorities: Vec<i32> = (0..theorem_count)
+            .map(|idx| self.prover.theorem_priority_bonus(idx))
+            .collect();
 
         for (idx, theorem) in self.prover.theorems.iter().enumerate() {
             let mut initial_bind = Bind::new();
@@ -1047,11 +1136,12 @@ impl BlackboardEngine {
             initial_bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
 
             self.task_queue.push(MatchTask {
-                priority: 0,
+                priority: priorities[idx],
                 theorem_idx: idx,
                 bind: initial_bind,
                 flip_states: FlipStates::new(),
-                remaining_patterns: Rc::new(theorem.patterns.clone()) 
+                remaining_patterns: Rc::new(theorem.patterns.clone()),
+                is_seeded: false,
             });
         }
     }
@@ -1093,6 +1183,7 @@ impl BlackboardEngine {
                                 bind,
                                 flip_states: FlipStates::new(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
+                                is_seeded: true,
                             });
                         }
                     }
@@ -1129,7 +1220,12 @@ impl BlackboardEngine {
 
             if let Some(mut task) = self.task_queue.pop() {
                 calls += 1;
-                self.prover.dfs_calls = 0; 
+                self.prover.dfs_calls = 0;
+                // 🌟 task はcap到達時に self.task_queue.push(task) で再キューされ
+                // 得るため(move)、後段のバンディット記録で使うフィールドは
+                // Copy型としてここで先に控えておく。
+                let task_theorem_idx = task.theorem_idx;
+                let task_is_seeded = task.is_seeded;
                 // 🌟 theorems は Vec<Rc<TheoremDef>> なので、この clone() はもう
                 // ディープコピーではなく参照カウントのインクリメントのみ(ポインタコピー相当)
                 let theorem = self.prover.theorems[task.theorem_idx].clone();
@@ -1173,6 +1269,12 @@ impl BlackboardEngine {
                     }
                 }
 
+                // 🌟 UCB1バンディット: このタスク(1回のdfs_match呼び出し)が
+                // 実際に何か結論を適用できたかどうかを、シードなしタスクに限って
+                // theorem_statsに反映する。「試したが何も生まなかった」も
+                // 立派な学習対象(失敗)である。
+                let mut task_succeeded = false;
+
                 for (mut bind, flips) in new_binds {
                     // 🌟 1. まず現在のE-Graphの状態で、この結論がすでに満たされているかチェックする
                     if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) {
@@ -1181,7 +1283,7 @@ impl BlackboardEngine {
 
                     // 🌟 2. 結論が満たされていない場合のみ、足りない図形を作図する
                     if self.prover.execute_constructions(&theorem.name, &theorem.constructions, &mut bind) {
-                        
+
                         // 🌟 3. 作図後、もう一度チェック。ここで真になるなら「作図しただけでマージ済み」なのでスキップ
                         if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) {
                             continue;
@@ -1197,10 +1299,15 @@ impl BlackboardEngine {
                         let (applied, generated_facts) = self.prover.apply_conclusions(&theorem, &bind, &flips);
                         if applied {
                             applied_anything = true;
-                            self.emit(Event::NodeMerged); 
+                            task_succeeded = true;
+                            self.emit(Event::NodeMerged);
                             for f in generated_facts { self.emit(Event::FactProven(f)); }
                         }
                     }
+                }
+
+                if !task_is_seeded {
+                    self.prover.record_theorem_attempt(task_theorem_idx, task_succeeded);
                 }
             } else { break; }
         }
