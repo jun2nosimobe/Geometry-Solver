@@ -127,16 +127,34 @@ impl ProverEngine {
         heat
     }
 
-    fn estimate_cost(&self, pat: &Pattern, bind: &FxHashMap<String, ClassId>) -> f64 {
+    fn estimate_cost(&self, pat: &Pattern, bind: &FxHashMap<String, ClassId>, theorem: &TheoremDef) -> f64 {
         match pat {
             Pattern::Fact(def) => {
                 let unbound_count = def.args.iter().filter(|v| !bind.contains_key(*v)).count();
                 if unbound_count == 0 { return 0.0; }
-                
+
                 let base_cost = if def.fact_type == "Identical" {
                     if unbound_count == 1 { 1.0 } else { 15.0 }
                 } else if def.fact_type == "Connected" {
-                    if unbound_count == 1 { 5.0 } else { 10000.0 }
+                    if unbound_count == 1 { 5.0 } else {
+                        // 🐛 FIX: 以前は両方未束縛のConnectedを「(None,None)は何もしない」
+                        // 前提でコスト10000(=事実上最後回し)にしていたが、(None,None)を
+                        // きちんと実装した今は「親の型で絞り込んだ局所探索」でしかない。
+                        // 固定値のままだと、円のように個体数が少ない型を親に持つ場合
+                        // (安く見積もるべき)と、点のように個体数が多い型を親に持つ場合
+                        // (高く見積もるべき)を区別できない。親変数の宣言型を引いて、
+                        // 実際にその型が今グラフに何個あるかで見積もる。
+                        let parent_var = &def.args[1];
+                        match theorem.entities.get(parent_var) {
+                            Some(&expected_type) => {
+                                let count = self.egraph.entities.iter()
+                                    .filter(|e| e.entity_type == expected_type)
+                                    .count();
+                                (count as f64) * 5.0 + 10.0
+                            }
+                            None => 10000.0, // 型情報すら無ければ従来通り最後回し
+                        }
+                    }
                 } else if def.fact_type == "DefinedBy" {
                     if unbound_count == def.args.len() { 
                         let penalty = match def.target_type.as_deref().unwrap_or("") {
@@ -149,8 +167,6 @@ impl ProverEngine {
                     } else {
                         10.0 + (unbound_count as f64) * 20.0
                     }
-                } else if def.fact_type == "Collinear" || def.fact_type == "Concyclic" {
-                    if unbound_count < def.args.len() { 5.0 } else { 10.0 }
                 } else {
                     100.0
                 };
@@ -170,7 +186,7 @@ impl ProverEngine {
             Pattern::Order(vars) | Pattern::Distinct(vars) => {
                 if vars.iter().any(|v| !bind.contains_key(v)) { std::f64::INFINITY } else { 0.0 }
             }
-            Pattern::Not(inner_pat) => self.estimate_cost(inner_pat, bind),
+            Pattern::Not(inner_pat) => self.estimate_cost(inner_pat, bind, theorem),
         }
     }
     
@@ -190,18 +206,6 @@ impl ProverEngine {
                             let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
                             if f1 != f2 { return false; }
                         }
-                    } else { return false; }
-                },
-                "Collinear" => {
-                    if let (Some(&a), Some(&b), Some(&c)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2])) {
-                        let fact = Fact::new_collinear(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c));
-                        if !self.facts.contains(&fact) { return false; }
-                    } else { return false; }
-                },
-                "Concyclic" => {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2]), bind.get(&conc.args[3])) {
-                        let fact = Fact::new_concyclic(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c), self.egraph.get_rep(d));
-                        if !self.facts.contains(&fact) { return false; }
                     } else { return false; }
                 },
                 "Connected" => {
@@ -266,7 +270,7 @@ impl ProverEngine {
         let mut best_idx = 0;
         let mut best_cost = std::f64::INFINITY;
         for (i, pat) in remaining.iter().enumerate() {
-            let cost = self.estimate_cost(pat, &bind);
+            let cost = self.estimate_cost(pat, &bind, theorem);
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
 
@@ -445,7 +449,45 @@ impl ProverEngine {
                             self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                         }
                     }
-                    _ => {}
+                    // 🐛 FIX: 以前は子・親どちらも未束縛の場合に何もせず候補ゼロで
+                    // 諦めていた(Concyclicを専用Factから「N点が同じ円にConnected」
+                    // という形に置き換えたことで、この分岐が実際に必要になり発覚した)。
+                    // 親の型(例:Circle)で絞り込み、各親候補についてはその親自身が
+                    // 繋がっている子(局所的で少数)だけを見る形で列挙する。
+                    (None, None) => {
+                        let mut parent_candidates: Vec<ClassId> = Vec::new();
+                        for i in 0..self.egraph.entities.len() {
+                            let p_id = ClassId(i);
+                            let p_rep = self.egraph.get_rep(p_id);
+                            if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                            if let Some(et) = expected_p_type {
+                                if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                            }
+                            parent_candidates.push(p_rep);
+                        }
+
+                        for p_rep in parent_candidates {
+                            let child_candidates: Vec<ClassId> = match self.egraph.entities[p_rep.0].components.first() {
+                                Some(comp) => comp.subobjects.iter()
+                                    .map(|&id| self.egraph.get_rep(id))
+                                    .filter(|&id| {
+                                        if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
+                                        match expected_c_type {
+                                            Some(et) => self.egraph.entities[id.0].entity_type == et,
+                                            None => true,
+                                        }
+                                    })
+                                    .collect(),
+                                None => vec![],
+                            };
+                            for c_rep in child_candidates {
+                                let mut next_bind = bind.clone();
+                                next_bind.insert(child_var.clone(), c_rep);
+                                next_bind.insert(parent_var.clone(), p_rep);
+                                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                            }
+                        }
+                    }
                 }
             },
             "DefinedBy" => {
@@ -756,45 +798,31 @@ impl ProverEngine {
                         }
                     }
                 }
-                "Collinear" => {
-                    if let (Some(&a), Some(&b), Some(&c)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2])) {
-                        let fact = Fact::new_collinear(self.egraph.get_rep(a), self.egraph.get_rep(b), self.egraph.get_rep(c));
-                        if !self.facts.contains(&fact) {
-                            self.facts.push(fact.clone());
-                            new_facts.push(fact);
-                            applied_anything = true;
-                        }
-                    }
-                },
-                "Concyclic" => {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1]), bind.get(&conc.args[2]), bind.get(&conc.args[3])) {
-                        let rep_a = self.egraph.get_rep(a);
-                        let rep_b = self.egraph.get_rep(b);
-                        let rep_c = self.egraph.get_rep(c);
-                        let rep_d = self.egraph.get_rep(d);
-                        let fact = Fact::new_concyclic(rep_a, rep_b, rep_c, rep_d);
-                        if !self.facts.contains(&fact) {
-                            self.facts.push(fact.clone());
-                            new_facts.push(fact);
-                            applied_anything = true;
-                            
-                            // 🌟 ヒューリスティック: 新発見に関わった図形の熱を上げる
-                            self.egraph.entities[rep_a.0].heat_bonus += 2.0;
-                            self.egraph.entities[rep_b.0].heat_bonus += 2.0;
-                            self.egraph.entities[rep_c.0].heat_bonus += 2.0;
-                            self.egraph.entities[rep_d.0].heat_bonus += 2.0;
-                        }
-                    }
-                },
                 // 🌟 FIX: Connected によるE-Graphの物理リンク構築を追加
+                // (Concyclic/Collinearを専用Factとして結論に持つのはやめ、
+                // 「N点が同じ円/直線にConnectedである」という形に統一した)
                 "Connected" => {
                     if let (Some(&child), Some(&parent)) = (bind.get(&conc.args[0]), bind.get(&conc.args[1])) {
                         let c_rep = self.egraph.get_rep(child);
                         let p_rep = self.egraph.get_rep(parent);
                         self.egraph.link_logical_incidence(c_rep, p_rep);
                         applied_anything = true;
-                        println!("  🟢 [リンク構築] {} ∈ {} (理由: {})", 
+                        println!("  🟢 [リンク構築] {} ∈ {} (理由: {})",
                             self.egraph.entities[c_rep.0].name, self.egraph.entities[p_rep.0].name, theorem_name);
+
+                        // 🐛 FIX: 以前はここでe-graphへの物理リンクを張るだけで、
+                        // Fact::Connected を一切生成・記録していなかった。そのため
+                        // schedule_matcher_task によるシード付き再マッチングが
+                        // 一度も起きず、この新しい接続に依存する他の定理(円周角の定理など)
+                        // が「シードなしの全探索(schedule_full_sweep)頼み」になって
+                        // 見逃されることがあった(miquelで実際に退行した)。
+                        // Identical/他のFactと同様にFactとして記録し、FactProvenイベント
+                        // 経由でシード付き再マッチングが起きるようにする。
+                        let fact = Fact::Connected(c_rep, p_rep);
+                        if !self.facts.contains(&fact) {
+                            self.facts.push(fact.clone());
+                            new_facts.push(fact);
+                        }
                     }
                 },
                 _ => {}
@@ -805,8 +833,6 @@ impl ProverEngine {
 
     fn get_fact_bindings(&self, theorem: &TheoremDef, fact: &Fact, fact_type: &str, args: &[String], current_bind: &FxHashMap<String, ClassId>) -> Vec<FxHashMap<String, ClassId>> {
         let (f_type, f_objs) = match fact {
-            Fact::Collinear(a, b, c) => ("Collinear", vec![*a, *b, *c]),
-            Fact::Concyclic(a, b, c, d) => ("Concyclic", vec![*a, *b, *c, *d]),
             Fact::Identical(a, b) => ("Identical", vec![*a, *b]),
             Fact::Connected(c, p) => ("Connected", vec![*c, *p]),
             Fact::Parallel(a, b) => ("Parallel", vec![*a, *b]),
@@ -825,7 +851,7 @@ impl ProverEngine {
             }
         }
 
-        let is_unordered = f_type == "Collinear" || f_type == "Concyclic" || f_type == "Identical";
+        let is_unordered = f_type == "Identical";
         let perms = if is_unordered { get_permutations(&f_objs) } else { vec![f_objs.clone()] };
 
         let mut matches = Vec::new();
@@ -894,8 +920,6 @@ impl BlackboardEngine {
 
     fn schedule_matcher_task(&mut self, fact: &Fact) {
         let (fact_type, fact_objs) = match fact {
-            Fact::Collinear(a, b, c) => ("Collinear", vec![*a, *b, *c]),
-            Fact::Concyclic(a, b, c, d) => ("Concyclic", vec![*a, *b, *c, *d]),
             Fact::Identical(a, b) => ("Identical", vec![*a, *b]),
             Fact::Connected(c, p) => ("Connected", vec![*c, *p]),
             Fact::Parallel(a, b) => ("Parallel", vec![*a, *b]),
@@ -910,7 +934,7 @@ impl BlackboardEngine {
                         // 発見された事実のオブジェクトの順列を作り、変数を事前バインド（シード化）する
                         let perms = match fact_type {
                             "Connected" => vec![fact_objs.clone()], // 有向関係なので順列なし
-                            _ => get_permutations(&fact_objs),      // Identical, Collinear, Concyclic 等は全順列
+                            _ => get_permutations(&fact_objs),      // Identical 等は全順列
                         };
 
                         for perm in perms {

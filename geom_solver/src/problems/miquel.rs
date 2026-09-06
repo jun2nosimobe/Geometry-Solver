@@ -1,6 +1,5 @@
 use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
-use crate::problems::Fact;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     println!("=== 問題: ミケルの定理 ===");
@@ -29,14 +28,14 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     
     egraph.apply_congruence_closure();
     
+    // 🌟 以前はB,D,Cの共線やA,M,E,F/B,M,D,Fの共円を専用Factとして明示的に
+    // 登録していたが、共線はどの定理からも参照されておらず不要だった。
+    // 共円もCircumcircleの定義とlink_logical_incidenceによる構造的な接続
+    // (a,e,fはCircAEFの定義から、b,f,dはCircBFDの定義から、Mは上のlink_logical_incidence
+    // から)だけで「円周角の定理」のConnectedベースの前提を満たすので、
+    // 別途Factを登録する必要が無くなった。
     ProblemSetup {
         target_fact: Some(("Concyclic".to_string(), vec![m, c, d, e])),
-        initial_facts: vec![
-            Fact::new_collinear(b, d, c),
-            Fact::new_collinear(c, e, a),
-            Fact::new_collinear(a, f, b),
-            Fact::new_concyclic(a, m, e, f), // 🌟 明示的に共円を登録
-            Fact::new_concyclic(b, m, d, f),
-        ],
+        initial_facts: vec![],
     }
 }

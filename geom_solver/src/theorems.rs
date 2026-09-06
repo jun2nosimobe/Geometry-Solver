@@ -46,6 +46,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("Apex1", EntityType::Point), ("Apex2", EntityType::Point),
                 ("Base1", EntityType::Point), ("Base2", EntityType::Point),
+                ("Circ", EntityType::Circle),
                 ("L_A1_B1", EntityType::Line), ("L_A1_B2", EntityType::Line),
                 ("L_A2_B1", EntityType::Line), ("L_A2_B2", EntityType::Line),
                 ("Dir_A1_B1", EntityType::Direction), ("Dir_A1_B2", EntityType::Direction),
@@ -53,7 +54,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
-                fact_ext("Concyclic", &["Apex1", "Apex2", "Base1", "Base2"], Some("Unordered"), None, false, None),
+                // 🌟 Concyclicという専用Factをやめ、「4点が同じ円Circに乗っている」を
+                // Connectedの4連続で表す。link_logical_incidenceによる構造的な接続
+                // だけで十分になり、専用Factの登録忘れバグが起きなくなる。
+                fact_ext("Connected", &["Apex1", "Circ"], None, None, false, None),
+                fact_ext("Connected", &["Apex2", "Circ"], None, None, false, None),
+                fact_ext("Connected", &["Base1", "Circ"], None, None, false, None),
+                fact_ext("Connected", &["Base2", "Circ"], None, None, false, None),
                 distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
                 
                 // 🌟 FIX: Connected から DefinedBy に変更し、作図需要(Demand)を発生させる
@@ -311,6 +318,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
                 ("P_Apex1", EntityType::Point), ("P_Apex2", EntityType::Point),
                 ("P_Base1", EntityType::Point), ("P_Base2", EntityType::Point),
+                ("Circ_New", EntityType::Circle),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
@@ -333,8 +341,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 fact_ext("Connected", &["P_Base2", "L4"], Some("Line"), Some("Point"), false, None),
                 distinct(&["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"]),
             ],
-            constructions: vec![],
-            conclusions: vec![FactTemplate { fact_type: "Concyclic".to_string(), args: vec!["P_Apex1".to_string(), "P_Apex2".to_string(), "P_Base1".to_string(), "P_Base2".to_string()], target_type: Some("Circle".to_string()), sub_type: None }],
+            // 🌟 Concyclicという専用Factで結論するのをやめ、P_Apex1,P_Base1,P_Base2
+            // を通る円を作図し、P_Apex2もその円にConnectedである、という形で結論する。
+            // (4点は対称な関係なので、どの3点を作図に使っても良い)
+            constructions: vec![
+                ConstructTemplate { def_type: "Circumcircle".to_string(), args: vec!["P_Apex1".to_string(), "P_Base1".to_string(), "P_Base2".to_string()], target_type: "Circle".to_string(), bind_to: "Circ_New".to_string() },
+            ],
+            conclusions: vec![FactTemplate { fact_type: "Connected".to_string(), args: vec!["P_Apex2".to_string(), "Circ_New".to_string()], target_type: Some("Circle".to_string()), sub_type: None }],
         },
         // ==========================================
         // 同位角による平行判定 (右共通 / 左共通)[cite: 6]

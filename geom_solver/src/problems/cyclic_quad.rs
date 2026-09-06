@@ -1,6 +1,5 @@
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
-use crate::problems::Fact;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     println!("=== 問題: 円に内接する四角形 (円周角の連鎖) ===");
@@ -14,9 +13,9 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     // 円を作図し、点A,B,C,Dが同一円周上にあるとする
     let circ = egraph.create_entity("Circ".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
     egraph.link_logical_incidence(d, circ); // Dも同じ円に乗せる
-    // 🐛 バグ修正: link_logical_incidence だけでは「円周角の定理」が要求する
-    // Fact::Concyclic が生成されず、この定理が一度も発火しなかった(simsonと同種のバグ)。
-    // A,B,C,Dが共円であるという仮定を明示的にFactとして登録する。
+    // 🌟 「円周角の定理」はConnected(点,円)の4連続で共円を判定するので、
+    // A,B,C(Circumcircleの定義から自動リンク)とD(ここでリンク)が
+    // 同じ円に乗っているという構造的な接続だけで発火するようになった。
 
     // 対角線 AC, BD を引く
     let l_ac = egraph.create_entity("L_AC".to_string(), Definition::new_line(a, c), EntityType::Line);
@@ -39,8 +38,6 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     ProblemSetup {
         target_fact: Some(("Identical".to_string(), vec![ang1, ang2])),
-        initial_facts: vec![
-            Fact::new_concyclic(a, b, c, d),
-        ],
+        initial_facts: vec![],
     }
 }

@@ -71,12 +71,10 @@ fn main() {
                     break;
                 }
             } else if fact_type == "Concyclic" {
-                let r1 = engine.prover.egraph.get_rep(target_args[0]);
-                let r2 = engine.prover.egraph.get_rep(target_args[1]);
-                let r3 = engine.prover.egraph.get_rep(target_args[2]);
-                let r4 = engine.prover.egraph.get_rep(target_args[3]);
-                let fact = crate::mmp_core::Fact::new_concyclic(r1, r2, r3, r4);
-                if engine.prover.facts.contains(&fact) {
+                // 🌟 Concyclicは専用Factをやめたので、target_argsの全点が
+                // 共通の円にConnectedかどうかで判定する。
+                let reps: Vec<_> = target_args.iter().map(|&id| engine.prover.egraph.get_rep(id)).collect();
+                if engine.prover.egraph.points_share_a_circle(&reps) {
                     println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
                     break;
                 }

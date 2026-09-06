@@ -1,6 +1,5 @@
 use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
-use crate::problems::Fact;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     println!("=== 問題: シムソンの定理 ===");
@@ -15,13 +14,10 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let circ_abc = egraph.create_entity("Circum_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
     let p = egraph.create_entity("P".to_string(), Definition::FreePoint, EntityType::Point);
     egraph.link_logical_incidence(p, circ_abc);
-    // 🐛 バグ修正: link_logical_incidence は「PがCircum_ABC上にある」という構造的な
-    // 接続情報を作るだけで、「円周角の定理」がまず要求する Fact::Concyclic を
-    // 生成しない。そのため A,B,C,P が Concyclic であるという最も基本的な仮定が
-    // 一度もFactとして登録されず、この与えられた外接円に対して「円周角の定理」が
-    // 一度も(リーチにすら)発火していなかった。miquel.rs 等の他の問題では
-    // 円の交点から生じるConcyclicを initial_facts で明示的に登録しており、
-    // simsonでも同様に「Pは外接円ABC上にある」という仮定を事実として明示する。
+    // 🌟 「円周角の定理」はConnected(点,円)の4連続で共円を判定するようになったので、
+    // A,B,C(Circumcircleの定義から自動でリンクされる)とP(ここでlink_logical_incidence
+    // したことでリンクされる)が同じ円に乗っているという構造的な接続だけで十分になった。
+    // 以前は専用のFact::Concyclicを別途登録しないと発火しないバグがあった。
     
     let perp_d = egraph.create_entity("Perp_P_BC".to_string(), Definition::PerpendicularLine(line_bc, p), EntityType::Line);
     let d = egraph.create_entity("D".to_string(), Definition::Intersection(line_bc, perp_d), EntityType::Point);
@@ -42,8 +38,6 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     
     ProblemSetup {
         target_fact: Some(("Identical".to_string(), vec![dir_de, dir_fd])),
-        initial_facts: vec![
-            Fact::new_concyclic(a, b, c, p), // 🌟 Pが外接円ABC上にあるという仮定を明示的に登録
-        ],
+        initial_facts: vec![],
     }
 }

@@ -175,29 +175,20 @@ pub struct GeoEntity {
 
 
 
+// 🌟 Concyclic/Collinear は専用のFact型として持つのをやめた。
+// 「N点が同じ円/直線に乗っている」ことは、各点をその円/直線に
+// link_logical_incidence で構造的につなぐだけで既に表現できており
+// (Connected述語で汎用的に問い合わせられる)、別建てのN項Factとして
+// 二重に記録・維持する必要がなかった。実際、記録し忘れるバグの温床にも
+// なっていた(simson/cyclic_quadで発生)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Fact {
-    Collinear(ClassId, ClassId, ClassId),
-    Concyclic(ClassId, ClassId, ClassId, ClassId),
     Identical(ClassId, ClassId),
     Connected(ClassId, ClassId), // (Child, Parent)
     Parallel(ClassId, ClassId),
 }
 
 impl Fact {
-    // 🌟 コンストラクタでID順にソートし、24通りの順列爆発をO(1)で完全に刈り取る
-    pub fn new_concyclic(mut a: ClassId, mut b: ClassId, mut c: ClassId, mut d: ClassId) -> Self {
-        let mut arr = [a.0, b.0, c.0, d.0];
-        arr.sort_unstable();
-        Fact::Concyclic(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]), ClassId(arr[3]))
-    }
-
-    pub fn new_collinear(mut a: ClassId, mut b: ClassId, mut c: ClassId) -> Self {
-        let mut arr = [a.0, b.0, c.0];
-        arr.sort_unstable();
-        Fact::Collinear(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
-    }
-
     pub fn new_identical(mut a: ClassId, mut b: ClassId) -> Self {
         if a.0 > b.0 { std::mem::swap(&mut a, &mut b); }
         Fact::Identical(a, b)
@@ -692,6 +683,22 @@ impl EGraph {
         }
         for comp in &self.entities[r2.0].components {
             if comp.subobjects.iter().any(|&s| self.get_rep(s) == r1) { return true; }
+        }
+        false
+    }
+
+    /// 🌟 points に含まれる全ての点が乗っている共通の円が存在するかを判定する。
+    /// Concyclicを専用Factで持たなくなったので、目標判定などでこれを使う。
+    /// 円の数は通常ごく少数なので、全円を舐めても軽い。
+    pub fn points_share_a_circle(&self, points: &[ClassId]) -> bool {
+        if points.is_empty() { return false; }
+        for i in 0..self.entities.len() {
+            let cand = ClassId(i);
+            if self.get_rep(cand) != cand { continue; }
+            if self.entities[i].entity_type != EntityType::Circle { continue; }
+            if points.iter().all(|&p| self.is_connected(p, cand)) {
+                return true;
+            }
         }
         false
     }
