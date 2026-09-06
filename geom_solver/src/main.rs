@@ -22,11 +22,24 @@ fn main() {
     } else {
         "cyclic_quad" // 引数がない場合のデフォルト
     };
+    // 🌟 MCTSはデフォルトでは無効(--mctsで明示的に有効化)。
+    // 理由: MCTSの実験中、propagate_line_uniqueness/propagate_point_uniqueness
+    // (「2直線が2点を共有していれば同一とみなす」等の局所ショートカット)が、
+    // MCTSの無方向な探索が持ち込む偶然の一致の連鎖によって、本来別々であるべき
+    // 直線(例:三角形の辺と、それとは無関係な頂点からの垂線)を誤って同一視して
+    // しまうケースが実際に見つかった(orthocenter問題)。この時、証明目標の
+    // 結論自体が(垂心の存在のように)常に真である定理だと、数値サニティチェック
+    // (sanity_check_identical)でも「たまたま正しい値に一致してしまう」ため
+    // 検出できず、誤った推論経路のまま「証明成立」と表示されてしまう。
+    // これはpropagate_line_uniqueness/point_uniqueness自体に数値的な裏付け
+    // チェックを組み込む、より踏み込んだ修正が必要な既知の課題であり、
+    // 現状の実装のままデフォルトで自動的に使うのは安全とは言えないと判断した。
+    let use_mcts = args.iter().any(|a| a == "--mcts");
 
     println!("🚀 幾何ソルバーを起動します (対象問題: {})", problem_name);
 
     let mut egraph = EGraph::new();
-    let _tester = MMPTester::new();
+    let tester = MMPTester::new();
 
     // コマンドライン引数で問題を動的にロード
     let problem = problems::load_problem(problem_name, &mut egraph);
@@ -36,10 +49,15 @@ fn main() {
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
     prover.theorems = theorems::get_all_theorems().into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
-    // 🌟 MCTSは現状ほぼ使われておらず、しかもe-graph全体を毎回cloneするだけで
-    // 実際のロールアウト評価をしていない(スコア固定)ため、性能検証のあいだ一旦無効化する。
-    // TODO: e-graphをcloneしないクローンフリーな実装に書き換えてから再有効化する。
-    let mut _mcts = MCTSSearchEngine::new();
+    // 🌟 MCTSを再有効化。以前は実際のロールアウト評価をせずスコア固定
+    // (=常に1.0)だったが、合同閉包による実際のマージ数と、構造的な
+    // ヒューリスティック(次数・作図の種類・目標への近さ)による本物の
+    // 報酬関数に置き換えた。DFSマッチャー+需要駆動の補助線(resolve_demands/
+    // resolve_angle_demands)の両方が手詰まりになった時の最後の手段としてのみ
+    // 使う(まだe-graph全体をcloneする実装のままなので、呼び出し頻度は絞る)。
+    let mut mcts = MCTSSearchEngine::new();
+    let mut mcts_consecutive_failures = 0;
+    const MCTS_MAX_CONSECUTIVE_FAILURES: usize = 3;
     
     for fact in &problem.initial_facts {
         match fact {
@@ -67,12 +85,34 @@ fn main() {
                 let r1 = engine.prover.egraph.get_rep(target_args[0]);
                 let r2 = engine.prover.egraph.get_rep(target_args[1]);
                 if r1 == r2 {
-                    println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
-                    break;
+                    // 🌟 最終防衛ライン: propagate_line_uniqueness/propagate_point_uniqueness の
+                    // 「十分な数の接続関係を共有していれば同一とみなす」ショートカットは、
+                    // MCTSのような「とりあえず作ってみる」式の構成を大量に試すと、
+                    // 噛み合わせの偶然だけで図形全体が退化(例:三角形の3辺が同一直線に潰れる)し、
+                    // 目標の等式が「矛盾からは何でも従う」形で偽陽性になることがある
+                    // (実際にMCTS導入直後、orthocenterでこれが発生した)。
+                    // 座標を持たない有向角(Ang90など)ベースの証明はNone(判定不能)を返すので、
+                    // その場合は従来通り構造的な証明をそのまま信用する。
+                    match tester.sanity_check_identical(&engine.prover.egraph, target_args[0], target_args[1], 3) {
+                        Some(false) => {
+                            println!("🚨 [数値サニティチェック失敗] {} ≡ {} は構造的にはマージされましたが、ランダムな具体例では成り立ちません。",
+                                engine.prover.egraph.entities[r1.0].name, engine.prover.egraph.entities[r2.0].name);
+                            println!("    -> どこかの局所マージ(直線/点の一意性判定)が本来無関係な図形を誤って結合した可能性が高く、証明成立とは認めません。探索を打ち切ります。");
+                            break;
+                        }
+                        _ => {
+                            println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                            break;
+                        }
+                    }
                 }
             } else if fact_type == "Concyclic" {
                 // 🌟 Concyclicは専用Factをやめたので、target_argsの全点が
                 // 共通の円にConnectedかどうかで判定する。
+                // 🌟 既知の制約: Identicalと違い、ここには上記の数値サニティチェックを
+                // まだ導入していない(「共有する円」を一意に特定してから数値検証する
+                // 実装が必要で、今回のスコープでは見送った)。MCTSがConcyclicを目標とする
+                // 問題で暴走した場合、同種の偽陽性が起こり得る点に注意。
                 let reps: Vec<_> = target_args.iter().map(|&id| engine.prover.egraph.get_rep(id)).collect();
                 if engine.prover.egraph.points_share_a_circle(&reps) {
                     println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
@@ -88,11 +128,22 @@ fn main() {
                 recovered = true;
             }
             if !recovered {
-                // 🌟 MCTSは一旦スキップ(理由は上記コメント参照)。
-                // 需要による作図もMCTSによる補助線もどちらも打てない = これ以上進めないので、
-                // 残り時間を無駄なスピンで消費せずここで打ち切る。
-                println!("  -> 要求がなく、MCTSも無効化中のため探索を打ち切ります。");
-                break;
+                if !use_mcts {
+                    println!("  -> 要求がなく、MCTSも無効(--mctsで有効化できます)なため探索を打ち切ります。");
+                    break;
+                }
+                if mcts_consecutive_failures >= MCTS_MAX_CONSECUTIVE_FAILURES {
+                    println!("  -> MCTSも{}回連続で有効な一手を見つけられなかったため、探索を打ち切ります。", MCTS_MAX_CONSECUTIVE_FAILURES);
+                    break;
+                }
+                println!("  -> 需要による補助線がないため、MCTSで補助的な構成を探索します...");
+                if mcts.run_step(&mut engine.prover.egraph, &problem.target_fact, 200) {
+                    engine.schedule_full_sweep();
+                    mcts_consecutive_failures = 0;
+                } else {
+                    mcts_consecutive_failures += 1;
+                    println!("  -> MCTSも有効な一手を見つけられませんでした({}/{})。", mcts_consecutive_failures, MCTS_MAX_CONSECUTIVE_FAILURES);
+                }
             }
         }
     }

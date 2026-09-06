@@ -90,6 +90,29 @@ impl Definition {
             _ => vec![],
         }
     }
+
+    /// 🌟 MCTS/ActionGeneratorのために、この定義が生み出すエンティティの
+    /// 型を機械的に返す。execute_constructions内のtarget_type判定とは
+    /// 独立(あちらは定理テンプレート側が明示するのでこれを使わない)が、
+    /// 「作図アクション候補としてどんな型の図形ができるか」を1箇所にまとめて
+    /// おくことで、action_space.rs / mcts.rs 側の重複判定を避ける。
+    pub fn default_entity_type(&self) -> EntityType {
+        match self {
+            Definition::LineThroughPoints(_, _) => EntityType::Line,
+            Definition::PerpendicularLine(_, _) => EntityType::Line,
+            Definition::ParallelLine(_, _) => EntityType::Line,
+            Definition::TangentLine(_, _) => EntityType::Line,
+            Definition::Intersection(_, _) => EntityType::Point,
+            Definition::Midpoint(_, _) => EntityType::Point,
+            Definition::HarmonicConjugateOf(_, _, _) => EntityType::Point,
+            Definition::Circumcircle(_, _, _) => EntityType::Circle,
+            Definition::DirectionOf(_) => EntityType::Direction,
+            Definition::PerpDirectionOf(_) => EntityType::Direction,
+            Definition::AnglePair(_, _) => EntityType::Angle,
+            Definition::LengthSq(_, _) => EntityType::Scalar,
+            Definition::GivenPoint | Definition::FreePoint => EntityType::Point,
+        }
+    }
 }
 
 // 4. E-Graph (環境とUnion-Findの統合)

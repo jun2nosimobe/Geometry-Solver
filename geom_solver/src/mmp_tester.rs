@@ -68,6 +68,52 @@ impl MMPTester {
         v1.iter().zip(v2.iter()).all(|(a, b)| a.0 == b.0)
     }
 
+    /// 🌟 「証明成立」と判定する直前の最終防衛ライン。
+    ///
+    /// propagate_line_uniqueness / propagate_point_uniqueness の
+    /// 「2直線(または2点)が十分な数の接続関係を共有していれば同一とみなす」
+    /// という局所的なショートカットは、手作りの定理適用や既存の作図
+    /// (2点を通る直線、既存点の中点など)からしか合流が起きない前提では
+    /// 安全だったが、MCTSのように「とりあえず作ってみる」式の構成を
+    /// 大量に試すと、たまたま噛み合った構成の連鎖から本来別々であるべき
+    /// 直線・点が次々に合流し、最終的に図形全体が退化(例:三角形の3辺が
+    /// すべて同一直線に潰れる)して、目標の等式が「矛盾からは何でも従う」
+    /// 式に真になってしまうことがある(実際にorthocenter問題でMCTS導入後に
+    /// 観測された)。
+    ///
+    /// この関数は、座標計算を証明の主経路には一切使わないという方針を
+    /// 保ったまま、「証明成立」を宣言する直前にだけ、ランダムな座標を
+    /// 割り当てた具体例で本当にその等式が成り立つかを検算する安全網
+    /// (Schwartz-Zippel的な数値サニティチェック)。有向角(Ang90など)が
+    /// 絡む証明はそもそも座標を持たない記号的な定数なので評価できず
+    /// None(判定不能、これまで通り構造的な証明を信用する)を返す。
+    pub fn sanity_check_identical(&self, egraph: &EGraph, id1: ClassId, id2: ClassId, trials: usize) -> Option<bool> {
+        use crate::mmp_core::Definition;
+        let mut rng = rand::thread_rng();
+
+        let free_point_names: Vec<String> = egraph.entities.iter()
+            .filter(|e| egraph.get_rep(e.id) == e.id)
+            .filter(|e| matches!(e.components.first().and_then(|c| c.definitions.first()), Some(Definition::FreePoint)))
+            .map(|e| e.name.clone())
+            .collect();
+
+        for _ in 0..trials {
+            let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+            for name in &free_point_names {
+                vars.insert(format!("{}_x", name), *self.t_samples.choose(&mut rng).unwrap());
+                vars.insert(format!("{}_y", name), *self.t_samples.choose(&mut rng).unwrap());
+            }
+            let mut cache = FxHashMap::default();
+            match (egraph.evaluate_node(id1, &vars, &mut cache), egraph.evaluate_node(id2, &vars, &mut cache)) {
+                (Some(v1), Some(v2)) => {
+                    if !self.verify_identical(&v1, &v2) { return Some(false); }
+                }
+                _ => return None,
+            }
+        }
+        Some(true)
+    }
+
     pub fn is_canonical_angle_order(&self, d1: &[ModInt], d2: &[ModInt]) -> bool {
         if d1.len() < 2 || d2.len() < 2 { return true; }
         let cross = d1[0] * d2[1] - d1[1] * d2[0];
