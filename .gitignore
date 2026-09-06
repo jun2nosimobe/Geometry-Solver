@@ -41,6 +41,13 @@ dist/
 build/
 *.egg-info/
 
+# Rust (geom_solver) のビルド成果物
+# ※ Cargo.lock はバイナリクレートなので追跡対象のまま残す
+target/
+
+# ソルバーの実行結果(証明ログ・e-graph可視化画像など)。生成物なので追跡しない
+result/
+
 # ---- IDE & エディタの設定 ----
 # VS Code
 .vscode/
