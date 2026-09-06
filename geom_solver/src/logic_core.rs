@@ -711,7 +711,7 @@ impl ProverEngine {
 
     pub fn execute_constructions(
         &mut self,
-        theorem_name: &str,
+        _theorem_name: &str, // 🌟 命名には親図形の実名を使うので、定理名はもう使わない(呼び出し側との互換のため残置)
         constructions: &[ConstructTemplate],
         bind: &mut Bind,
     ) -> bool {
@@ -767,9 +767,18 @@ impl ProverEngine {
                     _ => EntityType::Point,
                 };
                 
-                // 定理名と要求された変数名を組み合わせて一意な名前をつける
-                let name = format!("{}_{}_(Auto)", constr.bind_to, theorem_name.replace(" ", ""));
-                
+                // 🐛 バグ修正: 以前はテンプレートの変数名(bind_to、例: "Ang_MH_CH")と
+                // 定理名をそのまま繋げていたため、"Ang_MH_CH_直角三角形の斜辺の中線_(Auto)"
+                // のように、実際にどの図形から作られたのか全く追跡できない名前になっていた。
+                // match_defined_by の自動生成箇所と同じ規則で、実際に束縛された親図形の
+                // 名前をそのまま繋げる(例: "AnglePair_H_C_(Auto)")ようにし、名前から
+                // 構成を逆に辿れるようにする。
+                let parent_names: Vec<String> = parent_ids.iter()
+                    .map(|&id| self.egraph.entities[id.0].name.clone())
+                    .collect();
+                let prefix = if constr.def_type == "DirectionOf" { "Dir" } else { constr.def_type.as_str() };
+                let name = format!("{}_{}_(Auto)", prefix, parent_names.join("_"));
+
                 let id = self.egraph.create_entity(name, def.clone(), entity_type);
                 self.egraph.apply_trivial_relations(id, &def);
                 id

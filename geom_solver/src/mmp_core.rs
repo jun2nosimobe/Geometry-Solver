@@ -399,13 +399,21 @@ impl EGraph {
                     // f(a)=f(b) if a=b という通常の合同閉包(create_entityのmemo)
                     // だけで自動的に導かれるようになる。既存のAng90ベースの定理には
                     // 一切影響しない、純粋な追加。
+                    // 🐛 バグ修正: 1つ目のmerge_entities(perp1_id, dir2_id)によって
+                    // dir2_id側の生のエンティティ格納先が「敗者」になった場合、
+                    // その.nameはmerge_entities内でstd::mem::takeされて空文字になる。
+                    // その後dir2_idという生の(mergeを経ていない)IDのままself.entities[..].name
+                    // を読むと空文字を拾ってしまい、"PerpDir__(Auto)"のような名前になる。
+                    // 常にget_repを通した代表元の名前を読むようにする。
+                    let dir1_name = self.entities[self.get_rep(dir1_id).0].name.clone();
                     let perp1_id = self.create_entity(
-                        format!("PerpDir_{}_(Auto)", self.entities[dir1_id.0].name),
+                        format!("PerpDir_{}_(Auto)", dir1_name),
                         Definition::PerpDirectionOf(dir1_id), EntityType::Direction);
                     self.merge_entities(perp1_id, dir2_id);
 
+                    let dir2_name = self.entities[self.get_rep(dir2_id).0].name.clone();
                     let perp2_id = self.create_entity(
-                        format!("PerpDir_{}_(Auto)", self.entities[dir2_id.0].name),
+                        format!("PerpDir_{}_(Auto)", dir2_name),
                         Definition::PerpDirectionOf(dir2_id), EntityType::Direction);
                     self.merge_entities(perp2_id, dir1_id);
                 } else {
