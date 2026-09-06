@@ -26,6 +26,12 @@ pub enum Definition {
     PerpendicularLine(ClassId, ClassId), // (Line, Point)
     Circumcircle(ClassId, ClassId, ClassId), // 順不同
     DirectionOf(ClassId),
+    // 🌟 与えられた方向に垂直な方向。無限遠直線上の対合(involution)として
+    // 垂直性を表す。perp(perp(D))=D という対合性を apply_trivial_relations で
+    // 構造的に保証しておくことで、「同じ直線への垂線は全て平行」のような事実が
+    // 専用の角度チェイス定理を経由せず、通常の合同閉包(f(a)=f(b) if a=b)だけで
+    // 自動的に導かれるようになる。
+    PerpDirectionOf(ClassId),
     AnglePair(ClassId, ClassId),
     Midpoint(ClassId, ClassId),
     LengthSq(ClassId, ClassId),
@@ -44,6 +50,7 @@ impl Definition {
         match self {
             Definition::Midpoint(_,_) => "Midpoint",
             Definition::DirectionOf(_) => "DirectionOf",
+            Definition::PerpDirectionOf(_) => "PerpDirectionOf",
             Definition::LineThroughPoints(_,_) => "LineThroughPoints",
             Definition::Intersection(_,_) => "Intersection",
             Definition::AnglePair(_,_) => "AnglePair",
@@ -61,6 +68,7 @@ impl Definition {
         match self {
             Definition::Midpoint(a, b) => vec![*a, *b],
             Definition::DirectionOf(a) => vec![*a],
+            Definition::PerpDirectionOf(a) => vec![*a],
             Definition::LineThroughPoints(a, b) => vec![*a, *b],
             Definition::Intersection(a, b) => vec![*a, *b],
             Definition::AnglePair(a, b) => vec![*a, *b],
@@ -263,6 +271,7 @@ impl EGraph {
             Definition::ParallelLine(l, p) => Definition::ParallelLine(self.get_rep(*l), self.get_rep(*p)),
             Definition::TangentLine(c, p) => Definition::TangentLine(self.get_rep(*c), self.get_rep(*p)),
             Definition::DirectionOf(l) => Definition::DirectionOf(self.get_rep(*l)),
+            Definition::PerpDirectionOf(d) => Definition::PerpDirectionOf(self.get_rep(*d)),
             _ => def.clone(),
         }
     }
@@ -372,13 +381,33 @@ impl EGraph {
                 self.link_logical_incidence(new_id, dir2_id);
 
                 if matches!(def, Definition::PerpendicularLine(_, _)) {
+                    // 🌟 既存の有向角ベースの表現(Ang90へのマージ)は、Ang90を直接
+                    // パターンに持つ既存定理(接弦定理・直角三角形の斜辺の中線など)が
+                    // 引き続き動くよう、そのまま残す。
                     let ang1_def = Definition::AnglePair(dir1_id, dir2_id);
                     let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Angle);
                     self.merge_entities(ang1_id, self.ang90);
-                    
+
                     let ang2_def = Definition::AnglePair(dir2_id, dir1_id);
                     let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Angle);
                     self.merge_entities(ang2_id, self.ang90);
+
+                    // 🌟 射影的な表現を追加: dir2 は「dir1に垂直な方向」そのものとして
+                    // PerpDirectionOfでも構造的に登録しておく(対合性 perp(perp(D))=D
+                    // も両方向に登録する)。これにより「同じ直線への垂線は全て平行」
+                    // のような事実が、専用の角度チェイス定理を経由せず、
+                    // f(a)=f(b) if a=b という通常の合同閉包(create_entityのmemo)
+                    // だけで自動的に導かれるようになる。既存のAng90ベースの定理には
+                    // 一切影響しない、純粋な追加。
+                    let perp1_id = self.create_entity(
+                        format!("PerpDir_{}_(Auto)", self.entities[dir1_id.0].name),
+                        Definition::PerpDirectionOf(dir1_id), EntityType::Direction);
+                    self.merge_entities(perp1_id, dir2_id);
+
+                    let perp2_id = self.create_entity(
+                        format!("PerpDir_{}_(Auto)", self.entities[dir2_id.0].name),
+                        Definition::PerpDirectionOf(dir2_id), EntityType::Direction);
+                    self.merge_entities(perp2_id, dir1_id);
                 } else {
                     self.merge_entities(dir1_id, dir2_id);
                 }
@@ -750,6 +779,7 @@ impl EGraph {
             Definition::LineThroughPoints(a, b) => format!("LineThrough({}, {})", get_name(a), get_name(b)),
             Definition::Midpoint(a, b) => format!("Midpoint({}, {})", get_name(a), get_name(b)),
             Definition::DirectionOf(a) => format!("DirectionOf({})", get_name(a)),
+            Definition::PerpDirectionOf(a) => format!("PerpDirectionOf({})", get_name(a)),
             Definition::AnglePair(a, b) => format!("AnglePair({}, {})", get_name(a), get_name(b)),
             Definition::PerpendicularLine(l, p) => format!("Perpendicular({} ⟂ {})", get_name(l), get_name(p)),
             Definition::ParallelLine(l, p) => format!("Parallel({} ∥ {})", get_name(l), get_name(p)),
@@ -976,5 +1006,31 @@ mod tests {
         let d2 = *egraph.memo.get(&Definition::DirectionOf(l2)).unwrap();
 
         assert_eq!(egraph.get_rep(d1), egraph.get_rep(d2), "平行線作図により方向ベクトルがマージされるべき");
+    }
+
+    #[test]
+    fn test_perpendiculars_to_same_line_are_parallel() {
+        // 🌟 垂線の射影的表現(PerpDirectionOf)の検証:
+        // 同じ直線 L に対する2本の垂線(異なる点 B, C からそれぞれ下ろした)は、
+        // 「有向角の加法性」等の角度チェイス定理を一切使わずとも、
+        // PerpDirectionOf(Dir(L)) という同じ値への合同閉包だけで
+        // 自動的に平行(同じ方向)だと判定されるべき。
+        let mut egraph = EGraph::new();
+        let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let p_b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let p_c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+        let l = egraph.create_entity("L".into(), Definition::new_line(p_a, p_b), EntityType::Line);
+        let perp_from_b = egraph.create_entity("Perp_B".into(), Definition::PerpendicularLine(l, p_b), EntityType::Line);
+        let perp_from_c = egraph.create_entity("Perp_C".into(), Definition::PerpendicularLine(l, p_c), EntityType::Line);
+        egraph.apply_congruence_closure();
+
+        let dir_perp_b = *egraph.memo.get(&Definition::DirectionOf(egraph.get_rep(perp_from_b))).unwrap();
+        let dir_perp_c = *egraph.memo.get(&Definition::DirectionOf(egraph.get_rep(perp_from_c))).unwrap();
+
+        assert_eq!(
+            egraph.get_rep(dir_perp_b), egraph.get_rep(dir_perp_c),
+            "同じ直線への2本の垂線は、角度チェイス定理を使わずとも合同閉包だけで方向が一致するべき"
+        );
     }
 }
