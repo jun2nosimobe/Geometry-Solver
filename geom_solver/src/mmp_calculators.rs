@@ -95,6 +95,34 @@ pub fn calc_squared_distance(v1: &[ModInt], v2: &[ModInt]) -> ModInt {
 }
 
 
+// 🌟 調和共役点(第4調和点)の直接計算。A,B,Cが同一直線上にあるとき
+// (A,B;C,D) = -1 となる D を求める。A,Bを基底とみなしC = p*A + q*B と
+// 分解し(同次座標なので係数比のみ意味を持つ)、D = p*A - q*B とすれば
+// クロス比が丁度 -1 になる(A,Bをそれぞれ媒介変数0, ∞とみなす標準的な事実)。
+// construct_harmonic_conjugate による完全四辺形の作図結果が、この閉じた式と
+// 数値的に一致することをテストで検証するために用いる(証明本体では使わない)。
+pub fn calc_harmonic_conjugate(a: &[ModInt], b: &[ModInt], c: &[ModInt]) -> Vec<ModInt> {
+    if a.len() < 3 || b.len() < 3 || c.len() < 3 { return vec![]; }
+
+    let try_pair = |i: usize, j: usize| -> Vec<ModInt> {
+        let row1 = [a[i], b[i], -c[i]];
+        let row2 = [a[j], b[j], -c[j]];
+        cross_product(&row1, &row2)
+    };
+
+    let mut pql = try_pair(0, 1);
+    if pql.iter().all(|x| x.0 == 0) { pql = try_pair(1, 2); }
+    if pql.iter().all(|x| x.0 == 0) { pql = try_pair(0, 2); }
+    let (p, q) = (pql[0], pql[1]);
+
+    let d = [
+        p * a[0] - q * b[0],
+        p * a[1] - q * b[1],
+        p * a[2] - q * b[2],
+    ];
+    normalize(&d)
+}
+
 pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
     // vc: [D, E, F, A] (A(x^2+y^2) + Dx + Ey + F = 0)
     // vp: [x, y, z] (接点)

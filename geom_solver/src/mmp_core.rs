@@ -37,6 +37,14 @@ pub enum Definition {
     LengthSq(ClassId, ClassId),
     TangentLine(ClassId, ClassId),
     ParallelLine(ClassId, ClassId),
+    // 🌟 調和共役点: 直線上の3点A,B,Cに対する「A,Bを固定点とする対合」による
+    // Cの像D。円錐曲線を一切使わず、完全四辺形(直線と交点だけ)で作図できる
+    // 古典的な射影的構成。(A,B)の順序は不問(normalize_definitionでソート)。
+    // この対合性(H(A,B,H(A,B,C))=C)や交叉比の対称性(H(A,B,C)=D ⟹ H(C,D,A)=B)を
+    // apply_trivial_relationsで構造的に登録しておくことで、PerpDirectionOfと
+    // 同じ要領で「通常の合同閉包(f(a)=f(b) if a=b)だけで自動的に従う事実」を
+    // 専用定理なしに手に入れられる。
+    HarmonicConjugateOf(ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -61,9 +69,10 @@ impl Definition {
             Definition::LengthSq(_,_) => "LengthSq",
             Definition::TangentLine(_,_) => "TangentLine",
             Definition::ParallelLine(_,_) => "ParallelLine",
+            Definition::HarmonicConjugateOf(_,_,_) => "HarmonicConjugateOf",
         }
     }
-    
+
     pub fn get_parents(&self) -> Vec<ClassId> {
         match self {
             Definition::Midpoint(a, b) => vec![*a, *b],
@@ -77,6 +86,7 @@ impl Definition {
             Definition::LengthSq(a, b) => vec![*a, *b],
             Definition::TangentLine(c, p) => vec![*c, *p],
             Definition::ParallelLine(l, p) => vec![*l, *p],
+            Definition::HarmonicConjugateOf(a, b, c) => vec![*a, *b, *c],
             _ => vec![],
         }
     }
@@ -272,6 +282,13 @@ impl EGraph {
             Definition::TangentLine(c, p) => Definition::TangentLine(self.get_rep(*c), self.get_rep(*p)),
             Definition::DirectionOf(l) => Definition::DirectionOf(self.get_rep(*l)),
             Definition::PerpDirectionOf(d) => Definition::PerpDirectionOf(self.get_rep(*d)),
+            Definition::HarmonicConjugateOf(a, b, c) => {
+                // (A,B)は固定点の対(=対合の不動点対)なので順不同。Cとは意味が違うのでソートしない。
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                let r_c = self.get_rep(*c);
+                if r_a.0 > r_b.0 { Definition::HarmonicConjugateOf(r_b, r_a, r_c) } else { Definition::HarmonicConjugateOf(r_a, r_b, r_c) }
+            },
             _ => def.clone(),
         }
     }
@@ -669,37 +686,87 @@ impl EGraph {
         vars: &FxHashMap<String, ModInt>,
         cache: &mut FxHashMap<usize, Vec<ModInt>>,
     ) -> Option<Vec<ModInt>> {
+        let mut in_progress = HashSet::new();
+        self.evaluate_node_inner(node_id, vars, cache, &mut in_progress)
+    }
+
+    /// 🌟 evaluate_node の実体。PerpDirectionOf/HarmonicConjugateOfのように、
+    /// マージによって「互いを参照し合う定義」が同じコンポーネントに同居する
+    /// ことがある(例: D=Harm(A,B,C) と C=Harm(A,B,D) が対合として互いに
+    /// マージされる)。素朴に再帰するとどちらの定義から計算しても計算不能な
+    /// 組み合わせで無限再帰(スタックオーバーフロー)に陥るため、
+    /// 計算中のIDへの再突入を in_progress で検出し、その場合はその定義を
+    /// 諦めて(Noneを返して)コンポーネント内の他の定義を試す。
+    fn evaluate_node_inner(
+        &self,
+        node_id: ClassId,
+        vars: &FxHashMap<String, ModInt>,
+        cache: &mut FxHashMap<usize, Vec<ModInt>>,
+        in_progress: &mut HashSet<usize>,
+    ) -> Option<Vec<ModInt>> {
         let rep_id = self.get_rep(node_id);
         if let Some(val) = cache.get(&rep_id.0) {
             return Some(val.clone());
         }
+        if !in_progress.insert(rep_id.0) {
+            return None;
+        }
 
-        let entity = &self.entities[rep_id.0];
-        let def = entity.components.first()?.definitions.first()?;
+        let name = self.entities[rep_id.0].name.clone();
+        let definitions = match self.entities[rep_id.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => { in_progress.remove(&rep_id.0); return None; }
+        };
 
-        let val = match def {
+        // 🌟 マージ後は1つのコンポーネントに複数の定義が同居し得るので、
+        // 計算可能なものが見つかるまで順に試す(以前は.first()決め打ちで、
+        // たまたま循環参照側が先頭に来ると即失敗していた)。
+        let mut result = None;
+        for def in &definitions {
+            if let Some(v) = self.evaluate_definition(def, &name, vars, cache, in_progress) {
+                result = Some(v);
+                break;
+            }
+        }
+
+        in_progress.remove(&rep_id.0);
+        if let Some(ref v) = result {
+            cache.insert(rep_id.0, v.clone());
+        }
+        result
+    }
+
+    fn evaluate_definition(
+        &self,
+        def: &Definition,
+        name: &str,
+        vars: &FxHashMap<String, ModInt>,
+        cache: &mut FxHashMap<usize, Vec<ModInt>>,
+        in_progress: &mut HashSet<usize>,
+    ) -> Option<Vec<ModInt>> {
+        match def {
             Definition::FreePoint | Definition::GivenPoint => {
-                let x = vars.get(&format!("{}_x", entity.name)).copied().unwrap_or(ModInt::new(0));
-                let y = vars.get(&format!("{}_y", entity.name)).copied().unwrap_or(ModInt::new(0));
+                let x = vars.get(&format!("{}_x", name)).copied().unwrap_or(ModInt::new(0));
+                let y = vars.get(&format!("{}_y", name)).copied().unwrap_or(ModInt::new(0));
                 Some(vec![x, y, ModInt::new(1)])
             }
             Definition::Midpoint(p1, p2) => {
-                let v1 = self.evaluate_node(*p1, vars, cache)?;
-                let v2 = self.evaluate_node(*p2, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_midpoint(&v1, &v2))
             }
             Definition::LineThroughPoints(p1, p2) => {
-                let v1 = self.evaluate_node(*p1, vars, cache)?;
-                let v2 = self.evaluate_node(*p2, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_line_through_points(&v1, &v2))
             }
             Definition::Intersection(l1, l2) => {
-                let v1 = self.evaluate_node(*l1, vars, cache)?;
-                let v2 = self.evaluate_node(*l2, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*l1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*l2, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_intersection(&v1, &v2))
             }
             Definition::DirectionOf(l) => {
-                let v = self.evaluate_node(*l, vars, cache)?;
+                let v = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
                 if v.len() >= 3 {
                     // 直線 ax + by + c = 0 の方向ベクトルは (b, -a)
                     Some(mmp_calculators::normalize(&[v[1], -v[0]]))
@@ -708,8 +775,8 @@ impl EGraph {
                 }
             }
             Definition::AnglePair(d1, d2) => {
-                let v1 = self.evaluate_node(*d1, vars, cache)?;
-                let v2 = self.evaluate_node(*d2, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*d1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*d2, vars, cache, in_progress)?;
                 if v1.len() >= 2 && v2.len() >= 2 {
                     // 外積(sin)と内積(cos)で有向角を一意に表現
                     let cross = v1[0] * v2[1] - v1[1] * v2[0];
@@ -720,33 +787,34 @@ impl EGraph {
                 }
             }
             Definition::LengthSq(p1, p2) => {
-                let v1 = self.evaluate_node(*p1, vars, cache)?;
-                let v2 = self.evaluate_node(*p2, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
                 Some(vec![mmp_calculators::calc_squared_distance(&v1, &v2), ModInt::new(1), ModInt::new(1)])
             }
             Definition::PerpendicularLine(l, p) => {
-                let vl = self.evaluate_node(*l, vars, cache)?;
-                let vp = self.evaluate_node(*p, vars, cache)?;
+                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
+                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_perpendicular(&vl, &vp))
             }
             Definition::Circumcircle(p1, p2, p3) => {
-                let v1 = self.evaluate_node(*p1, vars, cache)?;
-                let v2 = self.evaluate_node(*p2, vars, cache)?;
-                let v3 = self.evaluate_node(*p3, vars, cache)?;
+                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
+                let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_circumcircle(&v1, &v2, &v3))
             }
             Definition::TangentLine(c, p) => {
-                let vc = self.evaluate_node(*c, vars, cache)?;
-                let vp = self.evaluate_node(*p, vars, cache)?;
+                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
+                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
                 Some(mmp_calculators::calc_tangent_line(&vc, &vp))
             }
+            Definition::HarmonicConjugateOf(a, b, c) => {
+                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
+                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
+                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
+                Some(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
+            }
             _ => None,
-        };
-
-        if let Some(ref v) = val {
-            cache.insert(rep_id.0, v.clone());
         }
-        val
     }
 
     pub fn is_connected(&self, id1: ClassId, id2: ClassId) -> bool {
@@ -794,7 +862,105 @@ impl EGraph {
             Definition::LengthSq(a, b) => format!("LengthSq({}, {})", get_name(a), get_name(b)),
             Definition::Circumcircle(a, b, c) => format!("Circumcircle({}, {}, {})", get_name(a), get_name(b), get_name(c)),
             Definition::TangentLine(c, p) => format!("TangentLine({}, {})", get_name(c), get_name(p)),
+            Definition::HarmonicConjugateOf(a, b, c) => format!("HarmonicConjugate({}, {}; {})", get_name(a), get_name(b), get_name(c)),
         }
+    }
+
+    /// 🌟 与えられた図形群すべてが乗っている共通の直線を(あれば)1つ返す。
+    /// 調和共役点の抽象エンティティを、実際にA,B,Cが乗っている直線に
+    /// リンクするために使う(見つからなくても構成自体は成立するので失敗は許容)。
+    pub fn find_common_line(&self, ids: &[ClassId]) -> Option<ClassId> {
+        if ids.is_empty() { return None; }
+        let mut candidates: Option<HashSet<ClassId>> = None;
+        for &id in ids {
+            let rep = self.get_rep(id);
+            let lines: HashSet<ClassId> = self.entities[rep.0].components.first()
+                .map(|c| c.subobjects.iter().map(|&s| self.get_rep(s))
+                    .filter(|&s| self.entities[s.0].entity_type == EntityType::Line)
+                    .collect())
+                .unwrap_or_default();
+            candidates = Some(match candidates {
+                None => lines,
+                Some(prev) => prev.intersection(&lines).copied().collect(),
+            });
+        }
+        candidates.and_then(|s| s.into_iter().next())
+    }
+
+    /// 🌟 調和共役点の具体的な作図(完全四辺形)。円錐曲線を一切使わず、
+    /// 直線と交点だけで A,B を固定点とする対合による C の像 D を作る:
+    ///   1. 直線ABC上にない補助点 P を取る
+    ///   2. 直線PC上に(P,Cと異なる)補助点 Q を取る
+    ///   3. R = 直線AQ と 直線PB の交点
+    ///   4. S = 直線BQ と 直線PA の交点
+    ///   5. D = 直線RS と 直線ABC の交点
+    /// (これは古典的な複比調和点の作図で、補助点P,Qの取り方に依らずDは一意に
+    /// 定まることが射影幾何の定理として知られている。本エンジンはこの独立性を
+    /// 内部で証明するのではなく、Midpoint/Circumcircle等と同様に既知の結果として
+    /// 前提にし、実際に1回具体的に作図した点を抽象的な
+    /// Definition::HarmonicConjugateOf(A,B,C) に紐付けることで、以後は
+    /// 合同閉包だけで再利用できるようにする)。
+    ///
+    /// あわせて、対合性 H(A,B,D)=C と 交叉比のペア交換対称性
+    /// (A,B;C,D)=-1 ⟹ (C,D;A,B)=-1 つまり H(C,D,A)=B も構造的に登録する。
+    /// PerpDirectionOfと同じ理由(無限再帰の回避)で、HarmonicConjugateOf自体は
+    /// apply_trivial_relationsの汎用ディスパッチには載せず、この関数だけが
+    /// 有限個(3つ)の追加エンティティを明示的に作る。
+    pub fn construct_harmonic_conjugate(&mut self, a: ClassId, b: ClassId, c: ClassId) -> ClassId {
+        let a = self.get_rep(a);
+        let b = self.get_rep(b);
+        let c = self.get_rep(c);
+        let name = |id: ClassId, eg: &Self| eg.entities[eg.get_rep(id).0].name.clone();
+
+        // 直線ABC: A,Bを通る直線を(既存なら再利用して)確定させる。呼び出し側は
+        // Cがこの直線上にあることを前提として呼ぶこと(既に共線でなければ
+        // 「調和共役点」という概念自体が意味を持たないので、これは前提条件)。
+        let line_abc = self.create_entity(format!("Line_{}_{}_(Aux)", name(a, self), name(b, self)), Definition::new_line(a, b), EntityType::Line);
+
+        // 1. 補助点 P (直線ABC上にない自由点)
+        let p = self.create_entity(format!("P_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::FreePoint, EntityType::Point);
+        // 2. 補助点 Q (直線PC上の、P,Cと異なる自由点)
+        let line_pc = self.create_entity(format!("Line_{}_{}_(Aux)", name(p, self), name(c, self)), Definition::new_line(p, c), EntityType::Line);
+        let q = self.create_entity(format!("Q_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::FreePoint, EntityType::Point);
+        self.link_logical_incidence(q, line_pc);
+
+        // 3. R = AQ ∩ PB
+        let line_aq = self.create_entity(format!("Line_{}_{}_(Aux)", name(a, self), name(q, self)), Definition::new_line(a, q), EntityType::Line);
+        let line_pb = self.create_entity(format!("Line_{}_{}_(Aux)", name(p, self), name(b, self)), Definition::new_line(p, b), EntityType::Line);
+        let r = self.create_entity(format!("R_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::Intersection(line_aq, line_pb), EntityType::Point);
+
+        // 4. S = BQ ∩ PA
+        let line_bq = self.create_entity(format!("Line_{}_{}_(Aux)", name(b, self), name(q, self)), Definition::new_line(b, q), EntityType::Line);
+        let line_pa = self.create_entity(format!("Line_{}_{}_(Aux)", name(p, self), name(a, self)), Definition::new_line(p, a), EntityType::Line);
+        let s = self.create_entity(format!("S_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::Intersection(line_bq, line_pa), EntityType::Point);
+
+        // 5. D = RS ∩ ABC
+        let line_rs = self.create_entity(format!("Line_{}_{}_(Aux)", name(r, self), name(s, self)), Definition::new_line(r, s), EntityType::Line);
+        let d_concrete = self.create_entity(format!("D_Harm_{}_{}_{}_(Aux)", name(a, self), name(b, self), name(c, self)), Definition::Intersection(line_rs, line_abc), EntityType::Point);
+
+        self.apply_congruence_closure();
+
+        // 抽象的な調和共役点エンティティを作り、具体的な作図結果に結びつける
+        let hc_def = self.normalize_definition(&Definition::HarmonicConjugateOf(a, b, c));
+        let d_abstract = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(a, self), name(b, self), name(c, self)), hc_def, EntityType::Point);
+        self.merge_entities(d_abstract, d_concrete);
+        let d = self.get_rep(d_abstract);
+        self.link_logical_incidence(d, line_abc);
+
+        // 対合性: H(A,B,D) ≡ C
+        let inv_def = self.normalize_definition(&Definition::HarmonicConjugateOf(a, b, d));
+        let inv_id = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(a, self), name(b, self), name(d, self)), inv_def, EntityType::Point);
+        self.merge_entities(inv_id, c);
+
+        // 交叉比のペア交換対称性: (A,B;C,D)=-1 ⟹ (C,D;A,B)=-1 つまり H(C,D,A) ≡ B
+        let c_after = self.get_rep(c);
+        let d_after = self.get_rep(d);
+        let swap_def = self.normalize_definition(&Definition::HarmonicConjugateOf(c_after, d_after, a));
+        let swap_id = self.create_entity(format!("Harm_{}_{}_{}_(Auto)", name(c_after, self), name(d_after, self), name(a, self)), swap_def, EntityType::Point);
+        self.merge_entities(swap_id, b);
+
+        self.apply_congruence_closure();
+        self.get_rep(d)
     }
     /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
     pub fn dump_state(&self) {
@@ -1040,5 +1206,72 @@ mod tests {
             egraph.get_rep(dir_perp_b), egraph.get_rep(dir_perp_c),
             "同じ直線への2本の垂線は、角度チェイス定理を使わずとも合同閉包だけで方向が一致するべき"
         );
+    }
+
+    #[test]
+    fn test_harmonic_conjugate_construction_is_numerically_correct() {
+        // 🌟 完全四辺形(直線と交点だけ)による調和共役点の作図が、実際に
+        // 交叉比 -1 を満たす点を計算していることを、独立した閉じた式
+        // (calc_harmonic_conjugate)との数値一致で検証する。
+        // A=(0,0), B=(4,0), C=(1,0) のとき、古典的な計算から
+        // 調和共役点 D は (-2, 0) になる。
+        let mut egraph = EGraph::new();
+        let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+        let d = egraph.construct_harmonic_conjugate(a, b, c);
+
+        // 補助点 P, Q の名前は construct_harmonic_conjugate の命名規則に従う
+        let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+        vars.insert("A_x".into(), ModInt::new(0));
+        vars.insert("A_y".into(), ModInt::new(0));
+        vars.insert("B_x".into(), ModInt::new(4));
+        vars.insert("B_y".into(), ModInt::new(0));
+        vars.insert("C_x".into(), ModInt::new(1));
+        vars.insert("C_y".into(), ModInt::new(0));
+        vars.insert("P_Harm_A_B_C_(Aux)_x".into(), ModInt::new(2));
+        vars.insert("P_Harm_A_B_C_(Aux)_y".into(), ModInt::new(5));
+        vars.insert("Q_Harm_A_B_C_(Aux)_x".into(), ModInt::new(0));
+        vars.insert("Q_Harm_A_B_C_(Aux)_y".into(), ModInt::new(-5));
+
+        let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+        let vd = egraph.evaluate_node(d, &vars, &mut cache).expect("Dが数値的に計算できるべき");
+        let vd = mmp_calculators::normalize(&vd);
+
+        // 期待値 D=(-2, 0, 1) (斉次座標)
+        let x = vd[0] / vd[2];
+        let y = vd[1] / vd[2];
+        assert_eq!(x, ModInt::new(-2), "作図されたDのx座標は-2であるべき");
+        assert_eq!(y, ModInt::new(0), "作図されたDのy座標は0であるべき");
+
+        // 独立した閉じた式(calc_harmonic_conjugate)とも一致するはず
+        let va = egraph.evaluate_node(a, &vars, &mut cache).unwrap();
+        let vb = egraph.evaluate_node(b, &vars, &mut cache).unwrap();
+        let vc = egraph.evaluate_node(c, &vars, &mut cache).unwrap();
+        let vd_formula = mmp_calculators::normalize(&mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc));
+        assert_eq!(vd, vd_formula, "完全四辺形による作図と閉じた式による計算が一致するべき");
+    }
+
+    #[test]
+    fn test_harmonic_conjugate_is_an_involution() {
+        // 🌟 対合性: H(A,B,D) は、Dを求めるための2回目の作図をやり直さずとも
+        // 合同閉包だけで自動的にCへ一致するべき(construct_harmonic_conjugateの
+        // 内部で登録される)。
+        let mut egraph = EGraph::new();
+        let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        let d = egraph.construct_harmonic_conjugate(a, b, c);
+
+        // 新規に作図せず、既存の合同閉包だけでH(A,B,D)=Cが引ける
+        let inv_def = egraph.normalize_definition(&Definition::HarmonicConjugateOf(a, b, d));
+        let &inv_id = egraph.memo.get(&inv_def).expect("対合の逆像は既にmemoに登録済みのはず");
+        assert_eq!(egraph.get_rep(inv_id), egraph.get_rep(c), "H(A,B,H(A,B,C)) は C に一致するべき(対合性)");
+
+        // 交叉比のペア交換対称性: H(C,D,A) は B に一致するべき
+        let swap_def = egraph.normalize_definition(&Definition::HarmonicConjugateOf(c, d, a));
+        let &swap_id = egraph.memo.get(&swap_def).expect("ペア交換の像も既にmemoに登録済みのはず");
+        assert_eq!(egraph.get_rep(swap_id), egraph.get_rep(b), "(A,B;C,D)=-1 ⟹ (C,D;A,B)=-1 つまり H(C,D,A)=B であるべき");
     }
 }
