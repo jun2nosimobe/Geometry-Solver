@@ -471,5 +471,42 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_MB".to_string(), "Dist_MA".to_string()], target_type: None, sub_type: None }
             ],
         },
+
+        // ==========================================
+        // 🌟 定理: 直角三角形の斜辺の中線の逆
+        // ==========================================
+        // 「直角三角形の斜辺の中線(距離版)」の逆。BCの中点MからAまでの距離が
+        // Mから B までの距離(=BC/2)と等しいならば、角Aは直角である。
+        // タレスの定理(半円の弧に立つ角は直角)の証明で使う: 直径の両端をB,C、
+        // 円の中心(=BCの中点)をM、円周上の点をAとすれば、MA=MB(=半径)は
+        // 「Aが円上にある」という仮定そのものなので、この定理だけで
+        // ∠BAC=90°が導ける。
+        TheoremDef {
+            name: "直角三角形の斜辺の中線の逆".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
+                ("L1", EntityType::Line), ("L2", EntityType::Line),
+                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction),
+                ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
+                ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["Mid_BC", "B", "Dist_MB"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["Mid_BC", "A", "Dist_MA"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("Identical", &["Dist_MB", "Dist_MA"], Some("Scalar"), None, false, None),
+                distinct(&["A", "B", "C"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Line".to_string(), bind_to: "L1".to_string() },
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "L2".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L1".to_string()], target_type: "Direction".to_string(), bind_to: "Dir1".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L2".to_string()], target_type: "Direction".to_string(), bind_to: "Dir2".to_string() },
+                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir1".to_string(), "Dir2".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_A".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_A".to_string(), "Ang90".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+            ],
+        },
     ]
 }
