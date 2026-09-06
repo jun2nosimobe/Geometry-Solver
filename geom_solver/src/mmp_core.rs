@@ -210,13 +210,22 @@ impl EGraph {
     pub fn link_logical_incidence(&mut self, id1: ClassId, id2: ClassId) {
         let rep1 = self.get_rep(id1);
         let rep2 = self.get_rep(id2);
-        
+
         if let Some(comp1) = self.entities[rep1.0].components.first_mut() {
             comp1.subobjects.insert(rep2);
         }
         if let Some(comp2) = self.entities[rep2.0].components.first_mut() {
             comp2.subobjects.insert(rep1);
         }
+
+        // 🌟 新しい接続関係(incidence)ができたので、apply_congruence_closure の
+        // worklist に積んでおく。merge_entities 経由の変化だけでなく、
+        // create_entity 直後の apply_trivial_relations でできる新規の接続
+        // (マージを伴わない)も、これが無いと「直線の一致条件」「2直線の
+        // 交点の一意性」の局所伝播(propagate_line_uniqueness /
+        // propagate_point_uniqueness)が一度も走らず見逃されてしまう。
+        self.worklist.push(rep1);
+        self.worklist.push(rep2);
     }
     
 
@@ -391,28 +400,28 @@ impl EGraph {
 
     pub fn apply_congruence_closure(&mut self) -> bool {
         let mut changed_any = false;
-        
+
         while let Some(changed_id) = self.worklist.pop() {
             let rep_id = self.get_rep(changed_id);
             let uses: Vec<ClassId> = self.entities[rep_id.0].uses.iter().copied().collect();
-            
+
             let mut def_map: FxHashMap<Definition, ClassId> = FxHashMap::default();
-            
+
             for used_id in uses {
                 let u_rep = self.get_rep(used_id);
                 if u_rep != used_id { continue; }
-                
+
                 // 🌟 FIX: 不変参照を維持し続けないように、definitions をクローンして借用を即座にドロップする
                 let definitions = if let Some(comp) = self.entities[u_rep.0].components.first() {
                     comp.definitions.clone()
                 } else {
                     continue;
                 };
-                
+
                 for def in &definitions {
                     if matches!(def, Definition::FreePoint | Definition::GivenPoint) { continue; }
                     let norm_def = self.normalize_definition(def);
-                    
+
                     // 🌟 1. グローバルな memo (既存図形) との照合
                     if let Some(&global_existing) = self.memo.get(&norm_def) {
                         let g_rep = self.get_rep(global_existing);
@@ -422,13 +431,13 @@ impl EGraph {
                                 break;
                             }
                         }
-                    } 
+                    }
                     // 🌟 2. 現在のループ内で新しく生成された同一定義との照合
                     else if let Some(&existing_rep) = def_map.get(&norm_def) {
                         if existing_rep != u_rep {
                             if self.merge_entities(existing_rep, u_rep) {
                                 changed_any = true;
-                                break; 
+                                break;
                             }
                         }
                     } else {
@@ -437,60 +446,154 @@ impl EGraph {
                     }
                 }
             }
-        }
-        
-        // 🌟 [構造的マージ] 直線の自動結合 (変更の有無に関わらず実行してグラフを正規化)
-        let mut lines = Vec::new();
-        for j in 0..self.entities.len() {
-            let id = ClassId(j);
-            if self.get_rep(id) == id && self.entities[j].entity_type == EntityType::Line {
-                lines.push(id);
+
+            // 🌟 [構造的マージ] 点・直線の接続関係(incidence)から従う合同閉包を、
+            // 全図形×全図形の総当たりではなく、"今回変化した図形(rep_id)の
+            // 局所的な隣接関係(subobjects)だけを辿る" DFS的な伝播で行う。
+            //
+            // - 直線が変化した場合:「直線の一致条件」(2直線が2点を共有、
+            //   または1点を共有しつつ方向も等しいなら同一直線)を、
+            //   この直線上の点それぞれが他にどの直線に乗っているかだけを見て判定する。
+            // - 点が変化した場合:「2直線の交点の一意性」(この点が乗っている
+            //   2直線の交点として既に登録済みの点があれば同一点)を、
+            //   memoへのO(1)参照だけで判定する(全点を舐めない)。
+            //
+            // 以前はここを「全直線ペア×全点」のO(直線数^2 × 点数)の総当たりで
+            // 実行しており(apply_congruence_closureが呼ばれるたびに無条件で
+            // 走っていた)、かつ「点の一致」版は専用のBlackboard定理として
+            // dfs_match経由でしか判定できず、どちらも無駄が大きかった。
+            // ここでのマージも merge_entities 経由で worklist に積まれるので、
+            // 連鎖的な合流はこの while ループが自然に続けて処理する。
+            let rep_id = self.get_rep(changed_id); // 上のuses処理でrepが動いた可能性があるので取り直す
+            match self.entities[rep_id.0].entity_type {
+                EntityType::Line => {
+                    if self.propagate_line_uniqueness(rep_id) { changed_any = true; }
+                }
+                EntityType::Point => {
+                    if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
+                }
+                _ => {}
             }
         }
-        
-        let mut dir_to_lines: FxHashMap<ClassId, Vec<ClassId>> = FxHashMap::default();
-        for &l in &lines {
-            // E-Graphの性質上、DirectionOfは正規化されてmemoに格納されている
-            if let Some(&dir_id) = self.memo.get(&Definition::DirectionOf(l)) {
-                let dir_rep = self.get_rep(dir_id);
-                dir_to_lines.entry(dir_rep).or_default().push(l);
+
+        changed_any
+    }
+
+    /// 🌟 「直線の一致条件」の局所伝播版。
+    /// line 自身が乗っている点(局所・少数)だけを見て、それらの点が他に
+    /// 乗っている直線との共有点数・方向一致を調べる。全直線を舐めない。
+    fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool {
+        let mut line = self.get_rep(line);
+
+        // 🐛 FIX: 共有点を数える前に、この直線上の点どうしの「2直線の交点の
+        // 一意性」を先に局所的な不動点まで確定させておく。これをやらないと、
+        // 本来は同一点になるはずだがまだ別IDのままの2点(例: 外心の候補
+        // O1とO2)を「別々の2つの共有点」と誤認し、方向も違う別々の直線を
+        // 誤ってマージしてしまうことがある(外心の証明で実際に発生した)。
+        loop {
+            let points: Vec<ClassId> = match self.entities[line.0].components.first() {
+                Some(c) => c.subobjects.iter()
+                    .map(|&id| self.get_rep(id))
+                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
+                    .collect(),
+                None => return false,
+            };
+            let mut any = false;
+            for p in points {
+                if self.propagate_point_uniqueness(p) { any = true; }
+            }
+            line = self.get_rep(line);
+            if !any { break; }
+        }
+
+        // 🐛 FIX: subobjects は merge 前の生のIDをそのまま持ち続けるため、
+        // 同じ代表元を指す複数のエントリが残ることがある(例えばLineとその
+        // Demand版が別々に同じ点へリンクされ、後で合流した場合)。
+        // rep化した後に必ず重複を除いてから使う。
+        let points: std::collections::HashSet<ClassId> = match self.entities[line.0].components.first() {
+            Some(c) => c.subobjects.iter()
+                .map(|&id| self.get_rep(id))
+                .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
+                .collect(),
+            None => return false,
+        };
+
+        // line上の各点について、その点が他に乗っている直線ごとに共有点数を数える。
+        // 🐛 FIX: 1点につき同じ他直線への加算は高々1にする(重複subobjectsで
+        // 1点しか共有していないのに2点共有と誤カウントするのを防ぐ)。
+        let mut shared_counts: FxHashMap<ClassId, usize> = FxHashMap::default();
+        for &p in &points {
+            if let Some(comp) = self.entities[p.0].components.first() {
+                let other_lines_of_p: std::collections::HashSet<ClassId> = comp.subobjects.iter()
+                    .map(|&id| self.get_rep(id))
+                    .filter(|&id| id != line && self.entities[id.0].entity_type == EntityType::Line)
+                    .collect();
+                for other in other_lines_of_p {
+                    *shared_counts.entry(other).or_insert(0) += 1;
+                }
             }
         }
-        
-        for x in 0..lines.len() {
-            for y in (x + 1)..lines.len() {
-                let l1 = lines[x];
-                let l2 = lines[y];
-                let mut shared_points = 0;
-                for p_idx in 0..self.entities.len() {
-                    let pt = ClassId(p_idx);
-                    if self.get_rep(pt) == pt && self.entities[p_idx].entity_type == EntityType::Point {
-                        // 🌟 FIX: is_connected を使って確実に incidence を判定する
-                        if self.is_connected(pt, l1) && self.is_connected(pt, l2) {
-                            shared_points += 1;
+
+        for (other_line, shared) in shared_counts {
+            let line = self.get_rep(line); // 途中のマージでrepが変わっている可能性
+            let other_line = self.get_rep(other_line);
+            if line == other_line { continue; }
+
+            let same_dir = {
+                let d1 = self.memo.get(&Definition::DirectionOf(line)).map(|&id| self.get_rep(id));
+                let d2 = self.memo.get(&Definition::DirectionOf(other_line)).map(|&id| self.get_rep(id));
+                d1.is_some() && d1 == d2
+            };
+
+            if shared >= 2 || (shared >= 1 && same_dir) {
+                let name1 = self.entities[line.0].name.clone();
+                let name2 = self.entities[other_line.0].name.clone();
+                if self.merge_entities(line, other_line) {
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}/同方向={})により直線を結合: {} ≡ {}",
+                        shared, same_dir, name1, name2);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 🌟 「2直線の交点の一意性」の局所伝播版。
+    /// point 自身が乗っている直線(局所・少数)のペアについて、その交点が
+    /// memoに既に登録されていないかをO(1)参照するだけ。全点を舐めない。
+    fn propagate_point_uniqueness(&mut self, point: ClassId) -> bool {
+        let point = self.get_rep(point);
+        // 🐛 FIX: subobjects の重複エントリを rep 化した後に除いてから使う(理由は
+        // propagate_line_uniqueness と同様)。
+        let lines: Vec<ClassId> = match self.entities[point.0].components.first() {
+            Some(c) => {
+                let set: std::collections::HashSet<ClassId> = c.subobjects.iter()
+                    .map(|&id| self.get_rep(id))
+                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Line)
+                    .collect();
+                set.into_iter().collect()
+            },
+            None => return false,
+        };
+
+        for i in 0..lines.len() {
+            for j in (i + 1)..lines.len() {
+                let inter_def = self.normalize_definition(&Definition::Intersection(lines[i], lines[j]));
+                if let Some(&existing) = self.memo.get(&inter_def) {
+                    let existing_rep = self.get_rep(existing);
+                    let point_rep = self.get_rep(point);
+                    if existing_rep != point_rep {
+                        let name1 = self.entities[existing_rep.0].name.clone();
+                        let name2 = self.entities[point_rep.0].name.clone();
+                        if self.merge_entities(existing_rep, point_rep) {
+                            println!("  ⚙️ [E-Graph自動マージ] 2直線の交点の一意性により点を結合: {} ≡ {}", name1, name2);
+                            return true;
                         }
                     }
                 }
-                
-                // 1. 2点を共有していれば無条件でマージ
-                // 2. 🌟 NEW: 方向が等しく1点を共有していればマージ
-                let same_dir = {
-                    let d1 = self.memo.get(&Definition::DirectionOf(l1)).map(|&id| self.get_rep(id));
-                    let d2 = self.memo.get(&Definition::DirectionOf(l2)).map(|&id| self.get_rep(id));
-                    d1.is_some() && d1 == d2
-                };
-
-                if shared_points >= 2 || (shared_points >= 1 && same_dir) {
-                    if self.merge_entities(l1, l2) {
-                        changed_any = true;
-                        println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}/同方向={})により直線を結合: {} ≡ {}", 
-                            shared_points, same_dir, self.entities[l1.0].name, self.entities[l2.0].name);
-                    }
-                }
             }
         }
-        
-        changed_any
+        false
     }
 
     /// 🌟 数値評価環境 (MMPテスト用)
