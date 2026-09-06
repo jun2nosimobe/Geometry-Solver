@@ -110,24 +110,29 @@ impl Ord for MatchTask { fn cmp(&self, other: &Self) -> Ordering { self.priority
 
 /// 🌟 定理マッチングのUCB1バンディット統計。theorem_idxごとに、
 /// schedule_full_sweep由来のシードなしタスクを実際にdfs_matchまで走らせた
-/// 回数(attempts)と、そのうち少なくとも1つの結論を実際に適用できた
-/// 回数(successes)を数える。「有向角の加法性」のように変数が多く、
-/// シードなし状態からだと(成功するにせよ失敗するにせよ)dfs_cap一杯まで
-/// 巨大な探索を要する定理を、経験的な成功率が低いと分かった時点で
-/// 自動的に後回しにできるようにするための土台。
+/// 回数(attempts)と、その報酬の累積(total_reward)を数える。
+///
+/// 🐛 以前はsuccesses(結論を適用できた回数)を単純にカウントするだけの
+/// 二値報酬だったため、「dfs_cap一杯まで探索してようやく1回成功した定理」と
+/// 「一瞬で成功した定理」が同じ扱いになってしまい、まさに元々問題視していた
+/// 「有向角の加法性」のような重い定理を正しく罰せなかった(A/B測定で
+/// nine_point_fullにおいて有効化がむしろ約11%遅くなるという結果になった
+/// 一因と見ている)。record_theorem_reward側でdfs_calls_used/dfs_capの
+/// 比率をコストとして報酬に織り込むことで、「成功はしたが高くついた」
+/// 定理と「安く成功した」定理を区別できるようにする。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TheoremBanditStats {
     pub attempts: u64,
-    pub successes: u64,
+    pub total_reward: f64,
 }
 
 impl TheoremBanditStats {
-    /// UCB1スコア = 経験的成功率 + 探索ボーナス。一度も試していない定理は
+    /// UCB1スコア = 経験的な平均報酬 + 探索ボーナス。一度も試していない定理は
     /// 常に無限大を返し、必ず一度は(素の全探索からでも)試されるようにする
     /// (標準的なUCB1の初期化: 全アームを1回ずつ引いてから本題に入る)。
     fn ucb1_score(&self, total_attempts: u64, exploration_c: f64) -> f64 {
         if self.attempts == 0 { return f64::INFINITY; }
-        let mean = self.successes as f64 / self.attempts as f64;
+        let mean = self.total_reward / self.attempts as f64;
         let bonus = exploration_c * ((total_attempts.max(1) as f64).ln() / self.attempts as f64).sqrt();
         mean + bonus
     }
@@ -194,14 +199,33 @@ impl ProverEngine {
     }
 
     /// 🌟 schedule_full_sweep由来のシードなしタスクを実際にdfs_matchまで
-    /// 走らせた結果(少なくとも1つの結論を適用できたか)をバンディット統計に
-    /// 反映する。シード済みタスク(is_seeded=true)はここでは記録しない
-    /// (MatchTask::is_seededのドキュメント参照)。
-    pub fn record_theorem_attempt(&mut self, idx: usize, succeeded: bool) {
+    /// 走らせた結果をバンディット統計に反映する。シード済みタスク
+    /// (is_seeded=true)はここでは記録しない(MatchTask::is_seededの
+    /// ドキュメント参照)。
+    ///
+    /// コスト考慮型の報酬: dfs_calls_used(このタスク1回のdfs_match呼び出しが
+    /// 実際に消費したdfs_call数)をdfs_capに対する比率(cost_ratio)として、
+    /// - 成功時: 1.0 - 0.5*cost_ratio を 0.1 を下限にクランプ
+    ///   (一瞬で成功すれば報酬1.0に近く、cap一杯まで探索してようやく
+    ///   成功しても最低0.1は残る = 成功は常に失敗より高評価だが、
+    ///   探索コストが高いほど徐々に割り引かれる)
+    /// - 失敗時: -0.5*cost_ratio (0以下)
+    ///   (何も見つからずに終わった場合、安く諦めたなら0に近く、
+    ///   dfs_cap一杯まで無駄に探索したなら-0.5まで下がる)
+    /// この結果、「dfs_cap一杯まで探索した末にようやく1回成功する」定理
+    /// (以前の二値報酬では"成功"として高く評価されていた)を、実際の
+    /// 探索コストに見合った低めのスコアに補正できる。
+    pub fn record_theorem_attempt(&mut self, idx: usize, succeeded: bool, dfs_calls_used: u64) {
         self.ensure_theorem_stats();
+        let cost_ratio = (dfs_calls_used as f64 / self.dfs_cap.max(1) as f64).min(1.0);
+        let reward = if succeeded {
+            (1.0 - 0.5 * cost_ratio).max(0.1)
+        } else {
+            -0.5 * cost_ratio
+        };
         if let Some(stats) = self.theorem_stats.get_mut(idx) {
             stats.attempts += 1;
-            if succeeded { stats.successes += 1; }
+            stats.total_reward += reward;
         }
     }
     fn calc_bind_heat(&self, bind: &Bind) -> f64 {
@@ -1096,7 +1120,6 @@ pub struct BlackboardEngine {
     pub prover: ProverEngine,
     pub task_queue: BinaryHeap<MatchTask>,
     pub event_queue: VecDeque<Event>,
-    pub construction_demands: FxHashMap<(ClassId, ClassId), f64>,
     // 🌟 UCB1バンディットの効果測定用のA/Bスイッチ。false にすると
     // schedule_full_sweep がシードなしタスクの優先度を常に0固定にする
     // (バンディット導入前の挙動に戻す)。既定は有効(true)。
@@ -1109,7 +1132,6 @@ impl BlackboardEngine {
             prover,
             task_queue: BinaryHeap::new(),
             event_queue: VecDeque::new(),
-            construction_demands: FxHashMap::default(), // 🌟 初期化
             bandit_enabled: true,
         }
     }
@@ -1259,6 +1281,10 @@ impl BlackboardEngine {
                         new_binds.push((bind.clone(), flips.clone()));
                     }
                 );
+                // 🌟 コスト考慮型バンディット報酬のために、このタスク1回が
+                // 実際に消費したdfs_call数を控えておく(次のタスクの
+                // self.prover.dfs_calls = 0 まではこの値のまま変わらない)。
+                let dfs_calls_used = self.prover.dfs_calls;
 
                 // 🌟 スケジューリング工夫: DFSが上限(100,000)に張り付いた場合、
                 // このタスクは重すぎるためペナルティを与えて後回しにする。
@@ -1316,7 +1342,7 @@ impl BlackboardEngine {
                 }
 
                 if !task_is_seeded {
-                    self.prover.record_theorem_attempt(task_theorem_idx, task_succeeded);
+                    self.prover.record_theorem_attempt(task_theorem_idx, task_succeeded, dfs_calls_used);
                 }
             } else { break; }
         }
