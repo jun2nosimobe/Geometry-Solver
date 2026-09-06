@@ -558,21 +558,33 @@ impl ProverEngine {
                 }
             }
             (Some(c_id), None) => {
+                // 🌟 最適化: 以前はここが「全エンティティを舐めてis_connectedで
+                // 判定する」O(全エンティティ数)の総当たりになっていた
+                // ((None, Some(p_id))側の分岐は既にp_rep自身のsubobjectsだけを
+                // 見る局所探索に最適化済みで、この分岐だけ非対称に取り残されて
+                // いた)。link_logical_incidenceは常に双方向にリンクを張るので
+                // (is_connectedの実装もこれを前提に両側を見ている)、c_rep自身の
+                // subobjects(局所的で少数)だけを見れば取りこぼしなく同じ結果が
+                // 得られる。大きい問題(entities数が多い)ほど効果が大きい。
                 let c_rep = self.egraph.get_rep(c_id);
-                for i in 0..self.egraph.entities.len() {
-                    let p_id = ClassId(i);
-                    let p_rep = self.egraph.get_rep(p_id);
-                    if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-
-                    if let Some(et) = expected_p_type {
-                        if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                // 🌟 (None, Some(p_id))側の分岐と同じく、まず候補を(重複除去しつつ)
+                // 集め切ってから、egraphへの不変借用を終わらせた後でdfs_matchを呼ぶ
+                // (dfs_matchは&mut selfを要求するため)。
+                let mut candidates = rustc_hash::FxHashSet::default();
+                for comp in &self.egraph.entities[c_rep.0].components {
+                    for &sub in &comp.subobjects {
+                        let p_rep = self.egraph.get_rep(sub);
+                        if p_rep == c_rep || self.egraph.entities[p_rep.0].base_importance <= 0.0 { continue; }
+                        if let Some(et) = expected_p_type {
+                            if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                        }
+                        candidates.insert(p_rep);
                     }
-                    // 🌟 FIX
-                    if self.egraph.is_connected(c_rep, p_rep) {
-                        let mut next_bind = bind.clone();
-                        next_bind.insert(parent_var.clone(), p_rep);
-                        self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
-                    }
+                }
+                for p_rep in candidates {
+                    let mut next_bind = bind.clone();
+                    next_bind.insert(parent_var.clone(), p_rep);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
                 }
             }
             (None, Some(p_id)) => {
