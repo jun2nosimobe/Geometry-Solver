@@ -135,6 +135,37 @@ pub fn calc_harmonic_conjugate(a: &[ModInt], b: &[ModInt], c: &[ModInt]) -> Vec<
     normalize(&d)
 }
 
+// 🌟 複比 (A,B;C,D) の直接計算。A,B,C,Dが同一直線上にあるとき、C,Dを
+// それぞれA,Bの1次結合 X = p_X*A + q_X*B (同次座標としての比のみ意味を持つ、
+// calc_harmonic_conjugateと同じ分解トリック)に分解し、A,Bを媒介変数0,∞と
+// みなした時の"座標" τ_X = q_X/p_X を使って (A,B;C,D) := τ_D / τ_C として
+// 求める。D = H(A,B,C)(調和共役点)のときはτ_D = -τ_Cとなるため、この式は
+// ちょうど-1を返す ── これをテストでの正しさの検算に使う。
+// A,B,C,Dのいずれかが縮退している(C=BまたはD=A、あるいは分解不能)場合はNone。
+pub fn calc_cross_ratio(a: &[ModInt], b: &[ModInt], c: &[ModInt], d: &[ModInt]) -> Option<ModInt> {
+    if a.len() < 3 || b.len() < 3 || c.len() < 3 || d.len() < 3 { return None; }
+
+    let decompose = |x: &[ModInt]| -> Option<(ModInt, ModInt)> {
+        let try_pair = |i: usize, j: usize| -> Vec<ModInt> {
+            let row1 = [a[i], b[i], -x[i]];
+            let row2 = [a[j], b[j], -x[j]];
+            cross_product(&row1, &row2)
+        };
+        let mut pql = try_pair(0, 1);
+        if pql.iter().all(|v| v.0 == 0) { pql = try_pair(1, 2); }
+        if pql.iter().all(|v| v.0 == 0) { pql = try_pair(0, 2); }
+        if pql.len() < 2 || (pql[0].0 == 0 && pql[1].0 == 0) { return None; }
+        Some((pql[0], pql[1]))
+    };
+
+    let (p_c, q_c) = decompose(c)?;
+    let (p_d, q_d) = decompose(d)?;
+    // p_c==0 は C=B(τ_Cが未定義=分母ゼロ)、q_d==0 は D=A(τ_Dが未定義)に相当し、
+    // どちらも複比が定義不能な退化ケース。
+    if p_c.0 == 0 || q_d.0 == 0 { return None; }
+    Some((q_c * p_d) / (p_c * q_d))
+}
+
 // 🐛 FIX: 以前は長さチェックも、vp(接点)のz成分が0(=無限遠点)かのチェックも
 // 無かった。cross_productと同様、退化した入力に対してpanicせずvec![]
 // (計算不能)を返すようにする。

@@ -395,3 +395,58 @@ fn test_raw_proof_reports_gap_for_unmerged_entities() {
     let report = raw.verify_identical(a.0, b.0);
     assert!(!report.is_rigorous(), "無関係などうしはマージされていないので、ギャップとして報告されるべき");
 }
+
+/// 🌟 複比(A,B;C,D)のV4正規化: 値を厳密に保つ4元クライン群
+/// {id, (AB)(CD), (AC)(BD), (AD)(BC)} の4通りの引数順は、全て同じ
+/// エンティティに畳み込まれるべき(Circumcircleが3点の6順列を1つに
+/// 畳み込むのと同じ発想)。一方、この4通りに含まれない置換
+/// (例: (A,C,B,D))は値そのものが変わる(一般に1-kになる)ため、
+/// 別エンティティのままであるべき(過剰な同一視をしていないことの確認)。
+#[test]
+fn test_cross_ratio_v4_normalization() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+
+    let base = egraph.create_entity("CR1".into(), Definition::CrossRatio(a, b, c, d), EntityType::Scalar);
+    let swap_pairs = egraph.create_entity("CR2".into(), Definition::CrossRatio(b, a, d, c), EntityType::Scalar);
+    let swap_halves = egraph.create_entity("CR3".into(), Definition::CrossRatio(c, d, a, b), EntityType::Scalar);
+    let swap_both = egraph.create_entity("CR4".into(), Definition::CrossRatio(d, c, b, a), EntityType::Scalar);
+
+    assert_eq!(base, swap_pairs, "(B,A;D,C)は(A,B;C,D)と同じ値になるはずなので、同一エンティティであるべき");
+    assert_eq!(base, swap_halves, "(C,D;A,B)は(A,B;C,D)と同じ値になるはずなので、同一エンティティであるべき");
+    assert_eq!(base, swap_both, "(D,C;B,A)は(A,B;C,D)と同じ値になるはずなので、同一エンティティであるべき");
+
+    let different_value = egraph.create_entity("CR5".into(), Definition::CrossRatio(a, c, b, d), EntityType::Scalar);
+    assert_ne!(base, different_value, "(A,C;B,D)は一般に異なる値(1-k)になるはずなので、別エンティティであるべき");
+}
+
+/// 🌟 calc_cross_ratioの正しさを、既に検証済みのcalc_harmonic_conjugateとの
+/// 整合性で確認する: 定義上、調和共役点D=H(A,B,C)に対しては
+/// (A,B;C,D)がちょうど-1になるはず。
+#[test]
+fn test_cross_ratio_matches_harmonic_conjugate_value() {
+    let a = vec![ModInt::new(0), ModInt::new(0), ModInt::new(1)];
+    let b = vec![ModInt::new(4), ModInt::new(0), ModInt::new(1)];
+    let c = vec![ModInt::new(1), ModInt::new(0), ModInt::new(1)];
+
+    let d = mmp_calculators::calc_harmonic_conjugate(&a, &b, &c);
+    let k = mmp_calculators::calc_cross_ratio(&a, &b, &c, &d).expect("非退化な配置なので複比は計算できるはず");
+    assert_eq!(k, ModInt::new(-1), "調和共役点との複比はちょうど-1になるべき");
+}
+
+/// 🌟 calc_cross_ratioがA,B自身に対しては退化(定義不能)を正しく検出することを確認する
+/// (C=BやD=Aは複比の定義域外)。
+#[test]
+fn test_cross_ratio_degenerate_cases_return_none() {
+    let a = vec![ModInt::new(0), ModInt::new(0), ModInt::new(1)];
+    let b = vec![ModInt::new(4), ModInt::new(0), ModInt::new(1)];
+    let c = vec![ModInt::new(1), ModInt::new(0), ModInt::new(1)];
+
+    // C=B (第3引数がBそのもの)
+    assert!(mmp_calculators::calc_cross_ratio(&a, &b, &b, &c).is_none());
+    // D=A (第4引数がAそのもの)
+    assert!(mmp_calculators::calc_cross_ratio(&a, &b, &c, &a).is_none());
+}

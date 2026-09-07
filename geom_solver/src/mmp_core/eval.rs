@@ -202,6 +202,18 @@ impl EGraph {
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
                 Self::to_option(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
             }
+            // 🌟 複比(A,B;C,D)はPoint型ではなくScalar型の値(A,B,C,Dが直線上に
+            // ある前提でのτ_D/τ_C)なので、点のような同次座標[x,y,z]ではなく
+            // LengthSqと同じ「値, 1, 1」の3要素形式で返す(numeric_values_proportional
+            // が単純な値比較として扱えるようにするための既存の慣習)。
+            Definition::CrossRatio(a, b, c, d) => {
+                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
+                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
+                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
+                let vd = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
+                mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
+                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+            }
             _ => None,
         }
     }

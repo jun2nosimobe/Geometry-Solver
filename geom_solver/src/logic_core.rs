@@ -786,12 +786,18 @@ impl ProverEngine {
                     arr.sort_unstable();
                     Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
                 }
+                // 🌟 CrossRatioのV4正規化はここで手書きで複製せず、mod.rs側の
+                // normalize_definitionをそのまま呼ぶ(4元クライン群の畳み込みは
+                // 単純なソートより複雑なので、ロジックを1箇所に保つ)。
+                "CrossRatio" if parent_ids.len() == 4 => self.egraph.normalize_definition(
+                    &Definition::CrossRatio(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
+                ),
                 _ => Definition::GivenPoint,
             };
 
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
-            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq") {
+            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio") {
                 let e_type = match target_type {
                     "AnglePair" => EntityType::Angle,
                     "DirectionOf" => EntityType::Direction,
@@ -865,6 +871,20 @@ impl ProverEngine {
                                         (vec![d_parents[2], d_parents[1], d_parents[0]], None),
                                     ]
                                 } else { vec![(d_parents.clone(), None)] }
+                            } else if target_type == "CrossRatio" && d_parents.len() == 4 {
+                                // 🌟 複比の値を厳密に保つ4元クライン群V4の4通りだけを試す
+                                // (mod.rs::normalize_definitionのCrossRatio正規化と対になる
+                                // 唯一の正しい順列集合――全24順列や、Circumcircle等と同じ
+                                // 「完全な順不同」ではないことに注意。他の20順列は値そのものが
+                                // 変わるので、ここで一緒に試してしまうと異なる複比を誤って
+                                // 同一視することになる)。
+                                let p = &d_parents;
+                                vec![
+                                    (vec![p[0], p[1], p[2], p[3]], None),
+                                    (vec![p[1], p[0], p[3], p[2]], None),
+                                    (vec![p[2], p[3], p[0], p[1]], None),
+                                    (vec![p[3], p[2], p[1], p[0]], None),
+                                ]
                             } else if target_type == "AnglePair" && def.allow_flip && d_parents.len() == 2 {
                                 let mut valid_perms = Vec::new();
                                 let state = def.flip_group.as_ref().and_then(|g| flip_states.get(g).copied());

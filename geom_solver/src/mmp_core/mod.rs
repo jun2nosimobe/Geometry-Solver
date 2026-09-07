@@ -62,6 +62,14 @@ pub enum Definition {
     // 同じ要領で「通常の合同閉包(f(a)=f(b) if a=b)だけで自動的に従う事実」を
     // 専用定理なしに手に入れられる。
     HarmonicConjugateOf(ClassId, ClassId, ClassId),
+    // 🌟 複比(A,B;C,D) (Scalar): 直線上の4点の射影不変量。4引数の置換のうち、
+    // 値を厳密に保つのは4元クライン群V4={(A,B,C,D),(B,A,D,C),(C,D,A,B),
+    // (D,C,B,A)}のみ(normalize_definitionでこの4通りの中からClassId辞書順
+    // 最小を選ぶ)。残り20通りの置換は6種の異なる値(k,1/k,1-k,1/(1-k),
+    // k/(k-1),(k-1)/k)を生むため、それぞれ別エンティティになり得るが、
+    // 他のDefinitionと同様にmemoによる遅延生成なので、実際に定理/問題文が
+    // 参照した組み合わせしか作られない(組み合わせ爆発はしない)。
+    CrossRatio(ClassId, ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -86,6 +94,7 @@ impl Definition {
             Definition::TangentLine(_,_) => "TangentLine",
             Definition::ParallelLine(_,_) => "ParallelLine",
             Definition::HarmonicConjugateOf(_,_,_) => "HarmonicConjugateOf",
+            Definition::CrossRatio(_,_,_,_) => "CrossRatio",
         }
     }
 
@@ -103,6 +112,7 @@ impl Definition {
             Definition::TangentLine(c, p) => vec![*c, *p],
             Definition::ParallelLine(l, p) => vec![*l, *p],
             Definition::HarmonicConjugateOf(a, b, c) => vec![*a, *b, *c],
+            Definition::CrossRatio(a, b, c, d) => vec![*a, *b, *c, *d],
             _ => vec![],
         }
     }
@@ -126,6 +136,7 @@ impl Definition {
             Definition::PerpDirectionOf(_) => EntityType::Direction,
             Definition::AnglePair(_, _) => EntityType::Angle,
             Definition::LengthSq(_, _) => EntityType::Scalar,
+            Definition::CrossRatio(_, _, _, _) => EntityType::Scalar,
             Definition::GivenPoint | Definition::FreePoint => EntityType::Point,
         }
     }
@@ -476,6 +487,27 @@ impl EGraph {
                 let r_b = self.get_rep(*b);
                 let r_c = self.get_rep(*c);
                 if r_a.0 > r_b.0 { Definition::HarmonicConjugateOf(r_b, r_a, r_c) } else { Definition::HarmonicConjugateOf(r_a, r_b, r_c) }
+            },
+            // 🌟 複比(A,B;C,D)の値を厳密に保つのは4元クライン群V4=
+            // {id, (AB)(CD), (AC)(BD), (AD)(BC)}の4通りだけ(射影幾何の標準的な
+            // 事実)。この4通りの中からClassId辞書順最小を正準形として選ぶ
+            // ――Circumcircle(3点の6順列から選ぶ)と全く同じ発想の拡張。
+            // 残り20通りの置換は(k,1/k,1-k,1/(1-k),k/(k-1),(k-1)/k という)
+            // 6種の異なる値を生むため、意図的にここでは同一視しない
+            // (定理側が「この特定の組み合わせの複比」を明示的に参照した時だけ、
+            // そのための別エンティティがmemo経由で遅延生成される)。
+            Definition::CrossRatio(a, b, c, d) => {
+                let r = [self.get_rep(*a), self.get_rep(*b), self.get_rep(*c), self.get_rep(*d)];
+                let candidates = [
+                    (r[0], r[1], r[2], r[3]),
+                    (r[1], r[0], r[3], r[2]),
+                    (r[2], r[3], r[0], r[1]),
+                    (r[3], r[2], r[1], r[0]),
+                ];
+                let best = candidates.into_iter()
+                    .min_by_key(|t| (t.0.0, t.1.0, t.2.0, t.3.0))
+                    .unwrap();
+                Definition::CrossRatio(best.0, best.1, best.2, best.3)
             },
             _ => def.clone(),
         }

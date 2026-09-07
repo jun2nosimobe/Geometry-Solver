@@ -57,6 +57,7 @@ impl EGraph {
             Definition::Circumcircle(a, b, c) => format!("Circumcircle({}, {}, {})", get_name(a), get_name(b), get_name(c)),
             Definition::TangentLine(c, p) => format!("TangentLine({}, {})", get_name(c), get_name(p)),
             Definition::HarmonicConjugateOf(a, b, c) => format!("HarmonicConjugate({}, {}; {})", get_name(a), get_name(b), get_name(c)),
+            Definition::CrossRatio(a, b, c, d) => format!("CrossRatio({}, {}; {}, {})", get_name(a), get_name(b), get_name(c), get_name(d)),
         }
     }
 
