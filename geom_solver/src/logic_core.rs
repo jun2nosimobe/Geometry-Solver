@@ -1149,70 +1149,13 @@ impl BlackboardEngine {
     }
 
     /// 🌟 eval.rs::log_conjecture_candidateが蓄積した「証明されていないが
-    /// 数値的根拠のある予想」を処理する。まだ評価していない予想それぞれに
-    /// ついてestimate_conjecture_valueで(使い捨てクローン上で)価値を見積もり、
-    /// 一定以上の価値があれば、その予想が指す2つの実体のheat_bonusを引き上げて
-    /// 以後のDFS/MCTS探索がそちらを優先的に調べるよう仕向ける。現実のegraphの
-    /// 証明状態(union-find/memo/facts)は一切変更しない、あくまで優先度付けの
-    /// ヒント(既存のapply_conclusionsが実際のマージ成立時にheat_bonusを
-    /// 上げているのと同じ仕組みを、"まだ証明されていない有望な方向"にも
-    /// 適用するもの)。
-    ///
-    /// 🌟 組み合わせ爆発対策:
-    /// 1. 予想ごとの評価はestimate_conjecture_value側で合同閉包1回だけの
-    ///    浅い見積もりに固定し、定理マッチングや「予想の予想」への再帰的な
-    ///    連鎖は一切行わない。
-    /// 2. 同じ(a,b)ペアは(何度観測されても)ConjectureEntry.testedにより
-    ///    一度しか評価しない。
-    /// 3. 呼び出し1回あたりに新規評価する予想の数をMAX_PER_CALLで絞り、
-    ///    大量の予想が一度に湧いても評価コストが1ティックに集中しないように
-    ///    分散させる(mainループの毎イテレーションから呼ばれる想定)。
+    /// 数値的根拠のある予想」を処理する。実体はEGraph::process_pending_conjectures
+    /// (mmp_core/eval.rs)に移した(MCTS(mcts.rs::run_step)がBlackboardEngineを
+    /// 介さず、自分自身が発見した予想を同じrun_step呼び出しの中で直接
+    /// 評価・反映できるようにするため)。ここは既存呼び出し元(main.rs)向けの
+    /// 薄い委譲。
     pub fn process_pending_conjectures(&mut self, target: &Option<(String, Vec<ClassId>)>) -> usize {
-        const MAX_PER_CALL: usize = 3;
-        const MERGE_THRESHOLD: usize = 3;
-        const HEAT_BOOST: f64 = 2.0;
-        const HEAT_BOOST_TARGET: f64 = 10.0;
-
-        let pending: Vec<(usize, usize, String, u32)> = {
-            let map = self.prover.egraph.conjectures.borrow();
-            map.iter()
-                .filter(|(_, e)| !e.tested)
-                .take(MAX_PER_CALL)
-                .map(|(&(a, b), e)| (a, b, e.hypothesis.clone(), e.occurrences))
-                .collect()
-        };
-        if pending.is_empty() { return 0; }
-
-        for (a_idx, b_idx, hypothesis, occurrences) in &pending {
-            let (a, b) = (ClassId(*a_idx), ClassId(*b_idx));
-            let name_a = self.prover.egraph.entities[*a_idx].name.clone();
-            let name_b = self.prover.egraph.entities[*b_idx].name.clone();
-
-            println!("  🔍 [予想の検証開始] {} ≡ {} (仮説: {}, これまでに{}回観測) を一時的に仮定して検証します。\
-                以下は使い捨ての複製上での仮想的な帰結であり、実際の証明状態には反映されません:",
-                name_a, name_b, hypothesis, occurrences);
-            let value = self.prover.egraph.estimate_conjecture_value(a, b, target);
-            println!("  🔍 [予想の検証終了] 合同閉包だけで{}件の追加的な帰結{}",
-                value.additional_merges, if value.target_reached { "、さらに証明目標にも到達" } else { "" });
-
-            if let Some(entry) = self.prover.egraph.conjectures.borrow_mut().get_mut(&(*a_idx, *b_idx)) {
-                entry.tested = true;
-            }
-
-            if value.target_reached {
-                // 🌟 "🎯"は既存のリーチ通知(健全に完全マッチした定理の通知)で使われて
-                // いるため紛らわしい。こちらは未証明の仮定に基づく評価なので"🏆"を使う。
-                println!("  🏆 [予想の評価] {} ≡ {} を仮定するだけで証明目標に到達しました！この2点への注目度を大きく引き上げます。", name_a, name_b);
-                self.prover.egraph.entities[*a_idx].heat_bonus += HEAT_BOOST_TARGET;
-                self.prover.egraph.entities[*b_idx].heat_bonus += HEAT_BOOST_TARGET;
-            } else if value.additional_merges >= MERGE_THRESHOLD {
-                println!("  📈 [予想の評価] {} ≡ {} は仮定するだけで{}件の追加的な帰結を生むため、この2点への注目度を引き上げます。",
-                    name_a, name_b, value.additional_merges);
-                self.prover.egraph.entities[*a_idx].heat_bonus += HEAT_BOOST;
-                self.prover.egraph.entities[*b_idx].heat_bonus += HEAT_BOOST;
-            }
-        }
-        pending.len()
+        self.prover.egraph.process_pending_conjectures(target)
     }
 
     pub fn schedule_full_sweep(&mut self) {

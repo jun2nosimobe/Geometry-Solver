@@ -383,6 +383,79 @@ impl EGraph {
         }
     }
 
+    /// 🌟 log_conjecture_candidateが蓄積した「証明されていないが数値的根拠の
+    /// ある予想」を処理する。まだ評価していない予想それぞれについて
+    /// estimate_conjecture_valueで(使い捨てクローン上で)価値を見積もり、
+    /// 一定以上の価値があれば、その予想が指す2つの実体のheat_bonusを引き上げて
+    /// 以後のDFS/MCTS探索がそちらを優先的に調べるよう仕向ける。現実のegraphの
+    /// 証明状態(union-find/memo/facts)は一切変更しない、あくまで優先度付けの
+    /// ヒント。
+    ///
+    /// 🌟 元々BlackboardEngine側にあったが、MCTS(mcts.rs::run_step)からも
+    /// 自分自身が発見した予想を同じrun_step呼び出しの中で即座に評価・反映
+    /// (以後の同じ呼び出し内のシミュレーションのentity_weightに直結)したく
+    /// なったため、BlackboardEngineを介さずEGraph単体で完結するようここに
+    /// 移した。BlackboardEngine::process_pending_conjecturesは薄い委譲に
+    /// なっている。
+    ///
+    /// 🌟 組み合わせ爆発対策:
+    /// 1. 予想ごとの評価はestimate_conjecture_value側で合同閉包1回だけの
+    ///    浅い見積もりに固定し、定理マッチングや「予想の予想」への再帰的な
+    ///    連鎖は一切行わない。
+    /// 2. 同じ(a,b)ペアは(何度観測されても)ConjectureEntry.testedにより
+    ///    一度しか評価しない。
+    /// 3. 呼び出し1回あたりに新規評価する予想の数をMAX_PER_CALLで絞り、
+    ///    大量の予想が一度に湧いても評価コストが1呼び出しに集中しないように
+    ///    分散させる(mainループの毎イテレーション、及びMCTSの各run_step内で
+    ///    複数回呼ばれる想定)。
+    pub fn process_pending_conjectures(&mut self, target: &Option<(String, Vec<ClassId>)>) -> usize {
+        const MAX_PER_CALL: usize = 3;
+        const MERGE_THRESHOLD: usize = 3;
+        const HEAT_BOOST: f64 = 2.0;
+        const HEAT_BOOST_TARGET: f64 = 10.0;
+
+        let pending: Vec<(usize, usize, String, u32)> = {
+            let map = self.conjectures.borrow();
+            map.iter()
+                .filter(|(_, e)| !e.tested)
+                .take(MAX_PER_CALL)
+                .map(|(&(a, b), e)| (a, b, e.hypothesis.clone(), e.occurrences))
+                .collect()
+        };
+        if pending.is_empty() { return 0; }
+
+        for (a_idx, b_idx, hypothesis, occurrences) in &pending {
+            let (a, b) = (ClassId(*a_idx), ClassId(*b_idx));
+            let name_a = self.entities[*a_idx].name.clone();
+            let name_b = self.entities[*b_idx].name.clone();
+
+            println!("  🔍 [予想の検証開始] {} ≡ {} (仮説: {}, これまでに{}回観測) を一時的に仮定して検証します。\
+                以下は使い捨ての複製上での仮想的な帰結であり、実際の証明状態には反映されません:",
+                name_a, name_b, hypothesis, occurrences);
+            let value = self.estimate_conjecture_value(a, b, target);
+            println!("  🔍 [予想の検証終了] 合同閉包だけで{}件の追加的な帰結{}",
+                value.additional_merges, if value.target_reached { "、さらに証明目標にも到達" } else { "" });
+
+            if let Some(entry) = self.conjectures.borrow_mut().get_mut(&(*a_idx, *b_idx)) {
+                entry.tested = true;
+            }
+
+            if value.target_reached {
+                // 🌟 "🎯"は既存のリーチ通知(健全に完全マッチした定理の通知)で使われて
+                // いるため紛らわしい。こちらは未証明の仮定に基づく評価なので"🏆"を使う。
+                println!("  🏆 [予想の評価] {} ≡ {} を仮定するだけで証明目標に到達しました！この2点への注目度を大きく引き上げます。", name_a, name_b);
+                self.entities[*a_idx].heat_bonus += HEAT_BOOST_TARGET;
+                self.entities[*b_idx].heat_bonus += HEAT_BOOST_TARGET;
+            } else if value.additional_merges >= MERGE_THRESHOLD {
+                println!("  📈 [予想の評価] {} ≡ {} は仮定するだけで{}件の追加的な帰結を生むため、この2点への注目度を引き上げます。",
+                    name_a, name_b, value.additional_merges);
+                self.entities[*a_idx].heat_bonus += HEAT_BOOST;
+                self.entities[*b_idx].heat_bonus += HEAT_BOOST;
+            }
+        }
+        pending.len()
+    }
+
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化
     /// 方式が定義の種類によって異なる(FreePointは[x,y,1]のまま、他の多くは
     /// 「最初の非ゼロ成分を1にする」方式)ため、単純な要素比較ではなく

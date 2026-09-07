@@ -26,6 +26,10 @@ pub struct MCTSNode {
     pub visits: u32,
     pub total_score: f64,
     pub untried_actions: Vec<Action>,
+    // 🌟 Progressive widening: get_possible_actionsが一度に生成した候補の
+    // うち、まだ「解禁」していない残りをここに退避しておく
+    // (MCTSSearchEngine::maybe_widen参照)。
+    pub reserved_actions: Vec<Action>,
     pub depth: usize,
 }
 
@@ -48,6 +52,17 @@ pub struct MCTSSearchEngine {
 
 const MAX_DEPTH: usize = 3;
 const UCB_C: f64 = 1.4;
+
+// 🌟 Progressive widening: 訪問数visitsのノードで「試して良い」候補手の数を
+// ceil(WIDEN_C * (visits+1)^WIDEN_ALPHA)に制限する。get_possible_actions
+// 自体は変えず(既存のnum_samples 12/30のままフルにサンプリングする)、
+// 生成された候補プールのうち実際にuntried_actionsとして解禁する分だけを
+// 絞り、残りはMCTSNode::reserved_actionsに退避する。まだ数回しか訪れて
+// いないノードでは少数の候補だけを試し、訪問数が増えて「掘る価値がある」と
+// わかってから徐々に幅を広げることで、見込みの薄い枝の組み合わせ爆発を
+// 抑えつつ、有望な枝には十分な幅を与える。
+const WIDEN_C: f64 = 3.0;
+const WIDEN_ALPHA: f64 = 0.5;
 
 impl MCTSSearchEngine {
     pub fn new() -> Self {
@@ -120,6 +135,40 @@ impl MCTSSearchEngine {
 
     // 🌟 EGraph::count_active_classes (query.rs) に集約した。予想候補の価値推定
     // (eval.rs::estimate_conjecture_value)でも同じロジックが必要になったため。
+
+    fn allowed_width(visits: u32) -> usize {
+        (WIDEN_C * ((visits + 1) as f64).powf(WIDEN_ALPHA)).ceil() as usize
+    }
+
+    /// 🌟 get_possible_actionsが生成した候補全量を、初期解禁分(untried_actions)と
+    /// 未解禁分(reserved_actions)に分割する。ノード作成直後はvisits=0なので
+    /// allowed_width(0)件までを解禁する。
+    fn split_for_widening(mut actions: Vec<Action>) -> (Vec<Action>, Vec<Action>) {
+        let initial_w = Self::allowed_width(0);
+        if actions.len() <= initial_w {
+            (actions, Vec::new())
+        } else {
+            let reserved = actions.split_off(initial_w);
+            (actions, reserved)
+        }
+    }
+
+    /// 🌟 ノードの現在の訪問数に応じて、reserved_actionsからuntried_actionsへ
+    /// 候補を解禁する(Progressive widening本体)。選択フェーズでこのノードを
+    /// 通過するたびに呼ぶ。
+    fn maybe_widen(node: &mut MCTSNode) {
+        if node.reserved_actions.is_empty() { return; }
+        let target_w = Self::allowed_width(node.visits);
+        let exposed = node.children.len() + node.untried_actions.len();
+        if target_w > exposed {
+            let take = (target_w - exposed).min(node.reserved_actions.len());
+            for _ in 0..take {
+                if let Some(a) = node.reserved_actions.pop() {
+                    node.untried_actions.push(a);
+                }
+            }
+        }
+    }
 
     /// 🌟 構成された図形自体の構造的な「面白さ」。ActionGenerator::entity_weightと
     /// 同じ基礎重要度に加え、作図の種類・次数(共線/共円の強さ)でボーナスを足す。
@@ -229,18 +278,25 @@ impl MCTSSearchEngine {
             return false;
         }
 
+        let (root_untried, root_reserved) = Self::split_for_widening(root_actions);
         self.nodes.push(MCTSNode {
             action: None, parent: None, children: Vec::new(),
-            visits: 0, total_score: 0.0, untried_actions: root_actions, depth: 0,
+            visits: 0, total_score: 0.0, untried_actions: root_untried, reserved_actions: root_reserved, depth: 0,
         });
 
-        for _ in 0..num_simulations {
+        for sim_idx in 0..num_simulations {
             let mut sim_egraph = egraph.clone();
             let mut path = vec![0usize];
             let mut curr = 0usize;
 
             // 1. Selection: 展開済み(未試行行動なし)かつ子がある限りUCB1で降りる
-            while self.nodes[curr].untried_actions.is_empty() && !self.nodes[curr].children.is_empty() {
+            loop {
+                // 🌟 Progressive widening: このノードをまた通過したので、
+                // 訪問数に応じて候補の解禁幅を見直す。
+                Self::maybe_widen(&mut self.nodes[curr]);
+                if !(self.nodes[curr].untried_actions.is_empty() && !self.nodes[curr].children.is_empty()) {
+                    break;
+                }
                 let parent_visits = self.nodes[curr].visits;
                 curr = *self.nodes[curr].children.iter()
                     .max_by(|&&a, &&b| self.nodes[a].ucb1(parent_visits, UCB_C)
@@ -263,15 +319,16 @@ impl MCTSSearchEngine {
                 let reward = Self::evaluate_step(&mut sim_egraph, new_id, target, classes_before);
 
                 let depth = self.nodes[curr].depth + 1;
-                let untried = if depth < MAX_DEPTH && reward < 999.0 {
+                let generated = if depth < MAX_DEPTH && reward < 999.0 {
                     self.action_gen.get_possible_actions(&sim_egraph, true, gen_target)
                 } else {
                     vec![]
                 };
+                let (untried, reserved) = Self::split_for_widening(generated);
 
                 let child = MCTSNode {
                     action: Some(action), parent: Some(curr), children: Vec::new(),
-                    visits: 0, total_score: 0.0, untried_actions: untried, depth,
+                    visits: 0, total_score: 0.0, untried_actions: untried, reserved_actions: reserved, depth,
                 };
                 let child_idx = self.nodes.len();
                 self.nodes.push(child);
@@ -316,7 +373,26 @@ impl MCTSSearchEngine {
             // シミュレーション内で起きた数値的な偶然の一致の情報がほぼ全て
             // 失われ、heat_bonusへのフィードバックが機能しなくなる。
             egraph.absorb_conjectures_from(&sim_egraph);
+
+            // 🌟 直結: 以前はmain.rsのメインループ側だけがprocess_pending_conjectures
+            // を呼んでおり、MCTS自身がこのrun_step呼び出しの中で発見した予想は、
+            // このrun_stepが終わって呼び出し元に戻り、次のメインループの
+            // ティックが回ってくるまでheat_bonusに反映されなかった
+            // (=同じrun_step内の残りのシミュレーションには一切効かなかった)。
+            // ここで20シミュレーションに1回、EGraph::process_pending_conjectures
+            // を直接呼ぶことで、MCTSが自分の手番の中で見つけた「あと数個で
+            // マッチングできそうな」予想を、同じ呼び出し内の後続シミュレーション
+            // のentity_weight(=get_possible_actions/weighted_pickが読む値)に
+            // 即座に反映させる。呼び出し1回あたりの評価件数上限(MAX_PER_CALL=3)
+            // はprocess_pending_conjectures側でそのまま維持されるので、頻度を
+            // 上げても評価コスト(クローン+合同閉包1回)は「20シミュレーションに
+            // つき高々3件」に留まり、組み合わせ爆発は起きない。
+            if sim_idx % 20 == 19 {
+                egraph.process_pending_conjectures(target);
+            }
         }
+        // 🌟 num_simulationsが20未満の場合でも最低1回は反映させる。
+        egraph.process_pending_conjectures(target);
 
         self.print_root_ranking(egraph);
 
