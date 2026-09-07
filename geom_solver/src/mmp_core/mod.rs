@@ -253,6 +253,17 @@ pub struct EGraph {
     // (mmp_tester.rs等、既存の全ての呼び出し元は&EGraphしか渡さない)。
     // キーは正規化された(小さい方の代表元インデックス, 大きい方の代表元インデックス)。
     pub conjectures: std::cell::RefCell<rustc_hash::FxHashMap<(usize, usize), ConjectureEntry>>,
+    // 🌟 実際にunion-findの併合が起きるたび(merge_entities内で root1 != root2
+    // だった回数だけ)単調増加するカウンタ。logic_core.rs::MatchTaskが
+    // dfs_cap到達で再キューされる際、そのタスク専用のfailed_paths
+    // (このタスクの中でどのbind/flip_states状態が「これ以上進めない」と
+    // 分かったかのハッシュキャッシュ)を安全に持ち越せるかどうかの判定に使う。
+    // failed_pathsはget_rep()した後のClassIdをハッシュに含めているため、
+    // キャッシュを作った時点から1回でもマージが起きていれば、同じハッシュが
+    // 別の(今はマージにより到達可能になったかもしれない)状態を指してしまい
+    // 得る。そのため「保存時のこの値」と「再開時のこの値」が一致する場合
+    // だけ再利用し、1つでもずれていれば安全側に倒して空から作り直す。
+    pub merge_generation: u64,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -327,6 +338,7 @@ impl EGraph {
             proof_edges: rustc_hash::FxHashMap::default(),
             incidence_provenance: rustc_hash::FxHashMap::default(),
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
+            merge_generation: 0,
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);

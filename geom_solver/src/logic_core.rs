@@ -109,6 +109,18 @@ pub struct MatchTask {
     // 別種の試行なので、混ぜると「シードでよく呼ばれるが素の全探索では
     // ほぼ失敗する定理」の見込みスコアを不当に引き上げてしまう)。
     pub is_seeded: bool,
+    // 🌟 failed_pathsの持ち越し(EGraph::merge_generationのドキュメント参照):
+    // dfs_cap到達でこのタスクが再キューされた時点でのdfs_match失敗状態
+    // キャッシュと、その時点のegraph.merge_generationの値。再度popされた
+    // 時にmerge_generationが変わっていなければ(=このタスクが中断されて
+    // 以降、e-graphで一度もマージが起きていなければ)そのまま再利用し、
+    // 既に探索済みの行き止まりを再訪しない。変わっていれば安全側に倒して
+    // 空のfailed_pathsから再開する(run_step側の判定)。新規タスク
+    // (schedule_full_sweep/schedule_matcher_task由来)は常に空・世代0から
+    // 始まる(egraphのmerge_generationが0のままなら初回はそのまま有効な
+    // キャッシュとして扱われるが、中身が空なので実質的な違いはない)。
+    pub cached_failed_paths: rustc_hash::FxHashSet<u64>,
+    pub failed_paths_generation: u64,
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
@@ -1421,6 +1433,8 @@ impl BlackboardEngine {
                 flip_states: FlipStates::default(),
                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
+                cached_failed_paths: rustc_hash::FxHashSet::default(),
+                failed_paths_generation: self.prover.egraph.merge_generation,
             });
         }
     }
@@ -1463,6 +1477,8 @@ impl BlackboardEngine {
                                 flip_states: FlipStates::default(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                                 is_seeded: true,
+                                cached_failed_paths: rustc_hash::FxHashSet::default(),
+                                failed_paths_generation: self.prover.egraph.merge_generation,
                             });
                         }
                     }
@@ -1509,8 +1525,6 @@ impl BlackboardEngine {
                 // ディープコピーではなく参照カウントのインクリメントのみ(ポインタコピー相当)
                 let theorem = self.prover.theorems[task.theorem_idx].clone();
                 let mut new_binds = Vec::new();
-                let mut failed_paths = rustc_hash::FxHashSet::default();
-
                 // 🌟 検証メモ: 当初は schedule_full_sweep() 由来のシードなしタスク
                 // (priority<=0) だけ上限を 20,000 に下げる案を試したが、miquel の
                 // 「有向角の加法性」「円周角の定理の逆」はまさにシードなし状態から
@@ -1518,6 +1532,23 @@ impl BlackboardEngine {
                 // failed_paths キャッシュが空の状態から探索をやり直すだけになって
                 // かえって遅くなった(0.69s→1.15s)ため撤回した。
                 // 上限自体は104行目のフィールド定義の通り常に100,000のまま。
+                //
+                // 🌟 HAGeo-409ベンチマークで判明した問題への対応: 上記の撤回理由は
+                // 「dfs_cap到達で再キューされるたびにfailed_pathsが空に戻り、
+                // 同じ行き止まりを何度も再訪して探索し直す」という無駄そのもの
+                // だった。これを解消するため、このタスクがdfs_cap到達で再キュー
+                // されたものであり、かつ再キュー時点から今この瞬間まで(他の
+                // タスクの成功も含め)e-graphで一度もマージが起きていなければ
+                // (EGraph::merge_generationが一致していれば)、前回のfailed_paths
+                // をそのまま引き継いで再開する。マージが1回でも起きていれば
+                // (union-findの代表元が動き、古いハッシュが別の状態を指し得る
+                // ため)安全側に倒して空から作り直す。
+                let current_gen = self.prover.egraph.merge_generation;
+                let mut failed_paths = if task.failed_paths_generation == current_gen {
+                    std::mem::take(&mut task.cached_failed_paths)
+                } else {
+                    rustc_hash::FxHashSet::default()
+                };
 
                 self.prover.dfs_match(
                     &theorem,
@@ -1547,6 +1578,11 @@ impl BlackboardEngine {
                     if !self.task_queue.is_empty() {
                         task.priority -= 5;
                         if task.priority >= -20 { // 諦める閾値
+                            // 🌟 再開時に引き継げるよう、このタスク専用の
+                            // failed_pathsとその時点のmerge_generationを保存する
+                            // (再開条件のチェックはこのブロックの直前を参照)。
+                            task.cached_failed_paths = failed_paths;
+                            task.failed_paths_generation = current_gen;
                             self.task_queue.push(task);
                         }
                     }

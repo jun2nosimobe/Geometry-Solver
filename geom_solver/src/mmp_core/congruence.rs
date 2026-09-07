@@ -75,6 +75,9 @@ impl EGraph {
         self.entities[root1.0].uses.extend(root2_uses);
 
         self.worklist.push(root1);
+        // 🌟 実際に併合が起きた印。logic_core.rs::MatchTaskのfailed_paths
+        // 持ち越し判定(merge_generationのドキュメント参照)が使う。
+        self.merge_generation += 1;
         true
     }
 
