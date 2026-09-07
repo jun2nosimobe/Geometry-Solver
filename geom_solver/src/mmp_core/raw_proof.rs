@@ -307,14 +307,52 @@ impl RawProof {
         }
     }
 
+    /// 🌟 ある実体(entity)が、これまでにどんな他の実体を吸収して現在の姿に
+    /// なったか(=どんな名前付き定理がその過程で使われたか)を子ノードの列
+    /// として返す共通処理。(a)この実体自身がさらに別のマージの産物なら
+    /// そのマージ履歴(前向きpath_to_root)、(b)逆に「誰がこの実体に合流して
+    /// きたか」(reverse_edges)、の両方を辿る。excludeは「今まさに検証して
+    /// いる辺」の(from, to)で、これ自身を自分の根拠として再発見してしまう
+    /// 循環を防ぐために除外する(呼び出し元が該当する辺を持たない場合は
+    /// 存在しないid同士のペアを渡せばよい)。
+    fn merge_ancestry_steps(
+        &self,
+        entity: usize,
+        exclude: (usize, usize),
+        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        depth: usize,
+    ) -> Vec<DeepStep> {
+        let is_excluded = |a: usize, b: usize| (a, b) == exclude || (b, a) == exclude;
+        let mut children = Vec::new();
+        for (sf, se) in self.path_to_root(entity) {
+            if is_excluded(sf, se.to) { continue; }
+            children.push(self.build_step(sf, &se, false, visited, depth + 1));
+        }
+        // 🐛 FIX: 共有点/共有直線や、DefinedByの結果として参照されるClassIdは、
+        // 多くの場合そのマージの当時から今も代表元であり続けている側(=誰かが
+        // こちらへ吸収されてきた側)であるため、上のpath_to_root(前向き)だけ
+        // では何も出てこない(代表元自身はproof_edges上で"from"にはならない
+        // ため)。逆に「誰がこの実体に合流してきたか」をreverse_edgesで辿る
+        // ことで、例えば「別の方向が同位角判定などの定理チェーンでこの方向に
+        // 合流した」という、まさに知りたい経緯を拾い上げる(orthocenter_alt
+        // の調査でこの取りこぼしが実際に発覚した)。
+        if let Some(sources) = self.reverse_edges.get(&entity) {
+            for &src in sources {
+                if is_excluded(src, entity) { continue; }
+                let edge_key = ("REVEDGE".to_string(), vec![src, entity]);
+                if !visited.insert(edge_key) { continue; }
+                if let Some(edge) = self.proof_edges.get(&src) {
+                    children.push(self.build_step(src, edge, false, visited, depth + 1));
+                }
+            }
+        }
+        children
+    }
+
     /// 🌟 LineUniqueness/PointUniquenessが「共有している」とみなした1つの点
-    /// (またはPointUniquenessの場合は2点それぞれ)について、(a)それ自身が
-    /// さらに別のマージの産物ならそのマージ履歴、(b)関係する直線それぞれへの
-    /// 接続の由来、をまとめて1つの子ノードにする。excludeは「今まさに検証
-    /// している辺」の(from, to)で、path_to_root/reverse_edgesが偶然この
-    /// 辺自身を再発見してしまい、自分自身を自分の根拠として無限に参照する
-    /// 循環(PointUniquenessでentityがまさにその辺の片方になるため実際に
-    /// circumcenterの調査で発覚した)を防ぐために、この辺だけは除外する。
+    /// (またはPointUniquenessの場合は2点それぞれ)について、(a)それ自身の
+    /// 合流履歴(merge_ancestry_steps)、(b)関係する直線それぞれへの接続の
+    /// 由来、をまとめて1つの子ノードにする。
     fn build_grounding_step(
         &self,
         entity: usize,
@@ -328,32 +366,7 @@ impl RawProof {
         if !visited.insert(key) {
             return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
         }
-        let is_excluded = |a: usize, b: usize| (a, b) == exclude || (b, a) == exclude;
-        let mut children = Vec::new();
-        // (a) この実体自身がさらに別のマージの産物なら、その履歴を辿る
-        // (このentityが後で誰かに吸収された側=proof_edges上のfromである場合)。
-        for (sf, se) in self.path_to_root(entity) {
-            if is_excluded(sf, se.to) { continue; }
-            children.push(self.build_step(sf, &se, false, visited, depth + 1));
-        }
-        // 🐛 FIX: LineUniqueness/PointUniquenessが記録する共有点/共有直線の
-        // ClassIdは、多くの場合そのマージの当時から今も代表元であり続けている
-        // 側(=誰かがこちらへ吸収されてきた側)であるため、上のpath_to_root
-        // (前向き)だけでは何も出てこない(代表元自身はproof_edges上で
-        // "from"にはならないため)。逆に「誰がこの実体に合流してきたか」を
-        // reverse_edgesで辿ることで、例えば「別の方向が同位角判定などの
-        // 定理チェーンでこの方向に合流した」という、まさに知りたい経緯を
-        // 拾い上げる(orthocenter_altの調査でこの取りこぼしが実際に発覚した)。
-        if let Some(sources) = self.reverse_edges.get(&entity) {
-            for &src in sources {
-                if is_excluded(src, entity) { continue; }
-                let edge_key = ("REVEDGE".to_string(), vec![src, entity]);
-                if !visited.insert(edge_key) { continue; }
-                if let Some(edge) = self.proof_edges.get(&src) {
-                    children.push(self.build_step(src, edge, false, visited, depth + 1));
-                }
-            }
-        }
+        let mut children = self.merge_ancestry_steps(entity, exclude, visited, depth);
         // (b) 関係する直線それぞれへの接続の由来。記録が無ければ、作図時点の
         // 構造的な接続(定義から機械的に従う)として基底ケース扱いする。
         for &line in lines {
@@ -367,9 +380,55 @@ impl RawProof {
         DeepStep { headline, reason: "共有点/共有直線としての由来".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
     }
 
+    /// 🌟 DefinedBy前提(の結果として参照される実体)や、Identical(X,X)の
+    /// ように「既に同じ実体を指している」premiseは、一見すると「定義から
+    /// 機械的に従う自明な基底事実」に見えるが、実際にはその実体がこれまで
+    /// 他の実体を(named theoremによって)吸収してきた結果として初めて
+    /// 成立しているケースが多い(ユーザー指摘: orthocenter_altやsimsonの
+    /// extracted_proofで、本来は円周角の定理・有向角の交替律が使われている
+    /// はずの箇所が「定義より従う」で片付けられていた問題への対応)。
+    /// この実体のmerge_ancestry_steps(合流してきた実体の履歴)を子ノードと
+    /// して展開し、合流履歴が無ければ初めて「本当に自明な基底事実」として
+    /// 扱う。
+    ///
+    /// ⚠️ 精度の限界: raw_proofは「どのDefinitionがどの合流によって
+    /// 加わったか」までは記録していないため、この実体に合流履歴が複数
+    /// あれば全て列挙する(この特定の引数の組と無関係な合流が混ざる
+    /// 可能性はゼロではない)。それでも「定義から機械的に従う」と一律に
+    /// 片付けるよりは遥かに正直な提示になる。
+    fn build_result_ancestry_step(
+        &self,
+        entity: usize,
+        headline: String,
+        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        depth: usize,
+    ) -> DeepStep {
+        let key = ("RESULT_ANCESTRY".to_string(), vec![entity]);
+        if !visited.insert(key) {
+            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        }
+        let ancestry = self.merge_ancestry_steps(entity, (usize::MAX, usize::MAX), visited, depth);
+        if ancestry.is_empty() {
+            DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う。この実体が他の実体を吸収した履歴はありません)".to_string())
+        } else {
+            DeepStep {
+                headline,
+                reason: format!(
+                    "{} にこれまで合流してきた実体の履歴により成立(⚠️ この特定の組み合わせと無関係な合流が混在する可能性があります)",
+                    self.name_of(entity)
+                ),
+                children: ancestry,
+                is_gap: false,
+                gap_reason: None,
+                is_shortcut: false,
+            }
+        }
+    }
+
     /// 🌟 Theoremのpremises 1件をDeepStepへ展開する。Identicalなら合流経路を、
-    /// Connectedならincidence_provenanceの由来を再帰的に辿る。それ以外の
-    /// fact_type(DefinedByなど)は構造的な基底ケースとして扱う。
+    /// Connectedならincidence_provenanceの由来を再帰的に辿る。DefinedByは
+    /// 結果として参照される実体の合流履歴(build_result_ancestry_step)を
+    /// 辿る。
     fn build_premise_step(
         &self,
         fact_type: &str,
@@ -386,6 +445,13 @@ impl RawProof {
             return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
         }
         match fact_type {
+            // 🌟 Identical(X,X): 既に同じ実体(id)を指している場合、explainは
+            // 空経路(=一見自明)を返すだけだが、それは往々にしてこの実体が
+            // 他の実体を(named theoremで)吸収してきた結果である。その履歴を
+            // 辿る(でなければ本当に「元から自明」ということが分かる)。
+            "Identical" if args.len() == 2 && args[0] == args[1] => {
+                self.build_result_ancestry_step(args[0], headline, visited, depth + 1)
+            }
             "Identical" if args.len() == 2 => {
                 match self.explain(args[0], args[1]) {
                     Some(sub_edges) => {
@@ -415,6 +481,15 @@ impl RawProof {
                     // 従う」接続関係であることが多く、これ自体はギャップではない。
                     None => DeepStep::leaf(headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string()),
                 }
+            }
+            // 🌟 DefinedBy(引数..., 結果): 最後の引数が「定義された図形そのもの」
+            // (AnglePair/Midpoint/DirectionOfなど、いずれもpatternの最後の要素)。
+            // この結果実体がこれまで他の実体を吸収してきた履歴を辿ることで、
+            // 「見た目は定義から自明だが実際には円周角の定理・有向角の交替律
+            // などの合流の産物」というケースを可視化する。
+            "DefinedBy" if !args.is_empty() => {
+                let result_id = *args.last().unwrap();
+                self.build_result_ancestry_step(result_id, headline, visited, depth + 1)
             }
             _ => DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う)".to_string()),
         }
