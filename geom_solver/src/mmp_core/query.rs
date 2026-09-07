@@ -4,6 +4,13 @@
 use super::{ClassId, Definition, EntityType, EGraph};
 
 impl EGraph {
+    /// 🌟 現在アクティブな(=自身が代表元である)エンティティの数。マージが
+    /// 実際にいくつ起きたかの粗い指標として使う(MCTSの報酬評価、予想候補の
+    /// 価値推定(eval.rs::estimate_conjecture_value)などで共有する)。
+    pub fn count_active_classes(&self) -> usize {
+        (0..self.entities.len()).filter(|&i| self.get_rep(ClassId(i)).0 == i).count()
+    }
+
     pub fn is_connected(&self, id1: ClassId, id2: ClassId) -> bool {
         let r1 = self.get_rep(id1);
         let r2 = self.get_rep(id2);

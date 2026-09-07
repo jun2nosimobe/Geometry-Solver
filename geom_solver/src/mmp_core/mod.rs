@@ -161,6 +161,40 @@ pub struct EGraph {
     // 成り立ったかの記録。Concyclicの目標(共円であることの証明)を復元する時に使う。
     // キーは(小さい方のClassId, 大きい方のClassId)。
     pub incidence_provenance: rustc_hash::FxHashMap<(ClassId, ClassId), Justification>,
+    // 🌟 数値評価(eval.rs)が偶然の一致(log_conjecture_candidate)を検出した
+    // ときに蓄積する「証明されていないが数値的根拠のある予想」。通常の証明
+    // 状態(parents/memo/subobjects)とは完全に独立しており、証明の健全性には
+    // 一切影響しない。BlackboardEngine::process_pending_conjecturesが読み出し、
+    // 使い捨てのクローン上での価値推定を経てheat_bonusへのフィードバックだけに
+    // 使う(現実のegraphへ直接マージされることは無い)。
+    // Cell/RefCellを使うのは、numeric_plausibility_check系の呼び出し連鎖
+    // (evaluate_node等)が&selfのみで完結する設計を崩したくないため
+    // (mmp_tester.rs等、既存の全ての呼び出し元は&EGraphしか渡さない)。
+    // キーは正規化された(小さい方の代表元インデックス, 大きい方の代表元インデックス)。
+    pub conjectures: std::cell::RefCell<rustc_hash::FxHashMap<(usize, usize), ConjectureEntry>>,
+}
+
+/// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
+#[derive(Debug, Clone)]
+pub struct ConjectureEntry {
+    /// この一致が何を示唆しているか(例: "2点が同一点である")
+    pub hypothesis: String,
+    /// 独立した乱数試行で何回観測されたか(1回でも約10億分の1の偶然でしか
+    /// 起こらないほぼ確実な兆候だが、多いほど確信度の目安になる)
+    pub occurrences: u32,
+    /// process_pending_conjecturesで既に価値評価(estimate_conjecture_value)
+    /// 済みかどうか。同じ予想を何度も再評価しないための重複排除フラグ。
+    pub tested: bool,
+}
+
+/// 🌟 estimate_conjecture_valueの結果。
+#[derive(Debug, Clone, Copy)]
+pub struct ConjectureValue {
+    /// 予想を仮定して合同閉包だけを走らせた時に、追加でいくつの同値類が
+    /// 統合された(=マージが起きた)か。
+    pub additional_merges: usize,
+    /// その仮定だけで(定理マッチングなしに)証明目標に到達したか。
+    pub target_reached: bool,
 }
 
 /// 🌟 なぜこの等式(またはこの接続関係)が成り立つのかの理由。
@@ -209,6 +243,7 @@ impl EGraph {
             worklist: Vec::new(),
             proof_edges: rustc_hash::FxHashMap::default(),
             incidence_provenance: rustc_hash::FxHashMap::default(),
+            conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);

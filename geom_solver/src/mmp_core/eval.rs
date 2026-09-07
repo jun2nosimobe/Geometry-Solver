@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use rustc_hash::FxHashMap;
 use crate::mmp_math::ModInt;
 use crate::mmp_calculators;
-use super::{ClassId, Definition, EntityType, EGraph};
+use super::{ClassId, ConjectureEntry, ConjectureValue, Definition, EntityType, EGraph, Justification};
 
 impl EGraph {
     /// 🌟 数値評価環境 (MMPテスト用)
@@ -249,13 +249,138 @@ impl EGraph {
         let rep_a = self.get_rep(a);
         let rep_b = self.get_rep(b);
         if rep_a == rep_b { return; } // 既に記号的に証明済みなら予想ではない
-        let name_a = &self.entities[rep_a.0].name;
-        let name_b = &self.entities[rep_b.0].name;
-        println!(
-            "  🔮 [予想候補] {} と {} は独立な乱数サンプルで数値的に一致しました(仮説: {})。\
-             まだ証明はされていませんが、偶然の確率は約10億分の1なので実在する関係の可能性が高いです。",
-            name_a, name_b, hypothesis
-        );
+        let key = if rep_a.0 < rep_b.0 { (rep_a.0, rep_b.0) } else { (rep_b.0, rep_a.0) };
+
+        // 🌟 同じペアは観測のたびに(場合によっては数百回)何度も検出される
+        // (orthocenter --mctsの実測で1回の実行あたり最大2000回超)。コンソールを
+        // 埋め尽くさないよう、ログ出力は初回だけにし、以降はconjecturesマップの
+        // occurrencesカウンタを静かに増やすだけにする(BlackboardEngine側の
+        // process_pending_conjecturesが、蓄積されたこの情報を後でまとめて処理する)。
+        //
+        // 🐛 FIX: union-find(get_rep)は経路圧縮やマージにより、同じ「論理的な
+        // 実体」(例: H_AltA_AltBという交点)の代表元ClassIdが実行時間の経過で
+        // 変わり得る。以前は単純にrep_a.0/rep_b.0そのものをキーにしていたため、
+        // 代表元が変わるたびに全く同じ論理的関係が新しいキーとして再登録され、
+        // 実測でorthocenterの中心的な予想(H_AltA_AltB≡H_AltB_AltC)が
+        // "1つの関係"ではなく約800個の別々のエントリとして蓄積されてしまう
+        // 深刻な重複が発生していた。ここで、既存キーをCURRENT get_repで
+        // 再解決した結果が今回のキーと一致するものが無いか線形探索し、
+        // 見つかればそのエントリを現在のキーへ付け替えて更新する
+        // (マップは論理的に別個な関係の数だけ、通常は数十件以内に収まるので、
+        // この線形探索のコストは無視できる)。
+        let mut map = self.conjectures.borrow_mut();
+        let canonical_existing = map.keys().copied().find(|&(ka, kb)| {
+            let (ra, rb) = (self.get_rep(ClassId(ka)), self.get_rep(ClassId(kb)));
+            let (ra, rb) = if ra.0 < rb.0 { (ra.0, rb.0) } else { (rb.0, ra.0) };
+            (ra, rb) == key
+        });
+        let is_first = match canonical_existing {
+            Some(old_key) => {
+                if old_key != key {
+                    if let Some(entry) = map.remove(&old_key) { map.insert(key, entry); }
+                }
+                if let Some(entry) = map.get_mut(&key) { entry.occurrences += 1; }
+                false
+            }
+            None => {
+                map.insert(key, ConjectureEntry {
+                    hypothesis: hypothesis.to_string(),
+                    occurrences: 1,
+                    tested: false,
+                });
+                true
+            }
+        };
+        drop(map);
+
+        if is_first {
+            let name_a = &self.entities[rep_a.0].name;
+            let name_b = &self.entities[rep_b.0].name;
+            println!(
+                "  🔮 [予想候補] {} と {} は独立な乱数サンプルで数値的に一致しました(仮説: {})。\
+                 まだ証明はされていませんが、偶然の確率は約10億分の1なので実在する関係の可能性が高いです。",
+                name_a, name_b, hypothesis
+            );
+        }
+    }
+
+    /// 🌟 予想(a≡b)を実際に真だと仮定した場合、合同閉包だけでどれだけの
+    /// 追加的な帰結(マージ)が即座に得られるかを、使い捨てのクローン上で
+    /// 見積もる。証明の健全性には一切影響しない(現実のegraphは一切変更
+    /// しない)、あくまで探索の優先度付け(heat_bonus)のためのヒューリスティックな
+    /// 価値推定であり、これ自体が新しい事実を証明するわけではない。
+    ///
+    /// 🌟 組み合わせ爆発対策: 意図的に定理マッチング(dfs_match)までは行わず、
+    /// 合同閉包(apply_congruence_closure、直線/点の一意性の局所伝播)だけに
+    /// 留める。定理マッチングまで踏み込み、その結論をさらに新しい予想として
+    /// 連鎖的に評価し始めると、組み合わせが指数的に増える恐れがある。
+    /// まず最も安価でよく効く一段階の構造的伝播だけで価値を見積もり、
+    /// 効果が薄ければそれ以上深追いしない設計にすることで、1つの予想を
+    /// 評価するコストを「クローン1回+合同閉包1回」に固定している。
+    pub fn estimate_conjecture_value(&self, a: ClassId, b: ClassId, target: &Option<(String, Vec<ClassId>)>) -> ConjectureValue {
+        let mut sim = self.clone();
+        let classes_before = sim.count_active_classes();
+        sim.merge_entities_justified(a, b, Justification::Trivial {
+            reason: "予想(数値的根拠のみ、未証明)を価値評価のため一時的に仮定".to_string(),
+        });
+        sim.apply_congruence_closure();
+        let classes_after = sim.count_active_classes();
+        let additional_merges = classes_before.saturating_sub(classes_after);
+
+        let target_reached = match target {
+            Some((ftype, targets)) if ftype == "Identical" && targets.len() == 2 => {
+                sim.get_rep(targets[0]) == sim.get_rep(targets[1])
+            }
+            Some((ftype, targets)) if ftype == "Concyclic" => {
+                let reps: Vec<ClassId> = targets.iter().map(|&t| sim.get_rep(t)).collect();
+                sim.points_share_a_circle(&reps)
+            }
+            _ => false,
+        };
+
+        ConjectureValue { additional_merges, target_reached }
+    }
+
+    /// 🌟 使い捨てクローン(MCTSのsim_egraph等)側で検出された予想候補を、
+    /// 実際の(現実の)EGraphの予想マップへ合流させる。
+    ///
+    /// 🐛 背景: EGraph全体をクローンするとconjectures(RefCell)の中身も
+    /// そのまま複製されるが、これは複製先(独立したRefCell)であり、複製元とは
+    /// 一切共有されない。MCTSは1シミュレーションごとに使い捨てのsim_egraphを
+    /// 作り、その中でapply_congruence_closureを回すため、log_conjecture_candidate
+    /// がそこで検出した予想はシミュレーション終了時にsim_egraphごと丸ごと
+    /// 破棄され、現実のegraph側には一切反映されないまま失われていた
+    /// (実測: 1回の実行で"初回検出"ログが900件超出ても、実際に現実の
+    /// マップに記録され後続処理されたのはそのうち1件だけ、という深刻な
+    /// 取りこぼしが起きていた)。
+    ///
+    /// ここでは、クローン側で新しく作られた実体(=現実のegraphにはまだ
+    /// 存在しないClassId、シミュレーション内でしか意味を持たない補助構成)を
+    /// 参照する予想は除外し、両方の実体が現実のegraphにも実在するものだけを
+    /// 合流させる(存在しない実体へのheat_bonusフィードバックは意味を
+    /// 持たないため)。合流時は現実のegraph側の"今の"代表元で正規化し直す
+    /// (log_conjecture_candidateの重複排除ロジックと同じ理由)。
+    pub fn absorb_conjectures_from(&self, other: &EGraph) {
+        let real_len = self.entities.len();
+        let incoming: Vec<((usize, usize), ConjectureEntry)> = {
+            let other_map = other.conjectures.borrow();
+            other_map.iter()
+                .filter(|&(&(a, b), _)| a < real_len && b < real_len)
+                .map(|(&k, v)| (k, v.clone()))
+                .collect()
+        };
+        if incoming.is_empty() { return; }
+
+        let mut map = self.conjectures.borrow_mut();
+        for ((a, b), entry) in incoming {
+            let (ra, rb) = (self.get_rep(ClassId(a)), self.get_rep(ClassId(b)));
+            if ra == rb { continue; } // 現実のegraph側では既に証明済み
+            let key = if ra.0 < rb.0 { (ra.0, rb.0) } else { (rb.0, ra.0) };
+            match map.get_mut(&key) {
+                Some(existing) => existing.occurrences += entry.occurrences,
+                None => { map.insert(key, entry); }
+            }
+        }
     }
 
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化

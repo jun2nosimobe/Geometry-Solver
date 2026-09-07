@@ -118,9 +118,8 @@ impl MCTSSearchEngine {
         }
     }
 
-    fn count_active_classes(egraph: &EGraph) -> usize {
-        (0..egraph.entities.len()).filter(|&i| egraph.get_rep(ClassId(i)).0 == i).count()
-    }
+    // 🌟 EGraph::count_active_classes (query.rs) に集約した。予想候補の価値推定
+    // (eval.rs::estimate_conjecture_value)でも同じロジックが必要になったため。
 
     /// 🌟 構成された図形自体の構造的な「面白さ」。ActionGenerator::entity_weightと
     /// 同じ基礎重要度に加え、作図の種類・次数(共線/共円の強さ)でボーナスを足す。
@@ -198,7 +197,7 @@ impl MCTSSearchEngine {
             return 1000.0;
         }
 
-        let classes_after = Self::count_active_classes(egraph);
+        let classes_after = egraph.count_active_classes();
         let merges = classes_before.saturating_sub(classes_after) as f64;
         let mut score = merges * 8.0;
         if let Some(id) = new_id {
@@ -259,7 +258,7 @@ impl MCTSSearchEngine {
                 let idx = (rand::random::<u32>() as usize) % self.nodes[curr].untried_actions.len();
                 let action = self.nodes[curr].untried_actions.remove(idx);
 
-                let classes_before = Self::count_active_classes(&sim_egraph);
+                let classes_before = sim_egraph.count_active_classes();
                 let new_id = Self::apply_action(&mut sim_egraph, &action);
                 let reward = Self::evaluate_step(&mut sim_egraph, new_id, target, classes_before);
 
@@ -290,7 +289,7 @@ impl MCTSSearchEngine {
                     if acts.is_empty() { break; }
                     let pick = (rand::random::<u32>() as usize) % acts.len();
                     let a = acts[pick].clone();
-                    let cb = Self::count_active_classes(&sim_egraph);
+                    let cb = sim_egraph.count_active_classes();
                     let nid = Self::apply_action(&mut sim_egraph, &a);
                     let r = Self::evaluate_step(&mut sim_egraph, nid, target, cb);
                     if r >= 999.0 { found_target = true; }
@@ -309,6 +308,14 @@ impl MCTSSearchEngine {
                     self.nodes[node_idx].visits += 1;
                 }
             }
+
+            // 🌟 このシミュレーション用の使い捨てsim_egraphは次のループ反復で
+            // 破棄される(新しくcloneし直される)ため、その中でlog_conjecture_candidate
+            // が検出した予想候補を、破棄される前に現実のegraphへ合流させておく
+            // (EGraph::absorb_conjectures_from参照)。これが無いと、MCTSの
+            // シミュレーション内で起きた数値的な偶然の一致の情報がほぼ全て
+            // 失われ、heat_bonusへのフィードバックが機能しなくなる。
+            egraph.absorb_conjectures_from(&sim_egraph);
         }
 
         self.print_root_ranking(egraph);

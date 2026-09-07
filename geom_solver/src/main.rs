@@ -128,6 +128,13 @@ fn main() {
     while start_time.elapsed() < std::time::Duration::from_secs(time_budget_secs) {
         let applied_logic = engine.run_step(10000);
 
+        // 🌟 数値評価が偶然の一致(予想候補)を検出していれば、使い捨てクローン
+        // 上での価値推定を経てheat_bonusにフィードバックする(現実の証明状態は
+        // 一切変更しない)。呼び出しごとに未評価の予想を最大3件だけ処理するので
+        // (BlackboardEngine::process_pending_conjectures参照)、コストは
+        // ループの他の処理に対して無視できる程度に収まる。
+        engine.process_pending_conjectures(&problem.target_fact);
+
         // 🌟 FIX: & をつけて参照としてパターンマッチし、所有権の移動（move）を防ぐ
         if let Some((fact_type, target_args)) = &problem.target_fact {
             if fact_type == "Identical" {
