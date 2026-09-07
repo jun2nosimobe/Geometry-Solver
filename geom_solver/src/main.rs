@@ -182,14 +182,19 @@ fn main() {
     // 🌟 Rc化: theorems は Vec<Rc<TheoremDef>>。定理は実行中不変なので、
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
     let mut all_theorems = theorems::get_all_theorems();
-    // 🌟 複比の透視射影不変性(Phase 2)はopt-in(theorems.rs::get_projective_theorems
-    // のコメント参照: 9つの自由な点変数を持ち安価なシードが無いため、
-    // 全問題共通のget_all_theoremsに含めるとnine_point/orthic_incenter/
-    // miquel_quadrilateral等でdfs_capを食い潰し回帰する)。これを実際に
-    // 使う問題だけが明示的に有効化する。
-    if problem_name.contains("cross_ratio") {
-        all_theorems.extend(theorems::get_projective_theorems());
-    }
+    // 🌟 複比の透視射影不変性は、当初O,A,B,C,D,Ap,Bp,Cp,Dpの9自由変数を
+    // 同時に束縛する単一の巨大な定理として実装しており、安価なシードが
+    // 無いためnine_point/orthic_incenter/miquel_quadrilateral等でdfs_capを
+    // 食い潰し回帰する問題があり、opt-in(cross_ratio系の問題名でのみ有効化)
+    // にしていた。ユーザー提案「4点複比→4直線の複比→4点複比として扱えば
+    // マッチングが楽になりそう」に基づき、直線の同次係数を射影平面の点と
+    // みなすDefinition::CrossRatioOfLinesを介して「点→線束」「線束→点」の
+    // 2つの小さな定理に分解した結果、各定理の自由変数はConnected(_, _)の
+    // 局所スキャンだけで芋づる式に見つかるようになり(全件スキャンが
+    // 消えた)、12問題+orthocenter+orthocenter_alt全てで既存の実行時間から
+    // 有意な劣化が無いことを確認した。そのためget_all_theoremsと同様、
+    // 全問題共通のデフォルト定理集合に含める。
+    all_theorems.extend(theorems::get_projective_theorems());
     prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = bandit_enabled;

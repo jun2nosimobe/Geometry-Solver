@@ -214,6 +214,19 @@ impl EGraph {
                 mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
                     .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
             }
+            // 🌟 4本の共点直線がなす線束の複比。直線の同次係数(a,b,c)を
+            // 射影平面の"点"とみなせば(ユーザー指摘:「円も係数を射影空間の
+            // 点だと思えばOK」と同じ発想)、4直線が共点(=双対平面上で係数が
+            // 共線)であるときのCrossRatioOfLinesは、通常のCrossRatio(4点が
+            // 共線)と全く同じcalc_cross_ratioの式でそのまま計算できる。
+            Definition::CrossRatioOfLines(a, b, c, d) => {
+                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
+                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
+                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
+                let vd = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
+                mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
+                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+            }
             _ => None,
         }
     }
@@ -1022,8 +1035,13 @@ impl EGraph {
     /// この値の一致)。
     pub fn detect_cross_ratio_coincidences(&self, new_id: ClassId) {
         let new_rep = self.get_rep(new_id);
+        // 🌟 CrossRatio(点の複比)とCrossRatioOfLines(線束の複比)の両方を
+        // 対象にスキャンする――ユーザーが提案する定理A/B("点の複比→線束の
+        // 複比"、"線束の複比→点の複比")が実際に成り立つ組み合わせは、まさに
+        // 「点の複比のエンティティと線束の複比のエンティティが数値的に一致
+        // する」という異なる種類どうしの一致として現れるため。
         let others: Vec<ClassId> = (0..self.entities.len())
-            .filter(|&i| matches!(self.entities[i].original_definition, Definition::CrossRatio(..)))
+            .filter(|&i| matches!(self.entities[i].original_definition, Definition::CrossRatio(..) | Definition::CrossRatioOfLines(..)))
             .map(ClassId)
             .map(|id| self.get_rep(id))
             .filter(|&rep| rep != new_rep)

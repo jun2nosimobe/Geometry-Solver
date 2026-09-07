@@ -70,6 +70,23 @@ pub enum Definition {
     // 他のDefinitionと同様にmemoによる遅延生成なので、実際に定理/問題文が
     // 参照した組み合わせしか作られない(組み合わせ爆発はしない)。
     CrossRatio(ClassId, ClassId, ClassId, ClassId),
+    // 🌟 ユーザー提案:「複比の透視射影不変性は、4点複比(A,B;C,D)→4直線の
+    // 複比(PA,PB;PC,PD)→4点複比(A',B';C',D')として扱えばマッチングが楽に
+    // なりそう」への対応。4本の共点(同じ点を共有する)直線がなす線束の複比。
+    // 「円も係数を射影空間の点だと思えばOK」と全く同じ発想で、直線の同次係数
+    // (a,b,c)を射影平面の"点"とみなせば、4直線が共点である(=双対平面上で
+    // 4つの係数点が共線)ときのCrossRatioと、通常のCrossRatio(4点の共線)は
+    // 全く同じ計算式(calc_cross_ratio)で扱える。これにより「透視射影不変性」
+    // という1つの巨大な定理(自由変数9個、天然のシードが無くdfs_capを
+    // 食い潰す)を、
+    //   定理A: 点の複比(直線L上のA,B,C,D) = 線束の複比(Oを通るPA,PB,PC,PD)
+    //   定理B: 線束の複比(Oを通るPA,PB,PC,PD) = 点の複比(直線L'上のA',B',C',D')
+    // という2つの小さな定理に分解できる――CrossRatioOfLines(PA,PB,PC,PD)を
+    // 共通の"ハブ"として経由することで、それぞれの定理が同時に束縛すべき
+    // 自由変数の数が減り(定理Aは実質O,A,B,C,Dの5点)、かつ定理Bの4直線は
+    // 「Oに繋がっている既存の直線」というConnected(O,_)由来の自然なシードで
+    // 絞り込める(定理Aが作ったPA..PDがまさにその候補になる)。
+    CrossRatioOfLines(ClassId, ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -95,6 +112,7 @@ impl Definition {
             Definition::ParallelLine(_,_) => "ParallelLine",
             Definition::HarmonicConjugateOf(_,_,_) => "HarmonicConjugateOf",
             Definition::CrossRatio(_,_,_,_) => "CrossRatio",
+            Definition::CrossRatioOfLines(_,_,_,_) => "CrossRatioOfLines",
         }
     }
 
@@ -113,6 +131,7 @@ impl Definition {
             Definition::ParallelLine(l, p) => vec![*l, *p],
             Definition::HarmonicConjugateOf(a, b, c) => vec![*a, *b, *c],
             Definition::CrossRatio(a, b, c, d) => vec![*a, *b, *c, *d],
+            Definition::CrossRatioOfLines(a, b, c, d) => vec![*a, *b, *c, *d],
             _ => vec![],
         }
     }
@@ -137,6 +156,7 @@ impl Definition {
             Definition::AnglePair(_, _) => EntityType::Angle,
             Definition::LengthSq(_, _) => EntityType::Scalar,
             Definition::CrossRatio(_, _, _, _) => EntityType::Scalar,
+            Definition::CrossRatioOfLines(_, _, _, _) => EntityType::Scalar,
             Definition::GivenPoint | Definition::FreePoint => EntityType::Point,
         }
     }
@@ -518,6 +538,22 @@ impl EGraph {
                     .min_by_key(|t| (t.0.0, t.1.0, t.2.0, t.3.0))
                     .unwrap();
                 Definition::CrossRatio(best.0, best.1, best.2, best.3)
+            },
+            // 🌟 CrossRatioOfLinesもCrossRatioと全く同じV4クライン群の正準化
+            // (直線を"射影空間の点"とみなしているだけなので、置換に関する
+            // 値の対称性も同一)。
+            Definition::CrossRatioOfLines(a, b, c, d) => {
+                let r = [self.get_rep(*a), self.get_rep(*b), self.get_rep(*c), self.get_rep(*d)];
+                let candidates = [
+                    (r[0], r[1], r[2], r[3]),
+                    (r[1], r[0], r[3], r[2]),
+                    (r[2], r[3], r[0], r[1]),
+                    (r[3], r[2], r[1], r[0]),
+                ];
+                let best = candidates.into_iter()
+                    .min_by_key(|t| (t.0.0, t.1.0, t.2.0, t.3.0))
+                    .unwrap();
+                Definition::CrossRatioOfLines(best.0, best.1, best.2, best.3)
             },
             _ => def.clone(),
         }

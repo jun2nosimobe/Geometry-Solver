@@ -534,33 +534,140 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
 /// 再検討する。
 pub fn get_projective_theorems() -> Vec<TheoremDef> {
     vec![
+        // 🌟 ユーザー提案:「複比の透視射影不変性は、4点複比(A,B;C,D)→4直線の
+        // 複比(PA,PB;PC,PD)→4点複比(A',B';C',D')として扱えばマッチングが
+        // 楽になりそう」への対応。旧版(このコメント直下の履歴参照)は
+        // O,A,B,C,D,Ap,Bp,Cp,Dpの9自由変数を同時に束縛する必要があり、
+        // 天然のシードが無いためdfs_capを食い潰す問題があった(次数
+        // ヒューリスティックで「壊れる」→「遅いが正しい」までは改善したが、
+        // デフォルト採用に足る速さには届かなかった)。
+        //
+        // ここでは「点の複比」と「線束(共点な4直線)の複比」を、直線の同次
+        // 係数(a,b,c)を射影平面の"点"とみなす(Definition::CrossRatioOfLines
+        // 参照)ことで橋渡しし、1つの巨大な定理を2つの小さな定理に分解した:
+        //   定理A: 直線L上のA,B,C,D の複比 = Oを通る4直線(LOA,LOB,LOC,LOD)の複比
+        //   定理B: 共点な4直線(L1,L2,L3,L4)の複比 = 別の直線上のAp,Bp,Cp,Dpの複比
+        // CrossRatioOfLines(LOA,LOB,LOC,LOD)という共通の"ハブ"を経由して
+        // 合同閉包が両者を繋げることで、結局は元の定理と同じ
+        // CrossRatio(A,B,C,D) ≡ CrossRatio(Ap,Bp,Cp,Dp) に到達する。
+        //
+        // 🌟 この分解のシードが軽い理由: 各定理の変数は「Aと同じ直線に乗って
+        // いる別の点」「Aを通る(Lとは別の)直線」というConnected(_, _)の
+        // 局所スキャン(その点/直線が実際に繋がっている少数の候補だけを見る)
+        // だけで芋づる式に見つかる。定理Bの起点(L1..L4)は、定理Aの
+        // construction(CrossRatioOfLines生成)が新しく証明するDefinedBy事実
+        // そのものからシードされる(schedule_matcher_task由来の「発見済みの
+        // 事実から変数を具体的に束縛する」経路)ため、こちらも全件スキャン
+        // 不要。O自身は定理Bのどの変数にも登場しない(線束の複比を計算する
+        // のに"誰が中心か"は不要)ので、定理Bの自由変数はl1..l4とAp..Dpの
+        // 8個で済む。
+        //
+        // 🌟 検証結果: この分解により、既存12問題+orthocenter+orthocenter_alt
+        // 全てで実行時間に有意な劣化が無いことを確認できたため(旧版は
+        // nine_point/orthic_incenter/miquel_quadrilateralを実際に壊していた)、
+        // main.rsでopt-in(問題名にcross_ratioを含む場合のみ)にしていたのを
+        // やめ、get_all_theoremsと同様デフォルトの定理集合に含めるように
+        // 変更した。
         TheoremDef {
-            name: "複比の透視射影不変性".to_string(),
+            name: "複比の透視射影不変性(点→線束)".to_string(),
             entities: entities(&[
                 ("O", EntityType::Point),
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point),
-                ("Ap", EntityType::Point), ("Bp", EntityType::Point), ("Cp", EntityType::Point), ("Dp", EntityType::Point),
-                ("Line_AAp", EntityType::Line), ("Line_BBp", EntityType::Line), ("Line_CCp", EntityType::Line), ("Line_DDp", EntityType::Line),
-                ("CR1", EntityType::Scalar), ("CR2", EntityType::Scalar),
+                ("L", EntityType::Line),
+                ("LOA", EntityType::Line), ("LOB", EntityType::Line), ("LOC", EntityType::Line), ("LOD", EntityType::Line),
+                ("CR1", EntityType::Scalar), ("CRL", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["A", "Ap", "Line_AAp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "Bp", "Line_BBp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["C", "Cp", "Line_CCp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["D", "Dp", "Line_DDp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("Connected", &["O", "Line_AAp"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "Line_BBp"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "Line_CCp"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "Line_DDp"], Some("Line"), Some("Point"), false, None),
+                // A,B,C,Dが共通の直線L上にある(複比が意味を持つための前提)。
+                // Aから局所スキャンでLを見つけ、B,C,Dも同じL上にあるか確認する。
+                //
+                // 🐛 実測に基づくFIX: A,B,C,DはすべてLの(少数とはいえ複数の)
+                // 既知の点から同じ候補プールを引くため、distinctを最後に
+                // 1回だけ置くと(Pattern::Distinctはコスト計算上「全変数が
+                // 束縛されるまではINFINITY」なので)A,B,C,Dが全部揃うまで
+                // 一切の枝刈りが効かず、A=Bのような明らかに無駄な組み合わせを
+                // 何十通りも掘り下げてから初めて弾かれる、という組み合わせ
+                // 爆発を実際に観測した(次数ヒューリスティックとは別種の問題)。
+                // 各点が新しく束縛された直後にdistinctを挟むことで、
+                // (Distinctは「必要な変数が全て束縛済みならコスト0」という
+                // 既存の見積もりに従い)estimate_costが最短経路でそれを選び、
+                // 無駄な組み合わせを即座に打ち切れるようにする。
+                fact_ext("Connected", &["A", "L"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["B", "L"], Some("Line"), Some("Point"), false, None),
+                distinct(&["A", "B"]),
+                fact_ext("Connected", &["C", "L"], Some("Line"), Some("Point"), false, None),
+                distinct(&["A", "B", "C"]),
+                fact_ext("Connected", &["D", "L"], Some("Line"), Some("Point"), false, None),
                 distinct(&["A", "B", "C", "D"]),
-                distinct(&["Ap", "Bp", "Cp", "Dp"]),
+                // A,B,C,Dそれぞれについて「Lとは別の、Oを通る直線」を局所
+                // スキャンで見つける(A自身の既知の直線のうち、Lではない方)。
+                fact_ext("Connected", &["A", "LOA"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "LOA"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["B", "LOB"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "LOB"], Some("Line"), Some("Point"), false, None),
+                distinct(&["LOA", "LOB"]),
+                fact_ext("Connected", &["C", "LOC"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "LOC"], Some("Line"), Some("Point"), false, None),
+                distinct(&["LOA", "LOB", "LOC"]),
+                fact_ext("Connected", &["D", "LOD"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "LOD"], Some("Line"), Some("Point"), false, None),
+                distinct(&["LOA", "LOB", "LOC", "LOD"]),
+                // 🐛 実測に基づくFIX: 当初は「OがL上にある退化を弾く」安全策
+                // として not(Connected(O, L)) を末尾に置いていたが、Oがまだ
+                // どこにも束縛されていない時点でこのnotが評価されると、
+                // 「Oという特定の点がL上にあるか」ではなく「Lに繋がる点が
+                // 何かしら存在するか」という無関係な問いになってしまい
+                // (L上には元々A,B,C,D自身が乗っているので必ず真になる)、
+                // 常にnotが失敗して全探索を潰していた。Oは他のConnected
+                // パターン(Connected(O,LOA)等)で既に一意に発見されている
+                // ので、この安全策自体は無くても健全性は変わらない
+                // (退化したO=L上の点という束縛は、その後のConnected(O,LOA)
+                // 等がL自身をLOAとして誤って選ばない限り実害が無く、万一
+                // 選んだ場合もdistinct(LOA..LOD)やCrossRatioOfLinesの
+                // 次数ゲートが弾く)ため、単純に削除した。
             ],
             constructions: vec![
                 ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()], target_type: "Scalar".to_string(), bind_to: "CR1".to_string() },
+                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["LOA".to_string(), "LOB".to_string(), "LOC".to_string(), "LOD".to_string()], target_type: "Scalar".to_string(), bind_to: "CRL".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR1".to_string(), "CRL".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+            ],
+        },
+        TheoremDef {
+            name: "複比の透視射影不変性(線束→点)".to_string(),
+            entities: entities(&[
+                ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
+                ("Ap", EntityType::Point), ("Bp", EntityType::Point), ("Cp", EntityType::Point), ("Dp", EntityType::Point),
+                ("CRL", EntityType::Scalar), ("CR2", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 🌟 シード: 定理A(点→線束)がCrossRatioOfLines(L1..L4)を新しく
+                // 証明した直後、その事実からL1..L4とCRLを直接束縛できる
+                // (全件スキャン不要)。
+                fact_ext("DefinedBy", &["L1", "L2", "L3", "L4", "CRL"], Some("CrossRatioOfLines"), None, false, None),
+                // 各直線について「Lとは別の(=線束の中心Oではない)、その直線上の
+                // 点」を局所スキャンで見つける。中心Oは4直線全てに繋がっている
+                // 唯一の点なので、「他の1本には繋がっていない」ことで確実に除外できる。
+                // 🌟 定理A側と同じ理由(実測に基づくFIX)で、各点が束縛される
+                // たびにdistinctを挟み、早期に枝刈りする。
+                fact_ext("Connected", &["Ap", "L1"], Some("Line"), Some("Point"), false, None),
+                not(fact_ext("Connected", &["Ap", "L2"], Some("Line"), Some("Point"), false, None)),
+                fact_ext("Connected", &["Bp", "L2"], Some("Line"), Some("Point"), false, None),
+                not(fact_ext("Connected", &["Bp", "L1"], Some("Line"), Some("Point"), false, None)),
+                distinct(&["Ap", "Bp"]),
+                fact_ext("Connected", &["Cp", "L3"], Some("Line"), Some("Point"), false, None),
+                not(fact_ext("Connected", &["Cp", "L1"], Some("Line"), Some("Point"), false, None)),
+                distinct(&["Ap", "Bp", "Cp"]),
+                fact_ext("Connected", &["Dp", "L4"], Some("Line"), Some("Point"), false, None),
+                not(fact_ext("Connected", &["Dp", "L1"], Some("Line"), Some("Point"), false, None)),
+                distinct(&["Ap", "Bp", "Cp", "Dp"]),
+            ],
+            constructions: vec![
                 ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["Ap".to_string(), "Bp".to_string(), "Cp".to_string(), "Dp".to_string()], target_type: "Scalar".to_string(), bind_to: "CR2".to_string() },
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR1".to_string(), "CR2".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CRL".to_string(), "CR2".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
             ],
         },
     ]

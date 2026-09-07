@@ -847,29 +847,40 @@ impl ProverEngine {
                 "CrossRatio" if parent_ids.len() == 4 => self.egraph.normalize_definition(
                     &Definition::CrossRatio(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
                 ),
+                // 🌟 CrossRatioOfLines(線束の複比)もCrossRatioと同じV4正規化。
+                "CrossRatioOfLines" if parent_ids.len() == 4 => self.egraph.normalize_definition(
+                    &Definition::CrossRatioOfLines(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
+                ),
                 _ => Definition::GivenPoint,
             };
 
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
-            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio") {
+            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio" | "CrossRatioOfLines") {
                 // 🌟 ユーザー提案:「複比の定理を使うときは複比自体を次数を用いて
-                // 生成に制限をかけて」への対応。複比は4点から作られるため、
-                // 無関係な4点の組み合わせ(透視射影不変性のような多自由変数の
-                // 定理が、DFSの中で偶然束縛してしまった無関係な4点)では
-                // 次数が際限なく積み上がり得る。生成前に次数を測定し、
-                // 異常に高い候補は(この特定の束縛でのCrossRatio生成だけを
-                // 諦める――failed_pathsによりこのDFS枝は自然に打ち切られる)
-                // ことで、無駄な複比エンティティの増殖と、それに続く
+                // 生成に制限をかけて」への対応。複比は4点(または4直線)から
+                // 作られるため、無関係な組み合わせ(透視射影不変性のような
+                // 多自由変数の定理が、DFSの中で偶然束縛してしまった無関係な
+                // 4点/4直線)では次数が際限なく積み上がり得る。生成前に次数を
+                // 測定し、異常に高い候補は(この特定の束縛での生成だけを諦める
+                // ――failed_pathsによりこのDFS枝は自然に打ち切られる)ことで、
+                // 無駄な複比エンティティの増殖と、それに続く
                 // detect_cross_ratio_coincidencesの比較コストの増大を防ぐ。
                 // 次数が測定不能(None)な場合は安全側に倒し、制限しない。
-                if target_type == "CrossRatio" {
-                    if let Definition::CrossRatio(a, b, c, d) = temp_def {
+                // 🌟 CrossRatioOfLinesもmeasure_cross_ratio_affinityでそのまま
+                // 測定できる(4引数をpointかlineかを区別せずevaluate_nodeに
+                // 渡すだけなので、entity_typeによらず動く)。
+                if matches!(target_type, "CrossRatio" | "CrossRatioOfLines") {
+                    let cr_parents = match temp_def {
+                        Definition::CrossRatio(a, b, c, d) | Definition::CrossRatioOfLines(a, b, c, d) => Some((a, b, c, d)),
+                        _ => None,
+                    };
+                    if let Some((a, b, c, d)) = cr_parents {
                         const CR_DEGREE_CAP: usize = 8;
                         const CR_MAX_D: usize = 6;
                         if let Some((da, db, dc, dd, d_cr)) = self.egraph.measure_cross_ratio_affinity(a, b, c, d, CR_MAX_D) {
                             if d_cr > CR_DEGREE_CAP {
-                                println!("  🚫 [複比の生成を制限] 次数{}(点の次数{}+{}+{}+{})が高すぎるため、この複比の生成を見送りました", d_cr, da, db, dc, dd);
+                                println!("  🚫 [複比の生成を制限] 次数{}(次数{}+{}+{}+{})が高すぎるため、{}の生成を見送りました", d_cr, da, db, dc, dd, target_type);
                                 return valid_nodes;
                             }
                         }
@@ -894,9 +905,13 @@ impl ProverEngine {
                 self.egraph.apply_trivial_relations(new_id, &temp_def);
                 // 🌟 ユーザー提案:「複比同士の関係式からconjectureを発行して、
                 // そこから定理適用の形を見つける」への対応。新しく作られた
-                // 複比の値を既存の他の複比と数値的に比較し、一致するものが
-                // あれば予想(conjecture)として記録する。
-                if target_type == "CrossRatio" {
+                // 複比(点の複比・線束の複比のどちらでも)の値を既存の他の
+                // 複比と数値的に比較し、一致するものがあれば予想(conjecture)
+                // として記録する(detect_cross_ratio_coincidences側がCrossRatio/
+                // CrossRatioOfLines両方を対象にスキャンするので、点の複比と
+                // 線束の複比が一致する、というまさに定理A/Bが探している
+                // 組み合わせも検出できる)。
+                if matches!(target_type, "CrossRatio" | "CrossRatioOfLines") {
                     self.egraph.detect_cross_ratio_coincidences(new_id);
                 }
                 valid_nodes.push(new_id);
@@ -956,13 +971,13 @@ impl ProverEngine {
                                         (vec![d_parents[2], d_parents[1], d_parents[0]], None),
                                     ]
                                 } else { vec![(d_parents.clone(), None)] }
-                            } else if target_type == "CrossRatio" && d_parents.len() == 4 {
+                            } else if matches!(target_type, "CrossRatio" | "CrossRatioOfLines") && d_parents.len() == 4 {
                                 // 🌟 複比の値を厳密に保つ4元クライン群V4の4通りだけを試す
-                                // (mod.rs::normalize_definitionのCrossRatio正規化と対になる
-                                // 唯一の正しい順列集合――全24順列や、Circumcircle等と同じ
-                                // 「完全な順不同」ではないことに注意。他の20順列は値そのものが
-                                // 変わるので、ここで一緒に試してしまうと異なる複比を誤って
-                                // 同一視することになる)。
+                                // (mod.rs::normalize_definitionのCrossRatio/CrossRatioOfLines
+                                // 正規化と対になる唯一の正しい順列集合――全24順列や、
+                                // Circumcircle等と同じ「完全な順不同」ではないことに注意。
+                                // 他の20順列は値そのものが変わるので、ここで一緒に試して
+                                // しまうと異なる複比を誤って同一視することになる)。
                                 let p = &d_parents;
                                 vec![
                                     (vec![p[0], p[1], p[2], p[3]], None),
@@ -1098,6 +1113,10 @@ impl ProverEngine {
                 // をそのまま呼ぶ(ロジックを1箇所に保つ)。
                 "CrossRatio" => self.egraph.normalize_definition(
                     &Definition::CrossRatio(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
+                ),
+                // 🌟 CrossRatioOfLines(線束の複比)もCrossRatioと同じV4正規化。
+                "CrossRatioOfLines" => self.egraph.normalize_definition(
+                    &Definition::CrossRatioOfLines(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
                 ),
                 _ => return false,
             };
