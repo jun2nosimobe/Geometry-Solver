@@ -1608,14 +1608,39 @@ impl BlackboardEngine {
 
         if self.prover.point_construction_demands.is_empty() { return false; }
 
-        let mut demands: Vec<_> = self.prover.point_construction_demands.iter().collect();
-        demands.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| (a.0).0.0.cmp(&(b.0).0.0)).then_with(|| (a.0).1.0.cmp(&(b.0).1.0)));
+        // 🌟 MMPの次数(measure_intersection_degree_candidate)で候補を
+        // ランク付けする(ユーザー指摘: 添付のMMP解説PDFの「次数」概念、
+        // および旧Python版に既にあったnumerical_degree)。次数が低い
+        // (=単純な)候補を優先し、異常に高い候補(DEGREE_CAP超)は最初から
+        // 除外する。中点のような「構造的には複合に見えても実際は次数が
+        // 上がらない」構成は自然に許容されつつ、無関係な直線同士の交点を
+        // 無差別に取り続けるような構成は次数が積み上がるため自然に
+        // 足切りされる(実測でこの2つが明確に区別できることを
+        // test_numerical_degree_*系のテストで確認済み)。
+        // 次数が測定不能(Noneを表す適切なmoverが見つからない等)な場合は
+        // 安全側に倒し、除外せず「不明」として通す。
+        const DEGREE_CAP: usize = 4;
+        const MAX_D: usize = 6;
+        let mut demands: Vec<((ClassId, ClassId), f64, Option<usize>)> = self.prover.point_construction_demands.iter()
+            .map(|(&(l1, l2), &score)| {
+                let deg = self.prover.egraph.measure_intersection_degree_candidate(l1, l2, MAX_D);
+                (( l1, l2), score, deg)
+            })
+            .filter(|&(_, _, deg)| deg.map_or(true, |d| d <= DEGREE_CAP))
+            .collect();
+        demands.sort_by(|a, b| {
+            let da = a.2.unwrap_or(usize::MAX);
+            let db = b.2.unwrap_or(usize::MAX);
+            da.cmp(&db)
+                .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| (a.0).0.0.cmp(&(b.0).0.0))
+                .then_with(|| (a.0).1.0.cmp(&(b.0).1.0))
+        });
 
         let mut applied = false;
         let mut count = 0;
 
-        for (&(l1, l2), &score) in demands.into_iter() {
+        for ((l1, l2), score, deg) in demands.into_iter() {
             // 🌟 需要記録時からさらにマージが進んでいる可能性があるため、
             // normalize_definitionで現在の代表元へ正規化してから照合する。
             let def = self.prover.egraph.normalize_definition(&Definition::Intersection(l1, l2));
@@ -1624,7 +1649,8 @@ impl BlackboardEngine {
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("Pt_{}_{}_(Demand)",
                     self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
-                println!("  💡 [オンデマンド作図] 要請により {} (交点)を生成 (需要: {:.1})", name, score);
+                let deg_str = deg.map(|d| d.to_string()).unwrap_or_else(|| "不明".to_string());
+                println!("  💡 [オンデマンド作図] 要請により {} (交点、次数{})を生成 (需要: {:.1})", name, deg_str, score);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
 
                 // 🌟 Demand点の重要度を下げ、推論の主軸がブレるのを防ぐ(Demand線と同じ配慮)

@@ -450,3 +450,54 @@ fn test_cross_ratio_degenerate_cases_return_none() {
     // D=A (第4引数がAそのもの)
     assert!(mmp_calculators::calc_cross_ratio(&a, &b, &c, &a).is_none());
 }
+
+/// 🌟 Method of Moving Points(動点法)の次数測定(measure_numerical_degree)の
+/// 検証: ユーザーが指摘した通り、中点の作図を何段重ねても次数は1のまま
+/// 留まるべきである(中点は自由点1つが直線的に動く時、常に直線的にしか
+/// 動かないため)。
+#[test]
+fn test_numerical_degree_stays_low_for_repeated_midpoints() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let mut e = egraph.create_entity("E0".into(), Definition::FreePoint, EntityType::Point);
+
+    let mut current = a;
+    for i in 1..=3 {
+        e = egraph.create_entity(format!("E{}", i).into(), Definition::FreePoint, EntityType::Point);
+        current = egraph.create_entity(format!("M{}", i).into(), Definition::Midpoint(current, e), EntityType::Point);
+        let deg = egraph.measure_numerical_degree(current, 6).expect("次数が測定できるはず");
+        assert_eq!(deg, 1, "中点をM{}段重ねても次数は1のまま留まるべき", i);
+    }
+    let _ = e; // 未使用警告よけ
+}
+
+/// 🌟 対照実験: 無関係な2直線の交点を取ると、中点とは対照的に次数が
+/// 明確に増加する(1段取っただけでmover自身の次数1から2へ上がる)。これに
+/// より「次数の低い補助点(中点等)は積極的に採用し、次数が上がる補助点
+/// (無関係な交点)は警戒する」というフィルタが実際に意味のある判定に
+/// なることを確認する。
+/// 🌟 注記: 2段目以降は交点の取り方によって偶然の代数的な相殺が起こり
+/// 次数が上がりきらないことがある(実測で確認済み――これ自体はMMPの
+/// 次数評価が「常に最良の上界を単純に足し算できるとは限らない」ことの
+/// 実例で、上界の予測にはPDFが述べる通り数個の図での実測が必要になる
+/// 理由でもある)。ここでは「中点は増えない・交点は増える」という
+/// 最小限の対照だけを固く検証する。
+#[test]
+fn test_numerical_degree_grows_with_arbitrary_intersection() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+    let e = egraph.create_entity("E".into(), Definition::FreePoint, EntityType::Point);
+
+    let deg_a = egraph.measure_numerical_degree(a, 6).expect("次数が測定できるはず");
+    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
+
+    let l1 = egraph.create_entity("L1".into(), Definition::new_line(a, c), EntityType::Line);
+    let m = egraph.create_entity("Mid".into(), Definition::Midpoint(a, e), EntityType::Point);
+    let l2 = egraph.create_entity("L2".into(), Definition::new_line(m, d), EntityType::Line);
+    let p = egraph.create_entity("P".into(), Definition::Intersection(l1, l2), EntityType::Point);
+
+    let deg_p = egraph.measure_numerical_degree(p, 6).expect("次数が測定できるはず");
+    assert!(deg_p > deg_a, "無関係な2直線の交点は、moverそのものより次数が高くなるべき(1 -> {})", deg_p);
+}

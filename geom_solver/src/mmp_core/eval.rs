@@ -767,4 +767,114 @@ impl EGraph {
         }
         Some(true)
     }
+
+    /// 🌟 Method of Moving Points(動点法)の「次数」を、実際に1つの自由点を
+    /// 動かして数値的に測定する。以前のPython版にあったnumerical_degree/
+    /// get_numerical_degreeに相当する機能で、mmp_math.rsには既に移植されて
+    /// いた(matrix_rank_mod/get_numerical_degree)が、これまでどこからも
+    /// 呼ばれていなかった(ユーザーが添付したMMP解説PDFの指摘で判明)。
+    ///
+    /// naive_degree的な「親の次数の単純和」という構造的な上界と違い、これは
+    /// 実際にmover(祖先の自由点のうち1つ)を直線に沿って動かして複数の
+    /// パラメータ値でサンプリングし、有限体上のランク判定(get_numerical_degree)
+    /// で座標が実際に満たす有理関数の次数を検出する。これにより、
+    /// Midpoint(中点)のような「構造的には2つの入力の合成に見えても、実際
+    /// には次数が上がらない」操作を正しく低次数と判定できる一方、無関係な
+    /// 2直線を繰り返し交差させるような操作は素直に次数が積み上がっていく
+    /// ため、「次数が低い補助点を優先し、異常に高い補助点は避ける」という
+    /// 判定に使える。
+    ///
+    /// mover(前提を持たない自由点祖先)が見つからない、あるいはいずれかの
+    /// サンプルで評価不能(退化)だった場合はNone(次数不明)を返す――
+    /// 呼び出し側は安全側に倒し、次数による足切りをしない扱いにすること。
+    pub fn measure_numerical_degree(&self, entity: ClassId, max_d: usize) -> Option<usize> {
+        let mut visited = HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(entity, &mut visited, &mut ancestors);
+        if ancestors.is_empty() { return Some(0); } // 自由点に一切依存しない(定数)ので次数0
+
+        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
+        let mover_name = self.entities[mover.0].name.clone();
+
+        let k = 2 * max_d + 2;
+        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let mut t_vals = Vec::with_capacity(k);
+        let mut x_vals = Vec::with_capacity(k);
+        let mut y_vals = Vec::with_capacity(k);
+        for i in 1..=k {
+            let t = ModInt::new(i as i64);
+            let mut vars = base_vars.clone();
+            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
+            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            let v = self.evaluate_node(entity, &vars, &mut cache)?;
+            if v.len() < 3 || v[2].0 == 0 { return None; }
+            t_vals.push(t);
+            x_vals.push(v[0] / v[2]);
+            y_vals.push(v[1] / v[2]);
+        }
+        let dxd = crate::mmp_math::get_numerical_degree(&t_vals, &x_vals, max_d);
+        let dyd = crate::mmp_math::get_numerical_degree(&t_vals, &y_vals, max_d);
+        Some(dxd.max(dyd))
+    }
+
+    /// 🌟 measure_numerical_degreeの「まだエンティティとして存在しない候補」版。
+    /// resolve_point_demandsのような「実際に作る前に有望さを判定したい」
+    /// 場面向けに、2直線l1, l2の交点をentityとして作らずに次数だけ測定する。
+    pub fn measure_intersection_degree_candidate(&self, l1: ClassId, l2: ClassId, max_d: usize) -> Option<usize> {
+        let mut visited = HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(l1, &mut visited, &mut ancestors);
+        self.collect_free_point_ancestors(l2, &mut visited, &mut ancestors);
+        if ancestors.is_empty() { return Some(0); }
+
+        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
+        let mover_name = self.entities[mover.0].name.clone();
+
+        let k = 2 * max_d + 2;
+        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let mut t_vals = Vec::with_capacity(k);
+        let mut x_vals = Vec::with_capacity(k);
+        let mut y_vals = Vec::with_capacity(k);
+        for i in 1..=k {
+            let t = ModInt::new(i as i64);
+            let mut vars = base_vars.clone();
+            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
+            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            let v1 = self.evaluate_node(l1, &vars, &mut cache)?;
+            let v2 = self.evaluate_node(l2, &vars, &mut cache)?;
+            let p = mmp_calculators::calc_intersection(&v1, &v2);
+            if p.len() < 3 || p.iter().all(|x| x.0 == 0) { return None; }
+            t_vals.push(t);
+            x_vals.push(p[0] / p[2]);
+            y_vals.push(p[1] / p[2]);
+        }
+        let dxd = crate::mmp_math::get_numerical_degree(&t_vals, &x_vals, max_d);
+        let dyd = crate::mmp_math::get_numerical_degree(&t_vals, &y_vals, max_d);
+        Some(dxd.max(dyd))
+    }
+
+    /// 🌟 measure_numerical_degree系の共通処理: 祖先の自由点の中から
+    /// 「他の構造的前提(直線/円の上にあること)を持たない」ものを1つ選んで
+    /// mover(動点)とし、残りは(前提を満たす形で)1回だけ座標を固定する。
+    /// 適切なmoverが見つからない場合はNone。
+    fn setup_mover_and_base_vars(&self, ancestors: &[ClassId]) -> Option<(ClassId, FxHashMap<String, ModInt>)> {
+        let mover = *ancestors.iter().find(|&&fp| !self.has_extraneous_incidence(fp))?;
+        let others: Vec<ClassId> = ancestors.iter().copied().filter(|&fp| fp != mover).collect();
+        let mut base_vars: FxHashMap<String, ModInt> = FxHashMap::default();
+        if !self.assign_free_point_coords(&others, &mut base_vars) { return None; }
+        Some((mover, base_vars))
+    }
+
+    /// 🌟 moverが動く先の「一般の位置にある直線」: 基点(x0,y0)と方向(dx,dy)を
+    /// 無作為に選ぶ(moverの座標はx0+t*dx, y0+t*dyとしてtでパラメータ化される)。
+    fn random_mover_line() -> (ModInt, ModInt, ModInt, ModInt) {
+        (
+            ModInt::new(rand::random::<i64>()),
+            ModInt::new(rand::random::<i64>()),
+            ModInt::new(rand::random::<i64>()),
+            ModInt::new(rand::random::<i64>()),
+        )
+    }
 }
