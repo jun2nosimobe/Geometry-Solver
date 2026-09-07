@@ -73,9 +73,17 @@ fn main() {
     // schedule_full_sweepのシードなしタスクの優先度を常に0固定にし、
     // バンディット導入前と同じ挙動に戻す。既定はバンディット有効。
     let bandit_enabled = !args.iter().any(|a| a == "--no-bandit");
+    // 🌟 MCTSの目標指向ヒューリスティック(action_space.rsのget_possible_actions
+    // が候補の点・直線をサンプリングする際、証明目標に構造的に近い図形を
+    // 優先する)の効果測定用A/Bスイッチ。--no-mcts-target-biasを付けると
+    // 導入前の「entity_weightのみによる完全に目標非依存なサンプリング」に
+    // 戻す。既定は有効。
+    let mcts_target_bias_enabled = !args.iter().any(|a| a == "--no-mcts-target-bias");
 
-    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {})",
-        problem_name, time_budget_secs, if bandit_enabled { "有効" } else { "無効" });
+    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {})",
+        problem_name, time_budget_secs,
+        if bandit_enabled { "有効" } else { "無効" },
+        if mcts_target_bias_enabled { "有効" } else { "無効" });
 
     let mut egraph = EGraph::new();
     let tester = MMPTester::new();
@@ -96,6 +104,7 @@ fn main() {
     // resolve_angle_demands)の両方が手詰まりになった時の最後の手段としてのみ
     // 使う(まだe-graph全体をcloneする実装のままなので、呼び出し頻度は絞る)。
     let mut mcts = MCTSSearchEngine::new();
+    mcts.target_bias_enabled = mcts_target_bias_enabled;
     let mut mcts_consecutive_failures = 0;
     const MCTS_MAX_CONSECUTIVE_FAILURES: usize = 3;
     

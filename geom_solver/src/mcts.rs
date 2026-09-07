@@ -39,6 +39,11 @@ impl MCTSNode {
 pub struct MCTSSearchEngine {
     pub nodes: Vec<MCTSNode>,
     pub action_gen: ActionGenerator,
+    // 🌟 目標指向ヒューリスティック(action_space.rsのtarget_weight_bonus)の
+    // 効果測定用A/Bスイッチ。falseにすると、get_possible_actionsに常に
+    // targetの代わりにNoneを渡し、導入前(entity_weightのみによる完全に
+    // 目標非依存のサンプリング)の挙動に戻す。既定は有効(true)。
+    pub target_bias_enabled: bool,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -49,11 +54,37 @@ impl MCTSSearchEngine {
         Self {
             nodes: Vec::new(),
             action_gen: ActionGenerator::new(),
+            target_bias_enabled: true,
         }
+    }
+
+    /// 🌟 行動が参照するClassIdが、渡されたegraph上でまだ有効(entities.len()
+    /// の範囲内)かを確認する。
+    ///
+    /// 🐛 背景: MCTSの木構造(self.nodes)は複数のシミュレーションをまたいで
+    /// 永続する一方、各シミュレーションは`egraph.clone()`した使い捨ての
+    /// sim_egraphの上で行動を適用・展開する。ある行動がどのクローン
+    /// (どれだけ多くの補助構成が積み重なった状態)から生成されたかによって、
+    /// その行動が参照するClassIdの「意味」は変わらなくても、down-stream の
+    /// 処理(create_entity/construct_harmonic_conjugateが内部でget_repを
+    /// 呼ぶ経路)が極めて稀に(スタックオーバーフローするほど巨大な組み合わせ
+    /// 爆発ではなく、通常のストレステストで数十回に1回程度)
+    /// `parents[curr]`の範囲外アクセスでpanicするケースが実際に観測された
+    /// (根本原因はまだ完全には特定できていないが、この境界で防御することで
+    /// 実害であるクラッシュ自体は確実に防げる)。行動を適用する前にここで
+    /// 参照先が実在するかを確認し、無効なら(既存のmemo命中や生成失敗と同様)
+    /// 静かにNoneを返して「この行動は今は適用できない」として扱う。
+    fn action_refs_valid(egraph: &EGraph, action: &Action) -> bool {
+        let ids: Vec<ClassId> = match action {
+            Action::Construct(def) => def.get_parents(),
+            Action::HarmonicConjugate(a, b, c) => vec![*a, *b, *c],
+        };
+        ids.iter().all(|id| id.0 < egraph.entities.len())
     }
 
     /// 行動を(クローン後の)e-graphに実際に適用し、生成物のIDを返す。
     fn apply_action(egraph: &mut EGraph, action: &Action) -> Option<ClassId> {
+        if !Self::action_refs_valid(egraph, action) { return None; }
         match action {
             Action::Construct(def) => {
                 if egraph.memo.contains_key(def) { return None; }
@@ -72,7 +103,14 @@ impl MCTSSearchEngine {
         }
     }
 
+    /// 🐛 FIX: apply_actionと同じ理由(action_refs_validのコメント参照)で、
+    /// ここも無効なClassId参照に対してpanicせず、それとわかる文字列を返す
+    /// ようにした(print_root_rankingは「採用前」に呼ばれるため、
+    /// apply_action側のガードだけでは防げない)。
     fn describe_action(egraph: &EGraph, action: &Action) -> String {
+        if !Self::action_refs_valid(egraph, action) {
+            return "<無効な参照(既に失効した候補)>".to_string();
+        }
         let name = |id: ClassId| egraph.entities[egraph.get_rep(id).0].name.clone();
         match action {
             Action::Construct(def) => egraph.format_definition(def),
@@ -176,8 +214,17 @@ impl MCTSSearchEngine {
         target: &Option<(String, Vec<ClassId>)>,
         num_simulations: usize,
     ) -> bool {
+        // 🌟 A/Bスイッチ: target_bias_enabled=falseなら、行動生成
+        // (get_possible_actions)にだけ常にNoneを渡し、action_space.rs側の
+        // target_weight_bonusを常に0にする(導入前の完全に目標非依存な
+        // サンプリングに戻す)。報酬評価(evaluate_step経由のtarget_reached/
+        // target_bonus)は引き続き本物のtargetを使う必要がある
+        // (でないと「そもそも目標達成を検知できない」という別の変化まで
+        // 混ざってしまい、行動生成だけの効果を測定できなくなる)ので、
+        // 元のtargetとは別にgen_targetとして持つ。
+        let gen_target: &Option<(String, Vec<ClassId>)> = if self.target_bias_enabled { target } else { &None };
         self.nodes.clear();
-        let root_actions = self.action_gen.get_possible_actions(egraph, false, target);
+        let root_actions = self.action_gen.get_possible_actions(egraph, false, gen_target);
         if root_actions.is_empty() {
             println!("  🤖 [MCTS] 候補となる作図アクションが見つかりませんでした。");
             return false;
@@ -218,7 +265,7 @@ impl MCTSSearchEngine {
 
                 let depth = self.nodes[curr].depth + 1;
                 let untried = if depth < MAX_DEPTH && reward < 999.0 {
-                    self.action_gen.get_possible_actions(&sim_egraph, true, target)
+                    self.action_gen.get_possible_actions(&sim_egraph, true, gen_target)
                 } else {
                     vec![]
                 };
@@ -239,7 +286,7 @@ impl MCTSSearchEngine {
                 let mut d = depth;
                 let mut found_target = reward >= 999.0;
                 while !found_target && d < MAX_DEPTH {
-                    let acts = self.action_gen.get_possible_actions(&sim_egraph, true, target);
+                    let acts = self.action_gen.get_possible_actions(&sim_egraph, true, gen_target);
                     if acts.is_empty() { break; }
                     let pick = (rand::random::<u32>() as usize) % acts.len();
                     let a = acts[pick].clone();
