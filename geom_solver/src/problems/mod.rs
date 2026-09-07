@@ -9,6 +9,7 @@ pub mod simson;
 pub mod test_parallel;
 pub mod test_right_midpoint;
 pub mod orthocenter;
+pub mod orthocenter_alt;
 pub mod circumcenter;
 pub mod thales;
 pub mod two_circles_reim;
@@ -34,6 +35,7 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "test_parallel" => test_parallel::setup(egraph),
         "test_right_midpoint" => test_right_midpoint::setup(egraph),
         "orthocenter" => orthocenter::setup(egraph),
+        "orthocenter_alt" => orthocenter_alt::setup(egraph),
         "circumcenter" => circumcenter::setup(egraph),
         "thales" => thales::setup(egraph),
         "two_circles_reim" => two_circles_reim::setup(egraph),
