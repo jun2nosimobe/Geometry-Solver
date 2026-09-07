@@ -17,6 +17,9 @@ pub mod orthic_incenter;
 pub mod test_cross_ratio;
 pub mod test_steiner;
 pub mod test_involution;
+pub mod test_isosceles_converse;
+pub mod test_power_of_point;
+pub mod test_steiner_converse;
 
 use crate::mmp_core::{ClassId, EGraph, Fact}; // Factを追加
 
@@ -46,6 +49,9 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "test_cross_ratio" => test_cross_ratio::setup(egraph),
         "test_steiner" => test_steiner::setup(egraph),
         "test_involution" => test_involution::setup(egraph),
+        "test_isosceles_converse" => test_isosceles_converse::setup(egraph),
+        "test_power_of_point" => test_power_of_point::setup(egraph),
+        "test_steiner_converse" => test_steiner_converse::setup(egraph),
         _ => panic!("未知の問題名です: {}", name),
     }
 }

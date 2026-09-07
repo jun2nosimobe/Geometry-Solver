@@ -107,6 +107,10 @@ pub enum Definition {
     // への最小限の対応として、この定義・数値評価・生成元5点の構造的な
     // 接続(Connected)判定までを実装し、接線・直線との交点計算は含まない。
     ConicThrough5Points(ClassId, ClassId, ClassId, ClassId, ClassId),
+    // 🌟 2つのScalar値の積(順不同)。方冪の定理(PA・PB=PC・PD)のように
+    // 「2辺の長さの積」を1つのScalarとして比較したい場合に使う。
+    // LengthSq等と同じ「値,1,1」の3要素形式で評価される。
+    Product(ClassId, ClassId),
 }
 
 impl Definition {
@@ -135,6 +139,7 @@ impl Definition {
             Definition::CrossRatioOfLines(_,_,_,_) => "CrossRatioOfLines",
             Definition::ConstantHomogeneous(_,_,_) => "ConstantHomogeneous",
             Definition::ConicThrough5Points(_,_,_,_,_) => "ConicThrough5Points",
+            Definition::Product(_,_) => "Product",
         }
     }
 
@@ -155,6 +160,7 @@ impl Definition {
             Definition::CrossRatio(a, b, c, d) => vec![*a, *b, *c, *d],
             Definition::CrossRatioOfLines(a, b, c, d) => vec![*a, *b, *c, *d],
             Definition::ConicThrough5Points(a, b, c, d, e) => vec![*a, *b, *c, *d, *e],
+            Definition::Product(a, b) => vec![*a, *b],
             _ => vec![],
         }
     }
@@ -187,6 +193,7 @@ impl Definition {
             // ここはMCTS等の型不明時のフォールバックとしてのみ使われる。
             Definition::ConstantHomogeneous(_, _, _) => EntityType::Point,
             Definition::ConicThrough5Points(_, _, _, _, _) => EntityType::Conic,
+            Definition::Product(_, _) => EntityType::Scalar,
         }
     }
 }
@@ -615,6 +622,11 @@ impl EGraph {
                 let mut reps = [self.get_rep(*a), self.get_rep(*b), self.get_rep(*c), self.get_rep(*d), self.get_rep(*e)];
                 reps.sort_unstable_by_key(|id| id.0);
                 Definition::ConicThrough5Points(reps[0], reps[1], reps[2], reps[3], reps[4])
+            },
+            Definition::Product(a, b) => {
+                let r_a = self.get_rep(*a);
+                let r_b = self.get_rep(*b);
+                if r_a.0 > r_b.0 { Definition::Product(r_b, r_a) } else { Definition::Product(r_a, r_b) }
             },
             _ => def.clone(),
         }

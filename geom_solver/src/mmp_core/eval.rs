@@ -251,6 +251,14 @@ impl EGraph {
                 let v5 = self.evaluate_node_inner(*p5, vars, cache, in_progress)?;
                 Self::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, v4, v5]))
             }
+            // 🌟 2つのScalarの積。LengthSq等と同じ「値,1,1」の3要素形式で
+            // 評価する(numeric_values_proportionalが単純な値比較として扱える)。
+            Definition::Product(a, b) => {
+                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
+                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
+                if va.is_empty() || vb.is_empty() { return None; }
+                Some(vec![va[0] * vb[0], ModInt::new(1), ModInt::new(1)])
+            }
         }
     }
 

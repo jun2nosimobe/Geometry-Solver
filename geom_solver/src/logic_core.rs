@@ -536,6 +536,32 @@ impl ProverEngine {
                         reps.push(id);
                     }
                 }
+                // 🐛 実測に基づくFIX: このシード無し(両変数未束縛)経路は、
+                // apply_conclusionsが直後にheat_bonusを加算した「たった今マージ
+                // されたばかりの代表元」(=この定理が本来欲しがっている候補で
+                // ある可能性が高い)を、生成順(ClassId順)のまま辿っていたため
+                // 後回しにしてしまい、無関係な候補を大量に試してからようやく
+                // 正解に辿り着く(あるいはdfs_cap/持ち時間の方が先に尽きる)、
+                // という実際の性能問題を「共点二弦の相似」定理のテストで観測した。
+                // heat(base_importance+heat_bonus)の降順に並べ替えるだけで、
+                // 直近にマージされた=熱い代表元から先に試せるようになる
+                // (match_defined_by_factの全件スキャンで既に使われているのと
+                // 同じ「熱で優先順位を付ける」考え方をこちらにも適用しただけ)。
+                reps.sort_by(|&a, &b| {
+                    let ha = self.egraph.entities[a.0].base_importance + self.egraph.entities[a.0].heat_bonus;
+                    let hb = self.egraph.entities[b.0].base_importance + self.egraph.entities[b.0].heat_bonus;
+                    hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                // 🌟 この経路は本来「シードが来なかった時の保険」に過ぎず
+                // (本命はschedule_matcher_task/DefinedByシード)、候補が
+                // 大量にある問題(例: 複比が大量生成されるtest_cross_ratio)では
+                // 無関係なエンティティまで大量に自己束縛して試すコストが
+                // 無視できなくなり得る。上のheatソートで関係のある候補は
+                // ほぼ確実に先頭付近に来るため、候補数を適当な上限で打ち切っても
+                // 正解を逃すリスクは小さい――ワーストケースの青天井を防ぐ
+                // 安全弁として導入する(全問題で悪影響が無いことを確認済み)。
+                const MAX_IDENTICAL_SELF_BIND_CANDIDATES: usize = 40;
+                reps.truncate(MAX_IDENTICAL_SELF_BIND_CANDIDATES);
                 for rep in reps {
                     let mut next_bind = bind.clone();
                     next_bind.insert(v1.clone(), rep);
@@ -1118,6 +1144,19 @@ impl ProverEngine {
                 "CrossRatioOfLines" => self.egraph.normalize_definition(
                     &Definition::CrossRatioOfLines(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
                 ),
+                // 🌟 2つのScalarの積(順不同)。方冪の定理(PA・PB=PC・PD)のような
+                // 「2辺の積」をconclusionsのIdenticalで比較できるようにする。
+                "Product" => self.egraph.normalize_definition(
+                    &Definition::Product(parent_ids[0], parent_ids[1])
+                ),
+                // 🌟 シュタイナーの定理の逆(射影版・円周角の定理の逆)が、
+                // 複比が一致した6点のうち5点から二次曲線を構築するために使う。
+                // Circumcircleと同じ「完全な順不同」なのでソートするだけ。
+                "ConicThrough5Points" => {
+                    let mut arr = [parent_ids[0].0, parent_ids[1].0, parent_ids[2].0, parent_ids[3].0, parent_ids[4].0];
+                    arr.sort_unstable();
+                    Definition::ConicThrough5Points(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]), ClassId(arr[3]), ClassId(arr[4]))
+                }
                 _ => return false,
             };
 
@@ -1132,6 +1171,7 @@ impl ProverEngine {
                     "Angle" => EntityType::Angle, 
                     "Circle" => EntityType::Circle,
                     "Scalar" => EntityType::Scalar, // 🌟 スカラー型の追加
+                    "Conic" => EntityType::Conic,
                     _ => EntityType::Point,
                 };
                 

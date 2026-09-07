@@ -337,6 +337,19 @@ fn main() {
                     output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
                     break;
                 }
+            } else if fact_type == "Connected" {
+                // 🌟 「シュタイナーの定理の逆」のように、結論がConnected(点,二次曲線)
+                // であるような定理を直接目標にできるようにする(Concyclicが
+                // Circle専用なのに対し、こちらはis_connectedが対応する任意の型に
+                // 使える汎用版)。Concyclicと同じくMCTSの数値サニティチェックは
+                // まだ導入していない。
+                let r1 = engine.prover.egraph.get_rep(target_args[0]);
+                let r2 = engine.prover.egraph.get_rep(target_args[1]);
+                if engine.prover.egraph.is_connected(r1, r2) {
+                    println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                    output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
+                    break;
+                }
             }
         }
 
