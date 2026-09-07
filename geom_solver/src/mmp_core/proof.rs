@@ -94,6 +94,33 @@ impl EGraph {
         None
     }
 
+    /// 🌟 証明経路の中に、名前付き定理の連鎖(Given/Theorem/Congruence/Trivial)
+    /// ではなく、局所伝播のショートカット(LineUniqueness/PointUniqueness)だけを
+    /// 根拠にしたステップが含まれているかを判定する。
+    ///
+    /// 🐛 背景: propagate_line_uniqueness/propagate_point_uniqueness(「2直線が
+    /// 十分な点/方向を共有していれば同一視する」「2直線の交点は一意」)は、
+    /// マージを確定する前にnumeric_plausibility_checkで有限体上のランダムな
+    /// 1点(または少数)による数値的裏付けを取ってはいるものの、これは
+    /// あくまで「ランダムに選んだ具体例で矛盾が見つからなかった」という
+    /// 確率的な根拠(Schwartz-Zippel的な議論)であり、名前付き定理を
+    /// 前提から結論へ連鎖させる形式的な演繹ではない。この2つのJustification
+    /// だけがそれに該当する(Congruenceは定義の構造的な一致、Trivialは
+    /// apply_trivial_relations由来の定義から機械的に従う結合なので、
+    /// どちらも数値サンプリングには依存しない)。
+    ///
+    /// MCTSのような無方向な探索は、この局所伝播だけを頼りに大量の補助構成を
+    /// 経由して目標へ到達することがあり(実測: orthocenter_altで観測)、
+    /// 個々のステップは(numeric_plausibility_checkにより)偽陽性ではなさそうで
+    /// あっても、その経路全体を「形式的な証明」と呼ぶのは正確ではない。
+    /// generate_proof/main.rsの🎉表示で、この違いを利用者に明示するために使う。
+    pub fn proof_uses_numeric_shortcut(edges: &[ProofEdge]) -> bool {
+        edges.iter().any(|e| matches!(
+            e.justification,
+            Justification::LineUniqueness { .. } | Justification::PointUniqueness { .. }
+        ))
+    }
+
     fn format_justification(&self, j: &Justification) -> String {
         let name = |id: ClassId| self.earliest_known_name(id);
         match j {
@@ -140,6 +167,17 @@ impl EGraph {
                 if edges.is_empty() {
                     out.push_str("(まだ証明されていません、またはこの2つは元から同一の図形です)\n");
                 } else {
+                    if Self::proof_uses_numeric_shortcut(&edges) {
+                        out.push_str(
+                            "⚠️ 注意: 以下の経路には「2直線が十分な点/方向を共有」「2直線の交点は\n\
+                             一意」といった局所伝播ショートカット(理由の行に明記)が含まれています。\n\
+                             これらは確定前に有限体上のランダムな数値サンプリングで矛盾がないことを\n\
+                             確認していますが、名前付き定理を前提から結論へ連鎖させる形式的な演繹\n\
+                             ではなく、あくまで「ランダムな具体例で反例が見つからなかった」という\n\
+                             確率的な根拠に基づいています。以下は形式的な証明としてではなく、\n\
+                             その根拠付きの参考記録として読んでください。\n\n"
+                        );
+                    }
                     for (i, edge) in edges.iter().enumerate() {
                         out.push_str(&format!("Step {:2}: {} ≡ {}\n", i + 1,
                             self.earliest_known_name(edge.from), self.earliest_known_name(edge.to)));

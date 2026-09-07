@@ -157,7 +157,20 @@ fn main() {
                             break;
                         }
                         _ => {
-                            println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                            // 🌟 数値サニティチェックはあくまで最終的な等式そのものの
+                            // 妥当性(=偽陽性でないか)を見るだけで、そこに至る経路の
+                            // 「厳密さ」までは保証しない。経路上にLineUniqueness/
+                            // PointUniqueness局所伝播ショートカット(数値サンプリング
+                            // だけが根拠)が含まれる場合は、名前付き定理の連鎖による
+                            // 形式的な証明ではないことをここで明示する
+                            // (EGraph::proof_uses_numeric_shortcut参照)。
+                            let edges = engine.prover.egraph.explain_identical(target_args[0], target_args[1]);
+                            if EGraph::proof_uses_numeric_shortcut(&edges) {
+                                println!("🎉 証明完了(ただし一部は数値的検証のみに基づく非厳密な経路を含みます)！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                                println!("    -> 経路の詳細は result/proof_{}.txt の⚠️注意書きを参照してください。", problem_name);
+                            } else {
+                                println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                            }
                             output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
                             break;
                         }

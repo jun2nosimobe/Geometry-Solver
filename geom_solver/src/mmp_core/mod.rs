@@ -287,6 +287,7 @@ impl EGraph {
             base_importance: 1.0, heat_bonus: 0.0,
             components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: Vec::new() }],
             uses: rustc_hash::FxHashSet::default(),
+            mcts_depth: 0,
         };
 
         self.entities.push(entity);
@@ -354,6 +355,13 @@ pub struct GeoEntity {
     pub heat_bonus: f64,
     pub components: Vec<LogicalComponent>,
     pub uses: rustc_hash::FxHashSet<ClassId>,
+    // 🌟 MCTSが自由な探索で作った補助構成が、他のMCTS補助構成の上にさらに
+    // 積み重なった「連鎖の深さ」(mcts.rs::apply_action参照)。問題文で最初から
+    // 与えられている点・直線や、需要駆動(resolve_demands等)の補助線はこの値を
+    // 一切更新しないため常に0のままで、この上限による制限を受けない。MCTSが
+    // MCTS自身の産物の上に何段も構成を積み増す(例:中点のまた中点のまた中点…)
+    // ことだけを対象にした、ローカルな連鎖専用のカウンタ。
+    pub mcts_depth: usize,
 }
 
 

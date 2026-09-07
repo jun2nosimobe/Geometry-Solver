@@ -108,7 +108,22 @@ impl MCTSSearchEngine {
                     .map(|&id| egraph.entities[egraph.get_rep(id).0].name.clone())
                     .collect();
                 let name = format!("{}_{}_(MCTS)", def.get_type_name(), parent_names.join("_"));
+                let before_len = egraph.entities.len();
                 let id = egraph.create_entity(name, def.clone(), entity_type);
+                // 🌟 「無意味な中点の入れ子」対策: idがbefore_len以上(=hash consing
+                // でヒットせず本当に新規作成された)場合にだけ、MCTS連鎖の深さ
+                // (mcts_depth)を親の最大値+1として記録する。問題文で最初から
+                // 与えられている点・直線はmcts_depth=0のままなので、そこから
+                // 直接作った1段目の補助構成はmcts_depth=1、その産物の上に
+                // さらに積んだ2段目は2、…と増えていく。action_space.rs側で
+                // この値に上限を設け、MCTSがMCTS自身の産物の上にMCTS産物を
+                // 際限なく積み重ねる(例:中点のまた中点のまた中点…)のを防ぐ。
+                if id.0 >= before_len {
+                    let depth = def.get_parents().iter()
+                        .map(|&p| egraph.entities[egraph.get_rep(p).0].mcts_depth)
+                        .max().unwrap_or(0) + 1;
+                    egraph.entities[id.0].mcts_depth = depth;
+                }
                 egraph.apply_trivial_relations(id, def);
                 Some(id)
             }

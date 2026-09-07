@@ -176,6 +176,24 @@ impl ActionGenerator {
         actions
     }
 
+    // 🌟 MCTSがMCTS自身の産物の上にさらにMCTS産物を積み重ねる連鎖
+    // (GeoEntity::mcts_depth参照)の深さの上限。base_importanceを下げる
+    // (mcts.rs::run_stepで採用した補助構成に0.3を設定)だけでは、確率的な
+    // サンプリングである以上0にはならず、長時間の実行で「中点のまた中点の
+    // また中点…」のような無意味な入れ子が実際に積み上がることが実測で
+    // 確認された。これはentity_weightのuses.len()項が、何かを積み増す
+    // たびに親側のuses(=依存度)を底上げし、さらに選ばれやすくなるという
+    // 正のフィードバックも一因。ここでは「MCTS産物の上にMCTS産物」という
+    // 連鎖だけを対象にした深さでハード上限を設け、確率に頼らず物理的に
+    // 遮断する。問題文で最初から与えられている点・直線や需要駆動の補助線は
+    // mcts_depth=0のままなので、この上限の影響を一切受けない。
+    // 2に設定した理由: 1段目(真の点・直線から直接作った補助構成、例:
+    // 対辺への垂線)、2段目(その交点、例:垂心候補)までは典型的な定理の
+    // 証明で普通に必要になる一方、3段目以降(その上にさらに中点/直線などを
+    // 積む)は今回観測された無意味な入れ子のパターンそのものであり、
+    // 実質的に価値を生まないまま組み合わせだけが爆発する。
+    const MAX_MCTS_CHAIN_DEPTH: usize = 2;
+
     fn entities_of_type(&self, egraph: &EGraph, ty: EntityType) -> Vec<ClassId> {
         (0..egraph.entities.len())
             .map(ClassId)
@@ -183,6 +201,7 @@ impl ActionGenerator {
                 egraph.get_rep(id) == id
                     && egraph.entities[id.0].entity_type == ty
                     && egraph.entities[id.0].base_importance > 0.0
+                    && egraph.entities[id.0].mcts_depth <= Self::MAX_MCTS_CHAIN_DEPTH
             })
             .collect()
     }

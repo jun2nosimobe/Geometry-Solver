@@ -19,6 +19,7 @@ impl EGraph {
         let mut root2_comps = std::mem::take(&mut self.entities[root2.0].components);
         let root2_heat = self.entities[root2.0].heat_bonus;
         let root2_imp = self.entities[root2.0].base_importance;
+        let root2_mcts_depth = self.entities[root2.0].mcts_depth;
         let root2_name = std::mem::take(&mut self.entities[root2.0].name);
         let mut root2_uses = std::mem::take(&mut self.entities[root2.0].uses);
 
@@ -53,6 +54,11 @@ impl EGraph {
         let root1_entity = &mut self.entities[root1.0];
         root1_entity.heat_bonus = root1_entity.heat_bonus.max(root2_heat);
         root1_entity.base_importance = root1_entity.base_importance.max(root2_imp);
+        // 🌟 MCTS連鎖の深さは、統合後の実体が「より浅い(=より根拠が確かな)方」の
+        // 経緯を引き継ぐべきなので、maxではなくminを取る(片方が実は既知の浅い
+        // 実体と同一だったなら、もう「無根拠に積み上げられた深い産物」とは
+        // 見なさない)。
+        root1_entity.mcts_depth = root1_entity.mcts_depth.min(root2_mcts_depth);
 
         root1_entity.components = vec![LogicalComponent {
             definitions: merged_defs.into_iter().collect(),
