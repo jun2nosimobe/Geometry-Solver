@@ -173,6 +173,27 @@ impl EGraph {
                 // propagate_point_uniquenessの対象にする。
                 EntityType::Point | EntityType::Direction => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
+
+                    // 🐛 FIX: 点/方向が変化(他の点/方向とマージ)しても、それを
+                    // 含む直線側の「直線の一致条件」判定は自動的には再トリガー
+                    // されない(propagate_line_uniquenessは直線自身のrepが
+                    // 変化したときしか呼ばれないため)。このため「2直線が
+                    // 既に1点を共有していて、後から同位角判定などで方向まで
+                    // 一致した」というケースで、方向の一致が確立された直後に
+                    // 直線同士の合流だけが見逃されてStallする実例が
+                    // orthocenter_altで見つかった(同位角による平行判定で
+                    // Dir_Alt_A≡Dir_Line_AHが確立された直後、Alt_A≡Line_AHへの
+                    // 合流だけが起きなかった)。この点/方向を含む直線それぞれ
+                    // についてもpropagate_line_uniquenessを再実行することで
+                    // これを修正する。
+                    let lines: Vec<ClassId> = self.entities[rep_id.0].components.first()
+                        .map(|c| dedup_sorted_ids(c.subobjects.iter()
+                            .map(|&s| self.get_rep(s))
+                            .filter(|&s| self.entities[s.0].entity_type == EntityType::Line)))
+                        .unwrap_or_default();
+                    for l in lines {
+                        if self.propagate_line_uniqueness(l) { changed_any = true; }
+                    }
                 }
                 _ => {}
             }

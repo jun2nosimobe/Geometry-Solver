@@ -122,6 +122,15 @@ fn main() {
         engine.emit(logic_core::Event::FactProven(fact.clone()));
     }
     let start_time = Instant::now();
+    // 🌟 目標が数値ショートカットのみの経路で到達された場合、登録(🎉)を拒否して
+    // 探索を継続する(下記)が、union-findは既に統合済みで巻き戻らないため
+    // 同じ理由で毎ループ再検出してしまう。通知の重複を防ぐためのフラグ。
+    let mut shortcut_target_noted = false;
+    // 🌟 MCTSがこの実行で実際に少なくとも1手を採用したか。この後で説明する
+    // 「数値ショートカットのみの経路は登録を拒否する」ポリシーを、MCTSが
+    // 一度も使われていない実行(=circumcenterのような従来通りのDFSのみの
+    // 実行)には適用しないためのフラグ。
+    let mut mcts_ever_committed = false;
 
     engine.schedule_full_sweep();
 
@@ -161,18 +170,42 @@ fn main() {
                             // 妥当性(=偽陽性でないか)を見るだけで、そこに至る経路の
                             // 「厳密さ」までは保証しない。経路上にLineUniqueness/
                             // PointUniqueness局所伝播ショートカット(数値サンプリング
-                            // だけが根拠)が含まれる場合は、名前付き定理の連鎖による
-                            // 形式的な証明ではないことをここで明示する
-                            // (EGraph::proof_uses_numeric_shortcut参照)。
-                            let edges = engine.prover.egraph.explain_identical(target_args[0], target_args[1]);
-                            if EGraph::proof_uses_numeric_shortcut(&edges) {
-                                println!("🎉 証明完了(ただし一部は数値的検証のみに基づく非厳密な経路を含みます)！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
-                                println!("    -> 経路の詳細は result/proof_{}.txt の⚠️注意書きを参照してください。", problem_name);
+                            // だけが根拠であり、名前付き定理を前提から結論へ連鎖させる
+                            // 形式的な演繹ではない)が含まれることがある。
+                            //
+                            // 🐛 FIX: 当初は「経路にこのショートカットが含まれる場合は
+                            // 一律に登録を拒否する」実装にしたが、circumcenter(MCTS無し、
+                            // 常に解ける問題)ですら、実際にはこの経路を(既に他の定理で
+                            // 厳密に確立済みの接続関係から)ごく普通に、正しく使っていた
+                            // ことが判明した(回帰テストで発覚)。ショートカット自体は
+                            // 危険なのではなく、「MCTSの無方向な探索が、根拠の薄い
+                            // 偶然の接続関係を大量に積み重ねた末にこれを踏み抜く」
+                            // ケースだけが危険。そこでMCTSがこの実行で実際に少なくとも
+                            // 1手を採用した後(mcts_ever_committed)にだけ、この
+                            // ショートカットを理由に登録を拒否しconjectureとして扱う
+                            // (ユーザー要望)。MCTSが一度も使われていない(=circumcenterの
+                            // ような従来通りのDFSのみの)実行では、これまで通り無条件に
+                            // 受理する。union-find自体はもう統合されており安価に
+                            // 巻き戻せないため、「勝利条件として認めない」という形の
+                            // 拒否になる: 🎉もoutput_proofも出さずbreakせず、探索を
+                            // 継続する。同じ理由での重複通知を防ぐため、この
+                            // (fact_type, target_args)の組については初回だけ通知する。
+                            let uses_shortcut = mcts_ever_committed && {
+                                let edges = engine.prover.egraph.explain_identical(target_args[0], target_args[1]);
+                                EGraph::proof_uses_numeric_shortcut(&edges)
+                            };
+                            if uses_shortcut {
+                                if !shortcut_target_noted {
+                                    println!("🔮 [目標到達を却下・予想として記録] {} ≡ {} は構造的には統合されましたが、経路に数値的検証のみに基づく局所ショートカットが含まれ、かつMCTSがこの実行で構成に関与しているため、証明成立とは認めません。",
+                                        engine.prover.egraph.entities[r1.0].name, engine.prover.egraph.entities[r2.0].name);
+                                    println!("    -> 名前付き定理の連鎖による厳密な経路が別に見つかるまで、これは(反例が出なかったという意味で強い根拠のある)予想として扱い、探索を継続します。");
+                                    shortcut_target_noted = true;
+                                }
                             } else {
                                 println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+                                output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
+                                break;
                             }
-                            output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
-                            break;
                         }
                     }
                 }
@@ -211,6 +244,7 @@ fn main() {
                 if mcts.run_step(&mut engine.prover.egraph, &problem.target_fact, 200) {
                     engine.schedule_full_sweep();
                     mcts_consecutive_failures = 0;
+                    mcts_ever_committed = true;
                 } else {
                     mcts_consecutive_failures += 1;
                     println!("  -> MCTSも有効な一手を見つけられませんでした({}/{})。", mcts_consecutive_failures, MCTS_MAX_CONSECUTIVE_FAILURES);

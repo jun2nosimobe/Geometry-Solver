@@ -25,6 +25,15 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let alt_c = egraph.create_entity("Alt_C".to_string(), Definition::PerpendicularLine(l_ab, c), EntityType::Line);
     let h = egraph.create_entity("H".to_string(), Definition::Intersection(alt_b, alt_c), EntityType::Point);
 
+    // 🌟 補助点: BとCから対辺へ下ろした垂線の足(垂心三角形の頂点)。
+    // ∠BEC=∠BFC=90°(定義から自明)なので、B,C,E,Fが同一円周上にある
+    // ことを「円周角の定理の逆」で示せる。これを起点に、有向角の交替律→
+    // 同位角による平行判定という既存の定理チェーンでDir_Line_AH ≡ Dir_Alt_A
+    // (したがってLine_AH ≡ Alt_A、1点Aと方向を共有)まで辿り着けるはず、
+    // というのがこの問題の"別証明ルート"の核心。
+    let e = egraph.create_entity("E".to_string(), Definition::Intersection(alt_b, l_ca), EntityType::Point);
+    let f = egraph.create_entity("F".to_string(), Definition::Intersection(alt_c, l_ab), EntityType::Point);
+
     // 補助線: AとHを結ぶ直線
     let line_ah = egraph.create_entity("Line_AH".to_string(), Definition::new_line(a, h), EntityType::Line);
 
