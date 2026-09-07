@@ -8,7 +8,7 @@ mod action_space;
 mod mcts;
 mod problems;
 
-use mmp_core::EGraph;
+use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
 use mmp_tester::MMPTester;
 use mcts::MCTSSearchEngine;
@@ -33,8 +33,59 @@ fn output_proof(egraph: &EGraph, problem_name: &str, fact_type: &str, target_arg
     }
 }
 
+/// 🌟 raw_proof: EGraphが保持する証明関連情報(union-findの証明の森+
+/// incidenceの由来)を一切フィルタせず丸ごとテキストへダンプし、
+/// result/raw_proof_<問題名>.txtに保存する。generate_proofと違いこれは
+/// 人間が読むためのものではなく、後からextract_proof(RawProof::verify_identical)
+/// が独立に読み込んで検証をやり直せるようにするための、Rust側が読み書き
+/// しやすい機械可読な完全な記録。実行のたびに(証明が完了したかどうかに
+/// 関わらず)必ず書き出す。
+fn output_raw_proof(egraph: &EGraph, problem_name: &str) -> String {
+    let raw_text = egraph.dump_raw_proof();
+    let dir = "result";
+    if fs::create_dir_all(dir).is_ok() {
+        let path = format!("{}/raw_proof_{}.txt", dir, problem_name);
+        match fs::write(&path, &raw_text) {
+            Ok(_) => println!("📄 raw_proofを '{}' に保存しました。", path),
+            Err(e) => println!("⚠️ raw_proofファイルの書き込みに失敗しました ({}): {}", path, e),
+        }
+    }
+    raw_text
+}
+
+/// 🌟 extract_proof: 保存済みraw_proofテキストを読み込み、指定した2つの
+/// 実体(名前で指定)が名前付き定理の連鎖だけで(Theoremの前提も再帰的に)
+/// 厳密に合流しているかを検証し、結果を標準出力へ表示する。ソルバーを
+/// 再実行せずに済むので、「実際に証明が完了しているか、どこかに未証明の
+/// ギャップが眠っているのか」を後から(別プロセスからでも)監査できる。
+/// `geom_solver extract-proof <raw_proofファイル> <名前A> <名前B>` で呼ぶ。
+fn run_extract_proof(args: &[String]) {
+    if args.len() < 5 {
+        println!("使い方: geom_solver extract-proof <raw_proofファイル> <名前A> <名前B>");
+        return;
+    }
+    let path = &args[2];
+    let name_a = &args[3];
+    let name_b = &args[4];
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => { println!("⚠️ '{}' を読み込めませんでした: {}", path, e); return; }
+    };
+    let raw = RawProof::parse(&text);
+    let (Some(a), Some(b)) = (raw.id_of(name_a), raw.id_of(name_b)) else {
+        println!("⚠️ '{}' または '{}' という名前の実体がraw_proof中に見つかりませんでした。", name_a, name_b);
+        return;
+    };
+    let report = raw.verify_identical(a, b);
+    print!("{}", report.format());
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.len() > 1 && args[1] == "extract-proof" {
+        run_extract_proof(&args);
+        return;
+    }
     let problem_name = if args.len() > 1 {
         &args[1]
     } else {
@@ -204,6 +255,20 @@ fn main() {
                             } else {
                                 println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
                                 output_proof(&engine.prover.egraph, problem_name, fact_type, target_args);
+                                // 🌟 raw_proofを出力し、そのテキストを(実行中のEGraphの
+                                // 状態からではなく)独立に読み込み直してextract_proofの
+                                // 検証をやり直す。uses_shortcutの判定は目標そのものの
+                                // 直接のマージ経路(explain_identicalの最上位の辺)しか
+                                // 見ていないため、Theoremの前提が再帰的に別のショート
+                                // カットへ依存しているケース(circumcenterの調査で実在が
+                                // 判明)を見逃しうる――ここではraw_proofに記録された
+                                // Theoremのpremisesまで再帰的に遡って検証することで、
+                                // 「本当に最初から最後まで名前付き定理の連鎖だけで
+                                // 繋がっているか」をより深く監査する。
+                                let raw_text = output_raw_proof(&engine.prover.egraph, problem_name);
+                                let raw = RawProof::parse(&raw_text);
+                                let report = raw.verify_identical(target_args[0].0, target_args[1].0);
+                                print!("{}", report.format());
                                 break;
                             }
                         }
@@ -252,5 +317,11 @@ fn main() {
             }
         }
     }
+    // 🌟 ループが🎉に到達せず終わった(タイムアウト/Stall/ショートカット拒否の
+    // まま)場合でも、raw_proofは「全てのマージ履歴を記録」する無条件の
+    // 出力なので必ず書き出す(成功時は既に上で書き出し済みだが、その後に
+    // 状態が変わっていないので上書きは無害)。後からextract_proofで
+    // (どこまで進んで、どこで止まったかを含め)監査できるようにするため。
+    output_raw_proof(&engine.prover.egraph, problem_name);
     engine.prover.egraph.dump_state();
 }

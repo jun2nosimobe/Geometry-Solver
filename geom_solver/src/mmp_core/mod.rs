@@ -16,6 +16,8 @@ mod eval;
 mod proof;
 mod construction;
 mod query;
+mod raw_proof;
+pub use raw_proof::{RawProof, VerifyReport, Gap};
 #[cfg(test)]
 mod tests;
 
