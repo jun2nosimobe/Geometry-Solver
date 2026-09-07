@@ -83,17 +83,22 @@ impl EGraph {
             Definition::Midpoint(p1, p2) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_midpoint(&v1, &v2))
+                Self::to_option(mmp_calculators::calc_midpoint(&v1, &v2))
             }
             Definition::LineThroughPoints(p1, p2) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_line_through_points(&v1, &v2))
+                // 🐛 FIX: calc_line_through_pointsは2点の座標が数値的に一致した場合
+                // (退化)にvec![]を返す。以前はここでSome(vec![])として素通りさせて
+                // しまい、この空Vecが後続のIntersection計算等でcross_productに
+                // 渡されてindex out of bounds panicを起こしていた(orthocenter --mctsで
+                // 実際に発生)。to_optionで確実にNone(計算不能)に変換する。
+                Self::to_option(mmp_calculators::calc_line_through_points(&v1, &v2))
             }
             Definition::Intersection(l1, l2) => {
                 let v1 = self.evaluate_node_inner(*l1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*l2, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_intersection(&v1, &v2))
+                Self::to_option(mmp_calculators::calc_intersection(&v1, &v2))
             }
             Definition::DirectionOf(l) => {
                 let v = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
@@ -126,12 +131,17 @@ impl EGraph {
             Definition::LengthSq(p1, p2) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                Some(vec![mmp_calculators::calc_squared_distance(&v1, &v2), ModInt::new(1), ModInt::new(1)])
+                // 🐛 FIX: calc_squared_distanceは同次座標のz成分が0(無限遠点)だと
+                // 内部の除算(ModInt::inv())でpanicしていたため、Option<ModInt>を
+                // 返す実装に変更済み(mmp_calculators.rs参照)。ここではmapで
+                // Vec<ModInt>形式に包み直すだけ。
+                mmp_calculators::calc_squared_distance(&v1, &v2)
+                    .map(|d| vec![d, ModInt::new(1), ModInt::new(1)])
             }
             Definition::PerpendicularLine(l, p) => {
                 let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
                 let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_perpendicular(&vl, &vp))
+                Self::to_option(mmp_calculators::calc_perpendicular(&vl, &vp))
             }
             // 🌟 以前は未実装で、ParallelLine型のエンティティ(まだ他の定義と
             // マージされていないもの)を数値サニティチェック(numeric_plausibility_check)
@@ -139,7 +149,7 @@ impl EGraph {
             Definition::ParallelLine(l, p) => {
                 let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
                 let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_parallel(&vl, &vp))
+                Self::to_option(mmp_calculators::calc_parallel(&vl, &vp))
             }
             // 🌟 同上の理由でPerpDirectionOfも実装する。方向ベクトル(dx,dy)を
             // 90度回転させるだけ((dx,dy) -> (-dy,dx))。
@@ -156,21 +166,35 @@ impl EGraph {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
                 let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_circumcircle(&v1, &v2, &v3))
+                Self::to_option(mmp_calculators::calc_circumcircle(&v1, &v2, &v3))
             }
             Definition::TangentLine(c, p) => {
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
                 let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_tangent_line(&vc, &vp))
+                Self::to_option(mmp_calculators::calc_tangent_line(&vc, &vp))
             }
             Definition::HarmonicConjugateOf(a, b, c) => {
                 let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
                 let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                Some(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
+                Self::to_option(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
             }
             _ => None,
         }
+    }
+
+    /// 🌟 calc_*系のヘルパーが退化した入力(座標が数値的に一致した2点、
+    /// 平行な2直線等)に対して返す空Vecを、evaluate_definition全体で一貫して
+    /// 「計算不能」(None)に変換する。これが無いと、空Vecがあたかも妥当な値
+    /// であるかのようにSome(vec![])として上流(呼び出し元のevaluate_node_inner
+    /// のキャッシュ・そのまた呼び出し元)に伝播してしまい、後続の計算
+    /// (cross_product等の固定インデックスアクセス)でindex out of bounds
+    /// panicを起こす(orthocenter --mctsで実際に発生した既知のバグ。
+    /// mmp_calculators.rs側でもcross_product/calc_squared_distance/
+    /// calc_tangent_line自体に長さ・ゼロ除算ガードを追加したが、それとは
+    /// 独立に、ここでも「空=計算不能」という変換を一箇所に集約しておく)。
+    fn to_option(v: Vec<ModInt>) -> Option<Vec<ModInt>> {
+        if v.is_empty() { None } else { Some(v) }
     }
 
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化

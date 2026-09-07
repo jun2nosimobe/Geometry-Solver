@@ -15,7 +15,14 @@ pub fn normalize(v: &[ModInt]) -> Vec<ModInt> {
 }
 
 // 2直線（または点と直線）のクロス積（外積/交点計算）
+// 🐛 FIX: 以前は長さチェックが一切無く、退化した入力(例: calc_line_through_points
+// が2点の座標が数値的に一致した際に返す空Vec)がここに渡されるとv1[2]等の
+// インデックスアクセスでpanicしていた(orthocenter --mctsで実際に発生)。
+// evaluate_node系はNoneで「計算不能」を表現する設計なので、ここでは例外を
+// 投げず空Vecを返し、呼び出し側(calc_intersection等、そしてeval.rs側の
+// to_option)が「計算不能」として一貫して扱えるようにする。
 pub fn cross_product(v1: &[ModInt], v2: &[ModInt]) -> Vec<ModInt> {
+    if v1.len() < 3 || v2.len() < 3 { return vec![]; }
     vec![
         v1[1] * v2[2] - v1[2] * v2[1],
         v1[2] * v2[0] - v1[0] * v2[2],
@@ -84,14 +91,19 @@ pub fn calc_parallel(l: &[ModInt], p: &[ModInt]) -> Vec<ModInt> {
     normalize(&cross_product(&inf_pt, p))
 }
 
-pub fn calc_squared_distance(v1: &[ModInt], v2: &[ModInt]) -> ModInt {
+// 🐛 FIX: 以前は長さチェックも、z成分(同次座標の第3要素)が0(=無限遠点)かの
+// チェックも無かった。z==0の点を渡すと `v1[0]/v1[2]` がModInt::inv()内で
+// ゼロ除算panicを起こす(0.inv()はpanicする実装になっている)。戻り値を
+// Option<ModInt>にして、計算不能な場合はNoneで表現する。
+pub fn calc_squared_distance(v1: &[ModInt], v2: &[ModInt]) -> Option<ModInt> {
+    if v1.len() < 3 || v2.len() < 3 || v1[2].0 == 0 || v2[2].0 == 0 { return None; }
     let x1 = v1[0] / v1[2];
     let y1 = v1[1] / v1[2];
     let x2 = v2[0] / v2[2];
     let y2 = v2[1] / v2[2];
     let dx = x1 - x2;
     let dy = y1 - y2;
-    dx * dx + dy * dy
+    Some(dx * dx + dy * dy)
 }
 
 
@@ -123,9 +135,13 @@ pub fn calc_harmonic_conjugate(a: &[ModInt], b: &[ModInt], c: &[ModInt]) -> Vec<
     normalize(&d)
 }
 
+// 🐛 FIX: 以前は長さチェックも、vp(接点)のz成分が0(=無限遠点)かのチェックも
+// 無かった。cross_productと同様、退化した入力に対してpanicせずvec![]
+// (計算不能)を返すようにする。
 pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
     // vc: [D, E, F, A] (A(x^2+y^2) + Dx + Ey + F = 0)
     // vp: [x, y, z] (接点)
+    if vc.len() < 4 || vp.len() < 3 || vp[2].0 == 0 { return vec![]; }
     let d = vc[0];
     let e = vc[1];
     let f = vc[2];
