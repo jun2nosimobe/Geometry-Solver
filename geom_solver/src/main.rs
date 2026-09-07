@@ -147,6 +147,13 @@ fn main() {
     // MCTSの無方向な探索がそこを突く可能性を完全には排除できないという
     // 慎重さによるもの。
     let use_mcts = args.iter().any(|a| a == "--mcts");
+    // 🌟 HAGeo-409ベンチマーク拡充にあたり、「なぜ解けない/遅いのか」を
+    // 事後に切り分けるための診断フラグ。--statsを付けると終了時に
+    // UCB1バンディットのtheorem_stats(定理ごとの試行回数・平均報酬)を
+    // 試行回数の多い順に一覧表示する。試行回数が多いのに平均報酬が低い
+    // 定理は「CPU時間を大量に消費しているのに成果が薄い」ことを示す
+    // ので、探索の無駄がどこにあるかを特定する手がかりになる。
+    let show_stats = args.iter().any(|a| a == "--stats");
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -390,4 +397,17 @@ fn main() {
     // (どこまで進んで、どこで止まったかを含め)監査できるようにするため。
     output_raw_proof(&engine.prover.egraph, problem_name);
     engine.prover.egraph.dump_state();
+
+    if show_stats {
+        println!("\n=== 📊 定理ごとのUCB1統計 (試行回数の多い順、上位20件) ===");
+        let mut rows: Vec<(String, u64, f64)> = engine.prover.theorem_stats.iter().enumerate()
+            .filter(|(_, s)| s.attempts > 0)
+            .map(|(idx, s)| (engine.prover.theorems[idx].name.clone(), s.attempts, s.total_reward / s.attempts as f64))
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, attempts, avg_reward) in rows.iter().take(20) {
+            println!("  {:>6}回試行 / 平均報酬 {:>+6.3} : {}", attempts, avg_reward, name);
+        }
+        println!("=============================\n");
+    }
 }
