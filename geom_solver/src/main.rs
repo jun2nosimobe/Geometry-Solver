@@ -53,17 +53,20 @@ fn output_raw_proof(egraph: &EGraph, problem_name: &str) -> String {
     raw_text
 }
 
-/// 🌟 extract_proofの検証結果(VerifyReport::format())を、コンソールと
-/// ファイル(result/extracted_proof_<問題名>.txt)の両方に出力する。
-/// output_proof/output_raw_proofと同じ「コンソール+ファイルの両方に残す」
-/// 方針に揃えている。
-fn output_extract_report(report_text: &str, problem_name: &str) {
-    print!("{}", report_text);
+/// 🌟 extract_proofの検証結果を出力する。コンソールには短い要約
+/// (DeepProof::format_summary、ギャップの有無とresolved_shortcuts件数だけ)を
+/// 表示し、result/extracted_proof_<問題名>.txtには「深い証明」全文
+/// (DeepProof::format_deep、Theoremの前提やLineUniqueness/PointUniquenessの
+/// 共有点の由来まで再帰的に展開した完全な証明)を保存する。コンソールを
+/// 深い証明で埋め尽くさないための使い分け(output_proof/output_raw_proofと
+/// 同じ「コンソールには要点、ファイルには詳細」の方針)。
+fn output_extract_report(report: &mmp_core::DeepProof, problem_name: &str) {
+    print!("{}", report.format_summary());
     let dir = "result";
     if fs::create_dir_all(dir).is_ok() {
         let path = format!("{}/extracted_proof_{}.txt", dir, problem_name);
-        match fs::write(&path, report_text) {
-            Ok(_) => println!("📄 extract_proofの結果を '{}' に保存しました。", path),
+        match fs::write(&path, report.format_deep()) {
+            Ok(_) => println!("📄 extract_proof(深い証明)を '{}' に保存しました。", path),
             Err(e) => println!("⚠️ extract_proof結果ファイルの書き込みに失敗しました ({}): {}", path, e),
         }
     }
@@ -99,7 +102,7 @@ fn run_extract_proof(args: &[String]) {
     // 揃えたいため)。復元できない場合はファイル名全体をそのまま使う。
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or(path);
     let problem_name = stem.strip_prefix("raw_proof_").unwrap_or(stem);
-    output_extract_report(&report.format(), problem_name);
+    output_extract_report(&report, problem_name);
 }
 
 fn main() {
@@ -290,7 +293,7 @@ fn main() {
                                 let raw_text = output_raw_proof(&engine.prover.egraph, problem_name);
                                 let raw = RawProof::parse(&raw_text);
                                 let report = raw.verify_identical(target_args[0].0, target_args[1].0);
-                                output_extract_report(&report.format(), problem_name);
+                                output_extract_report(&report, problem_name);
                                 break;
                             }
                         }

@@ -17,7 +17,7 @@ mod proof;
 mod construction;
 mod query;
 mod raw_proof;
-pub use raw_proof::{RawProof, VerifyReport, Gap};
+pub use raw_proof::{RawProof, DeepProof, DeepStep};
 #[cfg(test)]
 mod tests;
 

@@ -374,9 +374,9 @@ fn test_raw_proof_resolves_shared_point_shortcut() {
     let raw = RawProof::parse(&raw_text);
     let report = raw.verify_identical(l1.0, l2.0);
     assert!(report.is_rigorous(),
-        "A, Bへの接続はどちらも定義から機械的に従う基底事実なので、LineUniqueness自体はギャップにならないはず: {:?}",
-        report.gaps);
-    assert!(report.resolved_shortcuts >= 1,
+        "A, Bへの接続はどちらも定義から機械的に従う基底事実なので、LineUniqueness自体はギャップにならないはず: {}",
+        report.format_deep());
+    assert!(report.resolved_shortcuts() >= 1,
         "LineUniquenessショートカットが少なくとも1件、由来検証済みとして解決されているはず");
 }
 
