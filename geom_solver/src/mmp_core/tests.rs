@@ -346,3 +346,52 @@ fn test_numeric_check_samples_consistent_point_on_circle() {
         "何の前提も無い自由点Rを使った外接円は、一般にCircとは数値的に別の円であるべき"
     );
 }
+
+/// 🌟 raw_proof::RawProof::verify_identicalの回帰テスト(ユーザー指摘への対応):
+/// 「2直線が2点を共有」によるLineUniqueness自体は、共有点それぞれの直線への
+/// 接続が定義から機械的に従う基底事実(このテストのA, Bのように)である限り、
+/// 数値サンプリングにしか頼らない「ギャップ」ではなく、共有点の由来まで
+/// 遡って検証済みの「resolved_shortcuts」として扱われるべきことを確認する
+/// (circumcenter/orthocenter_altの調査で実際にこの区別が必要だと判明した)。
+#[test]
+fn test_raw_proof_resolves_shared_point_shortcut() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let l1 = egraph.create_entity("L1".into(), Definition::new_line(a, b), EntityType::Line);
+    // L2はL1とは別定義(素朴なFreePointプレースホルダ)として独立に作り、A, Bを
+    // 後から手動でリンクする(test_incidence_preservation_after_mergeと同じ手法)。
+    // これでpropagate_line_uniquenessが「2点共有」経由でL1, L2をマージする状況を
+    // 意図的に作れる(new_line同士だと正規化されたDefinitionのhash consingで
+    // 最初から同一実体になってしまい、LineUniqueness経路を通らない)。
+    let l2 = egraph.create_entity("L2".into(), Definition::FreePoint, EntityType::Line);
+    egraph.link_logical_incidence(a, l2);
+    egraph.link_logical_incidence(b, l2);
+    egraph.apply_congruence_closure();
+    assert_eq!(egraph.get_rep(l1), egraph.get_rep(l2), "前提: 2点共有でL1, L2がマージされているはず");
+
+    let raw_text = egraph.dump_raw_proof();
+    let raw = RawProof::parse(&raw_text);
+    let report = raw.verify_identical(l1.0, l2.0);
+    assert!(report.is_rigorous(),
+        "A, Bへの接続はどちらも定義から機械的に従う基底事実なので、LineUniqueness自体はギャップにならないはず: {:?}",
+        report.gaps);
+    assert!(report.resolved_shortcuts >= 1,
+        "LineUniquenessショートカットが少なくとも1件、由来検証済みとして解決されているはず");
+}
+
+/// 🌟 raw_proof::RawProof::verify_identicalの回帰テスト: そもそも合流していない
+/// (raw_proof中に一切マージ経路が無い)2つの実体を尋ねた場合は、当然ギャップ
+/// (未証明)として報告されるべきことを確認する。
+#[test]
+fn test_raw_proof_reports_gap_for_unmerged_entities() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    egraph.apply_congruence_closure();
+
+    let raw_text = egraph.dump_raw_proof();
+    let raw = RawProof::parse(&raw_text);
+    let report = raw.verify_identical(a.0, b.0);
+    assert!(!report.is_rigorous(), "無関係などうしはマージされていないので、ギャップとして報告されるべき");
+}

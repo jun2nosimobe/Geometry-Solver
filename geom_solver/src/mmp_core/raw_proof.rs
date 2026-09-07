@@ -218,6 +218,7 @@ impl RawProof {
         steps: &mut usize,
         gaps: &mut Vec<Gap>,
         visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        resolved_shortcuts: &mut usize,
         depth: usize,
     ) {
         *steps += 1;
@@ -251,7 +252,7 @@ impl RawProof {
                             match self.explain(args[0], args[1]) {
                                 Some(sub_edges) => {
                                     for (sf, se) in &sub_edges {
-                                        self.verify_edge(*sf, se, false, steps, gaps, visited, depth + 1);
+                                        self.verify_edge(*sf, se, false, steps, gaps, visited, resolved_shortcuts, depth + 1);
                                     }
                                 }
                                 None => {
@@ -269,7 +270,7 @@ impl RawProof {
                         "Connected" if args.len() == 2 => {
                             let key = if args[0] < args[1] { (args[0], args[1]) } else { (args[1], args[0]) };
                             if let Some(inc_edge) = self.incidence.get(&key) {
-                                self.verify_edge(key.0, inc_edge, true, steps, gaps, visited, depth + 1);
+                                self.verify_edge(key.0, inc_edge, true, steps, gaps, visited, resolved_shortcuts, depth + 1);
                             }
                             // 🌟 由来が記録されていないConnectedは、apply_trivial_relations/
                             // 作図時点のlink_logical_incidenceによる「定義から機械的に
@@ -281,15 +282,54 @@ impl RawProof {
                     }
                 }
             }
-            "LineUniqueness" | "PointUniqueness" => {
-                let detail = match edge.kind.as_str() {
-                    "LineUniqueness" => format!("2直線が点(ID: {})を共有しているという構造的観察 + 数値サンプリングのみが根拠", edge.payload),
-                    _ => format!("2直線(ID: {})の交点の一意性という構造的観察 + 数値サンプリングのみが根拠", edge.payload),
-                };
-                gaps.push(Gap {
-                    location: self.format_location(from, edge.to, is_incidence),
-                    reason: format!("名前付き定理の連鎖ではなく、{}", detail),
-                });
+            // 🐛 FIX (ユーザー指摘): 以前はLineUniqueness/PointUniqueness自体を
+            // 問答無用でギャップ扱いにしていたが、「2点(または2方向)を共有する
+            // 2直線は同一」「2直線の交点は一意」はそれ自体が射影幾何の公理的な
+            // 事実であり、"共有している"という前提さえ厳密に裏付けられていれば
+            // 数値サンプリングは単なる保険であって、ギャップと呼ぶべきではない。
+            // ここでは共有点/共有方向・関係する直線それぞれの由来
+            // (a) それ自身がさらに別のマージの産物なら、そのマージ履歴
+            //     (path_to_root)を再帰的に検証する
+            // (b) incidence_provenanceに「この点はこの直線に乗っている」の
+            //     由来が明示的に記録されていれば、それも再帰的に検証する
+            //     (記録が無い場合は、作図時点の構造的な接続として基底ケース
+            //     扱いする――Connected前提の扱いと同じ方針)
+            // を辿り、そこにさらに深いギャップが無ければこのステップ自体は
+            // ギャップとして報告しない(resolved_shortcutsとしてカウントする
+            // だけに留める)。深いところで本当にギャップが見つかった場合は、
+            // そのより具体的なギャップが既にgapsに追加されているので、ここで
+            // 重ねて報告する必要はない。
+            "LineUniqueness" => {
+                let shared: Vec<usize> = edge.payload.split(',').filter_map(|s| s.parse().ok()).collect();
+                let before = gaps.len();
+                for p in shared {
+                    for (sf, se) in self.path_to_root(p) {
+                        self.verify_edge(sf, &se, false, steps, gaps, visited, resolved_shortcuts, depth + 1);
+                    }
+                    for &line in &[from, edge.to] {
+                        let key = if p < line { (p, line) } else { (line, p) };
+                        if let Some(inc_edge) = self.incidence.get(&key) {
+                            self.verify_edge(key.0, inc_edge, true, steps, gaps, visited, resolved_shortcuts, depth + 1);
+                        }
+                    }
+                }
+                if gaps.len() == before { *resolved_shortcuts += 1; }
+            }
+            "PointUniqueness" => {
+                let via_lines: Vec<usize> = edge.payload.split(',').filter_map(|s| s.parse().ok()).collect();
+                let before = gaps.len();
+                for &l in &via_lines {
+                    for (sf, se) in self.path_to_root(l) {
+                        self.verify_edge(sf, &se, false, steps, gaps, visited, resolved_shortcuts, depth + 1);
+                    }
+                    for &pt in &[from, edge.to] {
+                        let key = if pt < l { (pt, l) } else { (l, pt) };
+                        if let Some(inc_edge) = self.incidence.get(&key) {
+                            self.verify_edge(key.0, inc_edge, true, steps, gaps, visited, resolved_shortcuts, depth + 1);
+                        }
+                    }
+                }
+                if gaps.len() == before { *resolved_shortcuts += 1; }
             }
             other => {
                 gaps.push(Gap {
@@ -302,14 +342,19 @@ impl RawProof {
 
     /// 🌟 aとbが本当にrigorousな経路(Given/Theorem/Congruence/Trivialの連鎖、
     /// かつTheoremの前提も再帰的にrigorous)だけで合流しているかを検証する。
+    /// LineUniqueness/PointUniqueness(2点/2直線の共有という構造的観察)は
+    /// それ自体をギャップとはせず、共有点/共有直線の由来を再帰的に検証した上で
+    /// (a)全て辿れれば「射影幾何の公理として解決済み」(resolved_shortcuts)、
+    /// (b)辿れない箇所があればそここそを本当のギャップとして報告する。
     pub fn verify_identical(&self, a: usize, b: usize) -> VerifyReport {
         let mut steps = 0usize;
         let mut gaps = Vec::new();
         let mut visited = std::collections::HashSet::new();
+        let mut resolved_shortcuts = 0usize;
         match self.explain(a, b) {
             Some(edges) => {
                 for (from, edge) in &edges {
-                    self.verify_edge(*from, edge, false, &mut steps, &mut gaps, &mut visited, 0);
+                    self.verify_edge(*from, edge, false, &mut steps, &mut gaps, &mut visited, &mut resolved_shortcuts, 0);
                 }
             }
             None => {
@@ -319,7 +364,7 @@ impl RawProof {
                 });
             }
         }
-        VerifyReport { steps_checked: steps, gaps }
+        VerifyReport { steps_checked: steps, gaps, resolved_shortcuts }
     }
 }
 
@@ -335,6 +380,12 @@ pub struct Gap {
 pub struct VerifyReport {
     pub steps_checked: usize,
     pub gaps: Vec<Gap>,
+    /// 🌟 LineUniqueness/PointUniqueness(「2点/2直線の共有」という構造的
+    /// ショートカット)のうち、共有点/共有直線の由来を再帰的に検証し尽くせて
+    /// 「射影幾何の公理として解決済み」と判定できた件数。ギャップではないが、
+    /// 名前付き定理そのものでもない――何にどれだけ頼ったかを利用者に見せる
+    /// ための情報。
+    pub resolved_shortcuts: usize,
 }
 
 impl VerifyReport {
@@ -344,12 +395,18 @@ impl VerifyReport {
         let mut out = String::new();
         if self.is_rigorous() {
             out.push_str(&format!(
-                "✅ [extract_proof] 検証した{}ステップ全てが名前付き定理の連鎖(Given/Theorem/Congruence、前提も再帰的に検証済み)で説明でき、未証明のギャップは見つかりませんでした。\n",
+                "✅ [extract_proof] 検証した{}ステップ全てが厳密に辿れました(未証明のギャップなし)。\n",
                 self.steps_checked
             ));
+            if self.resolved_shortcuts > 0 {
+                out.push_str(&format!(
+                    "    うち{}件は「2点/2直線を共有する直線・点の一意性」という射影幾何の公理を使っていますが、\n    共有点・共有直線の由来を再帰的に検証し、全て名前付き定理/構造的な基底事実まで遡れることを確認済みです。\n",
+                    self.resolved_shortcuts
+                ));
+            }
         } else {
             out.push_str(&format!(
-                "⚠️ [extract_proof] {}ステップ中{}件、数値サンプリングや構造的近似だけに頼ったギャップが見つかりました:\n",
+                "⚠️ [extract_proof] {}ステップ中{}件、由来を遡っても名前付き定理や構造的な基底事実に辿り着けない(=数値サンプリングのみが根拠の)ギャップが見つかりました:\n",
                 self.steps_checked, self.gaps.len()
             ));
             for (i, g) in self.gaps.iter().enumerate() {
