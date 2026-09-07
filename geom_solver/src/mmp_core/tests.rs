@@ -710,3 +710,51 @@ fn test_conic_through_5_points_links_generator_points_structurally() {
         assert!(egraph.is_connected(p, conic), "生成元の点は二次曲線にConnectedであるべき");
     }
 }
+
+/// 🌟 sample_point_on_conic(円のsample_point_on_circleの二次曲線版)の検証。
+/// test_numeric_check_samples_consistent_point_on_circleと全く同じ発想:
+/// 「QはこのConic上にある」という前提をlink_logical_incidenceだけで与えた
+/// (座標としては裏付けの無い)自由点Qについて、P1,P2,P3,P4,Qを通る二次曲線が
+/// 元のConicと数値的に一致するはず(二次曲線は5点で一意に決まるため)。
+/// これが成り立つには、numeric_plausibility_checkの土台となる
+/// assign_free_point_coordsがQの座標をsample_point_on_conic経由で正しく
+/// 「本当にConic上にある」ように制約付きサンプリングできている必要がある。
+#[test]
+fn test_numeric_check_samples_consistent_point_on_conic() {
+    let mut egraph = EGraph::new();
+    let pts: Vec<ClassId> = (0..5)
+        .map(|i| egraph.create_entity(format!("P{}", i), Definition::FreePoint, EntityType::Point))
+        .collect();
+    let conic = egraph.create_entity(
+        "Conic".into(),
+        Definition::ConicThrough5Points(pts[0], pts[1], pts[2], pts[3], pts[4]),
+        EntityType::Conic,
+    );
+
+    let q = egraph.create_entity("Q".into(), Definition::FreePoint, EntityType::Point);
+    egraph.link_logical_incidence(q, conic);
+
+    let conic2 = egraph.create_entity(
+        "Conic2".into(),
+        Definition::ConicThrough5Points(pts[0], pts[1], pts[2], pts[3], q),
+        EntityType::Conic,
+    );
+    assert_eq!(
+        egraph.numeric_plausibility_check(conic, conic2, 5),
+        Some(true),
+        "QがConic上にあるなら、P0..P3,Qを通る二次曲線は元のConicと数値的に一致するべき"
+    );
+
+    // 対照実験: 何の前提も無い自由点Rでは、P0..P3,Rを通る二次曲線は一般に別物になる。
+    let r = egraph.create_entity("R".into(), Definition::FreePoint, EntityType::Point);
+    let conic3 = egraph.create_entity(
+        "Conic3".into(),
+        Definition::ConicThrough5Points(pts[0], pts[1], pts[2], pts[3], r),
+        EntityType::Conic,
+    );
+    assert_eq!(
+        egraph.numeric_plausibility_check(conic, conic3, 5),
+        Some(false),
+        "何の前提も無いRでは、P0..P3,Rを通る二次曲線は一般にConicとは別物になるべき"
+    );
+}

@@ -568,8 +568,19 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
         // main.rsでopt-in(問題名にcross_ratioを含む場合のみ)にしていたのを
         // やめ、get_all_theoremsと同様デフォルトの定理集合に含めるように
         // 変更した。
+        // 🌟 ユーザー提案「対合定理」への最小構成での対応: 共点4直線L1..L4を
+        // 横断線Lが切る4点A,B,C,DについてCrossRatio(A,B,C,D)=CrossRatioOfLines
+        // (L1..L4)、というのがDesargues Involution Theoremの最小・最も基本的な
+        // 形(退化した「2直線の対」を二次曲線とみなした場合の対合定理)。
+        // これは実は下の「複比の透視射影不変性(点→線束)」定理と全く同じ主張
+        // (共点4直線を横断線が切る配置)なので、新たに別定理としては複製せず
+        // (同じDFSパターンを2つ持っても探索が重複するだけで得るものが無い)、
+        // 下の定理名に「対合定理」の別名を追記するだけに留めた。実際に
+        // 「対合」らしい使い方(同じ線束を2本の横断線で切って複比が一致する
+        // ことを示す)は、この定理を2回適用+推移律で自動的に得られる
+        // (test_involution.rsで実際に検証済み)。
         TheoremDef {
-            name: "複比の透視射影不変性(点→線束)".to_string(),
+            name: "複比の透視射影不変性(点→線束)/対合定理(共点4直線+横断線)".to_string(),
             entities: entities(&[
                 ("O", EntityType::Point),
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point),
@@ -668,6 +679,73 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             ],
             conclusions: vec![
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["CRL".to_string(), "CR2".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+            ],
+        },
+        // ==========================================
+        // 🌟 シュタイナーの定理(二次曲線上の6点による複比の不変性)
+        // ==========================================
+        // 円周角の定理(2定点から見た2定点への直線のなす角が一致)の、一般の
+        // 二次曲線への拡張。円は「角度」で比較できたが、一般の二次曲線には
+        // 角度に相当する不変量が無いため、複比(CrossRatioOfLines)で比較する:
+        // 二次曲線上の2点P,Qから見た、同じ二次曲線上の他の4点への直線束は
+        // 常に同じ複比を持つ。
+        //
+        // 🌟 マッチングを軽くする設計(ユーザー要望「マッチングしやすい
+        // オブジェクトが少ないものを採用する」への対応):
+        // 二次曲線上で自由に6点を全件スキャンで探す(6重ループ)のは
+        // 明らかに高コストなので、代わりに二次曲線自身の定義(生成元5点
+        // P1..P5)を「複比の透視射影不変性(線束→点)」と同じ要領で
+        // DefinedByシードから直接束縛し(全件スキャン不要)、実際に新規
+        // スキャンが必要なのは「二次曲線上のもう1点Q」(Connected(Q,Conic)の
+        // 1変数だけ)に抑えている。したがって視点は生成元のうちP1,P5の2点、
+        // 見る先はP2,P3,P4とQの4点に固定した特殊ケースだが、これは
+        // シュタイナーの定理の本質(2視点からの直線束の複比が一致する)を
+        // 正しく捉えた非自明な具体例であり、視点を他の2点に取り直したい
+        // 場合は問題側でその2点を生成元に含めて二次曲線を作り直せばよい。
+        TheoremDef {
+            name: "シュタイナーの定理(二次曲線上の6点の複比不変性)".to_string(),
+            entities: entities(&[
+                ("P1", EntityType::Point), ("P2", EntityType::Point), ("P3", EntityType::Point),
+                ("P4", EntityType::Point), ("P5", EntityType::Point), ("Q", EntityType::Point),
+                ("Conic", EntityType::Conic),
+                ("L1_P2", EntityType::Line), ("L1_P3", EntityType::Line), ("L1_P4", EntityType::Line), ("L1_Q", EntityType::Line),
+                ("L5_P2", EntityType::Line), ("L5_P3", EntityType::Line), ("L5_P4", EntityType::Line), ("L5_Q", EntityType::Line),
+                ("CR_P1", EntityType::Scalar), ("CR_P5", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 🌟 シード: 既存の二次曲線自身の定義からP1..P5とConicを直接
+                // 束縛する(「複比の透視射影不変性(線束→点)」がCrossRatioOfLines
+                // からL1..L4を直接束縛するのと全く同じ発想)。
+                fact_ext("DefinedBy", &["P1", "P2", "P3", "P4", "P5", "Conic"], Some("ConicThrough5Points"), None, false, None),
+                distinct(&["P1", "P2", "P3", "P4", "P5"]),
+                // 二次曲線上のもう1点Qを局所スキャンで見つける(唯一の
+                // 「新規に探す」変数)。
+                fact_ext("Connected", &["Q", "Conic"], None, None, false, None),
+                distinct(&["P1", "P2", "P3", "P4", "P5", "Q"]),
+                // P1から見たP2,P3,P4,Qへの4直線(既存のものが無ければ
+                // 円周角の定理のL_A1_B1等と同じ「DefinedBy+作図需要」で作る)。
+                fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L1_P2", "L1_P3"]),
+                fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L1_P2", "L1_P3", "L1_P4"]),
+                fact_ext("DefinedBy", &["P1", "Q", "L1_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
+                // P5から見た同じP2,P3,P4,Qへの4直線。
+                fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3"]),
+                fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3", "L5_P4"]),
+                fact_ext("DefinedBy", &["P5", "Q", "L5_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L1_P2".to_string(), "L1_P3".to_string(), "L1_P4".to_string(), "L1_Q".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P1".to_string() },
+                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L5_P2".to_string(), "L5_P3".to_string(), "L5_P4".to_string(), "L5_Q".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P5".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR_P1".to_string(), "CR_P5".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
             ],
         },
     ]

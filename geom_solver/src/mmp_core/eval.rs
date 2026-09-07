@@ -574,7 +574,7 @@ impl EGraph {
         };
         comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle))
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic))
             .any(|curve| !self.is_natural_incidence(rep, curve))
     }
 
@@ -589,7 +589,7 @@ impl EGraph {
         let comp = self.entities[rep.0].components.first()?;
         comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle)
+            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic)
                 && !self.is_natural_incidence(rep, s))
     }
 
@@ -686,14 +686,59 @@ impl EGraph {
         None
     }
 
+    /// 🌟 ConicThrough5Pointsの定義から、その二次曲線に(定義上)乗っている
+    /// ことが保証されている点を1つ返す(5つの生成元のうち最初のもの)。
+    /// circle_definition_known_pointの二次曲線版。
+    fn conic_definition_known_point(&self, conic: ClassId) -> Option<ClassId> {
+        let rep = self.get_rep(conic);
+        let comp = self.entities[rep.0].components.first()?;
+        comp.definitions.iter().find_map(|def| {
+            if let Definition::ConicThrough5Points(p1, _, _, _, _) = def { Some(*p1) } else { None }
+        })
+    }
+
+    /// 🌟 二次曲線conicの上にあるランダムな点を1つサンプリングする。
+    /// sample_point_on_circleの一般化: 二次曲線の方程式
+    /// A x²+B xy+C y²+D x+E y+F=0 に、既に乗っていると分かっている点
+    /// known_point=(x1,y1)を通るランダムな直線(x1+t dx, y1+t dy)を代入すると、
+    /// tの2次方程式 α t²+β t+γ=0 のうちγ(定数項)はknown_pointが解であることから
+    /// 恒等的に0になるので、t(αt+β)=0 の非自明な解 t=-β/α が(円の場合と全く
+    /// 同じVietaの理屈で)平方根なしに直接求まる。
+    fn sample_point_on_conic(&self, conic: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
+        if !self.free_point_ancestors_ready(conic, vars) { return None; }
+        let coeffs = self.evaluate_node(conic, vars, cache)?;
+        if coeffs.len() < 6 { return None; }
+        let (a, b, c, d, e) = (coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4]);
+
+        let known_point = self.conic_definition_known_point(conic)?;
+        // known_pointはconicの生成元自身なので、free_point_ancestors_ready(conic, ..)が
+        // 真であれば必ずその祖先もvarsに揃っている(部分集合関係)。
+        let kp = self.evaluate_node(known_point, vars, cache)?;
+        if kp.len() < 3 || kp[2].0 == 0 { return None; }
+        let (x1, y1) = (kp[0] / kp[2], kp[1] / kp[2]);
+
+        let two = ModInt::new(2);
+        for _ in 0..8 {
+            let dx = ModInt::new(rand::random::<i64>());
+            let dy = ModInt::new(rand::random::<i64>());
+            let alpha = a * dx * dx + b * dx * dy + c * dy * dy;
+            if alpha.0 == 0 { continue; } // 縮退方向(漸近方向、理論上ごく低確率)。引き直す
+            let beta = two * a * x1 * dx + b * (x1 * dy + y1 * dx) + two * c * y1 * dy + d * dx + e * dy;
+            let t = -(beta / alpha);
+            return Some((x1 + t * dx, y1 + t * dy));
+        }
+        None
+    }
+
     /// 🌟 has_extraneous_incidence(fp)が真の自由点について、find_incidence_constraintで
-    /// 選んだ直線/円の上に乗るランダムな座標をサンプリングする。
+    /// 選んだ直線/円/二次曲線の上に乗るランダムな座標をサンプリングする。
     fn sample_point_on_constraint(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
         let rep = self.get_rep(fp);
         let curve = self.find_incidence_constraint(rep)?;
         match self.entities[curve.0].entity_type {
             EntityType::Line => self.sample_point_on_line(curve, vars, cache),
             EntityType::Circle => self.sample_point_on_circle(curve, vars, cache),
+            EntityType::Conic => self.sample_point_on_conic(curve, vars, cache),
             _ => None,
         }
     }
