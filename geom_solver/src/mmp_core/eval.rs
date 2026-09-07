@@ -111,7 +111,10 @@ impl EGraph {
                     // が両者を「別の値」と誤判定してしまう(この2つは設計上、
                     // 常に同じ点=方向を表すべきもの)。z成分0を付けた3要素の
                     // 同次座標として統一する。
-                    Some(mmp_calculators::normalize(&[v[1], -v[0], ModInt::new(0)]))
+                    // 🐛 FIX: lが無限遠直線[0,0,c]だと(v[0]=v[1]=0のため)
+                    // 結果が[0,0,0]という「方向として定義不能」な退化値になる。
+                    // to_optionで全成分ゼロもNoneとして弾く。
+                    Self::to_option(mmp_calculators::normalize(&[v[1], -v[0], ModInt::new(0)]))
                 } else {
                     None
                 }
@@ -157,7 +160,8 @@ impl EGraph {
                 let v = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
                 if v.len() >= 2 {
                     // DirectionOfと同じ理由でz成分0を付けた3要素の同次座標に統一する。
-                    Some(mmp_calculators::normalize(&[-v[1], v[0], ModInt::new(0)]))
+                    // (同じくv=[0,0,...]由来の全ゼロ退化値をto_optionで弾く)
+                    Self::to_option(mmp_calculators::normalize(&[-v[1], v[0], ModInt::new(0)]))
                 } else {
                     None
                 }
@@ -193,8 +197,20 @@ impl EGraph {
     /// mmp_calculators.rs側でもcross_product/calc_squared_distance/
     /// calc_tangent_line自体に長さ・ゼロ除算ガードを追加したが、それとは
     /// 独立に、ここでも「空=計算不能」という変換を一箇所に集約しておく)。
+    ///
+    /// 🐛 FIX: 長さが正しくても全成分が0の同次座標(例: cross_productが
+    /// 「数値的に同一な2直線」の交点を求めようとした時に返す[0,0,0])は、
+    /// 射影平面上の点として定義不能(P^2の点は少なくとも1成分が非ゼロで
+    /// なければならない)なのに、以前は「空ではない」という理由だけで
+    /// Some([0,0,0])として素通りしていた。normalize()は全ゼロ入力を
+    /// そのまま(全ゼロのまま)返す実装なので、cross_product/normalizeの
+    /// 長さガードだけではこのケースを検出できない。ここで全ゼロも
+    /// 明示的にNoneとして弾く(orthocenter --mctsの問題設定自体に退化の
+    /// 原因があるわけではなく、MCTSが生成する補助構成が、探索中はまだ
+    /// 記号的にマージされていない2つの直線/点をたまたま同じ数値サンプルで
+    /// 数値的に一致させてしまうケースがこれに当たる)。
     fn to_option(v: Vec<ModInt>) -> Option<Vec<ModInt>> {
-        if v.is_empty() { None } else { Some(v) }
+        if v.is_empty() || v.iter().all(|x| x.0 == 0) { None } else { Some(v) }
     }
 
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化
