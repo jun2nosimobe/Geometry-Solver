@@ -1008,6 +1008,12 @@ impl ProverEngine {
                     Definition::LengthSq(a, b)
                 },
                 "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
+                // 🌟 CrossRatioのV4正規化(4元クライン群の畳み込み)は単純なソートより
+                // 複雑なので、defined_by_valid_nodesと同じくmod.rs側のnormalize_definition
+                // をそのまま呼ぶ(ロジックを1箇所に保つ)。
+                "CrossRatio" => self.egraph.normalize_definition(
+                    &Definition::CrossRatio(parent_ids[0], parent_ids[1], parent_ids[2], parent_ids[3])
+                ),
                 _ => return false,
             };
 

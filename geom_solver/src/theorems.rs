@@ -510,3 +510,58 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         },
     ]
 }
+
+/// 🌟 複比の透視射影不変性 (Phase 2)。
+///
+/// 点Oから4組の対応点(A,A'),(B,B'),(C,C'),(D,D')への4本の直線がそれぞれ
+/// Oを通るなら(=Oを中心とする透視図法で対応しているなら)、複比(A,B;C,D)と
+/// (A',B';C',D')は等しい。射影幾何の最も基本的な定理の一つで、円周角の
+/// 定理・接弦定理・トレミーの定理など多くの古典定理を将来的に統一的に
+/// 導出する土台になる想定(Phase 2以降で個別に接続していく)。
+///
+/// 🐛 既知の制約: この定理はO,A,B,C,D,A',B',C',D'という9つの自由な点変数を
+/// 持ち、Identical/Connectedのような「新しい事実が証明された」イベントに
+/// よって自然にシード(一部の変数を安価に固定)されることが無い。そのため
+/// schedule_full_sweepの(シードなし)全探索でこの定理を評価しようとすると、
+/// 先頭のDefinedBy(LineThroughPoints)パターンが「直線を持つ全ペア」を
+/// 総当たりで試すことになり、点や直線が多い問題(nine_point/orthic_incenter/
+/// miquel_quadrilateral等)でdfs_capを食い潰してしまい、実際に回帰テストで
+/// 検出した(これらの問題が解けなくなり、他の問題群でも実行時間が数倍に
+/// 悪化した)。そのためget_all_theorems()には含めず、この定理を実際に使う
+/// 問題(test_cross_ratio等)側がmain.rsで明示的に追加する、opt-in方式に
+/// している。将来、より安価にシードできる定式化(あるいはtheorem単位の
+/// コスト上限/専用のシード機構)が見つかれば、get_all_theoremsへの統合を
+/// 再検討する。
+pub fn get_projective_theorems() -> Vec<TheoremDef> {
+    vec![
+        TheoremDef {
+            name: "複比の透視射影不変性".to_string(),
+            entities: entities(&[
+                ("O", EntityType::Point),
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point),
+                ("Ap", EntityType::Point), ("Bp", EntityType::Point), ("Cp", EntityType::Point), ("Dp", EntityType::Point),
+                ("Line_AAp", EntityType::Line), ("Line_BBp", EntityType::Line), ("Line_CCp", EntityType::Line), ("Line_DDp", EntityType::Line),
+                ("CR1", EntityType::Scalar), ("CR2", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["A", "Ap", "Line_AAp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "Bp", "Line_BBp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["C", "Cp", "Line_CCp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["D", "Dp", "Line_DDp"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("Connected", &["O", "Line_AAp"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "Line_BBp"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "Line_CCp"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["O", "Line_DDp"], Some("Line"), Some("Point"), false, None),
+                distinct(&["A", "B", "C", "D"]),
+                distinct(&["Ap", "Bp", "Cp", "Dp"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()], target_type: "Scalar".to_string(), bind_to: "CR1".to_string() },
+                ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["Ap".to_string(), "Bp".to_string(), "Cp".to_string(), "Dp".to_string()], target_type: "Scalar".to_string(), bind_to: "CR2".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR1".to_string(), "CR2".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+            ],
+        },
+    ]
+}

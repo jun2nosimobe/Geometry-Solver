@@ -170,7 +170,16 @@ fn main() {
     let mut prover = ProverEngine::new(egraph);
     // 🌟 Rc化: theorems は Vec<Rc<TheoremDef>>。定理は実行中不変なので、
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
-    prover.theorems = theorems::get_all_theorems().into_iter().map(std::rc::Rc::new).collect();
+    let mut all_theorems = theorems::get_all_theorems();
+    // 🌟 複比の透視射影不変性(Phase 2)はopt-in(theorems.rs::get_projective_theorems
+    // のコメント参照: 9つの自由な点変数を持ち安価なシードが無いため、
+    // 全問題共通のget_all_theoremsに含めるとnine_point/orthic_incenter/
+    // miquel_quadrilateral等でdfs_capを食い潰し回帰する)。これを実際に
+    // 使う問題だけが明示的に有効化する。
+    if problem_name.contains("cross_ratio") {
+        all_theorems.extend(theorems::get_projective_theorems());
+    }
+    prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = bandit_enabled;
     // 🌟 MCTSを再有効化。以前は実際のロールアウト評価をせずスコア固定
