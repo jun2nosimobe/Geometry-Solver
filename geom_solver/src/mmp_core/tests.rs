@@ -526,3 +526,28 @@ fn test_line_affinity_detects_collinear_degeneracy() {
         deg_a + deg_b, deg_line
     );
 }
+
+/// 🌟 ユーザー提案「多点での評価を導入する。円も係数を射影空間の点だと
+/// 思えばOK」の検証: 3点版(measure_circle_affinity)でも同じ退化検出が
+/// 働くことを確認する。A(mover), B(固定点), D=Midpoint(A,B)は常に一直線上
+/// (Dが線分AB上にある)にあるため、本来「外接円」であるはずの
+/// Circumcircle(A,B,D)は退化して実質的にLine(A,B)そのものになる。
+/// deg(A)+deg(B)+deg(D)という素朴な和より、実際のCircumcircle(A,B,D)の
+/// (係数ベクトルを4成分の同次座標とみなした)次数の方が小さくなるはず。
+#[test]
+fn test_circle_affinity_detects_collinear_degeneracy() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::Midpoint(a, b), EntityType::Point);
+
+    let (deg_a, deg_b, deg_d, deg_circle) = egraph.measure_circle_affinity(a, b, d, 6).expect("次数が測定できるはず");
+    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
+    assert_eq!(deg_b, 0, "Bは固定点なので次数0のはず");
+    assert_eq!(deg_d, 1, "中点(Midpoint)は次数を上げないはず");
+    assert!(
+        deg_circle < deg_a + deg_b + deg_d,
+        "A,B,D=Midpoint(A,B)は常に共線なので、Circumcircle(A,B,D)(実質的にLine(A,B))の次数は素朴な和({})より小さいはず(実測: {})",
+        deg_a + deg_b + deg_d, deg_circle
+    );
+}

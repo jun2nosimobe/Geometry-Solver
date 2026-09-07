@@ -879,27 +879,56 @@ impl EGraph {
         Some(dxd.max(dyd))
     }
 
+    /// 🌟 ある同次座標ベクトルの時系列サンプル(t_valsに対応する各tでの値)から
+    /// 次数を測る共通処理。ユーザー指摘:「円も係数を射影空間の点だと思えば
+    /// OK」への対応で、成分数を2D点/直線の3に固定していた旧実装を一般化した。
+    /// 同次座標なので絶対スケールに意味は無く、比だけが意味を持つ――
+    /// 最後の成分を基準に他の全成分を割った値それぞれの次数を測り、その
+    /// 最大値を返す(3成分の点(x,y,1)/直線(a,b,c)なら常にindex 2で割って
+    /// いた旧実装と完全に後方互換。円の係数(A,D,E,F)のような4成分でも
+    /// そのまま同じ枠組みで動く)。基準成分がいずれかのサンプルで0になって
+    /// いたら(退化)測定不能としてNoneを返す。
+    fn degree_of_homogeneous_samples(t_vals: &[ModInt], samples: &[Vec<ModInt>], max_d: usize) -> Option<usize> {
+        let n = samples.first()?.len();
+        if n < 2 { return None; }
+        let norm_idx = n - 1;
+        if samples.iter().any(|s| s.len() != n || s[norm_idx].0 == 0) { return None; }
+        let mut max_deg = 0;
+        for i in 0..norm_idx {
+            let ratios: Vec<ModInt> = samples.iter().map(|s| s[i] / s[norm_idx]).collect();
+            max_deg = max_deg.max(crate::mmp_math::get_numerical_degree(t_vals, &ratios, max_d));
+        }
+        Some(max_deg)
+    }
+
     /// 🌟 ユーザー提案: 「点の組A,Bについて、線分ABの次数がdeg(A)+deg(B)という
     /// 素朴な上界に比べて退化して小さい組は、何らかの隠れた定理・偶然の一致が
-    /// 効いている兆候として『相性が良い』とみなせるのではないか」への対応。
-    /// resolve_demandsが「頻度(score)」だけでなく、この退化(deg_a+deg_b超過分)
-    /// も候補の優先度に織り込めるよう、まだLineThroughPointsとして実体化して
-    /// いない候補(a,b)について、a自身の次数・b自身の次数・線分ABの次数の
-    /// 3つを、同じmover・同じ他の自由点座標を使って一貫して(=別々に3回
-    /// 呼ぶのではなく同じサンプリングパスの中で)測定する。
+    /// 効いている兆候として『相性が良い』とみなせるのではないか」「多点での
+    /// 評価を導入する」への対応。parents(2点でも3点でも4点でも良い)それぞれの
+    /// 次数と、combineで組み合わせた結果(任意の成分数の同次座標ベクトル)の
+    /// 次数を、同じmover・同じ他の自由点座標を使う1回の一貫したサンプリング
+    /// パスで測定する。combineが返すベクトルは(円の係数(A,D,E,F)のような
+    /// 4成分でも)degree_of_homogeneous_samplesにそのまま渡せる「射影空間の点」
+    /// として扱う。
     ///
-    /// 🌟 なぜ一貫した測定が必要か: measure_numerical_degreeを3回バラバラに
-    /// 呼ぶと、それぞれが(a,bの祖先集合が異なれば)別のmoverを選んだり、
-    /// 「他の」自由点に別々の乱数座標を割り当てたりし得るため、3つの次数を
+    /// 🌟 なぜ一貫した測定が必要か: measure_numerical_degreeをparentsの数だけ
+    /// バラバラに呼ぶと、それぞれが(祖先集合が異なれば)別のmoverを選んだり、
+    /// 「他の」自由点に別々の乱数座標を割り当てたりし得るため、次数どうしを
     /// 単純に比較することに意味がなくなる(比較したいのは「同じ1つの動きに
-    /// 対して、Aがどれだけ複雑に動くか・Bがどれだけ複雑に動くか・線分ABが
-    /// どれだけ複雑に動くか」という相対関係であり、測定条件を揃える必要がある)。
-    pub fn measure_line_affinity(&self, a: ClassId, b: ClassId, max_d: usize) -> Option<(usize, usize, usize)> {
+    /// 対して、各parentがどれだけ複雑に動くか・組み合わせ結果がどれだけ
+    /// 複雑に動くか」という相対関係であり、測定条件を揃える必要がある)。
+    pub fn measure_group_degrees(
+        &self,
+        parents: &[ClassId],
+        combine: impl Fn(&[Vec<ModInt>]) -> Vec<ModInt>,
+        max_d: usize,
+    ) -> Option<(Vec<usize>, usize)> {
         let mut visited = HashSet::new();
         let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(a, &mut visited, &mut ancestors);
-        self.collect_free_point_ancestors(b, &mut visited, &mut ancestors);
-        if ancestors.is_empty() { return Some((0, 0, 0)); }
+        for &p in parents {
+            self.collect_free_point_ancestors(p, &mut visited, &mut ancestors);
+        }
+        if ancestors.is_empty() { return Some((vec![0; parents.len()], 0)); }
 
         let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
         let mover_name = self.entities[mover.0].name.clone();
@@ -907,30 +936,57 @@ impl EGraph {
         let k = 2 * max_d + 2;
         let (x0, y0, dx, dy) = Self::random_mover_line();
         let mut t_vals = Vec::with_capacity(k);
-        let (mut ax, mut ay) = (Vec::with_capacity(k), Vec::with_capacity(k));
-        let (mut bx, mut by) = (Vec::with_capacity(k), Vec::with_capacity(k));
-        let (mut lx, mut ly) = (Vec::with_capacity(k), Vec::with_capacity(k));
+        let mut parent_samples: Vec<Vec<Vec<ModInt>>> = vec![Vec::with_capacity(k); parents.len()];
+        let mut combined_samples: Vec<Vec<ModInt>> = Vec::with_capacity(k);
         for i in 1..=k {
             let t = ModInt::new(i as i64);
             let mut vars = base_vars.clone();
             vars.insert(format!("{}_x", mover_name), x0 + t * dx);
             vars.insert(format!("{}_y", mover_name), y0 + t * dy);
             let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-            let va = self.evaluate_node(a, &vars, &mut cache)?;
-            let vb = self.evaluate_node(b, &vars, &mut cache)?;
-            if va.len() < 3 || va[2].0 == 0 || vb.len() < 3 || vb[2].0 == 0 { return None; }
-            let line = mmp_calculators::calc_line_through_points(&va, &vb);
-            if line.len() < 3 || line.iter().all(|x| x.0 == 0) { return None; }
+            let mut vals = Vec::with_capacity(parents.len());
+            for &p in parents {
+                vals.push(self.evaluate_node(p, &vars, &mut cache)?);
+            }
+            combined_samples.push(combine(&vals));
+            for (idx, v) in vals.into_iter().enumerate() {
+                parent_samples[idx].push(v);
+            }
             t_vals.push(t);
-            ax.push(va[0] / va[2]); ay.push(va[1] / va[2]);
-            bx.push(vb[0] / vb[2]); by.push(vb[1] / vb[2]);
-            lx.push(line[0] / line[2]); ly.push(line[1] / line[2]);
         }
-        let deg = |xs: &[ModInt], ys: &[ModInt]| {
-            crate::mmp_math::get_numerical_degree(&t_vals, xs, max_d)
-                .max(crate::mmp_math::get_numerical_degree(&t_vals, ys, max_d))
-        };
-        Some((deg(&ax, &ay), deg(&bx, &by), deg(&lx, &ly)))
+
+        let mut parent_degs = Vec::with_capacity(parents.len());
+        for samples in &parent_samples {
+            parent_degs.push(Self::degree_of_homogeneous_samples(&t_vals, samples, max_d)?);
+        }
+        let combined_deg = Self::degree_of_homogeneous_samples(&t_vals, &combined_samples, max_d)?;
+        Some((parent_degs, combined_deg))
+    }
+
+    /// 🌟 measure_group_degreesの2点(直線)特化版。resolve_demandsから使う。
+    pub fn measure_line_affinity(&self, a: ClassId, b: ClassId, max_d: usize) -> Option<(usize, usize, usize)> {
+        let (degs, combined) = self.measure_group_degrees(
+            &[a, b],
+            |vals| mmp_calculators::calc_line_through_points(&vals[0], &vals[1]),
+            max_d,
+        )?;
+        Some((degs[0], degs[1], combined))
+    }
+
+    /// 🌟 measure_group_degreesの3点(外接円)特化版。ユーザー提案の「これを
+    /// 3,4点とかでやったら」への対応。円は4成分(A,D,E,F)の同次ベクトルだが、
+    /// degree_of_homogeneous_samples側が成分数を問わず扱えるため、
+    /// measure_line_affinityと全く同じ枠組みでそのまま使える。deg(A)+deg(B)+
+    /// deg(C)という素朴な和に対しCircumcircle(A,B,C)の次数が退化して小さい
+    /// 3点の組は、A,B,Cが常に(あるいは頻繁に)同じ円に乗るような隠れた
+    /// 構造を持っている兆候として「相性が良い」とみなせる。
+    pub fn measure_circle_affinity(&self, a: ClassId, b: ClassId, c: ClassId, max_d: usize) -> Option<(usize, usize, usize, usize)> {
+        let (degs, combined) = self.measure_group_degrees(
+            &[a, b, c],
+            |vals| mmp_calculators::calc_circumcircle(&vals[0], &vals[1], &vals[2]),
+            max_d,
+        )?;
+        Some((degs[0], degs[1], degs[2], combined))
     }
 
     /// 🌟 measure_numerical_degree系の共通処理: 祖先の自由点の中から
