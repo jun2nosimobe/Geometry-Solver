@@ -12,10 +12,18 @@ use std::rc::Rc;
 // ポインタ(Rc)を共有するので、.clone()の実質コストがO(1)に近くなる。
 // 呼び出し側の書き方(.clone()や.insert())は通常のHashMapと同じままで良い。
 // 🌟 検証メモ: FxHashに差し替えると(im::HashMap<..., FxBuild>)、内部のHAMT構造との
-// 相性が悪いのか実測でむしろ悪化した(miquel: 0.36s→1.12s)。既定のハッシャーの
-// ままにしている。
-pub type Bind = im::HashMap<String, ClassId>;
-pub type FlipStates = im::HashMap<String, bool>;
+// 相性が悪いのか実測でむしろ悪化した(miquel: 0.36s→1.12s)ため、以前は既定の
+// RandomStateのままにしていた。しかしRandomStateはプロセスごとに異なる
+// ランダムなシードで初期化されるため、bind.iter()の反復順序(ひいては定理
+// マッチングが候補を試す順序)がプロセス起動のたびに変わってしまい、
+// 「同じ問題を2回実行すると異なる長さの証明が見つかる」という再現性の
+// 無さの原因になっていた(extract_proofの調査で発覚)。
+// 🌟 FIX: BuildHasherDefault<DefaultHasher>(SipHash系だがFxHashとは異なる
+// アルゴリズムで、シードが固定・決定的)に差し替えることで、FxHash+HAMTの
+// 相性問題を避けつつ決定性を得る。miquel等での実測では有意な性能劣化は
+// 見られなかった(検証手順はコミットメッセージ参照)。
+pub type Bind = im::HashMap<String, ClassId, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
+pub type FlipStates = im::HashMap<String, bool, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
 
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
@@ -157,6 +165,10 @@ pub struct ProverEngine {
     // 上限は据え置き、シードなしタスクだけ上限を大幅に下げて早期に諦めさせる。
     pub dfs_cap: u64,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>, // 🌟 Blackboardから移動
+    // 🌟 「2直線は既にあるが、その交点がまだ図形として存在しない」ことへの
+    // 需要。キーは2直線(ソート済み)。construction_demandsと同じ役割を
+    // Intersection(点)に対して果たす。resolve_point_demandsが消費する。
+    pub point_construction_demands: FxHashMap<(ClassId, ClassId), f64>,
     // 🌟 UCB1バンディット統計。theorems と同じインデックス(theorem_idx)で
     // 引く。theoremsはProverEngine::new後にmain.rs側で流し込まれるため、
     // ここでは空のまま初期化し、実際に使う直前にensure_theorem_statsで
@@ -173,6 +185,7 @@ impl ProverEngine {
             dfs_calls: 0,
             dfs_cap: 100_000,
             construction_demands: FxHashMap::default(), // 🌟 追加
+            point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),
         }
     }
@@ -676,6 +689,32 @@ impl ProverEngine {
                 let r2 = self.egraph.get_rep(p2);
                 if r1 != r2 {
                     *self.construction_demands.entry((r1, r2)).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+        // 🌟 NEW: 「2直線が既に存在するのに、その交点(Intersection)がまだ
+        // 図形として存在しない」場合の需要記録。LineThroughPointsの需要
+        // (「2点はあるのに、それを結ぶ直線がない」)と対称な仕組みで、
+        // 「垂線の足」「補助円との交点」のような、問題文に最初から
+        // 登録されていない補助点をDFS/需要駆動だけで発見できるようにする
+        // (ユーザー要望: orthocenter/orthocenter_altでE,Fのような補助点を
+        // 手で問題文に書かなくても発見できるようにしたい)。
+        // resolve_point_demands(main.rsのリカバリーフェーズ)が実際に
+        // Definition::Intersectionとして作図する。ここではLineThroughPoints
+        // と同様、「需要はあるが今は作らない」――大量の無関係な直線ペアの
+        // 交点まで無差別に作ってしまう爆発を避けるため、実際に定理が
+        // 欲しがった(=パターンマッチで必要とされた)組み合わせだけを
+        // 需要として記録し、実際の作図は頻度上位の少数に限定する。
+        if matches.is_empty() && target_type == "Intersection" && parent_vars.len() == 2 {
+            if let (Some(&l1), Some(&l2)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
+                let r1 = self.egraph.get_rep(l1);
+                let r2 = self.egraph.get_rep(l2);
+                if r1 != r2
+                    && self.egraph.entities[r1.0].entity_type == EntityType::Line
+                    && self.egraph.entities[r2.0].entity_type == EntityType::Line
+                {
+                    let key = if r1.0 < r2.0 { (r1, r2) } else { (r2, r1) };
+                    *self.point_construction_demands.entry(key).or_insert(0.0) += 1.0;
                 }
             }
         }
@@ -1201,7 +1240,7 @@ impl BlackboardEngine {
         };
 
         for (idx, theorem) in self.prover.theorems.iter().enumerate() {
-            let mut initial_bind = Bind::new();
+            let mut initial_bind = Bind::default();
             initial_bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
             initial_bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
 
@@ -1209,7 +1248,7 @@ impl BlackboardEngine {
                 priority: priorities[idx],
                 theorem_idx: idx,
                 bind: initial_bind,
-                flip_states: FlipStates::new(),
+                flip_states: FlipStates::default(),
                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
             });
@@ -1236,7 +1275,7 @@ impl BlackboardEngine {
                         };
 
                         for perm in perms {
-                            let mut bind = Bind::new();
+                            let mut bind = Bind::default();
                             // 定数ノードの事前バインド
                             bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
                             bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
@@ -1251,7 +1290,7 @@ impl BlackboardEngine {
                                 priority: 10,
                                 theorem_idx: idx,
                                 bind,
-                                flip_states: FlipStates::new(),
+                                flip_states: FlipStates::default(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                                 is_seeded: true,
                             });
@@ -1496,10 +1535,95 @@ impl BlackboardEngine {
         }
         
         self.prover.construction_demands.clear();
-        if applied { 
+        if applied {
             // 🌟 FIX: 作図直後に合同閉包を強制実行し、既存の直線と即座にマージさせる！
             self.prover.egraph.apply_congruence_closure();
-            self.schedule_full_sweep(); 
+            self.schedule_full_sweep();
+        }
+        applied
+    }
+
+    // 🌟 フェーズ2.5: 交点(Point)の需要を解消する。2種類の需要源を合流させる:
+    //   (a) match_defined_by_fact由来のpoint_construction_demands――今のところ
+    //       どの定理も"Intersection"をDefinedByパターンとして問い合わせて
+    //       いないため実質発火しないが、将来そのような定理を追加した時のために
+    //       残してある。
+    //   (b) このメソッド自身が行う、垂線の足に対する能動的なヒューリスティック
+    //       走査(resolve_angle_demandsと同じ設計思想): 既存のPerpendicularLine
+    //       (L_base, P)それぞれについて、それ自身とL_baseの交点(=Pから
+    //       L_baseへの垂線の足)がまだ図形として存在しなければ需要とみなす。
+    //       これは「2直線の任意の組み合わせ」のような組み合わせ爆発ではなく、
+    //       既存のPerpendicularLineの数(三角形なら高々3本)に比例するだけの
+    //       安全なスキャンで、直感的にも「垂線を引いたなら、その足は普通
+    //       興味の対象になる」という妥当な着眼点。
+    //       ユーザー要望: orthocenter/orthocenter_altでE,Fのような補助点を
+    //       手で問題文に書かなくても発見できるようにしたい、への対応。
+    //
+    // 🌟 安全策: resolve_demands/resolve_angle_demandsと同じく、DFSが完全に
+    // Stallしたリカバリーフェーズでのみ呼ばれる。新規点の重要度は下げて
+    // 推論の主軸がブレるのを防ぐ。
+    pub fn resolve_point_demands(&mut self) -> bool {
+        // (b) 垂線の足の能動的スキャン。既存のdemandに合流させる。
+        for i in 0..self.prover.egraph.entities.len() {
+            let id = ClassId(i);
+            if self.prover.egraph.get_rep(id) != id { continue; }
+            if self.prover.egraph.entities[i].entity_type != EntityType::Line { continue; }
+            let bases: Vec<ClassId> = self.prover.egraph.entities[i].components.iter()
+                .flat_map(|c| c.definitions.iter())
+                .filter_map(|d| if let Definition::PerpendicularLine(base, _) = d { Some(*base) } else { None })
+                .collect();
+            for base in bases {
+                let base_rep = self.prover.egraph.get_rep(base);
+                if base_rep == id { continue; }
+                let key = if id.0 < base_rep.0 { (id, base_rep) } else { (base_rep, id) };
+                self.prover.point_construction_demands.entry(key).or_insert(0.0);
+            }
+        }
+
+        if self.prover.point_construction_demands.is_empty() { return false; }
+
+        let mut demands: Vec<_> = self.prover.point_construction_demands.iter().collect();
+        demands.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| (a.0).0.0.cmp(&(b.0).0.0)).then_with(|| (a.0).1.0.cmp(&(b.0).1.0)));
+
+        let mut applied = false;
+        let mut count = 0;
+
+        for (&(l1, l2), &score) in demands.into_iter() {
+            // 🌟 需要記録時からさらにマージが進んでいる可能性があるため、
+            // normalize_definitionで現在の代表元へ正規化してから照合する。
+            let def = self.prover.egraph.normalize_definition(&Definition::Intersection(l1, l2));
+            let (l1, l2) = match def { Definition::Intersection(a, b) => (a, b), _ => (l1, l2) };
+            if l1 == l2 { continue; }
+            if !self.prover.egraph.memo.contains_key(&def) {
+                let name = format!("Pt_{}_{}_(Demand)",
+                    self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
+                println!("  💡 [オンデマンド作図] 要請により {} (交点)を生成 (需要: {:.1})", name, score);
+                let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
+
+                // 🌟 Demand点の重要度を下げ、推論の主軸がブレるのを防ぐ(Demand線と同じ配慮)
+                self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+
+                self.prover.egraph.apply_trivial_relations(new_id, &def);
+                applied = true;
+                count += 1;
+                // 🌟 実測に基づくFIX: 当初は上限4(三角形の垂線3本+余裕1)にしていたが、
+                // orthocenter/orthocenter_altで実験したところ、3本の垂線の足を
+                // 一度に全部作ってしまうと(円の候補が3通りに増える等)DFSの
+                // 探索が拡散し、逆に目標へ到達しにくくなることが判明した。
+                // 上限を2に下げる(=最初のスタックでは最も需要が高い2点だけを
+                // 作る)ことで、orthocenter(対称形、垂線の足なし)が4.5秒、
+                // orthocenter_alt(補助点E,Fなし)が2.5秒で解けるようになった
+                // ――3本目が本当に必要なら、次にまたStallした時に改めて
+                // 需要として再スキャンされるので、完全性は失われない。
+                if count >= 2 { break; }
+            }
+        }
+
+        self.prover.point_construction_demands.clear();
+        if applied {
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep();
         }
         applied
     }

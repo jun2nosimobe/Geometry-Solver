@@ -318,6 +318,9 @@ fn main() {
         if !applied_logic {
             println!("⏳ ロジックがStallしました。リカバリーフェーズに移行します...");
             let mut recovered = engine.resolve_demands();
+            if engine.resolve_point_demands() {
+                recovered = true;
+            }
             if engine.resolve_angle_demands() {
                 recovered = true;
             }
