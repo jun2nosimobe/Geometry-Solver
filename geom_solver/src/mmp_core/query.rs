@@ -59,6 +59,8 @@ impl EGraph {
             Definition::HarmonicConjugateOf(a, b, c) => format!("HarmonicConjugate({}, {}; {})", get_name(a), get_name(b), get_name(c)),
             Definition::CrossRatio(a, b, c, d) => format!("CrossRatio({}, {}; {}, {})", get_name(a), get_name(b), get_name(c), get_name(d)),
             Definition::CrossRatioOfLines(a, b, c, d) => format!("CrossRatioOfLines({}, {}; {}, {})", get_name(a), get_name(b), get_name(c), get_name(d)),
+            Definition::ConstantHomogeneous(a, b, c) => format!("Constant({:?}, {:?}, {:?})", a, b, c),
+            Definition::ConicThrough5Points(a, b, c, d, e) => format!("ConicThrough5Points({}, {}, {}, {}, {})", get_name(a), get_name(b), get_name(c), get_name(d), get_name(e)),
         }
     }
 

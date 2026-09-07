@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::cell::Cell;
+use crate::mmp_math::ModInt;
 
 // 🌟 mmp_core はファイルが肥大化していたため、関心事ごとにサブモジュールへ分割した。
 // 型定義・EGraphの基本操作(生成・union-find・論理リンク)はこのmod.rs自身に残し、
@@ -30,6 +31,12 @@ pub struct ClassId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
     Point, Line, Circle, Direction, Angle, Scalar,
+    // 🌟 5点を通る一般二次曲線(Definition::ConicThrough5Points)専用の型。
+    // Circleとは別型にしておくことで、既存のCircle前提のコード
+    // (sample_point_on_circle等)を誤って二次曲線に適用してしまう事故を防ぐ
+    // (このバージョンでは接線・直線との交点は未実装で、点の接続(Connected)
+    // 判定の土台だけを提供する)。
+    Conic,
 }
 
 // 3. 作図定義 (Algebraic Data Types)
@@ -87,6 +94,19 @@ pub enum Definition {
     // 「Oに繋がっている既存の直線」というConnected(O,_)由来の自然なシードで
     // 絞り込める(定理Aが作ったPA..PDがまさにその候補になる)。
     CrossRatioOfLines(ClassId, ClassId, ClassId, ClassId),
+    // 🌟 固定された同次座標を持つ定数エンティティ。GivenPointは(名前を
+    // varsから引くが誰も登録しないので実質)常に(0,0,1)に評価されるだけで
+    // 任意の定数は表現できないため、円周点(circular points) I=(1,i,0),
+    // J=(1,-i,0)(有向角を複比として扱うための固定参照点。i=√-1はこの
+    // プロジェクトの法998244353がp≡1(mod4)なので体内に存在する)のような
+    // 「常にこの値」という定数を導入するために追加した。
+    ConstantHomogeneous(ModInt, ModInt, ModInt),
+    // 🌟 5点を通る一般二次曲線(Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0、射影空間として
+    // 5自由度)。Circumcircle(3点から円を復元)の一般化で、5点は完全に
+    // 順不同(normalize_definitionでソート)。ユーザー提案「二次曲線の導入」
+    // への最小限の対応として、この定義・数値評価・生成元5点の構造的な
+    // 接続(Connected)判定までを実装し、接線・直線との交点計算は含まない。
+    ConicThrough5Points(ClassId, ClassId, ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -113,6 +133,8 @@ impl Definition {
             Definition::HarmonicConjugateOf(_,_,_) => "HarmonicConjugateOf",
             Definition::CrossRatio(_,_,_,_) => "CrossRatio",
             Definition::CrossRatioOfLines(_,_,_,_) => "CrossRatioOfLines",
+            Definition::ConstantHomogeneous(_,_,_) => "ConstantHomogeneous",
+            Definition::ConicThrough5Points(_,_,_,_,_) => "ConicThrough5Points",
         }
     }
 
@@ -132,6 +154,7 @@ impl Definition {
             Definition::HarmonicConjugateOf(a, b, c) => vec![*a, *b, *c],
             Definition::CrossRatio(a, b, c, d) => vec![*a, *b, *c, *d],
             Definition::CrossRatioOfLines(a, b, c, d) => vec![*a, *b, *c, *d],
+            Definition::ConicThrough5Points(a, b, c, d, e) => vec![*a, *b, *c, *d, *e],
             _ => vec![],
         }
     }
@@ -158,6 +181,12 @@ impl Definition {
             Definition::CrossRatio(_, _, _, _) => EntityType::Scalar,
             Definition::CrossRatioOfLines(_, _, _, _) => EntityType::Scalar,
             Definition::GivenPoint | Definition::FreePoint => EntityType::Point,
+            // 🌟 円周点I,Jのように「同次座標を持つ定数」は、デフォルトでは
+            // Point(GivenPoint/FreePointと同じ)として扱っておく。実際の型は
+            // create_entity呼び出し側が明示するので(circ_i/circ_jはDirection)、
+            // ここはMCTS等の型不明時のフォールバックとしてのみ使われる。
+            Definition::ConstantHomogeneous(_, _, _) => EntityType::Point,
+            Definition::ConicThrough5Points(_, _, _, _, _) => EntityType::Conic,
         }
     }
 }
@@ -178,6 +207,18 @@ pub struct EGraph {
     // 定理(有向角の加法性・交替律・円周角の定理など)は Definition::DirectionOf
     // を通じて方向をそのまま参照し続けるので、この追加はパターンには一切影響しない。
     pub line_infinity: ClassId,
+    // 🌟 円周点(circular points at infinity) I, J。有向角AnglePair(D1,D2)を
+    // 「無限遠直線上の4点D1,D2,I,Jの複比」として扱うための固定参照点。
+    // ユーザー提案「有向角を複比として扱う」への対応で、AnglePairの数値評価
+    // (eval.rs)がこの2点とcalc_cross_ratioを使うように変更されている。
+    // I,Jは古典的に(1,±i,0)(iは虚数単位)で、この複比 (I,J;D1,D2) は
+    // Möbius変換の比として D1→D2→D3 の加法性(掛け算則)・交替律
+    // (a/b=c/d ⟹ a/c=b/d)をそのまま満たすため、既存の「有向角の加法性」
+    // 「有向角の交替律」定理(AnglePairの値をIdenticalで比較するだけの
+    // 純粋に構造的な定理で、値の具体的な計算式には一切依存しない)は
+    // パターン・定理側を一切変更せずにそのまま複比としての意味を持つ。
+    pub circ_i: ClassId,
+    pub circ_j: ClassId,
     pub worklist: Vec<ClassId>, // 🌟 NEW: マージが発生して再評価が必要なIDキュー
 
     // 🌟 証明復元(explain)のための「証明の森」。
@@ -273,6 +314,8 @@ impl EGraph {
             ang90: ClassId(0), // ダミー初期化
             ang0: ClassId(0),
             line_infinity: ClassId(0),
+            circ_i: ClassId(0),
+            circ_j: ClassId(0),
             worklist: Vec::new(),
             proof_edges: rustc_hash::FxHashMap::default(),
             incidence_provenance: rustc_hash::FxHashMap::default(),
@@ -282,6 +325,15 @@ impl EGraph {
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
         egraph.ang0 = egraph.create_entity("Ang0".to_string(), Definition::GivenPoint, EntityType::Angle);
         egraph.line_infinity = egraph.create_entity("Line_infinity".to_string(), Definition::GivenPoint, EntityType::Line);
+        // 🌟 円周点 I=(1,i,0), J=(1,-i,0) (i=√-1)。このプロジェクトの法
+        // 998244353 は p≡1(mod4) なので体内に平方根が存在し、原始根3を使って
+        // i = 3^((p-1)/4) と求まる(Tonelli-Shanksを持ち出すまでもない、
+        // NTT-friendly素数の標準的なトリック)。i²≡-1(mod p)であることは
+        // 事前に検証済み。
+        let i = ModInt::new(3).pow((crate::mmp_math::PRIME - 1) / 4);
+        let neg_i = -i;
+        egraph.circ_i = egraph.create_entity("CircI".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), i, ModInt::new(0)), EntityType::Direction);
+        egraph.circ_j = egraph.create_entity("CircJ".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), neg_i, ModInt::new(0)), EntityType::Direction);
         egraph
     }
 
@@ -555,6 +607,15 @@ impl EGraph {
                     .unwrap();
                 Definition::CrossRatioOfLines(best.0, best.1, best.2, best.3)
             },
+            // 🌟 二次曲線は5点の完全な順不同(Circumcircleの3点版と同じ発想)。
+            // 二次曲線の方程式は5点それぞれの単項式ベクトルを並べた行列の
+            // 零空間として求まり、点の順序には一切依存しないため、単純に
+            // ClassId順にソートするだけでよい。
+            Definition::ConicThrough5Points(a, b, c, d, e) => {
+                let mut reps = [self.get_rep(*a), self.get_rep(*b), self.get_rep(*c), self.get_rep(*d), self.get_rep(*e)];
+                reps.sort_unstable_by_key(|id| id.0);
+                Definition::ConicThrough5Points(reps[0], reps[1], reps[2], reps[3], reps[4])
+            },
             _ => def.clone(),
         }
     }
@@ -660,6 +721,19 @@ impl EGraph {
             Definition::LengthSq(a, b) => {
                 self.link_logical_incidence(*a, new_id);
                 self.link_logical_incidence(*b, new_id);
+            },
+            // 🌟 Circumcircleと同じ要領で、生成元の5点はこの二次曲線に乗って
+            // いることを構造的にConnectedとして登録しておく。これにより
+            // 「点PはこのConic上にある」という前提を、既存のCircleと全く
+            // 同じ Connected(P, Conic) パターン(型に依らないis_connected/
+            // subobjectsベースの構造チェック)でそのまま参照できる。
+            Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
+                let reason = "二次曲線の定義より、生成元の5点はこの二次曲線に乗っている".to_string();
+                self.link_logical_incidence_justified(*p1, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p2, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p3, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p4, new_id, Justification::Trivial { reason: reason.clone() });
+                self.link_logical_incidence_justified(*p5, new_id, Justification::Trivial { reason });
             },
             _ => {}
         }

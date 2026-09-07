@@ -138,17 +138,28 @@ impl EGraph {
                     None
                 }
             }
+            // 🌟 ユーザー提案「有向角を複比として扱う」への対応。
+            // D1,D2は既にDirectionOf/PerpDirectionOf経由で無限遠直線上の点
+            // (x,y,0)として評価されるので、同じく無限遠直線上の固定点である
+            // 円周点I,Jと合わせて4点(I,J,D1,D2)は常に共線 ―― 通常の
+            // CrossRatio(4点が共線な直線上の点)と全く同じcalc_cross_ratioの
+            // 式でそのまま複比 (I,J;D1,D2) が計算できる(「円も係数を射影空間の
+            // 点だと思えばOK」「線束も点とみなせる」と同じ発想を、方向にも
+            // 適用しただけ)。I,Jを基準(A,B)側に固定して測る(D1,D2を「動く」
+            // C,D側に置く)ことで、D1を基準としたτ_D2/τ_D1というMöbius変換上の
+            // 比になり、既存の「有向角の加法性」「有向角の交替律」定理
+            // (AnglePairの値をIdenticalで比較するだけの純粋に構造的な定理)が
+            // 求める代数法則(τ_a/τ_b * τ_b/τ_c = τ_a/τ_c、および
+            // a/b=c/d ⟹ a/c=b/d)をそのまま満たす。したがって定理・パターン
+            // 側は一切変更せずに、この評価式の変更だけで「有向角=複比」化が
+            // 完了する。
             Definition::AnglePair(d1, d2) => {
                 let v1 = self.evaluate_node_inner(*d1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*d2, vars, cache, in_progress)?;
-                if v1.len() >= 2 && v2.len() >= 2 {
-                    // 外積(sin)と内積(cos)で有向角を一意に表現
-                    let cross = v1[0] * v2[1] - v1[1] * v2[0];
-                    let dot = v1[0] * v2[0] + v1[1] * v2[1];
-                    Some(vec![cross, dot, ModInt::new(1)])
-                } else {
-                    None
-                }
+                let vi = self.evaluate_node_inner(self.circ_i, vars, cache, in_progress)?;
+                let vj = self.evaluate_node_inner(self.circ_j, vars, cache, in_progress)?;
+                mmp_calculators::calc_cross_ratio(&vi, &vj, &v1, &v2)
+                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
             }
             Definition::LengthSq(p1, p2) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
@@ -227,7 +238,19 @@ impl EGraph {
                 mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
                     .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
             }
-            _ => None,
+            // 🌟 円周点I,Jのような「常にこの値」の定数。varsの内容に関わらず
+            // 埋め込まれたModIntをそのまま返す。
+            Definition::ConstantHomogeneous(a, b, c) => Some(vec![*a, *b, *c]),
+            // 🌟 5点を通る一般二次曲線の係数[A,B,C,D,E,F]。calc_circumcircleの
+            // 一般化(calc_conic_through_5_pointsのコメント参照)。
+            Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
+                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
+                let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
+                let v4 = self.evaluate_node_inner(*p4, vars, cache, in_progress)?;
+                let v5 = self.evaluate_node_inner(*p5, vars, cache, in_progress)?;
+                Self::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, v4, v5]))
+            }
         }
     }
 

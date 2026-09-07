@@ -188,3 +188,43 @@ pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
     
     normalize(&[a, b, c])
 }
+
+// 🌟 二次曲線(5点)の係数復元で使う、3D外積[cross_product]の6次元への一般化。
+// 3D外積 a×b は行列式 det([[e1,e2,e3],[a1,a2,a3],[b1,b2,b3]]) を第1行(基底
+// ベクトル)で展開したもの ―― 第k成分 = (-1)^k * (a,bから第k列を除いた
+// 2×2小行列式)という構成そのものであり、これは「5本のベクトル+6次元」に
+// そのまま一般化できる(以下、成分数を6, 入力ベクトル数を5に一般化した版)。
+// 結果は入力の5本全てに直交する(証明: 結果を計算する際に使うのと全く同じ
+// 余因子で、ある入力行r_iをもう一度「基底の行」の位置に代入して6×6行列式を
+// 展開すると、行列に同じ行r_iが2回現れるため恒等的に0になる。これが
+// ちょうどr_i・結果 の余因子展開そのもの)。
+fn generalized_cross_6(rows: &[Vec<ModInt>; 5]) -> Vec<ModInt> {
+    (0..6).map(|j| {
+        let mut minor: Vec<Vec<ModInt>> = rows.iter()
+            .map(|row| row.iter().enumerate().filter(|(k, _)| *k != j).map(|(_, v)| *v).collect())
+            .collect();
+        let det = crate::mmp_math::determinant_mod(&mut minor);
+        if j % 2 == 0 { det } else { -det }
+    }).collect()
+}
+
+// 🌟 5点を通る一般二次曲線 Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0 の係数[A,B,C,D,E,F]を
+// 求める。calc_circumcircleの一般化(円は「x²とy²の係数が等しくxyの係数が0」
+// という特殊な二次曲線)だが、二次曲線は6係数(射影空間としては5自由度)が
+// 独立なので、外接円のような3×4行列の零空間ではなく5×6行列の零空間が必要。
+// 各点(x,y,z)が二次曲線に乗る条件 A x²+B xy+C y²+D xz+E yz+F z² = 0 は
+// 係数[A..F]に関する1次方程式なので、5点それぞれの単項式ベクトル
+// [x²,xy,y²,xz,yz,z²]を5本並べた5×6行列の零空間(のはずの1次元の解)を、
+// generalized_cross_6(3点円の場合のcross_productに相当)でそのまま求める。
+// 5点が一般の位置に無い(4点が同一直線上にある等でランク落ちする)場合は
+// 全成分0になり、退化(計算不能)として空Vecを返す。
+pub fn calc_conic_through_5_points(pts: &[Vec<ModInt>]) -> Vec<ModInt> {
+    if pts.len() != 5 || pts.iter().any(|p| p.len() < 3) { return vec![]; }
+    let rows: [Vec<ModInt>; 5] = std::array::from_fn(|i| {
+        let (x, y, z) = (pts[i][0], pts[i][1], pts[i][2]);
+        vec![x * x, x * y, y * y, x * z, y * z, z * z]
+    });
+    let coeffs = generalized_cross_6(&rows);
+    if coeffs.iter().all(|v| v.0 == 0) { return vec![]; }
+    normalize(&coeffs)
+}

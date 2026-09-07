@@ -116,6 +116,42 @@ pub fn matrix_rank_mod(matrix: &mut Vec<Vec<ModInt>>) -> usize {
 }
 
 
+/// 🌟 汎用のn×n行列式(ガウス消去法、体上のpivotで割るので特異でなければ
+/// 常に厳密に計算できる)。matrix_rank_modと同じ消去の骨格だが、こちらは
+/// ランクではなく実際の行列式の値(行入替の符号反転込み)を返す。
+/// 二次曲線の5点復元(calc_conic_through_5_points)で、5×6行列の零空間を
+/// 「6本の5×5小行列式」として求めるために使う(3D外積の6次元への一般化)。
+/// 特異(=途中の列に非ゼロのpivotが見つからない)なら0を返す。
+pub fn determinant_mod(matrix: &mut Vec<Vec<ModInt>>) -> ModInt {
+    let n = matrix.len();
+    if n == 0 || matrix.iter().any(|row| row.len() != n) { return ModInt::new(0); }
+
+    let mut det = ModInt::new(1);
+    for col in 0..n {
+        let pivot_r = (col..n).find(|&r| matrix[r][col].0 != 0);
+        let pivot_r = match pivot_r {
+            Some(r) => r,
+            None => return ModInt::new(0), // 特異行列
+        };
+        if pivot_r != col {
+            matrix.swap(pivot_r, col);
+            det = -det;
+        }
+        det *= matrix[col][col];
+        let inv_val = matrix[col][col].inv();
+        for r in (col + 1)..n {
+            let factor = matrix[r][col] * inv_val;
+            if factor.0 != 0 {
+                for c in col..n {
+                    let sub = factor * matrix[col][c];
+                    matrix[r][c] -= sub;
+                }
+            }
+        }
+    }
+    det
+}
+
 pub fn get_numerical_degree(t_values: &[ModInt], x_values: &[ModInt], max_d: usize) -> usize {
     let n = t_values.len();
     for d in 0..=max_d {

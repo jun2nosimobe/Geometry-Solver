@@ -610,3 +610,103 @@ fn test_cross_ratio_affinity_is_zero_for_affine_invariant_configuration() {
     assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
     assert_eq!(deg_cr, 0, "2重中点の複比は常に同じ定数なので次数0のはず(実測: {})", deg_cr);
 }
+
+/// 🌟 ユーザー提案「有向角を複比として扱う」の検証: AnglePairの評価式を
+/// calc_cross_ratio(CircI,CircJ,D1,D2)ベースに変更した後も、既存の
+/// 「有向角の加法性」「有向角の交替律」定理がそのまま前提とする代数法則
+/// (a/b=c/d ⟹ a/c=b/d、およびτ13=τ12*τ23の乗法性)が数値的に成り立つことを
+/// 直接確認する。これらの定理は元々AnglePairの値をIdenticalで比較するだけの
+/// 純粋に構造的な定理(値の計算式に依存しない)なので、eval式を差し替えても
+/// 定理側は無傷のはずだが、その前提となる「値が本当にこの法則を満たす」こと
+/// 自体は評価式の実装に依存するため、ここで直接検証しておく。
+#[test]
+fn test_angle_pair_value_satisfies_cross_ratio_multiplicativity() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+
+    let l_ab = egraph.create_entity("L_AB".into(), Definition::new_line(a, b), EntityType::Line);
+    let l_ac = egraph.create_entity("L_AC".into(), Definition::new_line(a, c), EntityType::Line);
+    let l_ad = egraph.create_entity("L_AD".into(), Definition::new_line(a, d), EntityType::Line);
+
+    let dir_ab = egraph.create_entity("Dir_AB".into(), Definition::DirectionOf(l_ab), EntityType::Direction);
+    let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Direction);
+    let dir_ad = egraph.create_entity("Dir_AD".into(), Definition::DirectionOf(l_ad), EntityType::Direction);
+
+    let ang_ab_ac = egraph.create_entity("Ang_AB_AC".into(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);
+    let ang_ac_ad = egraph.create_entity("Ang_AC_AD".into(), Definition::AnglePair(dir_ac, dir_ad), EntityType::Angle);
+    let ang_ab_ad = egraph.create_entity("Ang_AB_AD".into(), Definition::AnglePair(dir_ab, dir_ad), EntityType::Angle);
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    vars.insert("A_x".into(), ModInt::new(0)); vars.insert("A_y".into(), ModInt::new(0));
+    vars.insert("B_x".into(), ModInt::new(3)); vars.insert("B_y".into(), ModInt::new(1));
+    vars.insert("C_x".into(), ModInt::new(1)); vars.insert("C_y".into(), ModInt::new(4));
+    vars.insert("D_x".into(), ModInt::new(-2)); vars.insert("D_y".into(), ModInt::new(5));
+
+    let mut cache = FxHashMap::default();
+    let v12 = egraph.evaluate_node(ang_ab_ac, &vars, &mut cache).expect("計算できるはず")[0];
+    let v23 = egraph.evaluate_node(ang_ac_ad, &vars, &mut cache).expect("計算できるはず")[0];
+    let v13 = egraph.evaluate_node(ang_ab_ad, &vars, &mut cache).expect("計算できるはず")[0];
+
+    // 加法性: (I,J;D1,D2)*(I,J;D2,D3) = (I,J;D1,D3) (本文コメント参照、
+    // φ(D)=τ_Dとおいた時のφ(D1)/φ(D2)*φ(D2)/φ(D3)=φ(D1)/φ(D3)という
+    // Möbius変換の比の連鎖則そのもの)。
+    assert_eq!(v12 * v23, v13, "有向角の加法性はτ13=τ12*τ23という複比の乗法則として成り立つべき");
+}
+
+/// 🌟 二次曲線(5点)の係数復元(calc_conic_through_5_points)の正しさを、
+/// 既知の円(x²+y²=25、有理点(5,0),(0,5),(-5,0),(0,-5),(3,4)はいずれも
+/// この円周上にある)から復元させることで検証する。円は
+/// 「xy項が無くx²とy²の係数が等しい」特殊な二次曲線なので、復元結果は
+/// [1,0,1,0,0,-25](= x²+y²-25=0)にnormalizeされるはず。
+#[test]
+fn test_calc_conic_through_5_points_reconstructs_known_circle() {
+    let pts = vec![
+        vec![ModInt::new(5), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(0), ModInt::new(5), ModInt::new(1)],
+        vec![ModInt::new(-5), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(0), ModInt::new(-5), ModInt::new(1)],
+        vec![ModInt::new(3), ModInt::new(4), ModInt::new(1)],
+    ];
+    let coeffs = mmp_calculators::calc_conic_through_5_points(&pts);
+    assert_eq!(
+        coeffs,
+        vec![ModInt::new(1), ModInt::new(0), ModInt::new(1), ModInt::new(0), ModInt::new(0), ModInt::new(-25)],
+        "x²+y²-25=0 (半径5の円)が復元されるべき"
+    );
+}
+
+/// 🌟 5点のうち4点が同一直線上にある(=5×6行列のランクが5未満の)退化配置では、
+/// 二次曲線が(一意には)定まらないのでNone相当(空Vec)を返すことを確認する。
+#[test]
+fn test_calc_conic_through_5_points_degenerate_returns_empty() {
+    let pts = vec![
+        vec![ModInt::new(0), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(1), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(2), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(3), ModInt::new(0), ModInt::new(1)],
+        vec![ModInt::new(4), ModInt::new(0), ModInt::new(1)],
+    ];
+    assert!(mmp_calculators::calc_conic_through_5_points(&pts).is_empty(), "4点以上が同一直線上にある退化配置は空Vecを返すべき");
+}
+
+/// 🌟 ユーザー提案「二次曲線の導入」の検証: Circumcircleと同じ要領で、
+/// ConicThrough5Pointsの生成元5点が構造的にConnected(この二次曲線に乗って
+/// いる)と判定されることを確認する(apply_trivial_relations経由)。
+#[test]
+fn test_conic_through_5_points_links_generator_points_structurally() {
+    let mut egraph = EGraph::new();
+    let pts: Vec<ClassId> = (0..5)
+        .map(|i| egraph.create_entity(format!("P{}", i), Definition::FreePoint, EntityType::Point))
+        .collect();
+    let conic = egraph.create_entity(
+        "Conic".into(),
+        Definition::ConicThrough5Points(pts[0], pts[1], pts[2], pts[3], pts[4]),
+        EntityType::Conic,
+    );
+    for &p in &pts {
+        assert!(egraph.is_connected(p, conic), "生成元の点は二次曲線にConnectedであるべき");
+    }
+}
