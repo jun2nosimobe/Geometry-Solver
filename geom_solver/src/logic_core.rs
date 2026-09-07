@@ -1589,32 +1589,63 @@ impl BlackboardEngine {
     }
 
     // 🌟 フェーズ2: 論理エンジンが欲しがっていた補助線(Demand)を引く
+    //
+    // 🌟 ユーザー提案: 「点の組A,Bについて、線分ABの次数がdeg(A)+deg(B)という
+    // 素朴な上界に比べて退化して小さい組は、何らかの隠れた定理・偶然の一致が
+    // 効いている兆候として『相性が良い』」への対応で、頻度ベースのscoreに
+    // measure_line_affinity(A,B)の退化量(deg_a+deg_b - deg_line、0未満は0に
+    // 切り詰め)を加点として合成し、頻度だけでは見えない「単純な組み合わせに
+    // 見えて実は特別な関係にある」ペアも優先的に試せるようにする。
     pub fn resolve_demands(&mut self) -> bool {
         if self.prover.construction_demands.is_empty() { return false; }
 
-        let mut demands: Vec<_> = self.prover.construction_demands.iter().collect();
-        demands.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+        const AFFINITY_MAX_D: usize = 4;
+        const AFFINITY_WEIGHT: f64 = 2.0;
+        let mut demands: Vec<((ClassId, ClassId), f64, Option<(usize, usize, usize)>)> = self.prover.construction_demands.iter()
+            .map(|(&(p1, p2), &score)| {
+                let affinity = self.prover.egraph.measure_line_affinity(p1, p2, AFFINITY_MAX_D);
+                (( p1, p2), score, affinity)
+            })
+            .collect();
+        demands.sort_by(|a, b| {
+            let priority = |&(_, score, aff): &((ClassId, ClassId), f64, Option<(usize, usize, usize)>)| -> f64 {
+                let bonus = aff.map_or(0.0, |(da, db, dab)| {
+                    (da as f64 + db as f64 - dab as f64).max(0.0)
+                });
+                score + AFFINITY_WEIGHT * bonus
+            };
+            priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| (a.0).0.0.cmp(&(b.0).0.0))
+                .then_with(|| (a.0).1.0.cmp(&(b.0).1.0))
+        });
 
         let mut applied = false;
         let mut count = 0;
-        
-        for (&(p1, p2), &score) in demands.into_iter() {
+
+        for ((p1, p2), score, affinity) in demands.into_iter() {
             let def = Definition::new_line(p1, p2);
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("Line_{}_{}_(Demand)", self.prover.egraph.entities[p1.0].name, self.prover.egraph.entities[p2.0].name);
-                println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1})", name, score);
+                match affinity {
+                    Some((da, db, dab)) if da + db > dab => {
+                        println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1}, 相性◎: 次数{}+{}→{})", name, score, da, db, dab);
+                    }
+                    _ => {
+                        println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1})", name, score);
+                    }
+                }
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Line);
-                
+
                 // 🌟 FIX: Demand線の重要度を下げ、推論の主軸がブレるのを防ぐ
                 self.prover.egraph.entities[new_id.0].base_importance = 0.5;
-                
+
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
                 applied = true;
                 count += 1;
                 if count >= 3 { break; }
             }
         }
-        
+
         self.prover.construction_demands.clear();
         if applied {
             // 🌟 FIX: 作図直後に合同閉包を強制実行し、既存の直線と即座にマージさせる！

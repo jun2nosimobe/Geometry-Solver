@@ -501,3 +501,28 @@ fn test_numerical_degree_grows_with_arbitrary_intersection() {
     let deg_p = egraph.measure_numerical_degree(p, 6).expect("次数が測定できるはず");
     assert!(deg_p > deg_a, "無関係な2直線の交点は、moverそのものより次数が高くなるべき(1 -> {})", deg_p);
 }
+
+/// 🌟 ユーザー提案の検証: 「点の組A,Bについて、線分ABの次数がdeg(A)+deg(B)
+/// という素朴な上界より退化して小さい組は、隠れた定理・偶然の一致(この
+/// テストでは「B=Midpoint(A,F)なのでA,B,Fは常に共線」という自明な幾何的
+/// 事実)が効いている兆候として『相性が良い』とみなせる」を実測で確認する。
+/// A(mover, 次数1)とB=Midpoint(A,F)(次数1、Fは固定点)は素朴には
+/// deg(A)+deg(B)=2の直線を作りそうに見えるが、実際にはA,B,Fが常に
+/// 一直線上にある(=Line(A,B)は実質的にLine(A,F)、次数1)ため、
+/// measure_line_affinityはこの退化(2ではなく1)を検出できるはず。
+#[test]
+fn test_line_affinity_detects_collinear_degeneracy() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let f = egraph.create_entity("F".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::Midpoint(a, f), EntityType::Point);
+
+    let (deg_a, deg_b, deg_line) = egraph.measure_line_affinity(a, b, 6).expect("次数が測定できるはず");
+    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
+    assert_eq!(deg_b, 1, "中点(Midpoint)は次数を上げないはず");
+    assert!(
+        deg_line < deg_a + deg_b,
+        "A,B=Midpoint(A,F),Fは常に共線なので、Line(A,B)の次数は素朴な和({})より小さいはず(実測: {})",
+        deg_a + deg_b, deg_line
+    );
+}

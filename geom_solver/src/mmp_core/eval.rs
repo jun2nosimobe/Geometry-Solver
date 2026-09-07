@@ -879,6 +879,60 @@ impl EGraph {
         Some(dxd.max(dyd))
     }
 
+    /// 🌟 ユーザー提案: 「点の組A,Bについて、線分ABの次数がdeg(A)+deg(B)という
+    /// 素朴な上界に比べて退化して小さい組は、何らかの隠れた定理・偶然の一致が
+    /// 効いている兆候として『相性が良い』とみなせるのではないか」への対応。
+    /// resolve_demandsが「頻度(score)」だけでなく、この退化(deg_a+deg_b超過分)
+    /// も候補の優先度に織り込めるよう、まだLineThroughPointsとして実体化して
+    /// いない候補(a,b)について、a自身の次数・b自身の次数・線分ABの次数の
+    /// 3つを、同じmover・同じ他の自由点座標を使って一貫して(=別々に3回
+    /// 呼ぶのではなく同じサンプリングパスの中で)測定する。
+    ///
+    /// 🌟 なぜ一貫した測定が必要か: measure_numerical_degreeを3回バラバラに
+    /// 呼ぶと、それぞれが(a,bの祖先集合が異なれば)別のmoverを選んだり、
+    /// 「他の」自由点に別々の乱数座標を割り当てたりし得るため、3つの次数を
+    /// 単純に比較することに意味がなくなる(比較したいのは「同じ1つの動きに
+    /// 対して、Aがどれだけ複雑に動くか・Bがどれだけ複雑に動くか・線分ABが
+    /// どれだけ複雑に動くか」という相対関係であり、測定条件を揃える必要がある)。
+    pub fn measure_line_affinity(&self, a: ClassId, b: ClassId, max_d: usize) -> Option<(usize, usize, usize)> {
+        let mut visited = HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(a, &mut visited, &mut ancestors);
+        self.collect_free_point_ancestors(b, &mut visited, &mut ancestors);
+        if ancestors.is_empty() { return Some((0, 0, 0)); }
+
+        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
+        let mover_name = self.entities[mover.0].name.clone();
+
+        let k = 2 * max_d + 2;
+        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let mut t_vals = Vec::with_capacity(k);
+        let (mut ax, mut ay) = (Vec::with_capacity(k), Vec::with_capacity(k));
+        let (mut bx, mut by) = (Vec::with_capacity(k), Vec::with_capacity(k));
+        let (mut lx, mut ly) = (Vec::with_capacity(k), Vec::with_capacity(k));
+        for i in 1..=k {
+            let t = ModInt::new(i as i64);
+            let mut vars = base_vars.clone();
+            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
+            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            let va = self.evaluate_node(a, &vars, &mut cache)?;
+            let vb = self.evaluate_node(b, &vars, &mut cache)?;
+            if va.len() < 3 || va[2].0 == 0 || vb.len() < 3 || vb[2].0 == 0 { return None; }
+            let line = mmp_calculators::calc_line_through_points(&va, &vb);
+            if line.len() < 3 || line.iter().all(|x| x.0 == 0) { return None; }
+            t_vals.push(t);
+            ax.push(va[0] / va[2]); ay.push(va[1] / va[2]);
+            bx.push(vb[0] / vb[2]); by.push(vb[1] / vb[2]);
+            lx.push(line[0] / line[2]); ly.push(line[1] / line[2]);
+        }
+        let deg = |xs: &[ModInt], ys: &[ModInt]| {
+            crate::mmp_math::get_numerical_degree(&t_vals, xs, max_d)
+                .max(crate::mmp_math::get_numerical_degree(&t_vals, ys, max_d))
+        };
+        Some((deg(&ax, &ay), deg(&bx, &by), deg(&lx, &ly)))
+    }
+
     /// 🌟 measure_numerical_degree系の共通処理: 祖先の自由点の中から
     /// 「他の構造的前提(直線/円の上にあること)を持たない」ものを1つ選んで
     /// mover(動点)とし、残りは(前提を満たす形で)1回だけ座標を固定する。
