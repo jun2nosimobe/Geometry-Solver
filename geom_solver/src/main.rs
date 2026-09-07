@@ -60,6 +60,12 @@ fn output_raw_proof(egraph: &EGraph, problem_name: &str) -> String {
 /// 共有点の由来まで再帰的に展開した完全な証明)を保存する。コンソールを
 /// 深い証明で埋め尽くさないための使い分け(output_proof/output_raw_proofと
 /// 同じ「コンソールには要点、ファイルには詳細」の方針)。
+///
+/// 🌟 ユーザー要望: extracted_proofは「目標から遡って根拠を展開」という
+/// 木構造(同じ事実がその場その場で(既出...)として何度も顔を出す)なので、
+/// これとは別にresult/compressed_proof_<問題名>.txtへ、(Auto)/(Demand)
+/// ラベルを除去し前提→結論の順に並べ替え、重複するステップは参照に
+/// 圧縮した版(DeepProof::format_compressed)も併せて保存する。
 fn output_extract_report(report: &mmp_core::DeepProof, problem_name: &str) {
     print!("{}", report.format_summary());
     let dir = "result";
@@ -68,6 +74,11 @@ fn output_extract_report(report: &mmp_core::DeepProof, problem_name: &str) {
         match fs::write(&path, report.format_deep()) {
             Ok(_) => println!("📄 extract_proof(深い証明)を '{}' に保存しました。", path),
             Err(e) => println!("⚠️ extract_proof結果ファイルの書き込みに失敗しました ({}): {}", path, e),
+        }
+        let compressed_path = format!("{}/compressed_proof_{}.txt", dir, problem_name);
+        match fs::write(&compressed_path, report.format_compressed()) {
+            Ok(_) => println!("📄 compressed_proof(圧縮された証明)を '{}' に保存しました。", compressed_path),
+            Err(e) => println!("⚠️ compressed_proof結果ファイルの書き込みに失敗しました ({}): {}", compressed_path, e),
         }
     }
 }

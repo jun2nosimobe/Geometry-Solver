@@ -756,6 +756,19 @@ impl DeepStep {
     }
 }
 
+/// 🌟 エンティティ名に付いた"_(Auto)"/"_(Demand)"ラベルを取り除く。これらは
+/// 「resolve_demands系のオンデマンド作図によって生まれた」という実装都合の
+/// 印であり、命名時に親の名前をそのまま埋め込むため入れ子(例:
+/// "Dir_Line_A_B_(Auto)_(Auto)")になることもあるが、str::replaceは文字列中の
+/// 全ての出現を1回の呼び出しで置換するため、ネストの回数によらず1回の
+/// 置換呼び出しずつで全て取り除ける。証明の可読性(ユーザー要望)のためだけの
+/// 整形であり、名前からラベルを消しても指しているClassId自体は変わらないので
+/// 曖昧さは生じない(重複排除のキーには使わない――compressed_proof側で
+/// 別途headline文字列そのものをキーにする)。
+fn clean_label(s: &str) -> String {
+    s.replace("_(Auto)", "").replace("_(Demand)", "")
+}
+
 /// 🌟 verify_identicalが復元した「深い証明」全体。トップレベルのroots
 /// (explain_identicalの各辺)それぞれが、根拠として使われた定理の前提や
 /// LineUniqueness/PointUniquenessの由来を再帰的に子として持つ。
@@ -831,5 +844,92 @@ impl DeepProof {
             out.push('\n');
         }
         out
+    }
+
+    /// 🌟 ユーザー要望: 「extracted_proofから、(Auto)/(Demand)ラベルを除き、
+    /// 前提から結論へ上から順に書き、既に証明済みの前提の重複はスキップした
+    /// compressed_proofを作りたい」への対応。
+    ///
+    /// format_deepは「目標→なぜ成り立つか→そのまた根拠」という目標始点の
+    /// 再帰的な入れ子(インデント)構造で、同じ事実が複数箇所から必要と
+    /// されるとその都度(既出: 上記で検証済みなので省略)という葉で参照だけ
+    /// 残す。ここではその木を**post-order**(子=前提を先に、親=結論を後に
+    /// 処理する)で辿って1本のステップ列に平坦化することで、実際に人が
+    /// 書く数学の証明のように「まず基本的な事実を確認し、それらを使って
+    /// 次第に目標に近づく」という順序に並べ替える。同じheadlineを持つ
+    /// ノードが複数箇所に現れる場合(既出プレースホルダ自身も含む)は
+    /// 新しいステップを作らず、既存のステップ番号への参照(「Step N より」)
+    /// に置き換えることで重複を圧縮する。
+    pub fn format_compressed(&self) -> String {
+        let mut out = String::new();
+        out.push_str("========================================\n");
+        out.push_str("✨ 圧縮された証明 (前提→結論の順、重複ステップは参照に置換) ✨\n");
+        out.push_str("========================================\n\n");
+
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut steps: Vec<String> = Vec::new();
+        for root in &self.roots {
+            Self::flatten_step(root, &mut seen, &mut steps);
+        }
+
+        for (i, s) in steps.iter().enumerate() {
+            out.push_str(&format!("Step {:2}: {}\n\n", i + 1, s));
+        }
+        if steps.is_empty() {
+            out.push_str("(ステップがありません)\n");
+        }
+        out
+    }
+
+    /// 🌟 format_compressedの中核。DeepStep木を1つ、post-order(子が先、
+    /// 自分が後)で辿り、まだ登場していなければstepsに1行追加してその
+    /// ステップ番号(1始まり)を返す。既に同じheadlineのステップがあれば
+    /// (「(既出...)」プレースホルダ経由も含め)新規に追加せずそのステップ
+    /// 番号だけを返す――呼び出し元(親ノード)はこれを「Step N より」という
+    /// 参照として使う。
+    ///
+    /// 重複判定のキーには(表示用にAuto/Demandラベルを除去する前の)生の
+    /// headlineを使う。「既出」プレースホルダは元のノードとbuild_*側で全く
+    /// 同じ組み立て方でheadlineを作ってから生成されるため、ラベル除去前の
+    /// 文字列同士は必ず一致する。
+    fn flatten_step(
+        node: &DeepStep,
+        seen: &mut std::collections::HashMap<String, usize>,
+        steps: &mut Vec<String>,
+    ) -> Option<usize> {
+        if node.reason.starts_with("(既出") {
+            // このノード自体は実体を持たない参照プレースホルダ。対応する
+            // 本物のステップは(木の構築順の性質上)既にseenへ登録済みのはず。
+            return seen.get(&node.headline).copied();
+        }
+        if let Some(&idx) = seen.get(&node.headline) {
+            return Some(idx);
+        }
+        let mut child_refs: Vec<usize> = Vec::new();
+        for c in &node.children {
+            if let Some(idx) = Self::flatten_step(c, seen, steps) {
+                if !child_refs.contains(&idx) { child_refs.push(idx); }
+            }
+        }
+        let headline = clean_label(&node.headline);
+        let line = if node.is_gap {
+            format!("⚠️ {} — {}", headline, clean_label(&node.gap_reason.clone().unwrap_or_default()))
+        } else {
+            let reason = clean_label(&node.reason);
+            let refs = if child_refs.is_empty() {
+                String::new()
+            } else {
+                format!(" (Step {} より)", child_refs.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "))
+            };
+            if reason.is_empty() {
+                format!("{}{}", headline, refs)
+            } else {
+                format!("{} — {}{}", headline, reason, refs)
+            }
+        };
+        steps.push(line);
+        let idx = steps.len();
+        seen.insert(node.headline.clone(), idx);
+        Some(idx)
     }
 }
