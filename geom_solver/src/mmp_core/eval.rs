@@ -93,12 +93,31 @@ impl EGraph {
                 // しまい、この空Vecが後続のIntersection計算等でcross_productに
                 // 渡されてindex out of bounds panicを起こしていた(orthocenter --mctsで
                 // 実際に発生)。to_optionで確実にNone(計算不能)に変換する。
-                Self::to_option(mmp_calculators::calc_line_through_points(&v1, &v2))
+                let result = mmp_calculators::calc_line_through_points(&v1, &v2);
+                if result.is_empty() {
+                    // 🔮 CONJECTURE: 無作為な座標(独立一様分布, 法998244353)で
+                    // p1とp2が偶然一致する確率は約10億分の1で、単発でも観測されたなら
+                    // ほぼ確実に偶然ではない(Schwartz-Zippel補題の逆読み)。まだ記号的
+                    // には別物として扱われている2点が、実は常に同一なのではないか、
+                    // という「証明はできていないが数値的根拠のある予想」として
+                    // 目立つ形でログに残す(数値サニティチェックの土台として黙って
+                    // Noneに変換するだけでは、この情報がそのまま捨てられてしまう)。
+                    self.log_conjecture_candidate(*p1, *p2, "2点が同一点である");
+                }
+                Self::to_option(result)
             }
             Definition::Intersection(l1, l2) => {
                 let v1 = self.evaluate_node_inner(*l1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*l2, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_intersection(&v1, &v2))
+                let result = mmp_calculators::calc_intersection(&v1, &v2);
+                if result.is_empty() || result.iter().all(|x| x.0 == 0) {
+                    // 🔮 CONJECTURE: 2直線の交点が定義不能([0,0,0])になるのは、
+                    // 2直線が数値的に同一直線である場合だけ(平行なだけの別直線は
+                    // 無限遠点で交わる、通常の交点として well-defined)。上と同じ理由で
+                    // 「実はl1とl2は同一直線なのでは」という予想として記録する。
+                    self.log_conjecture_candidate(*l1, *l2, "2直線が同一直線である");
+                }
+                Self::to_option(result)
             }
             Definition::DirectionOf(l) => {
                 let v = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
@@ -211,6 +230,32 @@ impl EGraph {
     /// 数値的に一致させてしまうケースがこれに当たる)。
     fn to_option(v: Vec<ModInt>) -> Option<Vec<ModInt>> {
         if v.is_empty() || v.iter().all(|x| x.0 == 0) { None } else { Some(v) }
+    }
+
+    /// 🔮 CONJECTURE: 記号的にはまだ別物として扱われている2つの図形a, bが、
+    /// 独立にランダムサンプリングした座標の下で数値的に一致してしまった
+    /// (LineThroughPointsの2点が同一点になった/Intersectionの2直線が
+    /// 同一直線になった)ことを目立つ形でログに残す。
+    ///
+    /// 独立一様分布(法998244353)からサンプリングした2つの値が偶然一致する
+    /// 確率は約10億分の1なので、単発の観測でもほぼ確実に偶然ではなく、
+    /// a と b の間に(まだ証明されていない)何らかの構造的な同一性が
+    /// 実在することを強く示唆する(Schwartz-Zippel補題の逆読み)。
+    /// これは証明ではなく、あくまで「調べる価値の高い予想」の提示に過ぎない
+    /// ―― 経路によっては数値的に偶然近い値になるだけの見せかけの一致も
+    /// 理論上あり得るため、実際に証明したい場合は改めてtrials回数を
+    /// 増やした再現確認や、記号的な証明の探索が必要になる。
+    fn log_conjecture_candidate(&self, a: ClassId, b: ClassId, hypothesis: &str) {
+        let rep_a = self.get_rep(a);
+        let rep_b = self.get_rep(b);
+        if rep_a == rep_b { return; } // 既に記号的に証明済みなら予想ではない
+        let name_a = &self.entities[rep_a.0].name;
+        let name_b = &self.entities[rep_b.0].name;
+        println!(
+            "  🔮 [予想候補] {} と {} は独立な乱数サンプルで数値的に一致しました(仮説: {})。\
+             まだ証明はされていませんが、偶然の確率は約10億分の1なので実在する関係の可能性が高いです。",
+            name_a, name_b, hypothesis
+        );
     }
 
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化
