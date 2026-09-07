@@ -818,6 +818,30 @@ impl EGraph {
         Some(dxd.max(dyd))
     }
 
+    /// 🌟 measure_numerical_degreeのメモ化版。ユーザー要望: 「複比の透視射影
+    /// 不変性のように関連するオブジェクトが非常に多い定理を、次数を
+    /// ヒューリスティックに使って最適な順序でマッチングしたい」への対応で、
+    /// logic_core.rs::match_defined_by_fact が「候補が多いDefinedByパターンの
+    /// マッチ候補を、次数の低い(単純な)ものから先に試す」ために呼ぶ。
+    /// 定理マッチングは同じエンティティに対して何度も呼ばれ得るホットパスなので、
+    /// 一度測定した代表元についてはGeoEntity::degree_cacheに結果を記憶し、以後は
+    /// 再測定しない(measure_numerical_degree自体は複数回のevaluate_node呼び出しと
+    /// 有限体上のランク判定を伴うため、無条件に呼び続けると探索そのものより
+    /// 重くなりかねない)。キャッシュは(ユーザー指摘によりheat_bonus/uses等と
+    /// 同じ場所に置くよう変更した)代表元自身のGeoEntity::degree_cacheに持たせる
+    /// ――もし後からその代表元がさらに別のクラスへ吸収されても、古いスロットの
+    /// キャッシュ値がどこかから誤って読まれることはない(get_repは常に現在の
+    /// 代表元を指すインデックスへ解決するため)。
+    pub fn cached_degree(&self, id: ClassId, max_d: usize) -> Option<usize> {
+        let rep = self.get_rep(id);
+        if let Some(cached) = self.entities[rep.0].degree_cache.get() {
+            return cached;
+        }
+        let deg = self.measure_numerical_degree(rep, max_d);
+        self.entities[rep.0].degree_cache.set(Some(deg));
+        deg
+    }
+
     /// 🌟 measure_numerical_degreeの「まだエンティティとして存在しない候補」版。
     /// resolve_point_demandsのような「実際に作る前に有望さを判定したい」
     /// 場面向けに、2直線l1, l2の交点をentityとして作らずに次数だけ測定する。

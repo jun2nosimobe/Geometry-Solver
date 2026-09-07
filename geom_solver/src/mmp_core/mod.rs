@@ -302,6 +302,7 @@ impl EGraph {
             original_definition: norm_def.clone(),
             uses: rustc_hash::FxHashSet::default(),
             mcts_depth: 0,
+            degree_cache: std::cell::Cell::new(None),
         };
 
         self.entities.push(entity);
@@ -388,6 +389,15 @@ pub struct GeoEntity {
     // MCTS自身の産物の上に何段も構成を積み増す(例:中点のまた中点のまた中点…)
     // ことだけを対象にした、ローカルな連鎖専用のカウンタ。
     pub mcts_depth: usize,
+    // 🌟 MMP(動点法)の次数(measure_numerical_degree)のメモ化キャッシュ。
+    // heat_bonus/base_importance/usesと同じく「そのエンティティ固有の
+    // 派生情報」なので、EGraph側に別立てのHashMapを持つのではなくここに
+    // 置く(ユーザー指摘: 次数はGeoEntityの中にあった方が自然)。
+    // None=未計算、Some(None)=計算済みだが測定不能、Some(Some(d))=次数d。
+    // Cell(RefCellではない)で足りるのは中身がCopyだから。定理マッチングの
+    // ホットパス(logic_core.rs::match_defined_by_fact)から&selfのまま
+    // 読み書きできるようにするための内部可変性。
+    pub degree_cache: std::cell::Cell<Option<Option<usize>>>,
 }
 
 

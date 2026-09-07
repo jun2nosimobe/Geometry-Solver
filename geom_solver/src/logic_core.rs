@@ -719,10 +719,65 @@ impl ProverEngine {
             }
         }
 
+        // 🌟 ユーザー要望: 「複比の透視射影不変性のように関連するオブジェクトが
+        // 非常に多い定理を、次数(MMP/動点法)をヒューリスティックに使って
+        // 最適な順序でマッチングしたい」。
+        //
+        // 背景: DefinedByパターンの親変数が全て未束縛のフルスキャン
+        // (defined_by_valid_nodes)では、既存の全エンティティ(例: 全ての直線)を
+        // 候補として試すため、9自由変数の透視射影不変性のような定理では
+        // 候補数がそのままdfs_matchの分岐数になる。dfs_capは全体で共有される
+        // 有限予算なので、「正しい(=証明に必要な)候補」がこの分岐の中で早く
+        // 試されるかどうかが、他の定理へ回る予算を食い潰すかどうかを左右する。
+        // 次数は「その候補がどれだけ単純な構成か」の目安になり(実測: 中点や
+        // 素直な2点直線は低次数、無関係な直線同士を繰り返し交差させた構成は
+        // 高次数)、多くの名前付き定理は問題の基本的な図形(低次数)に対して
+        // 使われることが多いため、次数の低い候補から先に試すことで「早く
+        // 見つかるか、安く諦めるか」のどちらかになりやすい。
+        //
+        // 候補が少ない(=そもそも分岐が爆発しない)通常のケースでは次数測定
+        // 自体のコストが無駄になるため、候補数がある程度多い場合のみ計算する
+        // (DEGREE_HEURISTIC_THRESHOLD件以下ならこれまで通り熱だけで並べる)。
+        // 次数はGeoEntity::degree_cacheでエンティティ単位にメモ化されるため、
+        // 同じ問題内で繰り返しこの分岐に来ても実測コストは初回だけで済む。
+        //
+        // 🐛 実測に基づくFIX: 当初はTHRESHOLD=4, MAX_D=2で試したところ、
+        // (a) simsonのような「候補が5〜10件程度」の中規模スキャンにまで
+        // 次数測定が発動してしまい、既存12問題+orthocenter/orthocenter_altの
+        // 合計実行時間が全体的に悪化した(simson: 3.9s→7.9〜8.1s、複数回
+        // 再現)。(b) MAX_D=2(サンプル数k=2*2+2=6)は次数0/1/2を区別する
+        // ぎりぎりの点数しかなく、random_mover_line(真の乱数)が引く方向に
+        // よってランク判定が数値的にぶれやすく、同じ問題を実行するたびに
+        // (プロセスごとに乱数シードが変わるため)測定される次数が変わり得て、
+        // マッチ順序ひいては探索時間そのものが再現しない(orthocenterで
+        // 実行毎に6秒/14秒/19秒とばらつくのを確認)という、まさにこのセッション
+        // 冒頭でim::HashMapのRandomStateを潰して排除したのと同種の
+        // 非決定性を、次数測定の乱数サンプリング経由で再び持ち込んでしまって
+        // いた。THRESHOLD=10(=既存12問題+orthocenter/orthocenter_altでは
+        // ほぼ発動しない)・MAX_D=4(=resolve_point_demandsで既に実績のある値、
+        // k=10点でランク判定に十分な余裕がある)に調整することで、既存の
+        // 全問題(cargo test 23/23 + 12問題+orthocenter/orthocenter_alt+
+        // test_cross_ratioの計16問題)の実行時間・成否を完全に元通りに保ちつつ、
+        // 複比の透視射影不変性(9自由変数、cross_ratio系のみで有効)を
+        // 全問題のデフォルト定理集合へ強制的に加える実験では、この次数
+        // ヒューリスティック無しだと壊れていたnine_point/orthic_incenter/
+        // miquel_quadrilateralが(遅いながらも)全て正しく証明に到達できる
+        // ことを確認した――「壊れる」を「遅いが正しい」まで改善できたが、
+        // デフォルト採用に足るほどの速さにはまだ届いていない(今後の課題)。
+        const DEGREE_HEURISTIC_THRESHOLD: usize = 10;
+        const DEGREE_MAX_D_FOR_ORDERING: usize = 4;
+        const DEGREE_WEIGHT: f64 = 3.0;
+        let use_degree_heuristic = matches.len() > DEGREE_HEURISTIC_THRESHOLD;
+        let degree_score = |b: &Bind| -> f64 {
+            if !use_degree_heuristic { return 0.0; }
+            b.get(result_var)
+                .and_then(|&id| self.egraph.cached_degree(id, DEGREE_MAX_D_FOR_ORDERING))
+                .unwrap_or(0) as f64
+        };
         matches.sort_by(|(b1, _), (b2, _)| {
-            let heat1 = self.calc_bind_heat(b1);
-            let heat2 = self.calc_bind_heat(b2);
-            // 熱が高い(降順)ものを優先し、同値の場合はIDで決定論的にソート[cite: 5]
+            let heat1 = self.calc_bind_heat(b1) - DEGREE_WEIGHT * degree_score(b1);
+            let heat2 = self.calc_bind_heat(b2) - DEGREE_WEIGHT * degree_score(b2);
+            // 熱(次数で調整済み)が高い(降順)ものを優先し、同値の場合はIDで決定論的にソート[cite: 5]
             heat2.partial_cmp(&heat1).unwrap_or(Ordering::Equal)
                 .then_with(|| {
                     let mut k1: Vec<_> = b1.iter().collect(); k1.sort_by_key(|k| k.0);
