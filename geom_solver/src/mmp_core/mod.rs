@@ -288,6 +288,7 @@ impl EGraph {
             id, original_name: name.clone(), name, entity_type: e_type,
             base_importance: 1.0, heat_bonus: 0.0,
             components: vec![LogicalComponent { definitions: vec![norm_def.clone()], subobjects: Vec::new() }],
+            original_definition: norm_def.clone(),
             uses: rustc_hash::FxHashSet::default(),
             mcts_depth: 0,
         };
@@ -356,6 +357,18 @@ pub struct GeoEntity {
     pub base_importance: f64,
     pub heat_bonus: f64,
     pub components: Vec<LogicalComponent>,
+    // 🌟 create_entity時に一度だけ設定され、以後マージが起きても絶対に
+    // 書き換えられない、そのスロット固有の不変な「元の定義」。components側は
+    // merge_entities で(生き残った側に)吸収された実体からstd::mem::takeされ
+    // 空になってしまうため、「このIDは元々どんな(引数の)定義で作られたか」を
+    // 後から(raw_proof::dump_raw_proofが)正確に復元するために必要。
+    // extract_proofの「DefinedBy(d1,d2,result)前提は、実は名前付き定理の合流の
+    // 産物であることが多いのに一律『定義から自明』と表示してしまう」問題を、
+    // 全合流履歴の総当たり列挙ではなく、この特定の(d1,d2)組み合わせを
+    // 最初に持っていた"元の"実体1つとその実体からresultまでの最短合流経路だけを
+    // ピンポイントで特定する形で解消するために導入した(ユーザー提案の
+    // 「証明の先頭からDPで証明木を構築する」方針への対応)。
+    pub original_definition: Definition,
     pub uses: rustc_hash::FxHashSet<ClassId>,
     // 🌟 MCTSが自由な探索で作った補助構成が、他のMCTS補助構成の上にさらに
     // 積み重なった「連鎖の深さ」(mcts.rs::apply_action参照)。問題文で最初から

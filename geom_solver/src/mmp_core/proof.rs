@@ -130,7 +130,15 @@ impl EGraph {
                     format!("定理「{}」", theorem_name)
                 } else {
                     let ps: Vec<String> = premises.iter()
-                        .map(|(ft, args)| format!("{}({})", ft, args.iter().map(|&a| name(a)).collect::<Vec<_>>().join(", ")))
+                        .map(|(ft, args)| {
+                            // 🌟 raw_proof::RawProofがDefinition単位の由来を
+                            // ピンポイントに検索できるよう、DefinedBy前提には
+                            // compute_theorem_premises側で"DefinedBy:AnglePair"の
+                            // ようにtarget_typeがタグ付けされている。人間向けの
+                            // この表示では読みやすさのため元の"DefinedBy"に戻す。
+                            let display_ft = ft.split_once(':').map(|(base, _)| base).unwrap_or(ft);
+                            format!("{}({})", display_ft, args.iter().map(|&a| name(a)).collect::<Vec<_>>().join(", "))
+                        })
                         .collect();
                     format!("定理「{}」 (前提: {})", theorem_name, ps.join(" ∧ "))
                 }

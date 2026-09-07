@@ -74,6 +74,22 @@ impl EGraph {
         for i in 0..self.entities.len() {
             out.push_str(&format!("E\t{}\t{}\t{:?}\n", i, self.entities[i].original_name, self.entities[i].entity_type));
         }
+        // 🌟 D行: このIDがcreate_entity時に(一度だけ、以後不変に)持っていた
+        // 「元の定義」。type_nameと、その定義自身の引数(=定義された図形自体は
+        // 含まない)をダンプする。FreePoint/GivenPointのように引数を持たない
+        // 定義は、DefinedBy前提の検索対象になり得ないのでダンプしない。
+        // これにより、RawProof側は「あるDefinition(type, args)を最初に持って
+        // いた実体はどれか」を(生きているEGraphが無くても)特定できるように
+        // なる――extract_proofが「DefinedBy前提は本当は名前付き定理の合流の
+        // 産物なのに定義から自明と表示してしまう」問題を、全合流履歴の総当たり
+        // ではなくピンポイントな最短経路で解消するための土台。
+        for i in 0..self.entities.len() {
+            let def = &self.entities[i].original_definition;
+            let parents = def.get_parents();
+            if parents.is_empty() { continue; }
+            let args_str = parents.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(",");
+            out.push_str(&format!("D\t{}\t{}\t{}\n", i, def.get_type_name(), args_str));
+        }
         for (&from, edge) in &self.proof_edges {
             let (kind, payload) = encode_justification(&edge.justification);
             out.push_str(&format!("P\t{}\t{}\t{}\t{}\n", from, edge.to.0, kind, payload));
@@ -115,6 +131,13 @@ pub struct RawProof {
     reverse_edges: FxHashMap<usize, Vec<usize>>,
     /// 「点PはこのCircle/Lineに乗っている」の由来: (小さい方, 大きい方) -> 辺
     incidence: FxHashMap<(usize, usize), RawEdge>,
+    /// 🌟 Definition単位の由来トラッキング: id -> (type_name, 創出時点での引数)。
+    /// D行から読み取る。
+    original_defs: FxHashMap<usize, (String, Vec<usize>)>,
+    /// 🌟 「(type_name, 引数を最終的な代表元まで辿った正準形)」から、それを
+    /// 最初に持っていた実体id(複数あり得る)への逆引きインデックス。parse時に
+    /// original_defsから一度だけ構築する(canonical_def_key参照)。
+    by_definition: FxHashMap<(String, Vec<usize>), Vec<usize>>,
 }
 
 impl RawProof {
@@ -128,6 +151,7 @@ impl RawProof {
         let mut name_to_id = FxHashMap::default();
         let mut proof_edges = FxHashMap::default();
         let mut incidence = FxHashMap::default();
+        let mut original_defs: FxHashMap<usize, (String, Vec<usize>)> = FxHashMap::default();
 
         for line in text.lines() {
             let mut parts = line.splitn(5, '\t');
@@ -138,6 +162,13 @@ impl RawProof {
                     let Ok(id) = id_s.parse::<usize>() else { continue };
                     names.insert(id, name.to_string());
                     name_to_id.insert(name.to_string(), id);
+                }
+                "D" => {
+                    let (Some(id_s), Some(type_name), Some(args_s)) =
+                        (parts.next(), parts.next(), parts.next()) else { continue };
+                    let Ok(id) = id_s.parse::<usize>() else { continue };
+                    let args: Vec<usize> = args_s.split(',').filter_map(|s| s.parse::<usize>().ok()).collect();
+                    original_defs.insert(id, (type_name.to_string(), args));
                 }
                 "P" => {
                     let (Some(from_s), Some(to_s), Some(kind), Some(payload)) =
@@ -159,7 +190,63 @@ impl RawProof {
         for (&from, edge) in &proof_edges {
             reverse_edges.entry(edge.to).or_default().push(from);
         }
-        RawProof { names, name_to_id, proof_edges, reverse_edges, incidence }
+        let mut proof = RawProof {
+            names, name_to_id, proof_edges, reverse_edges, incidence,
+            original_defs, by_definition: FxHashMap::default(),
+        };
+        // 🌟 by_definitionインデックスの構築はproof_edges/reverse_edgesが
+        // 揃った後でなければfinal_repが正しく計算できないため、ここで最後に行う。
+        let mut by_definition: FxHashMap<(String, Vec<usize>), Vec<usize>> = FxHashMap::default();
+        for (&id, (type_name, args)) in &proof.original_defs {
+            let key = proof.canonical_def_key(type_name, args);
+            by_definition.entry(key).or_default().push(id);
+        }
+        proof.by_definition = by_definition;
+        proof
+    }
+
+    /// 🌟 idからproof_edgesを辿った最終的な代表元(根)を返す(get_repのraw_proof版、
+    /// 経路圧縮なし)。
+    fn final_rep(&self, mut id: usize) -> usize {
+        let mut guard = 0usize;
+        while let Some(edge) = self.proof_edges.get(&id) {
+            id = edge.to;
+            guard += 1;
+            if guard > self.names.len() + 10 { break; }
+        }
+        id
+    }
+
+    /// 🌟 (type_name, 定義自身の引数)を、各引数を最終的な代表元へ正規化した
+    /// 「正準形」に変換する。順不同な定義種別(normalize_definition参照:
+    /// LineThroughPoints/Midpoint/Intersection/LengthSq/Circumcircleは全引数、
+    /// HarmonicConjugateOfは最初の2引数のみ)は、比較可能になるようソートする。
+    fn canonical_def_key(&self, type_name: &str, raw_args: &[usize]) -> (String, Vec<usize>) {
+        let mut chased: Vec<usize> = raw_args.iter().map(|&a| self.final_rep(a)).collect();
+        match type_name {
+            "LineThroughPoints" | "Midpoint" | "Intersection" | "LengthSq" if chased.len() == 2 => {
+                chased.sort_unstable();
+            }
+            // 🌟 AnglePairはnormalize_definition上は順序付き(sort対象外)だが、
+            // 多くの定理パターンがallow_flip=trueで「D1,D2どちら向きでも良い」
+            // としてマッチしているため、この2つのIDが逆順で保存された"元の
+            // 定義"を持つ実体を見逃さないよう、探索キーとしては順不同として
+            // 扱う(見つかった候補は必ずfinal_rep一致で検証されるため、これに
+            // よって誤った――実在しない――合流経路を提示することはない)。
+            "AnglePair" if chased.len() == 2 => {
+                chased.sort_unstable();
+            }
+            "Circumcircle" if chased.len() == 3 => {
+                chased.sort_unstable();
+            }
+            "HarmonicConjugateOf" if chased.len() == 3 => {
+                let mut ab = [chased[0], chased[1]];
+                ab.sort_unstable();
+                chased = vec![ab[0], ab[1], chased[2]];
+            }
+            _ => {}
+        }
+        (type_name.to_string(), chased)
     }
 
     pub fn id_of(&self, name: &str) -> Option<usize> {
@@ -263,7 +350,13 @@ impl RawProof {
                 let mut children = Vec::new();
                 if !premises_str.is_empty() {
                     for premise in premises_str.split(';') {
-                        let Some((fact_type, args_str)) = premise.split_once(':') else { continue; };
+                        // 🌟 FIX: DefinedBy前提はfact_type自体が"DefinedBy:AnglePair"の
+                        // ようにコロンを含むようになったため、split_once(':')(最初の
+                        // コロン)ではなくrsplit_once(':')(最後のコロン)で区切る必要が
+                        // ある。引数部分は常にカンマ区切りの数字だけなので、最後の
+                        // コロンの後ろが引数、それより前が(コロンを含み得る)fact_type
+                        // という区切り方は常に一意に定まる。
+                        let Some((fact_type, args_str)) = premise.rsplit_once(':') else { continue; };
                         let args: Vec<usize> = args_str.split(',').filter_map(|s| s.parse::<usize>().ok()).collect();
                         children.push(self.build_premise_step(fact_type, &args, visited, depth + 1));
                     }
@@ -425,10 +518,85 @@ impl RawProof {
         }
     }
 
-    /// 🌟 Theoremのpremises 1件をDeepStepへ展開する。Identicalなら合流経路を、
-    /// Connectedならincidence_provenanceの由来を再帰的に辿る。DefinedByは
-    /// 結果として参照される実体の合流履歴(build_result_ancestry_step)を
-    /// 辿る。
+    /// 🌟 Definition単位の由来トラッキング(by_definition索引)を使い、
+    /// DefinedBy前提を「resultの合流履歴を総当たりで列挙する」のではなく
+    /// 「この特定の(引数の組)を最初に持っていた実体1つ + そこからresultへの
+    /// 最短合流経路」だけにピンポイントで絞り込む。ユーザー提案(「証明の
+    /// 先頭からDPで証明木を構築する」)への対応: 各実体の"元の定義"は
+    /// create_entity時点で確定する不変情報なので、それを起点に「この定義は
+    /// 最初どのIDに属していたか」を逆引きし、そこから目的のresultまでの
+    /// 経路だけを辿ればよい。
+    ///
+    /// fact_typeが"DefinedBy:{type_name}"の形(target_type付き)でない場合
+    /// (理論上は無いはずだが後方互換のため)は、従来通りbuild_result_ancestry_step
+    /// (resultの合流履歴全体)にフォールバックする。
+    fn build_defined_by_step(
+        &self,
+        fact_type: &str,
+        args: &[usize],
+        headline: String,
+        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        depth: usize,
+    ) -> DeepStep {
+        let result_id = *args.last().unwrap();
+        let Some((_, type_name)) = fact_type.split_once(':') else {
+            return self.build_result_ancestry_step(result_id, headline, visited, depth);
+        };
+        let def_args = &args[..args.len() - 1];
+        let key = self.canonical_def_key(type_name, def_args);
+        let result_final = self.final_rep(result_id);
+        // このDefinitionを最初に持っていた実体のうち、resultと同じ最終代表元に
+        // 合流しているものを探す(複数あり得るが、診断ツールとしては最初の
+        // 1件で十分――どれを選んでも「本当にこの定義からresultへ辿り着ける」
+        // という結論自体は変わらない)。
+        let origin = self.by_definition.get(&key).and_then(|ids| {
+            ids.iter().copied().find(|&oid| self.final_rep(oid) == result_final)
+        });
+        match origin {
+            None => {
+                // 見つからない場合(正規化の想定漏れ等)は、安全側に倒して
+                // 従来のresult全体の合流履歴を提示する。
+                self.build_result_ancestry_step(result_id, headline, visited, depth)
+            }
+            Some(origin_id) if origin_id == result_id => {
+                // resultはこの定義そのもので作られた実体自身(他実体からの
+                // 合流を一切経ていない)。正真正銘の基底事実。
+                DeepStep::leaf(headline, format!(
+                    "{} はこの定義そのもので作られた実体自身であり、他の実体からの合流を経ていません(基底事実)",
+                    self.name_of(result_id)
+                ))
+            }
+            Some(origin_id) => {
+                let ground_key = ("DEFORIGIN".to_string(), vec![origin_id, result_id]);
+                if !visited.insert(ground_key) {
+                    return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+                }
+                match self.explain(origin_id, result_id) {
+                    Some(sub_edges) if !sub_edges.is_empty() => {
+                        let children: Vec<DeepStep> = sub_edges.iter()
+                            .map(|(sf, se)| self.build_step(*sf, se, false, visited, depth + 1))
+                            .collect();
+                        DeepStep {
+                            headline,
+                            reason: format!(
+                                "{} が元々この定義で作られており、以下の経路で {} に合流した",
+                                self.name_of(origin_id), self.name_of(result_id)
+                            ),
+                            children, is_gap: false, gap_reason: None, is_shortcut: false,
+                        }
+                    }
+                    // final_repが一致していればexplainも非空の経路を返すはずだが
+                    // (理論上到達しないはずの)保険としてancestryへ委譲する。
+                    _ => self.build_result_ancestry_step(result_id, headline, visited, depth),
+                }
+            }
+        }
+    }
+
+    /// 🌟 Theoremのpremises 1件をDeepStepへ展開する。Identicalは合流経路を
+    /// (両辺が既に同じ実体を指す場合は自明な基底事実として)、Connectedは
+    /// incidence_provenanceの由来を再帰的に辿る。DefinedByはbuild_defined_by_step
+    /// でDefinition単位の由来をピンポイントに辿る。
     fn build_premise_step(
         &self,
         fact_type: &str,
@@ -445,12 +613,14 @@ impl RawProof {
             return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
         }
         match fact_type {
-            // 🌟 Identical(X,X): 既に同じ実体(id)を指している場合、explainは
-            // 空経路(=一見自明)を返すだけだが、それは往々にしてこの実体が
-            // 他の実体を(named theoremで)吸収してきた結果である。その履歴を
-            // 辿る(でなければ本当に「元から自明」ということが分かる)。
+            // 🌟 Identical(X,X): 既に同じ実体(id)を指している場合、その実体が
+            // なぜ「この役割」を持つに至ったか(=どのDefinedBy前提の合流の
+            // 産物か)は、隣接するDefinedBy前提側(build_defined_by_step)が
+            // Definition単位でピンポイントに説明する。ここで同じ話を(resultの
+            // 合流履歴を丸ごと辿って)重複表示すると証明が不必要に長くなる
+            // だけなので、単なる自明な基底事実として扱う。
             "Identical" if args.len() == 2 && args[0] == args[1] => {
-                self.build_result_ancestry_step(args[0], headline, visited, depth + 1)
+                DeepStep::leaf(headline, "同一の実体を指しているため自明(この実体がどう定義されたかは隣接するDefinedBy前提を参照)".to_string())
             }
             "Identical" if args.len() == 2 => {
                 match self.explain(args[0], args[1]) {
@@ -484,12 +654,13 @@ impl RawProof {
             }
             // 🌟 DefinedBy(引数..., 結果): 最後の引数が「定義された図形そのもの」
             // (AnglePair/Midpoint/DirectionOfなど、いずれもpatternの最後の要素)。
-            // この結果実体がこれまで他の実体を吸収してきた履歴を辿ることで、
-            // 「見た目は定義から自明だが実際には円周角の定理・有向角の交替律
-            // などの合流の産物」というケースを可視化する。
-            "DefinedBy" if !args.is_empty() => {
-                let result_id = *args.last().unwrap();
-                self.build_result_ancestry_step(result_id, headline, visited, depth + 1)
+            // build_defined_by_stepがDefinition単位の由来索引(by_definition)を
+            // 使い、「この定義を最初に持っていた実体からresultへの最短経路」
+            // だけをピンポイントに辿る――これにより「見た目は定義から自明だが
+            // 実際には円周角の定理・有向角の交替律などの合流の産物」という
+            // ケースを、resultの全合流履歴を総当たりで列挙することなく可視化する。
+            _ if (fact_type == "DefinedBy" || fact_type.starts_with("DefinedBy:")) && !args.is_empty() => {
+                self.build_defined_by_step(fact_type, args, headline, visited, depth + 1)
             }
             _ => DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う)".to_string()),
         }

@@ -995,13 +995,30 @@ impl ProverEngine {
     /// 証明ツリーに混入していた(ユーザー指摘の「不要な定理が多く含まれる」原因)。
     /// ここではtheorem.patterns中のPattern::Fact節(実際に検証された前提)だけを
     /// 辿るので、そのような無関係な図形は含まれない。
+    ///
+    /// 🌟 "DefinedBy"前提は、fpd.target_type(例: "AnglePair"/"Midpoint")が
+    /// 分かっている場合 "DefinedBy:AnglePair" のようにタグを付けて記録する。
+    /// これはraw_proof::RawProofが「このDefinedBy前提はDefinition::AnglePairの
+    /// どのインスタンスを指しているか」を、Definition単位の由来インデックスと
+    /// 照合してピンポイントに特定するために必要な情報(単なる"DefinedBy"だけ
+    /// では、AnglePair/Midpoint/LineThroughPointsなど複数の定義種別を
+    /// 区別できない)。表示用のformat_justificationや他の消費側は文字列を
+    /// そのまま前方一致/分割で扱うので、この変更で壊れることはない。
     fn compute_theorem_premises(theorem: &TheoremDef, bind: &Bind) -> Vec<(String, Vec<ClassId>)> {
         let mut premises = Vec::new();
         for pat in &theorem.patterns {
             if let Pattern::Fact(fpd) = pat {
                 let resolved: Option<Vec<ClassId>> = fpd.args.iter().map(|a| bind.get(a).copied()).collect();
                 if let Some(args) = resolved {
-                    premises.push((fpd.fact_type.clone(), args));
+                    let fact_type = if fpd.fact_type == "DefinedBy" {
+                        match &fpd.target_type {
+                            Some(tt) => format!("DefinedBy:{}", tt),
+                            None => fpd.fact_type.clone(),
+                        }
+                    } else {
+                        fpd.fact_type.clone()
+                    };
+                    premises.push((fact_type, args));
                 }
             }
         }
