@@ -551,3 +551,62 @@ fn test_circle_affinity_detects_collinear_degeneracy() {
         deg_a + deg_b + deg_d, deg_circle
     );
 }
+
+/// 🌟 A,B,M1=Midpoint(A,B),M2=Midpoint(A,M1)の4点を作る共通ヘルパー。
+/// M1,M2はどちらもA,Bの固定係数によるアフィン結合(M1=(A+B)/2、
+/// M2=(3A+B)/4)なので、A,Bの実際の位置に関わらずCrossRatio(A,B,M1,M2)は
+/// 常に同じ定数値になる(調和共役と違い"点が無限遠に飛ぶ"退化が起きない
+/// ぶん扱いやすい)――かつ、A,B,M1,M2はMidpointの構成上常に一直線上に
+/// あるので、calc_cross_ratio(decompose)の前提(直線上の4点)も満たす。
+fn make_double_midpoint_quad(egraph: &mut EGraph, a_name: &str, b_name: &str) -> (ClassId, ClassId, ClassId, ClassId) {
+    let a = egraph.create_entity(a_name.into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity(b_name.into(), Definition::FreePoint, EntityType::Point);
+    let m1 = egraph.create_entity(format!("Mid_{}", a_name), Definition::Midpoint(a, b), EntityType::Point);
+    let m2 = egraph.create_entity(format!("Mid2_{}", a_name), Definition::Midpoint(a, m1), EntityType::Point);
+    (a, b, m1, m2)
+}
+
+/// 🌟 ユーザー提案「複比同士の関係式からconjectureを発行する」の検証。
+/// 完全に独立な2組の4点(A1,B1,M1_1,M2_1)と(A2,B2,M1_2,M2_2)は、どちらも
+/// 「2重中点」という同じアフィン結合係数の構成なので複比が必ず同じ定数値に
+/// なる(座標のランダムな取り方に依存しない数学的な恒等式)。構造的には
+/// 何の関係もない(異なる自由点から作られた)2つの複比エンティティが、
+/// detect_cross_ratio_coincidencesによって「値が一致する」予想として
+/// 検出されることを確認する。
+#[test]
+fn test_detect_cross_ratio_coincidences_finds_matching_values() {
+    let mut egraph = EGraph::new();
+
+    let (a1, b1, m1_1, m2_1) = make_double_midpoint_quad(&mut egraph, "A1", "B1");
+    let cr1_def = egraph.normalize_definition(&Definition::CrossRatio(a1, b1, m1_1, m2_1));
+    let _cr1 = egraph.create_entity("CR1".into(), cr1_def, EntityType::Scalar);
+
+    let (a2, b2, m1_2, m2_2) = make_double_midpoint_quad(&mut egraph, "A2", "B2");
+    let cr2_def = egraph.normalize_definition(&Definition::CrossRatio(a2, b2, m1_2, m2_2));
+    let cr2 = egraph.create_entity("CR2".into(), cr2_def, EntityType::Scalar);
+
+    assert!(egraph.conjectures.borrow().is_empty(), "検出前は予想が無いはず");
+    egraph.detect_cross_ratio_coincidences(cr2);
+    assert!(
+        !egraph.conjectures.borrow().is_empty(),
+        "独立した2つの2重中点配置はどちらも同じ複比定数になるはずなので、予想として検出されるべき"
+    );
+}
+
+/// 🌟 ユーザー提案「複比自体を次数を用いて生成に制限をかけて」の土台となる
+/// measure_cross_ratio_affinityの検証。A(mover),B(固定点),M1=Midpoint(A,B),
+/// M2=Midpoint(A,M1)は、A,Bの実際の位置に関わらず常に同じ定数の複比を
+/// 持つ(make_double_midpoint_quadのコメント参照)ので、複比自体の次数は
+/// ちょうど0(定数)になるはず――たとえ入力の4点が次数1のmoverを含んでいても、
+/// 複比という「組み合わせ結果」の次数は個々の点の次数と独立に(このケースでは
+/// 0まで)変わり得ることを示す。
+#[test]
+fn test_cross_ratio_affinity_is_zero_for_affine_invariant_configuration() {
+    let mut egraph = EGraph::new();
+    let (a, _b, m1, m2) = make_double_midpoint_quad(&mut egraph, "A", "B");
+
+    let (deg_a, _deg_b, _deg_m1, _deg_m2, deg_cr) = egraph.measure_cross_ratio_affinity(a, _b, m1, m2, 6)
+        .expect("次数が測定できるはず");
+    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
+    assert_eq!(deg_cr, 0, "2重中点の複比は常に同じ定数なので次数0のはず(実測: {})", deg_cr);
+}

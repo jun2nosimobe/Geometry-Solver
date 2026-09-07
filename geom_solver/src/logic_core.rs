@@ -853,6 +853,29 @@ impl ProverEngine {
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
             } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio") {
+                // 🌟 ユーザー提案:「複比の定理を使うときは複比自体を次数を用いて
+                // 生成に制限をかけて」への対応。複比は4点から作られるため、
+                // 無関係な4点の組み合わせ(透視射影不変性のような多自由変数の
+                // 定理が、DFSの中で偶然束縛してしまった無関係な4点)では
+                // 次数が際限なく積み上がり得る。生成前に次数を測定し、
+                // 異常に高い候補は(この特定の束縛でのCrossRatio生成だけを
+                // 諦める――failed_pathsによりこのDFS枝は自然に打ち切られる)
+                // ことで、無駄な複比エンティティの増殖と、それに続く
+                // detect_cross_ratio_coincidencesの比較コストの増大を防ぐ。
+                // 次数が測定不能(None)な場合は安全側に倒し、制限しない。
+                if target_type == "CrossRatio" {
+                    if let Definition::CrossRatio(a, b, c, d) = temp_def {
+                        const CR_DEGREE_CAP: usize = 8;
+                        const CR_MAX_D: usize = 6;
+                        if let Some((da, db, dc, dd, d_cr)) = self.egraph.measure_cross_ratio_affinity(a, b, c, d, CR_MAX_D) {
+                            if d_cr > CR_DEGREE_CAP {
+                                println!("  🚫 [複比の生成を制限] 次数{}(点の次数{}+{}+{}+{})が高すぎるため、この複比の生成を見送りました", d_cr, da, db, dc, dd);
+                                return valid_nodes;
+                            }
+                        }
+                    }
+                }
+
                 let e_type = match target_type {
                     "AnglePair" => EntityType::Angle,
                     "DirectionOf" => EntityType::Direction,
@@ -869,6 +892,13 @@ impl ProverEngine {
 
                 let new_id = self.egraph.create_entity(name, temp_def.clone(), e_type);
                 self.egraph.apply_trivial_relations(new_id, &temp_def);
+                // 🌟 ユーザー提案:「複比同士の関係式からconjectureを発行して、
+                // そこから定理適用の形を見つける」への対応。新しく作られた
+                // 複比の値を既存の他の複比と数値的に比較し、一致するものが
+                // あれば予想(conjecture)として記録する。
+                if target_type == "CrossRatio" {
+                    self.egraph.detect_cross_ratio_coincidences(new_id);
+                }
                 valid_nodes.push(new_id);
             }
         }

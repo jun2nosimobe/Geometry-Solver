@@ -989,6 +989,70 @@ impl EGraph {
         Some((degs[0], degs[1], degs[2], combined))
     }
 
+    /// 🌟 measure_group_degreesの4点(複比)特化版。ユーザー提案:「複比の定理を
+    /// 使うときは複比自体を次数を用いて生成に制限をかけて」への対応。
+    /// calc_cross_ratioはScalar(k,1,1)を返す――第1,2成分が常に1という自明な
+    /// (次数0の)定数なので、degree_of_homogeneous_samplesが最後の成分(常に1)
+    /// で割ることは無害であり、実質的にkそのものの次数だけが結果を決める。
+    /// 4点A,B,C,Dの次数の和に対し複比の次数が異常に高い(=無関係な4点の
+    /// 組み合わせ)場合は生成自体を諦めるゲートに使う。
+    pub fn measure_cross_ratio_affinity(&self, a: ClassId, b: ClassId, c: ClassId, d: ClassId, max_d: usize) -> Option<(usize, usize, usize, usize, usize)> {
+        let (degs, combined) = self.measure_group_degrees(
+            &[a, b, c, d],
+            |vals| mmp_calculators::calc_cross_ratio(&vals[0], &vals[1], &vals[2], &vals[3])
+                .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+                .unwrap_or_default(),
+            max_d,
+        )?;
+        Some((degs[0], degs[1], degs[2], degs[3], combined))
+    }
+
+    /// 🌟 ユーザー提案:「複比同士の関係式からconjectureを発行して、そこから
+    /// 定理適用の形を見つける」への対応。新しく作られた複比エンティティ
+    /// new_idの値を、既存の他の全ての複比エンティティと(1回の乱数サンプルで)
+    /// 数値的に比較し、値が一致するものがあればlog_conjecture_candidateで
+    /// 予想として記録する(既存のprocess_pending_conjectures/heat_bonus
+    /// フィードバック機構にそのまま乗る――現実の証明状態は一切変更しない
+    /// 安全な拡張)。
+    ///
+    /// 🌟 なぜ「比例」ではなく「等値」判定か: 複比の評価値は[k, 1, 1]という
+    /// 形で、第1,2成分が常に1に固定されているため、通常の点/直線のような
+    /// 射影的スケール不変の比例判定は不要で、k自体の値がそのまま複比の値
+    /// そのもの(Identical(CrossRatio1, CrossRatio2)が意味したいのはまさに
+    /// この値の一致)。
+    pub fn detect_cross_ratio_coincidences(&self, new_id: ClassId) {
+        let new_rep = self.get_rep(new_id);
+        let others: Vec<ClassId> = (0..self.entities.len())
+            .filter(|&i| matches!(self.entities[i].original_definition, Definition::CrossRatio(..)))
+            .map(ClassId)
+            .map(|id| self.get_rep(id))
+            .filter(|&rep| rep != new_rep)
+            .collect();
+        if others.is_empty() { return; }
+
+        let mut visited = HashSet::new();
+        let mut ancestors = Vec::new();
+        self.collect_free_point_ancestors(new_rep, &mut visited, &mut ancestors);
+        for &other in &others {
+            self.collect_free_point_ancestors(other, &mut visited, &mut ancestors);
+        }
+        if ancestors.is_empty() { return; }
+
+        let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+        if !self.assign_free_point_coords(&ancestors, &mut vars) { return; }
+        let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+        let Some(v_new) = self.evaluate_node(new_rep, &vars, &mut cache) else { return; };
+        if v_new.is_empty() { return; }
+
+        for &other in &others {
+            if let Some(v_other) = self.evaluate_node(other, &vars, &mut cache) {
+                if !v_other.is_empty() && v_new[0].0 == v_other[0].0 {
+                    self.log_conjecture_candidate(new_rep, other, "複比の値が一致(透視射影関係などの可能性)");
+                }
+            }
+        }
+    }
+
     /// 🌟 measure_numerical_degree系の共通処理: 祖先の自由点の中から
     /// 「他の構造的前提(直線/円の上にあること)を持たない」ものを1つ選んで
     /// mover(動点)とし、残りは(前提を満たす形で)1回だけ座標を固定する。
