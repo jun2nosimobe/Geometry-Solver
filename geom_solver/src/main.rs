@@ -53,11 +53,27 @@ fn output_raw_proof(egraph: &EGraph, problem_name: &str) -> String {
     raw_text
 }
 
+/// 🌟 extract_proofの検証結果(VerifyReport::format())を、コンソールと
+/// ファイル(result/extracted_proof_<問題名>.txt)の両方に出力する。
+/// output_proof/output_raw_proofと同じ「コンソール+ファイルの両方に残す」
+/// 方針に揃えている。
+fn output_extract_report(report_text: &str, problem_name: &str) {
+    print!("{}", report_text);
+    let dir = "result";
+    if fs::create_dir_all(dir).is_ok() {
+        let path = format!("{}/extracted_proof_{}.txt", dir, problem_name);
+        match fs::write(&path, report_text) {
+            Ok(_) => println!("📄 extract_proofの結果を '{}' に保存しました。", path),
+            Err(e) => println!("⚠️ extract_proof結果ファイルの書き込みに失敗しました ({}): {}", path, e),
+        }
+    }
+}
+
 /// 🌟 extract_proof: 保存済みraw_proofテキストを読み込み、指定した2つの
 /// 実体(名前で指定)が名前付き定理の連鎖だけで(Theoremの前提も再帰的に)
-/// 厳密に合流しているかを検証し、結果を標準出力へ表示する。ソルバーを
-/// 再実行せずに済むので、「実際に証明が完了しているか、どこかに未証明の
-/// ギャップが眠っているのか」を後から(別プロセスからでも)監査できる。
+/// 厳密に合流しているかを検証し、結果を標準出力とファイルの両方へ出力する。
+/// ソルバーを再実行せずに済むので、「実際に証明が完了しているか、どこかに
+/// 未証明のギャップが眠っているのか」を後から(別プロセスからでも)監査できる。
 /// `geom_solver extract-proof <raw_proofファイル> <名前A> <名前B>` で呼ぶ。
 fn run_extract_proof(args: &[String]) {
     if args.len() < 5 {
@@ -77,7 +93,13 @@ fn run_extract_proof(args: &[String]) {
         return;
     };
     let report = raw.verify_identical(a, b);
-    print!("{}", report.format());
+    // 🌟 raw_proofファイル名(result/raw_proof_<問題名>.txt)から問題名を
+    // 復元し、対応するresult/extracted_proof_<問題名>.txtに保存する
+    // (ファイル名を素直に指定されない限り、main.rs実行時と同じ命名規則で
+    // 揃えたいため)。復元できない場合はファイル名全体をそのまま使う。
+    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or(path);
+    let problem_name = stem.strip_prefix("raw_proof_").unwrap_or(stem);
+    output_extract_report(&report.format(), problem_name);
 }
 
 fn main() {
@@ -268,7 +290,7 @@ fn main() {
                                 let raw_text = output_raw_proof(&engine.prover.egraph, problem_name);
                                 let raw = RawProof::parse(&raw_text);
                                 let report = raw.verify_identical(target_args[0].0, target_args[1].0);
-                                print!("{}", report.format());
+                                output_extract_report(&report.format(), problem_name);
                                 break;
                             }
                         }
