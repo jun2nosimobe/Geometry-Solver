@@ -237,7 +237,7 @@
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
     <div class="stat"><div class="n">10</div><div class="l">出荷済み最適化</div></div>
-    <div class="stat"><div class="n">5</div><div class="l">検証の末に撤回</div></div>
+    <div class="stat"><div class="n">6</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
 
@@ -357,6 +357,15 @@ flowchart TD
       </div>
 
       <div class="entry">
+        <div class="when">撤回</div>
+        <div>
+          <div class="headline"><h3>探索木のメモ化(成功した状態の再利用)</h3><span class="pill reverted">reverted</span></div>
+          <div class="desc">ユーザー提案「探索木のメモ化」への対応。まず診断計測(dfs_matchの全呼び出しのうち、このタスク内で既に一度以上訪れたstate_sigへの再訪問が何%か)を実装したところ、simsonで<b>約38%が再訪問</b>で、そのほとんど(38.4%)が「過去に成功した状態への再訪問」(既存のfailed_pathsは失敗した状態しか記憶しないため、成功する状態は毎回フルにサブツリーを再探索していた)だと判明。これを踏まえ、失敗キャッシュ(failed_paths)と成功結果キャッシュ(state_sigごとに実際に得られた完全な(Bind,FlipStates)一覧)を1つにまとめた<code>MatchCache</code>を新設し、既存のfailed_pathsと全く同じ寿命(タスク単位、cap到達での再キュー時にtype_generationスナップショットで持ち越し可否判定)で運用する形で実装した。</div>
+          <div class="evidence"><b>結果:</b> 実際に測ると効果ほぼゼロ(dfs_match総呼び出し回数が182,367→181,367とほぼ不変)で、simsonはむしろ悪化(1.1〜1.2秒→1.3〜1.9秒、キャッシュ管理のオーバーヘッドが純増)。原因: 診断計測は<b>実行全体(複数タスク・複数試行をまたぐ)</b>での再訪問を数えていたのに対し、実装したキャッシュは(failed_pathsと同じ寿命に揃えたため)<b>タスク単位</b>でしか有効でなかった――38%の再訪問の大半は、UCB1が同じ定理を(schedule_full_sweepのたびに新しいtask/新しいbindで)何度も試す<b>タスク間・試行間</b>の重複であり、タスク内メモ化ではほぼ捕捉できなかったと判明。真に効果を出すには、タスクをまたいで共有するグローバルなキャッシュ(connected_join_cache等と同じ発想だが、任意のbind内容をキーにする分、無効化の粒度・タイミングをより慎重に設計する必要がある)が要る――これは今回試した実装よりもう一段階大きい設計変更であり、今回は着手しなかった。コードは撤回前の状態に戻した(cargo test 33/33、simsonがbaseline通りに復帰したことを確認済み)。</div>
+        </div>
+      </div>
+
+      <div class="entry">
         <div class="when">出荷<span class="sha">aeaa32b</span></div>
         <div>
           <div class="headline"><h3>TheoremDefの改善(uses索引化 + OrderNonStrict)</h3><span class="pill shipped">shipped</span></div>
@@ -414,8 +423,8 @@ flowchart TD
         <div class="b-rank">1</div>
         <div>
           <h3>残る4定理の高速化には構造変更が要る(単純capは出尽くした)</h3>
-          <div class="desc">simsonは一連の修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected cap+正準順序)で2.23s→1.16s(約48%減)まで来たが、1秒未満には届いていない。残る4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)を診断計測で個別に再追跡した結果、2つの追加仮説(円周角の定理の逆へのDefinedByペアリングcap再挑戦、match_connected_factの局所スキャン分岐へのcap追加)は<b>いずれも効果ゼロ</b>だった。これは「見落とされたcap」がもう無いことを示す――残るコストは、10前後の変数を持つ定理の各段階(それぞれ中程度の分岐係数)が連鎖的に掛け合わさる<b>本物の組み合わせの複雑さ</b>である。全6回の仮説のうち3勝3敗で、実測なしに次の一手を当てるのはもう五分五分に近い。次に進むなら単純なcap追加ではなく、より大きな構造変更(seeded task経路をこの4定理だけに限定的に再有効化する、または探索木のメモ化)が必要。</div>
-          <div class="b-tags"><span class="tag">3勝3敗、単純capは打ち止め</span><span class="tag">要・構造変更</span></div>
+          <div class="desc">simsonは一連の修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected cap+正準順序)で2.23s→1.16s(約48%減)まで来たが、1秒未満には届いていない。残る4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)を診断計測で個別に再追跡した結果、2つの追加仮説(円周角の定理の逆へのDefinedByペアリングcap再挑戦、match_connected_factの局所スキャン分岐へのcap追加)は<b>いずれも効果ゼロ</b>だった。これは「見落とされたcap」がもう無いことを示す――残るコストは、10前後の変数を持つ定理の各段階(それぞれ中程度の分岐係数)が連鎖的に掛け合わさる<b>本物の組み合わせの複雑さ</b>である。全6回の仮説のうち3勝3敗で、実測なしに次の一手を当てるのはもう五分五分に近い。seeded task経路(#2)・タスク単位の探索木メモ化(#3)という2つの構造変更もどちらも試して撤回済みで、単純な手当てで届く範囲はほぼ出尽くしたと見られる。</div>
+          <div class="b-tags"><span class="tag">3勝3敗+2つの構造変更も不発</span><span class="tag">単純な手当ては出尽くした</span></div>
         </div>
       </div>
 
@@ -425,6 +434,15 @@ flowchart TD
           <h3>seeded task経路: 定理単位の絞り込みは5回中5回失敗、結論形式単位の制御が必要</h3>
           <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングの再有効化は、これまで5回すべて撤回している。1〜4回目は全定理×全結論形式への無差別適用、5回目(<code>SEED_ENABLED_THEOREMS</code>)は「本来シード起動前提で設計されている」と自身のコメントに明記された5定理だけへの絞り込みだったが、それでも悪化した(simson 1.19s→4.0s、nine_point_fullが7秒で解けていたのがタイムアウトで未解決化)。原因は、対象を定理単位で絞っても<b>Identical(Angle,Angle)という「結論の形」自体がこのドメインで極めて高頻度</b>で、どの定理が証明したかに関わらず証明探索全体でこの形の事実が大量に発生し、5定理のパターンと照合され続けるため。次に試すなら、定理単位ではなく<b>結論の形(fact_type+entity_type)単位で発生頻度に応じたシード抑制</b>(例: Angle同士のIdenticalだけ間引く、または一定時間内の同一結果型への再シード数に上限を設ける)が必要と見られる――ただしこれもまた新しい仮説であり、実測での検証必須。</div>
           <div class="b-tags"><span class="tag">5戦5敗</span><span class="tag">定理単位ではなく結論形式単位の制御が必要</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">3</div>
+        <div>
+          <h3>探索木のメモ化: タスク単位は不発、真に効くのはグローバルキャッシュ</h3>
+          <div class="desc">診断計測で、dfs_matchの全呼び出しの約38%が「過去に成功した状態への再訪問」だと判明したが、実際に(failed_pathsと同じ寿命の)<b>タスク単位</b>の成功キャッシュ(<code>MatchCache</code>)を実装して測ると、dfs_match呼び出し回数がほぼ不変(182,367→181,367)で効果ゼロ、simsonはキャッシュ管理のオーバーヘッド分だけ悪化した。原因: 38%の再訪問の大半は<b>タスクをまたいだ</b>もの(UCB1が同じ定理をschedule_full_sweepのたびに新しいtask/新しいbindで何度も試す)で、タスク単位のキャッシュでは捕捉できなかった。真に効かせるには、connected_join_cache/identical_self_bind_cacheと同じ発想のグローバル共有キャッシュが要るが、これらが「型」という粗い単位でキーを持つのに対し、成功結果キャッシュは「任意のbind内容」というずっと細かい単位をキーにするため、無効化の粒度・タイミングの設計(型ごとのtype_generationだけで十分か、より細かい依存関係追跡が要るか)がまだ詰め切れていない――今回のタスク単位実装よりもう一段階大きい設計変更になる。</div>
+          <div class="b-tags"><span class="tag">実測でタスク単位は不発と判明</span><span class="tag">要・グローバルキャッシュの無効化設計</span></div>
         </div>
       </div>
 
