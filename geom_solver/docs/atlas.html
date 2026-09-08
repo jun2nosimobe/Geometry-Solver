@@ -1,0 +1,418 @@
+<title>Geometry Solver Atlas</title>
+<style>
+  :root{
+    --paper:#f5f2ea;
+    --paper-raised:#ece6d6;
+    --ink:#1e2430;
+    --ink-soft:#4b5261;
+    --rule:#d9d2bd;
+    --accent:#2f5f8a;
+    --accent-soft:#dfe9ef;
+    --accent-ink:#1c3d59;
+    --mono-bg:#ece7d9;
+    --success:#3f7a55;
+    --success-soft:#e0ede3;
+    --warning:#a56a1e;
+    --warning-soft:#f3e6d1;
+    --danger:#a8483a;
+    --danger-soft:#f3ddd8;
+    --shadow: 0 1px 0 rgba(30,36,48,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14181d;
+      --paper-raised:#1b2027;
+      --ink:#e9e5d8;
+      --ink-soft:#a3a89b;
+      --rule:#333a3f;
+      --accent:#82b3d9;
+      --accent-soft:#1e3140;
+      --accent-ink:#cfe4f2;
+      --mono-bg:#1c2126;
+      --success:#79bd93;
+      --success-soft:#1c2c22;
+      --warning:#d9a45c;
+      --warning-soft:#2e2416;
+      --danger:#d98a7c;
+      --danger-soft:#2f1d1a;
+      --shadow: 0 1px 0 rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14181d;
+    --paper-raised:#1b2027;
+    --ink:#e9e5d8;
+    --ink-soft:#a3a89b;
+    --rule:#333a3f;
+    --accent:#82b3d9;
+    --accent-soft:#1e3140;
+    --accent-ink:#cfe4f2;
+    --mono-bg:#1c2126;
+    --success:#79bd93;
+    --success-soft:#1c2c22;
+    --warning:#d9a45c;
+    --warning-soft:#2e2416;
+    --danger:#d98a7c;
+    --danger-soft:#2f1d1a;
+    --shadow: 0 1px 0 rgba(0,0,0,.4);
+  }
+
+  *{box-sizing:border-box;}
+  html{text-size-adjust:100%;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"IBM Plex Sans","Hiragino Sans","Yu Gothic",sans-serif;
+    line-height:1.7;
+    font-size:16px;
+  }
+  ::selection{ background:var(--accent-soft); color:var(--accent-ink); }
+
+  h1,h2,h3{
+    font-family:"Fraunces","Noto Serif JP",serif;
+    font-weight:600;
+    text-wrap:balance;
+    color:var(--ink);
+  }
+  code, pre, .mono{
+    font-family:"IBM Plex Mono","SFMono-Regular",monospace;
+  }
+  a{ color:var(--accent); }
+
+  .wrap{ max-width:920px; margin:0 auto; padding:56px 24px 120px; }
+
+  /* ---------- header ---------- */
+  .masthead{
+    display:flex; flex-direction:column; gap:10px;
+    padding-bottom:28px; margin-bottom:36px;
+    border-bottom:2px solid var(--ink);
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:12.5px; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--ink-soft);
+  }
+  h1.title{ font-size:clamp(2.1rem,4.4vw,2.8rem); margin:0; line-height:1.12; }
+  .subtitle{ color:var(--ink-soft); font-size:16px; max-width:62ch; }
+  .meta-row{
+    display:flex; flex-wrap:wrap; gap:8px 22px; margin-top:6px;
+    font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--ink-soft);
+  }
+  .meta-row b{ color:var(--ink); font-weight:600; }
+
+  /* ---------- section scaffolding ---------- */
+  section{ margin-bottom:56px; }
+  .section-head{
+    display:flex; align-items:baseline; gap:14px; margin-bottom:6px;
+  }
+  .section-num{
+    font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--accent);
+    letter-spacing:.04em;
+  }
+  h2{ font-size:1.5rem; margin:0; }
+  .section-note{ color:var(--ink-soft); font-size:15px; max-width:68ch; margin:10px 0 22px; }
+
+  /* ---------- stat strip ---------- */
+  .stats{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+    border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
+    margin:28px 0 44px;
+  }
+  .stat{ padding:16px 18px; border-left:1px solid var(--rule); }
+  .stat:first-child{ border-left:none; }
+  .stat .n{
+    font-family:"Fraunces",serif; font-weight:600; font-size:2rem;
+    font-variant-numeric:tabular-nums; color:var(--ink);
+  }
+  .stat .l{ font-size:12.5px; color:var(--ink-soft); margin-top:2px; }
+
+  /* ---------- pipeline figure ---------- */
+  figure.pipeline{
+    margin:0; padding:22px 20px 10px;
+    background:var(--paper-raised);
+    border:1px solid var(--rule);
+    border-radius:6px;
+    overflow-x:auto;
+  }
+  figure.pipeline pre.mermaid{ margin:0; min-width:640px; }
+  figcaption{
+    font-size:13px; color:var(--ink-soft); padding:10px 4px 4px;
+    border-top:1px solid var(--rule); margin-top:14px;
+  }
+
+  /* ---------- pill / status ---------- */
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.03em;
+    padding:3px 9px; border-radius:99px; white-space:nowrap; text-transform:uppercase;
+    font-weight:600;
+  }
+  .pill.shipped{ background:var(--success-soft); color:var(--success); }
+  .pill.reverted{ background:var(--danger-soft); color:var(--danger); }
+  .pill.backlog{ background:var(--warning-soft); color:var(--warning); }
+  .pill.open{ background:var(--accent-soft); color:var(--accent-ink); }
+  .pill::before{ content:"●"; font-size:8px; }
+
+  /* ---------- ledger (table) ---------- */
+  .ledger{ display:flex; flex-direction:column; }
+  .entry{
+    display:grid;
+    grid-template-columns: 108px 1fr;
+    gap:6px 20px;
+    padding:20px 0;
+    border-top:1px solid var(--rule);
+  }
+  .entry:last-child{ border-bottom:1px solid var(--rule); }
+  .entry .when{
+    font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-soft);
+    padding-top:3px;
+  }
+  .entry .when .sha{ display:block; color:var(--ink); margin-top:4px; }
+  .entry h3{ font-size:17px; margin:0 0 6px; font-family:"IBM Plex Sans",sans-serif; font-weight:600; }
+  .entry .desc{ font-size:14.5px; color:var(--ink-soft); max-width:66ch; }
+  .entry .desc code{ background:var(--mono-bg); padding:.05em .35em; border-radius:3px; font-size:.92em; color:var(--ink); }
+  .entry .evidence{
+    margin-top:10px; font-size:13.5px; color:var(--ink-soft);
+    border-left:2px solid var(--rule); padding-left:12px;
+  }
+  .entry .evidence b{ color:var(--ink); font-weight:600; }
+  .entry .headline{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:2px;}
+
+  /* ---------- backlog list ---------- */
+  .backlog-list{ display:flex; flex-direction:column; gap:0; }
+  .b-item{
+    display:grid; grid-template-columns:34px 1fr; gap:16px;
+    padding:18px 0; border-top:1px solid var(--rule);
+  }
+  .b-item:last-child{ border-bottom:1px solid var(--rule); }
+  .b-rank{
+    font-family:"Fraunces",serif; font-weight:600; font-size:20px; color:var(--ink-soft);
+    padding-top:2px;
+  }
+  .b-item h3{ font-size:16px; margin:0 0 5px; font-weight:600; font-family:"IBM Plex Sans",sans-serif;}
+  .b-item .desc{ font-size:14.5px; color:var(--ink-soft); max-width:68ch; }
+  .b-item .desc code{ background:var(--mono-bg); padding:.05em .35em; border-radius:3px; font-size:.9em; color:var(--ink); }
+  .b-tags{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .tag{
+    font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-soft);
+    border:1px solid var(--rule); padding:2px 7px; border-radius:4px;
+  }
+
+  /* ---------- glossary ---------- */
+  .gloss{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+    gap:0; border-top:1px solid var(--rule); border-left:1px solid var(--rule);
+  }
+  .gterm{ padding:16px 18px; border-right:1px solid var(--rule); border-bottom:1px solid var(--rule); }
+  .gterm b{ font-family:"IBM Plex Mono",monospace; font-size:13.5px; color:var(--accent-ink); background:var(--accent-soft); padding:1px 6px; border-radius:4px; }
+  .gterm p{ margin:8px 0 0; font-size:13.5px; color:var(--ink-soft); }
+
+  footer{
+    margin-top:60px; padding-top:20px; border-top:1px solid var(--rule);
+    font-size:12.5px; color:var(--ink-soft); font-family:"IBM Plex Mono",monospace;
+  }
+
+  @media (max-width:600px){
+    .entry{ grid-template-columns:1fr; }
+    .entry .when{ padding-top:0; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+
+  <div class="masthead">
+    <div class="eyebrow">geom_solver — 内部リファレンス</div>
+    <h1 class="title">証明探索パイプライン全体図</h1>
+    <p class="subtitle">e-graph上の合同閉包 + 定理マッチングによる幾何定理自動証明エンジンの、現在の構造と最適化の来歴。次に何へ着手するかを判断するための一枚。</p>
+    <div class="meta-row">
+      <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/main.rs</span>
+      <span><b>ベンチ</b> 既存21問 + HAGeo-409由来8問 + 単体検証</span>
+      <span><b>最新コミット</b> 9b91366</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
+    <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">2</div><div class="l">検証の末に撤回</div></div>
+    <div class="stat"><div class="n">7</div><div class="l">未着手の改善候補</div></div>
+  </div>
+
+  <section id="pipeline">
+    <div class="section-head"><span class="section-num">01</span><h2>パイプライン全体</h2></div>
+    <p class="section-note">1問につき <code>EGraph::new()</code> → 問題ファイルによる初期条件の投入 → <code>BlackboardEngine</code> によるタスクキュー駆動の定理マッチング、という流れ。探索が完全に手詰まる(Stall)たびにオンデマンド作図の回復フェーズへ落ち、それも尽きればMCTSに委ねる。</p>
+
+    <figure class="pipeline">
+<pre class="mermaid">
+flowchart TD
+    A["問題ファイル<br/>(src/problems/*.rs)"] --> B["EGraph::new()<br/>Point/Line/Circle/... の初期エンティティ"]
+    B --> C["ProverEngine + BlackboardEngine<br/>schedule_full_sweep()"]
+    C --> D{"task_queue<br/>(BinaryHeap&lt;MatchTask&gt;)"}
+    D --> E["run_step(10000)<br/>dfs_match で1タスクずつ照合"]
+    E -->|"結論を適用できた"| F["apply_conclusions<br/>merge_entities / link_logical_incidence"]
+    F --> G["apply_congruence_closure<br/>直線/円/交点の一意性を局所伝播"]
+    G --> H["Event::FactProven<br/>schedule_matcher_task でシード投入"]
+    H --> D
+    E -->|"進展なし = Stall"| I{"回復フェーズ"}
+    I --> I1["resolve_demands<br/>直線の需要解決"]
+    I --> I2["resolve_point_demands<br/>交点の需要解決"]
+    I --> I3["resolve_angle_demands<br/>有向角の先回り生成"]
+    I --> I4["resolve_target_demands<br/>目標駆動の最終手段"]
+    I1 & I2 & I3 & I4 -->|"何か作れた"| C
+    I1 & I2 & I3 & I4 -->|"何も無い"| J{"MCTS 有効?"}
+    J -->|"はい"| K["MCTSSearchEngine::run_step<br/>無方向な補助構成の探索"]
+    K --> C
+    J -->|"いいえ"| L["探索打ち切り"]
+    E -->|"目標に到達"| M["🎉 証明完了<br/>generate_proof / raw_proof 出力"]
+</pre>
+    </figure>
+    <figcaption>灰色の矢印は1回の <code>run_step</code> 呼び出し内で完結するホットパス。回復フェーズは「Stallして初めて呼ばれる」設計で、その粗さ自体が §3 の課題になっている。</figcaption>
+  </section>
+
+  <section id="matching">
+    <div class="section-head"><span class="section-num">02</span><h2>マッチングの中身(dfs_match)</h2></div>
+    <p class="section-note"><code>MatchTask</code> は1つの定理・1つの束縛状態を表し、優先度付きキューで管理される。<code>TheoremDef.patterns</code> を先頭から満たしていくバックトラック探索で、パターンの型(Identical / Connected / DefinedBy / 汎用)ごとに専用の列挙ロジックを持つ。</p>
+    <div class="gloss">
+      <div class="gterm"><b>Identical(v1, v2)</b><p>両方未束縛なら型で絞った代表元へ自己束縛(RETE的に定理をまたいで共有キャッシュ済み)。</p></div>
+      <div class="gterm"><b>Connected(child, parent)</b><p>e-graphの subobjects を辿る接続判定。両方未束縛のジョインも型だけで決まるため共有キャッシュ済み。</p></div>
+      <div class="gterm"><b>DefinedBy(…, result)</b><p>親が揃っていれば <code>memo</code> の O(1) ルックアップ、無ければ一部の型(Angle/Direction/Scalar)はその場で構成 — この副作用性が §3 で扱う設計上の緊張点。</p></div>
+      <div class="gterm"><b>failed_paths</b><p>1タスク内の「この束縛状態はもう行き止まり」の記憶。<code>EGraph::type_generation</code>(型ごとの世代カウンタ)が変わらない限り、dfs_cap到達での再キュー間で持ち越せる。</p></div>
+      <div class="gterm"><b>UCB1バンディット</b><p>シードなし全探索タスクの優先度を、定理ごとの過去の成功率+探索ボーナスで決める。未試行の定理は常に一度は試す。</p></div>
+      <div class="gterm"><b>4つのゲートウェイ</b><p><code>create_entity</code> / <code>merge_entities</code> / <code>link_logical_incidence</code> / <code>insert_memo</code>。e-graphの生の構造を書き換える経路をここに集約し、<code>type_generation</code> の更新漏れを構造的に防いでいる。</p></div>
+    </div>
+  </section>
+
+  <section id="ledger">
+    <div class="section-head"><span class="section-num">03</span><h2>最適化の来歴</h2></div>
+    <p class="section-note">「定理が増えてきたので、もっとe-graphの構造やヒューリスティックを活かせないか」という問いから始まった一連の実験。効いたものと、実測の末に撤回したものの両方を、判断根拠ごと残す。</p>
+
+    <div class="ledger">
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">5c1778d</span></div>
+        <div>
+          <div class="headline"><h3>型インデックス + 定理の型シグネチャ事前フィルタ</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc"><code>EGraph::type_index</code>(EntityType別の代表元索引)で全件スキャンをO(1)索引引きに置換。加えて各定理が要求する「オンデマンド生成されない型」(Point/Line/Circle/Conic)がグラフに1つも無ければ、<code>schedule_full_sweep</code> の時点で試行自体をスキップ。</div>
+          <div class="evidence"><b>実測:</b> circumcenter 896ms→233ms、orthocenter_alt 26.9s→10.8s、orthic_incenter 19.6s→7.5s。circumcenter問題では実際に「円周角の定理」等3定理が試行スキップされることを確認。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">db23ce9</span></div>
+        <div>
+          <div class="headline"><h3>4ゲートウェイ集約 + failed_pathsの型別粒度</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">単一グローバルな <code>merge_generation</code> は「どこかで1回でも変化」しか区別できず、無関係な型のマージでも全タスクのfailed_pathsを巻き添えで破棄していた。生の構造書き込みを4つのゲートウェイに集約し、型ごとの<code>type_generation</code>で無効化を絞り込んだ。</div>
+          <div class="evidence"><b>経緯:</b> 初回実装は<code>apply_congruence_closure</code>内の直接<code>memo.insert</code>を見落として2回回帰(bench_2018silkroadp1等)。ゲートウェイに集約してから3回の全ベンチ再実行で正誤が完全一致することを確認。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">9b91366</span></div>
+        <div>
+          <div class="headline"><h3>RETE的な定理横断の共有キャッシュ(第一弾)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">「bindの中身に依存せず型の組み合わせだけで結果が決まる」2分岐 — <code>Connected</code>両方未束縛のジョインと<code>Identical</code>自己束縛の候補列挙 — を <code>type_generation</code> 世代付きで定理間共有。</div>
+          <div class="evidence"><b>未着手:</b> <code>DefinedBy</code>の両方未束縛分岐も同じ発想が適用できるが、型だけの列挙と変数名への束縛が現状ひとつの関数に同居しており、分離のリファクタが要る(→ 改善候補 #2)。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">撤回</div>
+        <div>
+          <div class="headline"><h3>DefinedByの遅延構築(マッチング純粋化)</h3><span class="pill reverted">reverted</span></div>
+          <div class="desc">「マッチングが副作用(<code>create_entity</code>)を持つのは設計上おかしい」という指摘に対応し、AnglePair等6種類を<code>construction_demands</code>と同じ「需要記録 → 毎イテレーション解決」方式に統一しようとした。</div>
+          <div class="evidence"><b>結果:</b> 全6種統一は重大回帰(orthocenter等が新規に解けなくなる)。CrossRatio系2種だけに絞ってもbench_2010g1が5回中3回失敗。原因は<code>schedule_full_sweep</code>の全リセットコストを毎イテレーション払うことだったため、旧来の即時生成へ戻した。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">撤回</div>
+        <div>
+          <div class="headline"><h3>schedule_full_sweepの精密化(タスク温存)</h3><span class="pill reverted">reverted</span></div>
+          <div class="desc"><code>type_generation</code>を流用し、「型が変わっていない非シードタスクは<code>cached_failed_paths</code>ごと温存し、全部は作り直さない」方式を試した。</div>
+          <div class="evidence"><b>結果:</b> bench_2011armog10p6 / bench_2010g1 が再現性を持って失敗。優先度の飢餓を疑い修正しても改善せず、判定を旧実装同等の厳格な条件に差し替えても再現 — 型判定の粗さでは説明が付かず、原因不明のまま撤回。</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section id="backlog">
+    <div class="section-head"><span class="section-num">04</span><h2>改善候補(優先度順)</h2></div>
+    <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。</p>
+
+    <div class="backlog-list">
+
+      <div class="b-item">
+        <div class="b-rank">1</div>
+        <div>
+          <h3>schedule_full_sweepの実測プロファイリング ★</h3>
+          <div class="desc">2回の撤回はどちらも「<code>schedule_full_sweep</code>が重い」という推測から出発し、原因を突き止められなかった。次に何かを変える前に、1回の呼び出しが実際に何秒・何dfs_call消費しているか、リカバリーフェーズ全体の何割を占めるかを計測する。</div>
+          <div class="b-tags"><span class="tag">低リスク</span><span class="tag">前提条件</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">2</div>
+        <div>
+          <h3>DefinedBy両方未束縛分岐の共有キャッシュ</h3>
+          <div class="desc"><code>defined_by_valid_nodes</code>(型だけの列挙)と<code>defined_by_collect_matches</code>(変数名への束縛)を分離すれば、Connected/Identicalと同じ型キー方式のキャッシュを適用できる。</div>
+          <div class="b-tags"><span class="tag">案4の続き</span><span class="tag">中規模リファクタ</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">3</div>
+        <div>
+          <h3>軽量な再統合機構(全リセットに代わる手段)</h3>
+          <div class="desc">新規エンティティ1つのために <code>schedule_full_sweep</code> が非シードタスク全体を揺さぶる、という構図そのものが2度の撤回の共通原因。「新しく出来た型に関係するタスクだけを狙い撃ちで再シードする」仕組みがあれば、DefinedBy純粋化・精密スケジューラの両方が現実的になる。</div>
+          <div class="b-tags"><span class="tag">要 #1</span><span class="tag">高リスク・高リターン</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">4</div>
+        <div>
+          <h3>本格的なRETE型ベータネットワーク</h3>
+          <div class="desc">定理間で部分マッチそのものをインクリメンタルに伝播する、案4のもともとの構想。#1〜#3で得られる効果を見てから判断する規模の刷新。</div>
+          <div class="b-tags"><span class="tag">大規模</span><span class="tag">保留</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">5</div>
+        <div>
+          <h3>定理集合の増加が無関係な問題に課税する問題</h3>
+          <div class="desc">新定理を1つ足すと、その定理を使わない問題まで「一度は試す」コストを払う。型シグネチャ事前フィルタ(#03既出)で軽減はしたが解消はしていない、既知の許容トレードオフとして監視を続ける。</div>
+          <div class="b-tags"><span class="tag">既知のトレードオフ</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">6</div>
+        <div>
+          <h3>bench_2011balkanmop1(スパイラル相似)が未解決</h3>
+          <div class="desc">「スパイラル相似の中点対応」定理を実装済みだが、前提(角度・比の等式)が確立される前に探索がStallし、定理が発火する機会自体がない。前提を能動的に組み立てる仕組みが要る。</div>
+          <div class="b-tags"><span class="tag">未解決問題</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">7</div>
+        <div>
+          <h3>残り4/8のHAGeo-409ベンチが未解決</h3>
+          <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ何が足りないのか(定理・作図規則・探索の深さ)の切り分けがまだ済んでいない。</div>
+          <div class="b-tags"><span class="tag">要調査</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    Geometry Solver Atlas — geom_solver/docs/atlas.html · このセッションの検証結果をもとに作成
+  </footer>
+
+</div>

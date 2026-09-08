@@ -245,6 +245,14 @@ impl Ord for MatchTask { fn cmp(&self, other: &Self) -> Ordering { self.priority
 pub struct TheoremBanditStats {
     pub attempts: u64,
     pub total_reward: f64,
+    // 🌟 ProverEngine::ProfileStatsと同じ動機: schedule_full_sweepの実測が
+    // 「そこ自体は安い」ことを示した以上、実際に壁時計時間を食っているのは
+    // dfs_match本体側だという仮説を裏付けるための、定理ごとの内訳。
+    // 1回の試行(シードなしタスク)がdfs_capにほぼ到達した(=ほぼ確実に
+    // 100,000回のdfs_call、すなわち相応の壁時計時間を1回で消費した)回数。
+    // --statsでattempts列と併記し、「試行回数は少ないのに時間を食っている」
+    // 定理を名指しできるようにする。
+    pub cap_hits: u64,
 }
 
 impl TheoremBanditStats {
@@ -315,6 +323,41 @@ pub struct ProverEngine {
     // (キャッシュするのは「型で絞り込んだ後・heat基準で並べ替える前」の
     // 集合だけ)。
     pub identical_self_bind_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
+    // 🌟 ユーザー提案(「schedule_full_sweepの改善を続ける」)への対応: 2度の
+    // 撤回(DefinedBy遅延構築・スケジューラ精密化)がいずれも「schedule_
+    // full_sweepが重いはず」という推測から出発し、実測せずに手を入れて
+    // 原因を特定できないまま終わった反省を踏まえ、まず実測用のカウンタを
+    // 用意する。main.rsのメインループが各フェーズ(dfs_match本体・回復
+    // フェーズ・MCTS)の実行時間を計測してここに積み上げ、--profileで
+    // 終了時に集計を表示する(ProfileStatsのドキュメント参照)。
+    pub profile: ProfileStats,
+}
+
+/// 🌟 ProverEngine::profileのドキュメント参照。schedule_full_sweep自体の
+/// 呼び出し回数・所要時間・生成したシードなしタスク数、および
+/// メインループの3大フェーズ(dfs_match本体/回復フェーズ/MCTS)の
+/// 所要時間を集計する、実行時プロファイリング専用の構造体。
+/// 証明の正しさには一切影響しない、純粋な計測用の副産物。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProfileStats {
+    pub sfs_calls: u64,
+    pub sfs_time: std::time::Duration,
+    pub sfs_tasks_created: u64,
+    pub run_step_time: std::time::Duration,
+    pub recovery_time: std::time::Duration,
+    pub mcts_time: std::time::Duration,
+    // 🌟 --statsの定理別UCB1統計はis_seeded=falseのタスクしか数えていない
+    // (MatchTask::is_seededのドキュメント参照)。schedule_matcher_task由来の
+    // シード済みタスクは新事実が証明されるたびに(理論上は該当する全定理×
+    // 全パターン×全順列の分だけ)大量に生成され得るため、実際の総dfs_call数の
+    // 内訳がシード済み側に偏っている可能性がある。ここでシード済み/シード
+    // なし双方のタスクポップ数とdfs_call消費量を種別ごとに集計し、
+    // 「少数の高コストな試行」なのか「大量の小さな試行の積み重ね」なのかを
+    // 実測で切り分けられるようにする。
+    pub seeded_pops: u64,
+    pub seeded_dfs_calls: u64,
+    pub unseeded_pops: u64,
+    pub unseeded_dfs_calls: u64,
 }
 
 impl ProverEngine {
@@ -331,6 +374,7 @@ impl ProverEngine {
             theorem_required_types: Vec::new(),
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
+            profile: ProfileStats::default(),
         }
     }
 
@@ -455,6 +499,9 @@ impl ProverEngine {
         if let Some(stats) = self.theorem_stats.get_mut(idx) {
             stats.attempts += 1;
             stats.total_reward += reward;
+            if dfs_calls_used >= self.dfs_cap {
+                stats.cap_hits += 1;
+            }
         }
     }
     fn calc_bind_heat(&self, bind: &Bind) -> f64 {
@@ -1647,6 +1694,15 @@ impl BlackboardEngine {
     }
 
     pub fn schedule_full_sweep(&mut self) {
+        // 🌟 ProverEngine::ProfileStatsのドキュメント参照: この関数自体が
+        // 実際にどれだけの時間・頻度で呼ばれ、1回あたり何個の「空の
+        // failed_pathsを持つシードなしタスク」を新規に作っているかを計測する。
+        // 2度の撤回(DefinedBy遅延構築・スケジューラ精密化)がどちらも
+        // 「この関数が重いはず」という推測止まりで終わった反省から、
+        // 次に何か変える前にまずここを実測できるようにする。
+        let sfs_start = std::time::Instant::now();
+        self.prover.profile.sfs_calls += 1;
+
         // 🌟 FIX: シード注入済みのタスクは消さずに保持する!
         // 🐛 以前は「priority > 0」で判定していたが、UCB1バンディットの
         // 導入でシードなしタスクの優先度も +5 まで上がり得るようになったため、
@@ -1695,7 +1751,9 @@ impl BlackboardEngine {
                 cached_failed_paths: rustc_hash::FxHashSet::default(),
                 failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph, &theorem_all_types(theorem)),
             });
+            self.prover.profile.sfs_tasks_created += 1;
         }
+        self.prover.profile.sfs_time += sfs_start.elapsed();
     }
 
     fn schedule_matcher_task(&mut self, fact: &Fact) {
@@ -1838,6 +1896,13 @@ impl BlackboardEngine {
                 // 実際に消費したdfs_call数を控えておく(次のタスクの
                 // self.prover.dfs_calls = 0 まではこの値のまま変わらない)。
                 let dfs_calls_used = self.prover.dfs_calls;
+                if task_is_seeded {
+                    self.prover.profile.seeded_pops += 1;
+                    self.prover.profile.seeded_dfs_calls += dfs_calls_used;
+                } else {
+                    self.prover.profile.unseeded_pops += 1;
+                    self.prover.profile.unseeded_dfs_calls += dfs_calls_used;
+                }
 
                 // 🌟 スケジューリング工夫: DFSが上限(100,000)に張り付いた場合、
                 // このタスクは重すぎるためペナルティを与えて後回しにする。

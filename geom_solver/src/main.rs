@@ -154,6 +154,15 @@ fn main() {
     // 定理は「CPU時間を大量に消費しているのに成果が薄い」ことを示す
     // ので、探索の無駄がどこにあるかを特定する手がかりになる。
     let show_stats = args.iter().any(|a| a == "--stats");
+    // 🌟 ユーザー提案(「schedule_full_sweepの改善を続ける」)への対応:
+    // 2度の撤回(DefinedBy遅延構築・スケジューラ精密化)がいずれも
+    // 「schedule_full_sweepが重いはず」という実測に基づかない推測止まりで
+    // 原因を特定できなかった反省から、--profileを付けると終了時に
+    // メインループの3大フェーズ(dfs_match本体・回復フェーズ・MCTS)の
+    // 壁時計時間の内訳と、schedule_full_sweep自体の呼び出し回数・
+    // 所要時間・作り直したシードなしタスク数を表示する
+    // (ProverEngine::ProfileStatsのドキュメント参照)。
+    let show_profile = args.iter().any(|a| a == "--profile");
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -243,7 +252,14 @@ fn main() {
     engine.schedule_full_sweep();
 
     while start_time.elapsed() < std::time::Duration::from_secs(time_budget_secs) {
+        // 🌟 ProverEngine::ProfileStatsのドキュメント参照: メインループの
+        // 3大フェーズ(dfs_match本体・回復フェーズ・MCTS)それぞれに
+        // 実際どれだけの壁時計時間が使われているかを計測する。
+        // --profileでこの内訳を終了時に表示し、schedule_full_sweep周りを
+        // 今後改善する際の実測の土台にする。
+        let run_step_start = std::time::Instant::now();
         let applied_logic = engine.run_step(10000);
+        engine.prover.profile.run_step_time += run_step_start.elapsed();
 
         // 🌟 数値評価が偶然の一致(予想候補)を検出していれば、使い捨てクローン
         // 上での価値推定を経てheat_bonusにフィードバックする(現実の証明状態は
@@ -362,6 +378,7 @@ fn main() {
 
         if !applied_logic {
             println!("⏳ ロジックがStallしました。リカバリーフェーズに移行します...");
+            let recovery_start = std::time::Instant::now();
             let mut recovered = engine.resolve_demands();
             if engine.resolve_point_demands() {
                 recovered = true;
@@ -375,6 +392,7 @@ fn main() {
             if !recovered && engine.resolve_target_demands(&problem.target_fact) {
                 recovered = true;
             }
+            engine.prover.profile.recovery_time += recovery_start.elapsed();
             if !recovered {
                 if !use_mcts {
                     println!("  -> 要求がなく、MCTSも無効(--mctsで有効化できます)なため探索を打ち切ります。");
@@ -385,7 +403,10 @@ fn main() {
                     break;
                 }
                 println!("  -> 需要による補助線がないため、MCTSで補助的な構成を探索します...");
-                if mcts.run_step(&mut engine.prover.egraph, &problem.target_fact, 200) {
+                let mcts_start = std::time::Instant::now();
+                let mcts_found = mcts.run_step(&mut engine.prover.egraph, &problem.target_fact, 200);
+                engine.prover.profile.mcts_time += mcts_start.elapsed();
+                if mcts_found {
                     engine.schedule_full_sweep();
                     mcts_consecutive_failures = 0;
                     mcts_ever_committed = true;
@@ -406,14 +427,48 @@ fn main() {
 
     if show_stats {
         println!("\n=== 📊 定理ごとのUCB1統計 (試行回数の多い順、上位20件) ===");
-        let mut rows: Vec<(String, u64, f64)> = engine.prover.theorem_stats.iter().enumerate()
+        // 🌟 cap_hits(dfs_capにほぼ到達した試行の回数)も併記する。
+        // --profileが「dfs_match本体が壁時計時間の大半を占める」ことを
+        // 示した後の自然な追跡調査: attempts列だけでは分からない
+        // 「1回あたりどれだけ高くついたか」を可視化する。
+        let mut rows: Vec<(String, u64, u64, f64)> = engine.prover.theorem_stats.iter().enumerate()
             .filter(|(_, s)| s.attempts > 0)
-            .map(|(idx, s)| (engine.prover.theorems[idx].name.clone(), s.attempts, s.total_reward / s.attempts as f64))
+            .map(|(idx, s)| (engine.prover.theorems[idx].name.clone(), s.attempts, s.cap_hits, s.total_reward / s.attempts as f64))
             .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
-        for (name, attempts, avg_reward) in rows.iter().take(20) {
-            println!("  {:>6}回試行 / 平均報酬 {:>+6.3} : {}", attempts, avg_reward, name);
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+        for (name, attempts, cap_hits, avg_reward) in rows.iter().take(20) {
+            println!("  {:>6}回試行 (うちcap到達{:>3}回) / 平均報酬 {:>+6.3} : {}", attempts, cap_hits, avg_reward, name);
         }
+        println!("=============================\n");
+    }
+
+    if show_profile {
+        let p = &engine.prover.profile;
+        let total = start_time.elapsed();
+        let accounted = p.run_step_time + p.recovery_time + p.mcts_time;
+        let pct = |d: std::time::Duration| -> f64 {
+            if total.as_secs_f64() > 0.0 { 100.0 * d.as_secs_f64() / total.as_secs_f64() } else { 0.0 }
+        };
+        println!("\n=== ⏱️  実行時間の内訳 (--profile) ===");
+        println!("  合計実行時間          : {:>7.2}s", total.as_secs_f64());
+        println!("  ├─ dfs_match本体      : {:>7.2}s ({:>5.1}%)", p.run_step_time.as_secs_f64(), pct(p.run_step_time));
+        println!("  ├─ 回復フェーズ       : {:>7.2}s ({:>5.1}%)", p.recovery_time.as_secs_f64(), pct(p.recovery_time));
+        println!("  ├─ MCTS               : {:>7.2}s ({:>5.1}%)", p.mcts_time.as_secs_f64(), pct(p.mcts_time));
+        println!("  └─ 未計測(数値検証等) : {:>7.2}s ({:>5.1}%)",
+            (total.saturating_sub(accounted)).as_secs_f64(), pct(total.saturating_sub(accounted)));
+        println!("  --- schedule_full_sweep自体の内訳 ---");
+        println!("  呼び出し回数          : {}", p.sfs_calls);
+        println!("  累計所要時間          : {:.3}s ({:.1}% of 合計)", p.sfs_time.as_secs_f64(), pct(p.sfs_time));
+        println!("  作成したシードなしタスク数 : {} (呼び出し1回あたり平均 {:.1}個)",
+            p.sfs_tasks_created,
+            if p.sfs_calls > 0 { p.sfs_tasks_created as f64 / p.sfs_calls as f64 } else { 0.0 });
+        println!("  --- タスクポップ数とdfs_call消費量の内訳(シード有無別) ---");
+        let total_calls = p.seeded_dfs_calls + p.unseeded_dfs_calls;
+        let calls_pct = |c: u64| -> f64 { if total_calls > 0 { 100.0 * c as f64 / total_calls as f64 } else { 0.0 } };
+        println!("  シード済みタスク      : {:>8}回ポップ / dfs_call計 {:>10} ({:>5.1}%)",
+            p.seeded_pops, p.seeded_dfs_calls, calls_pct(p.seeded_dfs_calls));
+        println!("  シードなしタスク      : {:>8}回ポップ / dfs_call計 {:>10} ({:>5.1}%)",
+            p.unseeded_pops, p.unseeded_dfs_calls, calls_pct(p.unseeded_dfs_calls));
         println!("=============================\n");
     }
 }
