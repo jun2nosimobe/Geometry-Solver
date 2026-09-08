@@ -53,6 +53,51 @@ use crate::mcts::MCTSSearchEngine;
 use crate::theorems;
 use std::time::{Duration, Instant};
 
+/// 🌟 ユーザー提案:「初期に与えるシードにもっと構図を増やしてみる」への
+/// 対応。既存31問題(src/problems/*.rs)のうち、test_*(単体検証専用の
+/// 狭い設定)・bench_*(HAGeo-409、難問すぎてセットアップ自体が重い/
+/// 偏りがある)を除いた"名前付きの"古典的で豊かな配置に、新設の
+/// triangle_centers(三角形+外心+垂心+重心+九点円中心)を加えたもの。
+/// --preset=allでこれを全て順番に走らせる。
+const CLASSIC_PRESETS: &[&str] = &[
+    "triangle_centers", "cyclic_quad", "varignon", "tangent_orthic", "miquel",
+    "nine_point", "nine_point_full", "miquel_quadrilateral", "simson",
+    "orthocenter", "orthocenter_alt", "circumcenter", "thales",
+    "two_circles_reim", "orthic_incenter",
+];
+
+/// 🌟 新設のプリセット。既存31問題はどれも「1つの特定の古典的命題」を
+/// 狙って作られており、"複数の中心が同時に絡む一般的な遊び場"という
+/// 種配置が無かった。三角形の外心・垂心・重心・九点円中心を最初から
+/// 全部揃えておけば、MCTSが基礎的な足場作りに予算を使い切る前に、
+/// 名前付きの中心同士の関係(オイラー線の共線性等)を自由に組み合わせる
+/// 段階へすぐ到達できる。
+fn setup_triangle_centers(egraph: &mut EGraph) {
+    let a = egraph.create_entity("A".to_string(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".to_string(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".to_string(), Definition::FreePoint, EntityType::Point);
+
+    let o = crate::problems::geo_helpers::circumcenter(egraph, a, b, c, "O");
+
+    let bc = egraph.create_entity("BC".to_string(), Definition::new_line(b, c), EntityType::Line);
+    let ca = egraph.create_entity("CA".to_string(), Definition::new_line(c, a), EntityType::Line);
+    let alt_a = egraph.create_entity("Alt_A".to_string(), Definition::PerpendicularLine(bc, a), EntityType::Line);
+    let alt_b = egraph.create_entity("Alt_B".to_string(), Definition::PerpendicularLine(ca, b), EntityType::Line);
+    let h = egraph.create_entity("H".to_string(), Definition::Intersection(alt_a, alt_b), EntityType::Point);
+
+    let mid_bc = egraph.create_entity("Mid_BC".to_string(), Definition::Midpoint(b, c), EntityType::Point);
+    let mid_ca = egraph.create_entity("Mid_CA".to_string(), Definition::Midpoint(c, a), EntityType::Point);
+    let med_a = egraph.create_entity("Med_A".to_string(), Definition::new_line(a, mid_bc), EntityType::Line);
+    let med_b = egraph.create_entity("Med_B".to_string(), Definition::new_line(b, mid_ca), EntityType::Line);
+    let g = egraph.create_entity("G".to_string(), Definition::Intersection(med_a, med_b), EntityType::Point);
+
+    // 九点円中心 = 外心と垂心の中点(古典的な事実として構成に組み込む――
+    // これ自体を"発見"させたいわけではなく、この点を足場にした先の
+    // 探索を豊かにするのが狙い)。
+    egraph.create_entity("N".to_string(), Definition::Midpoint(o, h), EntityType::Point);
+    let _ = g;
+}
+
 pub fn run(args: &[String]) {
     let time_budget_secs: u64 = args.iter()
         .find_map(|a| a.strip_prefix("--time="))
@@ -82,9 +127,14 @@ pub fn run(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3)
         .max(3);
-    // 🌟 仮説駆動の定理プロービング(probe_and_expand_conjectures)の制御。
-    // 既定で有効。--no-probeで従来通り(数値的コンフリクトのみ)に戻せる。
-    let skip_probe = args.iter().any(|a| a == "--no-probe");
+    // 🐛 方針転換(ユーザー指摘): 「a≡bを仮定せずにできることをやりたい。
+    // 自由度が落ちるような条件を課して何かを導いても基本的に意味がない」。
+    // 仮説駆動プロービング(probe_and_expand_conjectures)は、まさに
+    // 「一時的に自由度を1つ強制的に落として何が従うか見る」仕組みであり、
+    // 実際にこれが「P1≡P2(無関係な2自由点)」のような見せかけの発見を
+    // 生む主因だったと判明した(全体崩壊の除外ルールを参照)。既定を
+    // 無効に切り替え、必要な場合だけ--probeで明示的に有効化する形にした。
+    let use_probe = args.iter().any(|a| a == "--probe");
     let probe_dfs_budget: usize = args.iter()
         .find_map(|a| a.strip_prefix("--probe-dfs-budget="))
         .and_then(|v| v.parse().ok())
@@ -94,51 +144,90 @@ pub fn run(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
     // 🌟 ユーザー提案:「シードとして予め五心やミケル点、回転相似、接線と
-    // いった構図を入れ込んでしまうのはどうか」への対応。裸の自由点だけから
-    // 始めると、予算の大半が(中点1つ引く程度の)基礎的な足場作りに費やされ、
-    // 本当に豊かな構造(複数の古典的な中心・円が絡む配置)にMCTSが到達する
-    // 前に予算が尽きやすい。既存の31問題(src/problems/*.rs)は、まさに
-    // そうした"名前付きの"豊かな配置を既に持っているので、新しい作図
-    // ヘルパーを書き起こす代わりに、problems::load_problemでそのまま
-    // 初期配置として再利用する(--preset=<問題名>、例: orthocenter/
-    // miquel/miquel_quadrilateral/test_spiral_similarity/tangent_orthic/
-    // two_circles_reim等)。読み込んだ問題のtarget_fact(証明目標)は
-    // このモードでは使わない(自由探索はそもそも目標を持たない)ため
-    // 読み捨て、initial_facts(前提として最初から真とされる関係)だけを
+    // いった構図を入れ込んでしまうのはどうか」「初期に与えるシードにもっと
+    // 構図を増やしてみる」への対応。裸の自由点だけから始めると、予算の
+    // 大半が(中点1つ引く程度の)基礎的な足場作りに費やされ、本当に豊かな
+    // 構造にMCTSが到達する前に予算が尽きやすい。既存の31問題
+    // (src/problems/*.rs)はそうした"名前付きの"豊かな配置を既に持って
+    // いるので、problems::load_problemでそのまま再利用する
+    // (--preset=<問題名>)。--preset=allで、厳選した複数の古典的配置
+    // (CLASSIC_PRESETS)を1回の実行でまとめて試す。--preset=名前1,名前2
+    // のようにカンマ区切りで独自の組み合わせも指定できる。読み込んだ
+    // 問題のtarget_fact(証明目標)はこのモードでは使わない(自由探索は
+    // そもそも目標を持たない)ため読み捨て、initial_factsだけを
     // main.rsの通常経路と同じ形で適用する。
     let preset: Option<&str> = args.iter()
         .find_map(|a| a.strip_prefix("--preset="));
+    let seed_names: Vec<String> = match preset {
+        Some("all") => CLASSIC_PRESETS.iter().map(|s| s.to_string()).collect(),
+        Some(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        None => Vec::new(),
+    };
 
-    let mut egraph = EGraph::new();
-    if let Some(name) = preset {
-        println!("🔭 自由作図による「綺麗な問題」発見モードを開始します (種配置: 問題プリセット\"{}\", ステップ上限: {}, 時間予算: {}秒, 1ステップあたりのMCTSシミュレーション: {}回)",
-            name, max_steps, time_budget_secs, sims_per_step);
-        let problem = crate::problems::load_problem(name, &mut egraph);
-        for fact in &problem.initial_facts {
-            match fact {
-                crate::mmp_core::Fact::Identical(id1, id2) => {
-                    egraph.merge_entities_justified(*id1, *id2, crate::mmp_core::Justification::Given);
-                }
-                crate::mmp_core::Fact::Connected(c, p) => {
-                    egraph.link_logical_incidence_justified(*c, *p, crate::mmp_core::Justification::Given);
-                }
-                _ => {}
-            }
-        }
-        if problem.target_fact.is_some() {
-            println!("  -> このプリセットが本来持つ証明目標は無視します(自由探索モードには目標を渡しません)。");
-        }
-    } else {
-        println!("🔭 自由作図による「綺麗な問題」発見モードを開始します (初期自由点: {}個, ステップ上限: {}, 時間予算: {}秒, 1ステップあたりのMCTSシミュレーション: {}回)",
-            seed_points, max_steps, time_budget_secs, sims_per_step);
+    println!("🔭 自由作図による「綺麗な問題」発見モードを開始します (種配置: {}, ステップ上限: {}, 時間予算(種配置ごと): {}秒, 1ステップあたりのMCTSシミュレーション: {}回, 仮説駆動プロービング: {})",
+        if seed_names.is_empty() { format!("自由点{}個", seed_points) } else { format!("{}個のプリセット [{}]", seed_names.len(), seed_names.join(", ")) },
+        max_steps, time_budget_secs, sims_per_step, if use_probe { "有効" } else { "無効" });
+
+    let mut all_sections: Vec<String> = Vec::new();
+    if seed_names.is_empty() {
+        let mut egraph = EGraph::new();
         let names = ["A", "B", "C", "D", "E", "F", "G", "H"];
         for i in 0..seed_points {
             let name = names.get(i).map(|s| s.to_string()).unwrap_or_else(|| format!("P{}", i));
             egraph.create_entity(name, Definition::FreePoint, EntityType::Point);
         }
+        egraph.apply_congruence_closure();
+        let label = format!("自由点{}個", seed_points);
+        let sections = run_one_seed(&label, egraph, max_steps, sims_per_step, time_budget_secs,
+            use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
+        all_sections.extend(sections);
+    } else {
+        for name in &seed_names {
+            println!("\n########## 種配置: {} ##########", name);
+            let mut egraph = EGraph::new();
+            if name == "triangle_centers" {
+                setup_triangle_centers(&mut egraph);
+            } else {
+                let problem = crate::problems::load_problem(name, &mut egraph);
+                for fact in &problem.initial_facts {
+                    match fact {
+                        crate::mmp_core::Fact::Identical(id1, id2) => {
+                            egraph.merge_entities_justified(*id1, *id2, crate::mmp_core::Justification::Given);
+                        }
+                        crate::mmp_core::Fact::Connected(c, p) => {
+                            egraph.link_logical_incidence_justified(*c, *p, crate::mmp_core::Justification::Given);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            egraph.apply_congruence_closure();
+            let sections = run_one_seed(name, egraph, max_steps, sims_per_step, time_budget_secs,
+                use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
+            all_sections.extend(sections);
+        }
     }
-    egraph.apply_congruence_closure();
+    write_discover_report_html(&all_sections);
+}
 
+/// 🌟 1つの種配置(自由点N個、または--presetで読み込んだ配置)について、
+/// 自由構築→(任意で)仮説駆動プロービング→報告、までの一連の流れを行う。
+/// --preset=allのように複数の種配置を1回の実行でまとめて試せるように
+/// run()から切り出した。戻り値はHTML報告の断片(seed_labelの見出し付き)。
+#[allow(clippy::too_many_arguments)]
+fn run_one_seed(
+    seed_label: &str,
+    mut egraph: EGraph,
+    max_steps: usize,
+    sims_per_step: usize,
+    time_budget_secs: u64,
+    use_probe: bool,
+    probe_dfs_budget: usize,
+    probe_rounds: usize,
+    top_n: usize,
+    try_prove: bool,
+    prove_time_secs: u64,
+) -> Vec<String> {
     // 🌟 target_bias_enabledはtarget=Noneの下では実質何もしない
     // (action_space.rs::target_weight_bonusがtarget=Noneで常に0を返す)が、
     // 「このモードは意図的に目標非依存である」ことをコード上明示するために
@@ -163,18 +252,21 @@ pub fn run(args: &[String]) {
             }
         }
     }
-    println!("\n🔭 探索終了 ({}ステップ、{:.1}秒経過)。アクティブな同値類数: {}",
-        steps_done, start.elapsed().as_secs_f64(), egraph.count_active_classes());
+    println!("\n🔭 [{}] 探索終了 ({}ステップ、{:.1}秒経過)。アクティブな同値類数: {}",
+        seed_label, steps_done, start.elapsed().as_secs_f64(), egraph.count_active_classes());
 
     // 🌟 ここから先は定理探索エンジン(schedule_full_sweep/dfs_match)を使うため、
     // egraphの所有権をBlackboardEngineへ渡す。
     let mut engine = build_full_engine(egraph);
-    if !skip_probe {
+    if use_probe {
         probe_and_expand_conjectures(&mut engine, probe_dfs_budget, probe_rounds);
     }
 
-    report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_time_secs);
+    let sections = report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_time_secs);
     report_heat_ranking(&engine.prover.egraph, 10);
+    if sections.is_empty() { return Vec::new(); }
+    vec![format!("<h2 style=\"font:600 18px sans-serif;margin:32px 0 4px;\">🔭 種配置: {}</h2>\n{}",
+        xml_escape_html(seed_label), sections.join("\n"))]
 }
 
 /// 🌟 discover.rs内の各所(仮説駆動プロービング/--proveの証明試行)が
@@ -342,14 +434,14 @@ impl PrettyNamer {
 
 /// 🌟 探索中に蓄積されたEGraph::conjectures(数値的な偶然の一致候補)を
 /// 「美しさ」スコアで順位付けして表示する。
-fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_time_secs: u64) {
+fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_time_secs: u64) -> Vec<String> {
     let entries: Vec<((usize, usize), String, u32)> = {
         let map = egraph.conjectures.borrow();
         map.iter().map(|(&k, e)| (k, e.hypothesis.clone(), e.occurrences)).collect()
     };
     if entries.is_empty() {
         println!("\n😶 探索中に数値的な偶然の一致は見つかりませんでした。この乱数試行・この配置では、まだ知られていない関係を検出できませんでした(ステップ数や1ステップあたりのシミュレーション回数を増やすと見つかりやすくなります)。");
-        return;
+        return Vec::new();
     }
 
     let total_entries = entries.len();
@@ -429,7 +521,7 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
     if ranked.is_empty() {
         println!("\n😶 探索中に{}件の数値的な偶然の一致が検出されましたが、いずれも(局所的な一意性判定による自明化、退化した構成、または全体崩壊による除外)報告に値する未解決の関係としては残っていません(退化した構成による除外: {}件、全体崩壊による除外: {}件)。",
             total_entries, degenerate_skipped, collapse_skipped);
-        return;
+        return Vec::new();
     }
 
     println!("\n=== 🏛️  発見された「綺麗な」関係の候補 (美しさスコア降順、上位{}件 / 全{}件、退化した構成として除外{}件、全体崩壊として除外{}件) ===",
@@ -455,13 +547,13 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
         }
         html_sections.push(render_html_section(rank + 1, c, &name_a, &name_b, &steps, svg.as_deref()));
     }
-    write_discover_report_html(&html_sections);
 
     if try_prove {
         if let Some(top) = ranked.first() {
             attempt_proof(egraph, top.a, top.b, prove_time_secs);
         }
     }
+    html_sections
 }
 
 /// 🌟 発見された関係1件分を、見出し・SVG図(あれば)・構成手順を並べた
