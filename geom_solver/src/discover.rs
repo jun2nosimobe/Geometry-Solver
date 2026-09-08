@@ -35,6 +35,17 @@
 //!      これは「探索が何を"注目に値する"と判断したか」をそのまま可視化
 //!      したもので、人間の直感(中点・垂心・共円点のような"要"の図形が
 //!      上位に来るべき)と実際の分配を見比べるための診断材料。
+//!
+//! 🌟 ユーザー提案(「定理を無マージで動かし、conjectureのみでも定理を
+//! 適用させるモード」):自由構築の後、蓄積された各予想(a≡b)について
+//! BlackboardEngine::probe_conjectureで「その予想を一時的に真だと仮定した
+//! 使い捨てのクローン上で、実際に名前付き定理の連鎖を走らせたら何が
+//! 追加で導かれるか」を調べ、見つかった新しい等式を"条件付きの"予想として
+//! 同じconjecturesマップに合流させる(probe_and_expand_conjectures)。
+//! 既存のestimate_conjecture_value(合同閉包1回だけの浅い見積もり)より
+//! ずっと深く「その仮説が本当に効くとしたら何が起きるか」を覗ける一方、
+//! 定理マッチングの本予算を使うため計算コストは高い――既定では検出済みの
+//! 予想1件あたり1回だけ(連鎖の深追いはしない)に留めている。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use crate::logic_core::{ProverEngine, BlackboardEngine};
@@ -71,6 +82,17 @@ pub fn run(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3)
         .max(3);
+    // 🌟 仮説駆動の定理プロービング(probe_and_expand_conjectures)の制御。
+    // 既定で有効。--no-probeで従来通り(数値的コンフリクトのみ)に戻せる。
+    let skip_probe = args.iter().any(|a| a == "--no-probe");
+    let probe_dfs_budget: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--probe-dfs-budget="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3000);
+    let probe_rounds: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--probe-rounds="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
 
     println!("🔭 自由作図による「綺麗な問題」発見モードを開始します (初期自由点: {}個, ステップ上限: {}, 時間予算: {}秒, 1ステップあたりのMCTSシミュレーション: {}回)",
         seed_points, max_steps, time_budget_secs, sims_per_step);
@@ -110,8 +132,79 @@ pub fn run(args: &[String]) {
     println!("\n🔭 探索終了 ({}ステップ、{:.1}秒経過)。アクティブな同値類数: {}",
         steps_done, start.elapsed().as_secs_f64(), egraph.count_active_classes());
 
-    report_conjectures(&mut egraph, top_n, try_prove, prove_time_secs);
-    report_heat_ranking(&egraph, 10);
+    // 🌟 ここから先は定理探索エンジン(schedule_full_sweep/dfs_match)を使うため、
+    // egraphの所有権をBlackboardEngineへ渡す。
+    let mut engine = build_full_engine(egraph);
+    if !skip_probe {
+        probe_and_expand_conjectures(&mut engine, probe_dfs_budget, probe_rounds);
+    }
+
+    report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_time_secs);
+    report_heat_ranking(&engine.prover.egraph, 10);
+}
+
+/// 🌟 discover.rs内の各所(仮説駆動プロービング/--proveの証明試行)が
+/// 使う、全定理を登録済みのBlackboardEngineを組み立てる共通処理。
+/// main.rsの通常の問題実行と同じ定理集合(get_all_theorems +
+/// get_projective_theorems)を使う。
+fn build_full_engine(egraph: EGraph) -> BlackboardEngine {
+    let mut prover = ProverEngine::new(egraph);
+    let mut all_theorems = theorems::get_all_theorems();
+    all_theorems.extend(theorems::get_projective_theorems());
+    prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
+    let mut engine = BlackboardEngine::new(prover);
+    // 🌟 プロービング・単発の証明試行はどちらも1回限りの短い実行なので、
+    // UCB1バンディットの学習(複数回の試行で徐々に賢くなる仕組み)は
+    // 恩恵が薄く、むしろ毎回同じ優先順位から始まる方が結果を再現しやすい。
+    engine.bandit_enabled = false;
+    engine
+}
+
+/// 🌟 ユーザー提案:「定理を無マージで動かし、conjectureのみでも定理を
+/// 適用させるモード」。蓄積されている予想それぞれについて
+/// BlackboardEngine::probe_conjectureを1回適用し、「その予想を仮定すると
+/// さらに導かれる」新しい等式を"条件付きの"予想として同じconjectures
+/// マップに追加する。連鎖はここでは1段階だけ(見つかった条件付き予想を
+/// さらに再帰的にプロービングする深追いは、組み合わせ爆発のリスクが
+/// あるためv2の課題として残す)。
+fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize, sweep_rounds: usize) {
+    let seeds: Vec<((usize, usize), String)> = {
+        let map = engine.prover.egraph.conjectures.borrow();
+        map.iter().map(|(&k, e)| (k, e.hypothesis.clone())).collect()
+    };
+    if seeds.is_empty() {
+        println!("\n🧪 プロービング対象の予想がまだ無いため、この段階はスキップします。");
+        return;
+    }
+    println!("\n🧪 蓄積された{}件の予想それぞれについて、実際に名前付き定理を発火させてみます(仮説駆動プロービング、1件あたりdfs予算{}×{}ラウンド)...",
+        seeds.len(), dfs_budget, sweep_rounds);
+    // 🌟 conjecturesのキーは記録した"時点"のget_rep(ClassId)で正規化されている
+    // (eval.rs::log_conjecture_candidateのドキュメント参照)ため、union-findの
+    // 経路圧縮・マージが進んだ後では、複数のキーが現在は同じ代表元ペアに
+    // 解決されることがある。プロービング1回はdfs_match本体を走らせる高価な
+    // 処理なので、現在の代表元ペア単位で重複除去してから実行する。
+    let mut probed_pairs = rustc_hash::FxHashSet::default();
+    let mut new_count = 0usize;
+    for ((ai, bi), parent_hypothesis) in &seeds {
+        let (a, b) = (engine.prover.egraph.get_rep(ClassId(*ai)), engine.prover.egraph.get_rep(ClassId(*bi)));
+        if a == b { continue; }
+        let key = if a.0 < b.0 { (a, b) } else { (b, a) };
+        if !probed_pairs.insert(key) { continue; }
+        let name_a = engine.prover.egraph.entities[engine.prover.egraph.get_rep(a).0].name.clone();
+        let name_b = engine.prover.egraph.entities[engine.prover.egraph.get_rep(b).0].name.clone();
+        let discovered = engine.probe_conjecture(a, b, dfs_budget, sweep_rounds);
+        if !discovered.is_empty() {
+            println!("  🧪 {} ≡ {} を仮定すると、定理の連鎖により{}件の別の等式が追加で導かれました。",
+                name_a, name_b, discovered.len());
+        }
+        for (x, y) in discovered {
+            if x == y { continue; }
+            let hypothesis = format!("[定理連鎖] {} ≡ {}(仮説: {})を仮定すると導かれる", name_a, name_b, parent_hypothesis);
+            engine.prover.egraph.log_conjecture_candidate(x, y, &hypothesis);
+            new_count += 1;
+        }
+    }
+    println!("🧪 プロービング終了: 新たに{}件の条件付きの予想を発見しました。", new_count);
 }
 
 struct RankedConjecture {
@@ -154,9 +247,15 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
         // ・mcts_depthの和(構成手順の長さ)は大きいほど減点する――定規と
         //   コンパスで再現する手順が短いほど、1つの命題として提示しやすい
         //   "エレガントな問題"に近いという仮定に基づく。
+        // ・仮説駆動プロービング(probe_and_expand_conjectures)由来の"条件付き"
+        //   予想([定理連鎖]接頭辞で識別)は、既に一度「実際に名前付き定理を
+        //   発火させて出てきた」という単なる数値的偶然より強い根拠を持つため、
+        //   ボーナスを与えて優先的に上位へ来るようにする。
+        let chain_bonus = if hypothesis.starts_with("[定理連鎖]") { 5.0 } else { 0.0 };
         let beauty = value.additional_merges as f64 * 3.0
             + (occurrences.min(5) as f64) * 0.5
-            - (depth_a + depth_b) as f64 * 1.5;
+            - (depth_a + depth_b) as f64 * 1.5
+            + chain_bonus;
         ranked.push(RankedConjecture { a, b, hypothesis, occurrences, additional_merges: value.additional_merges, beauty });
     }
     ranked.sort_by(|x, y| y.beauty.partial_cmp(&x.beauty).unwrap_or(std::cmp::Ordering::Equal));
@@ -229,11 +328,7 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, time_budget_secs: u64)
     println!("\n🔍 最有力候補の証明を試みます: {} ≡ {} (時間予算: {}秒、MCTSは使わず名前付き定理の連鎖のみ)",
         name_a, name_b, time_budget_secs);
 
-    let mut prover = ProverEngine::new(egraph.clone());
-    let mut all_theorems = theorems::get_all_theorems();
-    all_theorems.extend(theorems::get_projective_theorems());
-    prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
-    let mut engine = BlackboardEngine::new(prover);
+    let mut engine = build_full_engine(egraph.clone());
     let target: Option<(String, Vec<ClassId>)> = Some(("Identical".to_string(), vec![a, b]));
 
     engine.schedule_full_sweep();

@@ -1896,6 +1896,64 @@ impl BlackboardEngine {
         self.prover.egraph.process_pending_conjectures(target)
     }
 
+    /// 🌟 ユーザー提案(「定理を無マージで動かし、conjectureのみでも定理を
+    /// 適用させるモード」):予想(a≡b、まだ証明されていない数値的な偶然の
+    /// 一致)を使い捨てのクローン上でのみ真だと仮定し、通常の定理探索
+    /// エンジン(schedule_full_sweep + dfs_match、UCB1バンディットは無効化)を
+    /// 限られた予算で走らせる。
+    ///
+    /// 既存のEGraph::estimate_conjecture_value(eval.rs)が合同閉包1回だけの
+    /// 浅い見積もりに意図的に留めている(定理マッチングまで踏み込むと
+    /// 組み合わせが指数的に増える恐れがあるため)のに対し、こちらは
+    /// 「その仮定が実際に名前付き定理を連鎖的に発火させ、現実にはまだ
+    /// 知られていない別の等式を導くか」を見るための、より深いプロービング。
+    /// 現実のegraph(self.prover.egraph)は一切変更しない。
+    ///
+    /// 戻り値は「現実には(まだ)別々の代表元だが、この仮定の下での
+    /// シミュレーションでは統合された」現実の代表元ペアの一覧――呼び出し側
+    /// (discover.rs)がこれを新しい"条件付き"の予想としてconjecturesマップに
+    /// 記録する想定(このメソッド自体は記録しない、純粋な問い合わせ)。
+    /// 比較はreal_len未満(=シミュレーション内で新規に作られた補助構成では
+    /// ない、現実にも存在する)代表元同士に限定する
+    /// (EGraph::absorb_conjectures_fromと同じ理由)。
+    pub fn probe_conjecture(&self, a: ClassId, b: ClassId, dfs_budget: usize, sweep_rounds: usize) -> Vec<(ClassId, ClassId)> {
+        if self.prover.egraph.get_rep(a) == self.prover.egraph.get_rep(b) { return Vec::new(); }
+        let real_len = self.prover.egraph.entities.len();
+
+        let mut sim_prover = ProverEngine::new(self.prover.egraph.clone());
+        sim_prover.theorems = self.prover.theorems.clone(); // Rc共有なのでコピーは軽い
+        sim_prover.dfs_cap = dfs_budget as u64;
+        let mut sim_engine = BlackboardEngine::new(sim_prover);
+        sim_engine.bandit_enabled = false;
+
+        if !sim_engine.prover.egraph.merge_entities_justified(a, b, crate::mmp_core::Justification::Trivial {
+            reason: "仮説プロービング: 予想を一時的に真と仮定(discover.rs::probe_and_expand_conjectures)".to_string(),
+        }) {
+            return Vec::new();
+        }
+        sim_engine.prover.egraph.apply_congruence_closure();
+        sim_engine.schedule_full_sweep();
+        for _ in 0..sweep_rounds {
+            if !sim_engine.run_step(dfs_budget) { break; }
+        }
+
+        // 現実に存在する代表元同士で、simでは統合されたが現実にはまだ
+        // 別々、というペアを新しい条件付き結論として拾う。
+        let mut discovered = Vec::new();
+        let mut seen_reps: FxHashMap<ClassId, ClassId> = FxHashMap::default();
+        for i in 0..real_len {
+            let id = ClassId(i);
+            if self.prover.egraph.get_rep(id) != id { continue; } // 現実側の代表元だけを見る(重複回避)
+            let sim_rep = sim_engine.prover.egraph.get_rep(id);
+            if let Some(&other_real_id) = seen_reps.get(&sim_rep) {
+                discovered.push((other_real_id, id));
+            } else {
+                seen_reps.insert(sim_rep, id);
+            }
+        }
+        discovered
+    }
+
     pub fn schedule_full_sweep(&mut self) {
         // 🌟 ProverEngine::ProfileStatsのドキュメント参照: この関数自体が
         // 実際にどれだけの時間・頻度で呼ばれ、1回あたり何個の「空の

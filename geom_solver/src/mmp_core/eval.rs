@@ -301,7 +301,13 @@ impl EGraph {
     /// ―― 経路によっては数値的に偶然近い値になるだけの見せかけの一致も
     /// 理論上あり得るため、実際に証明したい場合は改めてtrials回数を
     /// 増やした再現確認や、記号的な証明の探索が必要になる。
-    fn log_conjecture_candidate(&self, a: ClassId, b: ClassId, hypothesis: &str) {
+    // 🌟 pub(crate)化: 数値評価が独立に見つけた偶然の一致だけでなく、
+    // logic_core.rs側の「仮説駆動の定理プロービング」(BlackboardEngine::
+    // probe_conjecture)が見つけた"条件付きの"発見も、同じconjectures
+    // マップ・同じ重複排除ロジックに乗せたい(2種類の発見経路を別々の
+    // 仕組みで管理すると、process_pending_conjectures側の評価・報告が
+    // 二重化してしまう)ため、クレート内限定で公開する。
+    pub(crate) fn log_conjecture_candidate(&self, a: ClassId, b: ClassId, hypothesis: &str) {
         let rep_a = self.get_rep(a);
         let rep_b = self.get_rep(b);
         if rep_a == rep_b { return; } // 既に記号的に証明済みなら予想ではない
