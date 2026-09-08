@@ -277,6 +277,20 @@ pub struct EGraph {
     // しても結果が変わりようがないので、merge_generationが前回の却下時点から
     // 変わっていなければ即座にスキップする。
     pub rejected_circle_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
+    // 🌟 ユーザー提案(定理マッチングの最適化)への対応その1: EntityTypeごとの
+    // 生成済みエンティティID一覧のインデックス。create_entity内で追記するだけの
+    // 単調増加リストで、union-findのマージでは更新しない(吸収された側の
+    // ClassIdもそのまま残る)。そのため利用側は必ずget_rep()で正規化された
+    // 代表元だけを拾う(iter_reps_of_type参照)。
+    //
+    // 従来、logic_core.rs側の複数箇所(Identical/Connectedの両変数未束縛分岐、
+    // DefinedByの親変数も未束縛な場合のフルスキャン分岐)が「特定の型を持つ
+    // 代表元」を探すために self.egraph.entities を毎回全件ループしていた。
+    // 定理が増えるほどエンティティ数(補助図形)も増えるため、この種の
+    // フルスキャンのコストが線形に効いてくる。型ごとに索引を引けるように
+    // しておけば、目的の型のエンティティ数だけのスキャンで済む
+    // (特にCircle/Conicのような個体数の少ない型で効果が大きい)。
+    pub type_index: rustc_hash::FxHashMap<EntityType, Vec<ClassId>>,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -359,6 +373,7 @@ impl EGraph {
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
             rejected_circle_pairs: rustc_hash::FxHashMap::default(),
+            type_index: rustc_hash::FxHashMap::default(),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
@@ -418,6 +433,7 @@ impl EGraph {
 
         self.entities.push(entity);
         self.parents.push(Cell::new(id.0));
+        self.type_index.entry(e_type).or_default().push(id);
 
         for p in norm_def.get_parents() {
             let p_rep = self.get_rep(p);
@@ -430,6 +446,26 @@ impl EGraph {
 
         self.apply_trivial_relations(id, &norm_def);
         id
+    }
+
+    /// 🌟 type_indexを使い、指定した型を持つ「現在の代表元」だけを列挙する。
+    /// type_index自体は吸収された側のClassIdも保持したままの単調増加リストなので、
+    /// ここで必ずget_rep()により正規化し、代表元でなくなったものを除外する。
+    /// 同じ代表元がuses等の経路で重複して積まれることは無い(1エンティティ
+    /// につきtype_indexへの登録はcreate_entity内で1回だけ)ため、重複排除は不要。
+    pub fn iter_reps_of_type(&self, et: EntityType) -> impl Iterator<Item = ClassId> + '_ {
+        self.type_index.get(&et).into_iter().flatten()
+            .copied()
+            .filter(move |&id| self.get_rep(id) == id)
+    }
+
+    /// 🌟 定理マッチングの型シグネチャ事前フィルタ(logic_core.rs::schedule_full_sweep)
+    /// が使う、「この型のエンティティが1つでも存在するか」の軽量な判定。
+    /// type_indexへの登録は吸収後も残るので、空でなければ(たとえ全て吸収済みの
+    /// 代表元でなくなっていたとしても、その型自体は少なくとも一度は作られている
+    /// ため)実質的に「今この型の代表元が存在するか」の判定として十分安全。
+    pub fn has_entity_of_type(&self, et: EntityType) -> bool {
+        self.type_index.get(&et).is_some_and(|v| !v.is_empty())
     }
 }
 

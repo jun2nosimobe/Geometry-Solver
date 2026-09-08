@@ -25,6 +25,60 @@ use std::rc::Rc;
 pub type Bind = im::HashMap<String, ClassId, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
 pub type FlipStates = im::HashMap<String, bool, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
 
+/// 🌟 ユーザー提案(定理マッチングの最適化)への対応その2: 定理の型シグネチャに
+/// よる事前フィルタで使う、「この変数はこの定理の前提(patterns)の中で
+/// 実際に照合される」変数名だけを集めるヘルパー。Pattern::Fact の args に加え、
+/// Order/Distinctの対象変数、Not の中身も再帰的に辿る。constructions/conclusions
+/// にしか出てこない変数(この定理自身が作図で新規生成するだけの図形、例えば
+/// スパイラル相似の中点対応定理のM,N)はここには含まれない――そうした変数は
+/// 「今グラフに存在しなくても、この定理自身が後で作るから問題ない」ため、
+/// 事前フィルタの対象から除外する必要があるのが理由(詳細はrequired_hard_typesの
+/// ドキュメント参照)。
+fn collect_pattern_vars<'a>(pat: &'a Pattern, out: &mut Vec<&'a str>) {
+    match pat {
+        Pattern::Fact(def) => { for v in &def.args { out.push(v.as_str()); } }
+        Pattern::Distinct(vars) | Pattern::Order(vars) => { for v in vars { out.push(v.as_str()); } }
+        Pattern::Not(inner) => collect_pattern_vars(inner, out),
+    }
+}
+
+/// 🌟 定理の型シグネチャ事前フィルタ本体: この定理のpatternsの中で実際に
+/// 照合される変数のうち、「DefinedByのマッチング中には自動生成されない型
+/// (=既にグラフ上に実体が無ければ絶対にマッチしようがない型)」だけを集めて
+/// 返す。
+///
+/// 背景: defined_by_valid_nodes の自動生成ホワイトリスト
+/// (`"AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio" | "CrossRatioOfLines" | "Product"`)
+/// に載っている型(Angle/Direction/Scalar)は、親変数さえ既存であれば
+/// マッチングの最中にその場で新規生成される「軟らかい」型なので、対象外
+/// (=グラフに1つも無くても、親さえあれば定理は普通にマッチし得る)。
+/// 一方Point/Line/Circle/Conicはこのホワイトリストに無く、既存のmemo/
+/// 全件スキャンでしか見つからない「硬い」型なので、そのうちどれか1つでも
+/// グラフに実体が1つも存在しなければ、この定理はどう頑張っても
+/// マッチしようがない(必要条件であり、偽陰性を生まない安全なフィルタ)。
+///
+/// 定理が増えるほど「一度は素の全探索で試してみる」というUCB1のコストが
+/// 無関係な問題にまで課税される問題(このセッションで円の一意性・
+/// スパイラル相似の両方で実際に観測した既知のトレードオフ)に対し、
+/// 「そもそも必要な型の実体が1つも無い」という自明に無駄な試行だけでも
+/// スケジューリングの時点で弾くことで軽減する。
+fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType> {
+    use crate::mmp_core::EntityType;
+    let mut names = Vec::new();
+    for pat in &theorem.patterns {
+        collect_pattern_vars(pat, &mut names);
+    }
+    let mut set: std::collections::HashSet<EntityType> = std::collections::HashSet::new();
+    for name in names {
+        if let Some(&t) = theorem.entities.get(name) {
+            if !matches!(t, EntityType::Angle | EntityType::Direction | EntityType::Scalar) {
+                set.insert(t);
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
     let mut result = Vec::new();
@@ -186,6 +240,11 @@ pub struct ProverEngine {
     // ここでは空のまま初期化し、実際に使う直前にensure_theorem_statsで
     // theorems.len()に合わせてリサイズする。
     pub theorem_stats: Vec<TheoremBanditStats>,
+    // 🌟 required_hard_typesのドキュメント参照。theoremsと同じインデックス
+    // (theorem_idx)で引く。theorem_statsと同じく、theoremsが確定した後に
+    // ensure_theorem_required_typesで遅延計算する(theorem.patternsは実行中
+    // 不変なので、一度計算すれば使い回せる)。
+    pub theorem_required_types: Vec<Vec<crate::mmp_core::EntityType>>,
 }
 
 impl ProverEngine {
@@ -199,12 +258,36 @@ impl ProverEngine {
             construction_demands: FxHashMap::default(), // 🌟 追加
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),
+            theorem_required_types: Vec::new(),
         }
     }
 
     fn ensure_theorem_stats(&mut self) {
         if self.theorem_stats.len() != self.theorems.len() {
             self.theorem_stats.resize(self.theorems.len(), TheoremBanditStats::default());
+        }
+    }
+
+    /// 🌟 required_hard_typesのドキュメント参照。theoremsが確定してから最初に
+    /// 呼ばれた時点で1回だけ全定理分をまとめて計算し、以降は使い回す。
+    fn ensure_theorem_required_types(&mut self) {
+        if self.theorem_required_types.len() != self.theorems.len() {
+            self.theorem_required_types = self.theorems.iter()
+                .map(|t| required_hard_types(t))
+                .collect();
+        }
+    }
+
+    /// 🌟 定理の型シグネチャ事前フィルタ: この定理が前提の中で参照する
+    /// 「軟らかくない(オンデマンド生成されない)」型のうち、e-graphに
+    /// 実体が1つも無い型が1つでもあれば、この定理は全探索を試すだけ無駄
+    /// なので false を返す(呼び出し側はタスクのスケジューリング自体を
+    /// スキップする)。
+    pub fn theorem_types_available(&mut self, idx: usize) -> bool {
+        self.ensure_theorem_required_types();
+        match self.theorem_required_types.get(idx) {
+            Some(types) => types.iter().all(|&t| self.egraph.has_entity_of_type(t)),
+            None => true,
         }
     }
 
@@ -537,15 +620,25 @@ impl ProverEngine {
                 // Identical事実からD1..D6を具体的に束縛する経路)で使われる前提であり、
                 // シード無しの全探索(schedule_full_sweep)から来た場合はこの程度の
                 // 軽い足がかりで十分。Python版と同じ挙動に合わせて計算量を落とす。
+                // 🌟 型インデックス化(ユーザー提案「egraphの構造を生かした
+                // マッチング」への対応その1): 期待される型が分かっている場合、
+                // 全エンティティを舐める代わりにtype_index経由でその型の
+                // 代表元だけを引く(定理・エンティティが増えても計算量は
+                // 目的の型のエンティティ数だけに抑えられる)。
                 let mut reps: Vec<ClassId> = Vec::new();
-                for i in 0..self.egraph.entities.len() {
-                    let id = ClassId(i);
-                    if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
-                    if let Some(et) = expected_type {
-                        if self.egraph.entities[i].entity_type != et { continue; }
+                if let Some(et) = expected_type {
+                    for id in self.egraph.iter_reps_of_type(et) {
+                        if self.egraph.entities[id.0].base_importance > 0.0 {
+                            reps.push(id);
+                        }
                     }
-                    if self.egraph.entities[i].base_importance > 0.0 {
-                        reps.push(id);
+                } else {
+                    for i in 0..self.egraph.entities.len() {
+                        let id = ClassId(i);
+                        if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
+                        if self.egraph.entities[i].base_importance > 0.0 {
+                            reps.push(id);
+                        }
                     }
                 }
                 // 🐛 実測に基づくFIX: このシード無し(両変数未束縛)経路は、
@@ -663,15 +756,23 @@ impl ProverEngine {
             // 親の型(例:Circle)で絞り込み、各親候補についてはその親自身が
             // 繋がっている子(局所的で少数)だけを見る形で列挙する。
             (None, None) => {
+                // 🌟 型インデックス化: 期待される親の型が分かっていれば
+                // type_index経由でその型の代表元だけを引く(理由は
+                // match_identical_factの(None,None)分岐と同じ)。
                 let mut parent_candidates: Vec<ClassId> = Vec::new();
-                for i in 0..self.egraph.entities.len() {
-                    let p_id = ClassId(i);
-                    let p_rep = self.egraph.get_rep(p_id);
-                    if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-                    if let Some(et) = expected_p_type {
-                        if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                if let Some(et) = expected_p_type {
+                    for p_rep in self.egraph.iter_reps_of_type(et) {
+                        if self.egraph.entities[p_rep.0].base_importance > 0.0 {
+                            parent_candidates.push(p_rep);
+                        }
                     }
-                    parent_candidates.push(p_rep);
+                } else {
+                    for i in 0..self.egraph.entities.len() {
+                        let p_id = ClassId(i);
+                        let p_rep = self.egraph.get_rep(p_id);
+                        if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                        parent_candidates.push(p_rep);
+                    }
                 }
 
                 for p_rep in parent_candidates {
@@ -968,15 +1069,16 @@ impl ProverEngine {
             }
         }
         // 🌟 FIX 3: どちらも未バインドの場合のみフルスキャン
-        else {
+        // 🌟 型インデックス化: 期待される結果の型が分かっていれば
+        // type_index経由でその型の代表元だけを引く(理由は
+        // match_identical_fact/match_connected_factの(None,None)分岐と同じ)。
+        else if let Some(et) = expected_r_type {
+            valid_nodes.extend(self.egraph.iter_reps_of_type(et));
+        } else {
             for i in 0..self.egraph.entities.len() {
                 let id = ClassId(i);
                 if self.egraph.get_rep(id) == id {
-                    if let Some(et) = expected_r_type {
-                        if self.egraph.entities[id.0].entity_type == et { valid_nodes.push(id); }
-                    } else {
-                        valid_nodes.push(id);
-                    }
+                    valid_nodes.push(id);
                 }
             }
         }
@@ -1433,7 +1535,16 @@ impl BlackboardEngine {
             vec![0; theorem_count]
         };
 
+        // 🌟 型シグネチャ事前フィルタ(theorem_types_availableのドキュメント参照):
+        // 借用チェッカの都合上(下のループはself.prover.theoremsを不変借用したまま
+        // &mut self.proverを要求するtheorem_types_availableを呼べない)、
+        // 先にインデックスごとの可否だけ計算しておく。
+        let types_available: Vec<bool> = (0..theorem_count)
+            .map(|idx| self.prover.theorem_types_available(idx))
+            .collect();
+
         for (idx, theorem) in self.prover.theorems.iter().enumerate() {
+            if !types_available[idx] { continue; }
             let mut initial_bind = Bind::default();
             initial_bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
             initial_bind.insert("Ang0".to_string(), self.prover.egraph.ang0);
