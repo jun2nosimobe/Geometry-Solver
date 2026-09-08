@@ -465,6 +465,18 @@ impl EGraph {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
             if existing_rep != point_rep {
+                // 🐛 FIX候補として「PointとDirectionのEntityType不一致を弾く」
+                // ガードを一度試したが、orthocenter/nine_point_fullが本物の
+                // 回帰(証明が届かなくなる)を起こしたため撤回した。これらの
+                // 問題は「2直線が実は平行 ⟹ 交点は無限遠点」という正しい構造的
+                // 推論の一部として、意図的にPoint型で登録された実体が後から
+                // Direction型の実体と同一視されることに依存している
+                // (原因はaction_space.rs::is_special_constant付近のコメント
+                // 参照: Intersection(l1,l2)は常にPoint型の実体を作るため)。
+                // 根本原因はaction_space.rs側(MCTSの候補生成が平行な2直線の
+                // 交点を素朴に候補に挙げてしまう場所)で塞ぐのが正しく、ここ
+                // (通常の証明探索でも必ず通る合同閉包の中枢)を型で一律に
+                // 塞ぐと必要な収束経路まで一緒に潰してしまう。
                 // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
                 // 確定する前に数値的な裏付けを取る。
                 if self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {

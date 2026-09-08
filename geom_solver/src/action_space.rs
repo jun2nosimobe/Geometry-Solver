@@ -112,6 +112,27 @@ impl ActionGenerator {
             if pair.len() < 2 { continue; }
             let (x, y) = (egraph.get_rep(pair[0]), egraph.get_rep(pair[1]));
             if x == y { continue; }
+            // 🐛 FIX(型混同の温床): 2直線が既に平行だと構造的にわかっている場合、
+            // その「交点」は有限の点ではなく無限遠点(=2直線が共有する方向、
+            // DirectionOfで既に表現済み)そのものであり、新しくPoint型の実体を
+            // 作る意味がない。にもかかわらずIntersection(l1,l2)は問答無用で
+            // EntityType::Pointの実体を作ってしまう(default_entity_type)ため、
+            // 後で2直線の交点の一意性判定(propagate_point_uniqueness)がこれを
+            // 本物のDirection実体と同一だと(数学的には正しく)結論し、
+            // Point型とDirection型をまたぐ統合が発生していた
+            // (discover.rsの自由探索で実測: ParallelLine(l,p)で作った新しい線と
+            // 元のlを later intersectionしようとする形で頻発し、Line_infinityの
+            // 接続点が汚染され、無関係な方向どうしを誤って同一視しようとする
+            // 健全性チェック却下のスパムを大量に引き起こしていた)。
+            // 両方向がまだ実体化されていない場合は判定できないので素通しする
+            // (その場合はIntersectionが先に試され、その時点で初めて2つの
+            // 方向が統合されるので、以後のサンプリングではこの分岐で弾かれる)。
+            if let (Some(&dx), Some(&dy)) = (
+                egraph.memo.get(&egraph.normalize_definition(&Definition::DirectionOf(x))),
+                egraph.memo.get(&egraph.normalize_definition(&Definition::DirectionOf(y))),
+            ) {
+                if egraph.get_rep(dx) == egraph.get_rep(dy) { continue; }
+            }
             let (a, b) = if x.0 > y.0 { (y, x) } else { (x, y) };
             let def_int = Definition::Intersection(a, b);
             self.try_push_def(&mut actions, egraph, def_int, is_simulation);
