@@ -933,6 +933,28 @@ impl ProverEngine {
         }
     }
 
+    /// 🌟 match_connected_fact の局所スキャン分岐((Some,None)/(None,Some))
+    /// 向けの熱量駆動cap。これらの分岐は「ある実体自身に繋がっている
+    /// (少数のはずの)候補」を集めるので、通常は無条件で全件試して問題
+    /// なかった。しかし診断計測(円周角の定理)で、多くの点が乗っている円
+    /// のような「ハブ」実体では数十件になり得ると判明した――(None,None)
+    /// 分岐(identical_self_bind_candidates/connected_pairs_for_types)に
+    /// 既に入れているのと同じ熱降順cap(=40)を、候補が実際に多い場合に
+    /// 限って適用する(少ない場合はソートのコストも省き従来通り全件試す)。
+    fn heat_capped_connected_candidates(&self, candidates: rustc_hash::FxHashSet<ClassId>) -> Vec<ClassId> {
+        const MAX_LOCAL_CONNECTED_CANDIDATES: usize = 40;
+        let mut v: Vec<ClassId> = candidates.into_iter().collect();
+        if v.len() > MAX_LOCAL_CONNECTED_CANDIDATES {
+            v.sort_by(|&a, &b| {
+                let ha = self.egraph.entities[a.0].base_importance + self.egraph.entities[a.0].heat_bonus;
+                let hb = self.egraph.entities[b.0].base_importance + self.egraph.entities[b.0].heat_bonus;
+                hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            v.truncate(MAX_LOCAL_CONNECTED_CANDIDATES);
+        }
+        v
+    }
+
     /// 🌟 "Connected" パターン: child/parent の束縛状況の4通り(両方/片方×2/どちらも未束縛)
     /// で分岐する。
     fn match_connected_fact(
@@ -981,7 +1003,13 @@ impl ProverEngine {
                         candidates.insert(p_rep);
                     }
                 }
-                for p_rep in candidates {
+                // 🌟 診断計測(円周角の定理)で判明: この「局所」スキャンは通常は
+                // 少数(その実体自身に繋がっているものだけ)だが、多くの点が
+                // 乗っている円のような「ハブ」実体では数十件になり得る。
+                // (None,None)分岐に加えたのと同じ熱降順cap(=40)を、候補が
+                // 実際に多い場合に限って適用する(heat_capped_connected_
+                // candidatesのドキュメント参照)。
+                for p_rep in self.heat_capped_connected_candidates(candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(parent_var.clone(), p_rep);
                     self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
@@ -997,10 +1025,10 @@ impl ProverEngine {
                         if self.egraph.entities[s_rep.0].base_importance > 0.0 { child_candidates.insert(s_rep); }
                     }
                 }
-                for c_rep in child_candidates {
-                    if let Some(et) = expected_c_type {
-                        if self.egraph.entities[c_rep.0].entity_type != et { continue; }
-                    }
+                child_candidates.retain(|&c_rep| {
+                    expected_c_type.map_or(true, |et| self.egraph.entities[c_rep.0].entity_type == et)
+                });
+                for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(child_var.clone(), c_rep);
                     self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
