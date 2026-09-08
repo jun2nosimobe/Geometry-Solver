@@ -202,6 +202,22 @@ impl ActionGenerator {
     // 実質的に価値を生まないまま組み合わせだけが爆発する。
     const MAX_MCTS_CHAIN_DEPTH: usize = 2;
 
+    /// 🌟 ユーザー提案(自由探索モードでの改善点の洗い出し)への対応。
+    /// Line_infinity/CircI/CircJ/Ang0/Ang90は、有向角・複比といった
+    /// 射影的な計算機構を成立させるための内部的な定数(EGraph::new参照)で
+    /// あって、人間が「補助構成として選ぶ」対象ではない。しかしbase_importance
+    /// はどれも既定値1.0のままで、entity_typeも普通のLine/Direction/Angleと
+    /// 見分けが付かないため、これまでentities_of_typeの候補プールに紛れ込み、
+    /// 「Line_infinityとの交点」「Line_infinityへの垂線」のような、名前だけ
+    /// 見ても何を意味するか分からない退化した作図案がMCTSの候補に混ざる
+    /// 原因になっていた(discover.rsでの自由探索の実測で確認)。目標に向けた
+    /// 通常の証明探索でもこれらが有用な補助構成先になることは無いため、
+    /// 除外しても既存問題への悪影響は無いはず(31問題スイートで検証済み)。
+    fn is_special_constant(egraph: &EGraph, id: ClassId) -> bool {
+        id == egraph.line_infinity || id == egraph.circ_i || id == egraph.circ_j
+            || id == egraph.ang0 || id == egraph.ang90
+    }
+
     fn entities_of_type(&self, egraph: &EGraph, ty: EntityType) -> Vec<ClassId> {
         (0..egraph.entities.len())
             .map(ClassId)
@@ -210,6 +226,7 @@ impl ActionGenerator {
                     && egraph.entities[id.0].entity_type == ty
                     && egraph.entities[id.0].is_active()
                     && egraph.entities[id.0].mcts_depth <= Self::MAX_MCTS_CHAIN_DEPTH
+                    && !Self::is_special_constant(egraph, egraph.get_rep(id))
             })
             .collect()
     }
