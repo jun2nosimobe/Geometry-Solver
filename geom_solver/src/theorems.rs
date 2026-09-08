@@ -32,6 +32,16 @@ fn distinct(args: &[&str]) -> Pattern {
     Pattern::Distinct(args.iter().map(|s| s.to_string()).collect())
 }
 
+// 🌟 厳密な順序("<")。distinct()と違い「代表元IDの昇順」という1つの
+// 正準形しか通さないため、複数の変数が同じ候補プール(例: 同じ直線上の点)
+// から選ばれる場合に、同じ集合の異なる並べ替え(4点ならN!通り)を
+// distinct()のように全て試すのではなく1通りに絞れる。使えるのは
+// 「変数の割り当て順序が結論の成立可否に影響しない」場合のみ
+// (順序に意味がある定理では使ってはいけない)。
+fn order(args: &[&str]) -> Pattern {
+    Pattern::Order(args.iter().map(|s| s.to_string()).collect())
+}
+
 // 🌟 Pattern::OrderNonStrictのドキュメント参照(logic_core.rs)。「2つの役割
 // (方向トリプルの組など)を丸ごと入れ替えても同じ結論になる」定理の
 // 対称的な重複探索を、正当な解を一切失わずに約半分に間引くためのヘルパー。
@@ -893,11 +903,24 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 無駄な組み合わせを即座に打ち切れるようにする。
                 fact_ext("Connected", &["A", "L"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["B", "L"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "B"]),
+                // 🐛 実験的変更(要検証): distinct(&["A","B"]) 等だったのを
+                // order(&["A","B"]) 等に変更した。同じ直線L上のN点から
+                // A,B,C,Dを選ぶ際、distinctだけだと同じ4点集合のN!通りの
+                // 並べ替えを全て試してしまう(実測でsimsonのdfs_call消費量
+                // トップの主因だった)。order()は代表元ID昇順という1つの
+                // 正準形だけを通すため無駄な並べ替えを削れるが、複比は
+                // 完全対称ではなくクライン4群の下でしか値が保存されない
+                // (順列によって1-x, 1/x等の異なる値になる)ため、この定理の
+                // 結論(CR1≡CRL、同じ割り当てに対する内部無矛盾性)は常に
+                // 真だが、外部の目標複比と数値一致させる必要がある問題
+                // (test_cross_ratio/test_involution)では「必要な特定の値」を
+                // 正準順序が排除してしまい壊れるリスクがある。要:
+                // test_cross_ratio/test_involutionで実際に解けることを確認。
+                order(&["A", "B"]),
                 fact_ext("Connected", &["C", "L"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "B", "C"]),
+                order(&["B", "C"]),
                 fact_ext("Connected", &["D", "L"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "B", "C", "D"]),
+                order(&["C", "D"]),
                 // A,B,C,Dそれぞれについて「Lとは別の、Oを通る直線」を局所
                 // スキャンで見つける(A自身の既知の直線のうち、Lではない方)。
                 fact_ext("Connected", &["A", "LOA"], Some("Line"), Some("Point"), false, None),

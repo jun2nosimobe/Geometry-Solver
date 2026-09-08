@@ -1022,11 +1022,44 @@ impl ProverEngine {
                 // フォールバックでは従来通りのフルスキャンを行う。
                 if let (Some(ct), Some(pt)) = (expected_c_type, expected_p_type) {
                     let pairs = self.connected_pairs_for_types(ct, pt);
-                    for &(c_rep, p_rep) in pairs.iter() {
-                        let mut next_bind = bind.clone();
-                        next_bind.insert(child_var.clone(), c_rep);
-                        next_bind.insert(parent_var.clone(), p_rep);
-                        self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                    // 🌟 ユーザー提案(「複比の透視射影不変性」を熱量駆動の考え方で
+                    // 高速化したい)への対応: この分岐(Connected両方未束縛)は
+                    // match_identical_fact/match_defined_by_factの類似分岐と違い、
+                    // これまで熱による並べ替えもcapも一切無く、connected_pairs_
+                    // for_typesが返す全ペアを無差別に試していた。「複比の透視射影
+                    // 不変性(点→線束)」はO,A,B,C,D等9自由変数を持つが天然のシードが
+                    // 無く、先頭のConnected(A,L)(点,直線どちらも未束縛)がまさに
+                    // この分岐から始まるため、点や直線が多い問題ではこの1パターン
+                    // だけで全(点,直線)接続ペアを総当たりすることになっていた。
+                    // identical_self_bind_candidates(cap=40、熱降順)と同じ発想を
+                    // ここにも適用する: 候補が多い場合のみ熱(base_importance+
+                    // heat_bonus、両端の合計)で降順ソートしてから絞り、少数の
+                    // 場合はこれまで通り全件試す(ソートのコストも省く)。
+                    const MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES: usize = 40;
+                    if pairs.len() <= MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES {
+                        for &(c_rep, p_rep) in pairs.iter() {
+                            let mut next_bind = bind.clone();
+                            next_bind.insert(child_var.clone(), c_rep);
+                            next_bind.insert(parent_var.clone(), p_rep);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                        }
+                    } else {
+                        let mut ordered: Vec<(ClassId, ClassId)> = (*pairs).clone();
+                        let heat_of = |id: ClassId| -> f64 {
+                            self.egraph.entities[id.0].base_importance + self.egraph.entities[id.0].heat_bonus
+                        };
+                        ordered.sort_by(|&(c1, p1), &(c2, p2)| {
+                            let h1 = heat_of(c1) + heat_of(p1);
+                            let h2 = heat_of(c2) + heat_of(p2);
+                            h2.partial_cmp(&h1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        ordered.truncate(MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES);
+                        for (c_rep, p_rep) in ordered {
+                            let mut next_bind = bind.clone();
+                            next_bind.insert(child_var.clone(), c_rep);
+                            next_bind.insert(parent_var.clone(), p_rep);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                        }
                     }
                 } else {
                     let mut parent_candidates: Vec<ClassId> = Vec::new();
