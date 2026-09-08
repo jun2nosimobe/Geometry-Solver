@@ -373,6 +373,18 @@ pub struct ProverEngine {
     // (キャッシュするのは「型で絞り込んだ後・heat基準で並べ替える前」の
     // 集合だけ)。
     pub identical_self_bind_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
+    // 🌟 同じ発想の第三弾: defined_by_valid_nodes の「両方未束縛」分岐
+    // (親変数もresult_varも未束縛で、期待される結果の型だけで全代表元を
+    // 列挙するフォールバック)も、identical_self_bind_cacheと全く同じ形の
+    // 「型→代表元集合」の問い合わせで、bindの中身にもtarget_typeにも依存
+    // しない(target_typeはこの後defined_by_collect_matchesが実際の
+    // Definitionで絞り込むための情報で、valid_nodesの列挙自体には使われて
+    // いない)。よってキーはexpected_r_type(EntityType)のみでよく、
+    // identical_self_bind_cacheと同じtype_generation方式でそのまま
+    // 定理をまたいで共有できる。ただしidentical_self_bind_cacheは
+    // base_importance>0.0のフィルタをかけているのに対し、この分岐は
+    // フィルタなしで全代表元を返す(既存の挙動を変えないための別キャッシュ)。
+    pub defined_by_full_scan_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
     // 🌟 ユーザー提案(「schedule_full_sweepの改善を続ける」)への対応: 2度の
     // 撤回(DefinedBy遅延構築・スケジューラ精密化)がいずれも「schedule_
     // full_sweepが重いはず」という推測から出発し、実測せずに手を入れて
@@ -424,6 +436,7 @@ impl ProverEngine {
             theorem_required_types: Vec::new(),
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
+            defined_by_full_scan_cache: FxHashMap::default(),
             profile: ProfileStats::default(),
         }
     }
@@ -474,6 +487,19 @@ impl ProverEngine {
         }
         let result = Rc::new(reps);
         self.identical_self_bind_cache.insert(et, (result.clone(), cur_gen));
+        result
+    }
+
+    /// 🌟 defined_by_full_scan_cacheのドキュメント参照。DefinedByパターンの
+    /// 親変数・result_varがどちらも未束縛の場合に問い合わせる、期待される
+    /// 結果の型だけで決まる全代表元の共有列挙結果を返す。
+    fn defined_by_type_scan_candidates(&mut self, et: crate::mmp_core::EntityType) -> Rc<Vec<ClassId>> {
+        let cur_gen = self.egraph.type_generation.get(&et).copied().unwrap_or(0);
+        if let Some((cached, cached_gen)) = self.defined_by_full_scan_cache.get(&et) {
+            if *cached_gen == cur_gen { return cached.clone(); }
+        }
+        let result = Rc::new(self.egraph.iter_reps_of_type(et).collect::<Vec<_>>());
+        self.defined_by_full_scan_cache.insert(et, (result.clone(), cur_gen));
         result
     }
 
@@ -1437,7 +1463,8 @@ impl ProverEngine {
         // type_index経由でその型の代表元だけを引く(理由は
         // match_identical_fact/match_connected_factの(None,None)分岐と同じ)。
         else if let Some(et) = expected_r_type {
-            valid_nodes.extend(self.egraph.iter_reps_of_type(et));
+            let cached = self.defined_by_type_scan_candidates(et);
+            valid_nodes.extend(cached.iter().copied());
         } else {
             for i in 0..self.egraph.entities.len() {
                 let id = ClassId(i);
