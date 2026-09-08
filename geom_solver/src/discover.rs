@@ -224,6 +224,14 @@ fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize
         if a == b { continue; }
         let key = if a.0 < b.0 { (a, b) } else { (b, a) };
         if !probed_pairs.insert(key) { continue; }
+        // 🌟 FIX: report_conjecturesと同じhas_degenerate_ancestorの事前
+        // フィルタをここにも適用する。以前はここを素通りしていたため、
+        // 「調和共役の入力に自分自身の結果を使い回す」ような、そもそも
+        // 構造的に退化した(=真ではあっても偶然でも新発見でもない)種
+        // 予想まで律儀にプロービングしており、無駄な計算コストに加えて、
+        // まさにこの種の退化した前提が全体崩壊カスケードの主な火種に
+        // なっていた可能性が高い。
+        if has_degenerate_ancestor(&engine.prover.egraph, a, b) { continue; }
         let name_a = engine.prover.egraph.entities[engine.prover.egraph.get_rep(a).0].name.clone();
         let name_b = engine.prover.egraph.entities[engine.prover.egraph.get_rep(b).0].name.clone();
         // 🐛 FIX(ユーザー報告で判明): 「P1 ≡ P2(2つの無関係な自由点)」の
