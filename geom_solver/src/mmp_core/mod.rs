@@ -597,7 +597,39 @@ pub struct GeoEntity {
     pub degree_cache: std::cell::Cell<Option<Option<usize>>>,
 }
 
+// 🌟 熱関連処理の統一(ユーザー要望「熱関連の処理をリファクタリングして整理」)。
+// 以前は「base_importance + heat_bonus + uses.len()*0.5」という同じ式が
+// calc_bind_heat/estimate_cost(logic_core.rs)とaction_space.rs::entity_weightの
+// 計3箇所に、「base_importance + heat_bonus」(次数抜き)がmatch_identical_fact
+// の自己束縛ソート/heat_capped_connected_candidates/match_connected_factの
+// 局所スキャンソートの計3箇所に、それぞれ独立にコピーされていた
+// (後者は前者から「次数の項だけ」意図的に省いた別の式で、単なる重複ではなく
+// 実際に2種類の式が使い分けられている――この違いも含めてここに集約する)。
+// DFSのbind順序付け・MCTSの行動サンプリング/報酬評価のどちらでも「何が
+// 面白い図形か」を判定する箇所は、常にこの2メソッドのどちらかを呼ぶことに
+// 統一し、式そのものを直接書く場所を無くす。
+impl GeoEntity {
+    /// 熱(heat_bonus) + 基本重要度(base_importance)。「直近マージされた/
+    /// 予想の裏付けが取れた」対象を優先するための、次数を含まない素の熱量。
+    pub fn heat(&self) -> f64 {
+        self.base_importance + self.heat_bonus
+    }
 
+    /// heat() + 次数ボーナス(uses.len()による依存度、0.5倍)。この実体に
+    /// 依存する他の実体が多いほど「図の中で参照され尽くしている=重要な
+    /// 構成要素」とみなして優先度を上げる、calc_bind_heat/estimate_cost/
+    /// action_space::entity_weightが使う完全版の熱量。
+    pub fn heat_with_degree(&self) -> f64 {
+        self.heat() + (self.uses.len() as f64 * 0.5)
+    }
+
+    /// base_importance > 0.0 の判定。MCTS産の使い捨て補助構成
+    /// (base_importance=0.2〜0.5)や無視すべき実体を除外するための
+    /// フィルタとして8箇所前後に直接比較が散らばっていたのをまとめる。
+    pub fn is_active(&self) -> bool {
+        self.base_importance > 0.0
+    }
+}
 
 // 🌟 Concyclic/Collinear は専用のFact型として持つのをやめた。
 // 「N点が同じ円/直線に乗っている」ことは、各点をその円/直線に

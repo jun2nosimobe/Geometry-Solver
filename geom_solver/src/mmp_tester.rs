@@ -142,7 +142,7 @@ impl MMPTester {
 
         let valid_nodes: Vec<ClassId> = (0..egraph.entities.len())
             .map(ClassId)
-            .filter(|&id| egraph.get_rep(id) == id && egraph.entities[id.0].base_importance > 0.0)
+            .filter(|&id| egraph.get_rep(id) == id && egraph.entities[id.0].is_active())
             .collect();
 
         // Identical (同一性) のテスト[cite: 3]

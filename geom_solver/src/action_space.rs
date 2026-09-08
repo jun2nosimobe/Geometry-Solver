@@ -25,12 +25,11 @@ impl ActionGenerator {
         }
     }
 
-    /// 🌟 図形1つの「重要度」。既存のcalc_bind_heat(logic_core.rs)と
-    /// 全く同じ式(基本重要度+熱+依存度)を使い回すことで、DFSのbind順序付けと
-    /// MCTSの行動サンプリング・報酬評価とで「何が面白い図形か」の基準を
-    /// 1つに統一する(代数的な次数計算は一切使わない)。
+    /// 🌟 図形1つの「重要度」。GeoEntity::heat_with_degree(mmp_core/mod.rs)を
+    /// 使い回すことで、DFSのbind順序付けとMCTSの行動サンプリング・報酬評価とで
+    /// 「何が面白い図形か」の基準を1つに統一する(代数的な次数計算は一切使わない)。
     pub fn entity_weight(e: &GeoEntity) -> f64 {
-        e.base_importance + e.heat_bonus + (e.uses.len() as f64 * 0.5)
+        e.heat_with_degree()
     }
 
     /// 🌟 証明目標の図形への構造的な近さによる重みボーナス。mcts.rsの
@@ -200,7 +199,7 @@ impl ActionGenerator {
             .filter(|&id| {
                 egraph.get_rep(id) == id
                     && egraph.entities[id.0].entity_type == ty
-                    && egraph.entities[id.0].base_importance > 0.0
+                    && egraph.entities[id.0].is_active()
                     && egraph.entities[id.0].mcts_depth <= Self::MAX_MCTS_CHAIN_DEPTH
             })
             .collect()

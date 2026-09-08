@@ -456,12 +456,12 @@ impl ProverEngine {
         }
         let mut pairs = Vec::new();
         for p_rep in self.egraph.iter_reps_of_type(p_type) {
-            if self.egraph.entities[p_rep.0].base_importance <= 0.0 { continue; }
+            if !self.egraph.entities[p_rep.0].is_active() { continue; }
             if let Some(comp) = self.egraph.entities[p_rep.0].components.first() {
                 for &sub in &comp.subobjects {
                     let c_rep = self.egraph.get_rep(sub);
                     if c_rep == p_rep { continue; }
-                    if self.egraph.entities[c_rep.0].base_importance <= 0.0 { continue; }
+                    if !self.egraph.entities[c_rep.0].is_active() { continue; }
                     if self.egraph.entities[c_rep.0].entity_type != c_type { continue; }
                     pairs.push((c_rep, p_rep));
                 }
@@ -483,7 +483,7 @@ impl ProverEngine {
         }
         let mut reps = Vec::new();
         for id in self.egraph.iter_reps_of_type(et) {
-            if self.egraph.entities[id.0].base_importance > 0.0 { reps.push(id); }
+            if self.egraph.entities[id.0].is_active() { reps.push(id); }
         }
         let result = Rc::new(reps);
         self.identical_self_bind_cache.insert(et, (result.clone(), cur_gen));
@@ -585,9 +585,7 @@ impl ProverEngine {
         let mut heat = 0.0;
         for &id in bind.values() {
             let rep = self.egraph.get_rep(id);
-            let e = &self.egraph.entities[rep.0];
-            // 熱(heat_bonus) + 基本重要度 + 次数(uses.len()による依存度)
-            heat += e.base_importance + e.heat_bonus + (e.uses.len() as f64 * 0.5);
+            heat += self.egraph.entities[rep.0].heat_with_degree();
         }
         heat
     }
@@ -641,8 +639,7 @@ impl ProverEngine {
                 for v in &def.args {
                     if let Some(&id) = bind.get(v) {
                         let rep = self.egraph.get_rep(id);
-                        let e = &self.egraph.entities[rep.0];
-                        heat += e.base_importance + e.heat_bonus + (e.uses.len() as f64 * 0.5);
+                        heat += self.egraph.entities[rep.0].heat_with_degree();
                     }
                 }
                 
@@ -890,7 +887,7 @@ impl ProverEngine {
                         for i in 0..self.egraph.entities.len() {
                             let id = ClassId(i);
                             if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
-                            if self.egraph.entities[i].base_importance > 0.0 {
+                            if self.egraph.entities[i].is_active() {
                                 reps.push(id);
                             }
                         }
@@ -909,8 +906,8 @@ impl ProverEngine {
                 // (match_defined_by_factの全件スキャンで既に使われているのと
                 // 同じ「熱で優先順位を付ける」考え方をこちらにも適用しただけ)。
                 reps.sort_by(|&a, &b| {
-                    let ha = self.egraph.entities[a.0].base_importance + self.egraph.entities[a.0].heat_bonus;
-                    let hb = self.egraph.entities[b.0].base_importance + self.egraph.entities[b.0].heat_bonus;
+                    let ha = self.egraph.entities[a.0].heat();
+                    let hb = self.egraph.entities[b.0].heat();
                     hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 // 🌟 この経路は本来「シードが来なかった時の保険」に過ぎず
@@ -972,8 +969,8 @@ impl ProverEngine {
         let mut v: Vec<ClassId> = candidates.into_iter().collect();
         if v.len() > MAX_LOCAL_CONNECTED_CANDIDATES {
             v.sort_by(|&a, &b| {
-                let ha = self.egraph.entities[a.0].base_importance + self.egraph.entities[a.0].heat_bonus;
-                let hb = self.egraph.entities[b.0].base_importance + self.egraph.entities[b.0].heat_bonus;
+                let ha = self.egraph.entities[a.0].heat();
+                let hb = self.egraph.entities[b.0].heat();
                 hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
             });
             v.truncate(MAX_LOCAL_CONNECTED_CANDIDATES);
@@ -1022,7 +1019,7 @@ impl ProverEngine {
                 for comp in &self.egraph.entities[c_rep.0].components {
                     for &sub in &comp.subobjects {
                         let p_rep = self.egraph.get_rep(sub);
-                        if p_rep == c_rep || self.egraph.entities[p_rep.0].base_importance <= 0.0 { continue; }
+                        if p_rep == c_rep || !self.egraph.entities[p_rep.0].is_active() { continue; }
                         if let Some(et) = expected_p_type {
                             if self.egraph.entities[p_rep.0].entity_type != et { continue; }
                         }
@@ -1048,7 +1045,7 @@ impl ProverEngine {
                     for &sub in &comp.subobjects {
                         // 🌟 FIX: 必ず rep を通す
                         let s_rep = self.egraph.get_rep(sub);
-                        if self.egraph.entities[s_rep.0].base_importance > 0.0 { child_candidates.insert(s_rep); }
+                        if self.egraph.entities[s_rep.0].is_active() { child_candidates.insert(s_rep); }
                     }
                 }
                 child_candidates.retain(|&c_rep| {
@@ -1099,9 +1096,7 @@ impl ProverEngine {
                         }
                     } else {
                         let mut ordered: Vec<(ClassId, ClassId)> = (*pairs).clone();
-                        let heat_of = |id: ClassId| -> f64 {
-                            self.egraph.entities[id.0].base_importance + self.egraph.entities[id.0].heat_bonus
-                        };
+                        let heat_of = |id: ClassId| -> f64 { self.egraph.entities[id.0].heat() };
                         ordered.sort_by(|&(c1, p1), &(c2, p2)| {
                             let h1 = heat_of(c1) + heat_of(p1);
                             let h2 = heat_of(c2) + heat_of(p2);
@@ -1119,7 +1114,7 @@ impl ProverEngine {
                     let mut parent_candidates: Vec<ClassId> = Vec::new();
                     if let Some(et) = expected_p_type {
                         for p_rep in self.egraph.iter_reps_of_type(et) {
-                            if self.egraph.entities[p_rep.0].base_importance > 0.0 {
+                            if self.egraph.entities[p_rep.0].is_active() {
                                 parent_candidates.push(p_rep);
                             }
                         }
@@ -1127,7 +1122,7 @@ impl ProverEngine {
                         for i in 0..self.egraph.entities.len() {
                             let p_id = ClassId(i);
                             let p_rep = self.egraph.get_rep(p_id);
-                            if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                            if p_rep != p_id || !self.egraph.entities[i].is_active() { continue; }
                             parent_candidates.push(p_rep);
                         }
                     }
@@ -1137,7 +1132,7 @@ impl ProverEngine {
                             Some(comp) => comp.subobjects.iter()
                                 .map(|&id| self.egraph.get_rep(id))
                                 .filter(|&id| {
-                                    if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
+                                    if !self.egraph.entities[id.0].is_active() { return false; }
                                     match expected_c_type {
                                         Some(et) => self.egraph.entities[id.0].entity_type == et,
                                         None => true,
