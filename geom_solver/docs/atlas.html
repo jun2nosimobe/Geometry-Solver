@@ -229,14 +229,14 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/main.rs</span>
       <span><b>ベンチ</b> 既存21問 + HAGeo-409由来8問 + 単体検証</span>
-      <span><b>最新コミット</b> 9b91366</span>
+      <span><b>最新コミット</b> 515d58c</span>
     </div>
   </div>
 
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">10</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">11</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">6</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -410,6 +410,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">515d58c</span></div>
+        <div>
+          <div class="headline"><h3>DefinedBy「両方未束縛」分岐の共有キャッシュ(backlog#3)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc"><code>connected_join_cache</code>/<code>identical_self_bind_cache</code>と同じ発想の第三弾。<code>defined_by_valid_nodes</code>の「親変数・result_varが両方未束縛」の最終フォールバック(期待される結果の型だけで決まる代表元の全列挙)は、bindの中身にもtarget_typeにも依存しない純粋な「型→代表元集合」の問い合わせだと確認できたため、<code>defined_by_full_scan_cache</code>(キーはEntityType、<code>type_generation</code>で無効化)として定理をまたいで共有した。<code>identical_self_bind_cache</code>とは違いbase_importanceフィルタを掛けない(既存の挙動を完全に保つため別キャッシュにした)。</div>
+          <div class="evidence"><b>検証:</b> cargo test 33/33、31問題スイートでsolved/unsolvedが変更前と完全一致(diffなし)。<b>注記:</b> 検証時点で実行環境のCPU負荷変動が大きく(orthocenterで変更を適用していないベースラインでも22秒〜118秒とばらつくことをA/Bテストで確認)、今回はタイミング比較でなくsolved状態の一致のみで安全性を確認した。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -449,15 +458,6 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">3</div>
         <div>
-          <h3>DefinedBy「両方未束縛」分岐の共有キャッシュ</h3>
-          <div class="desc"><code>defined_by_valid_nodes</code>(型だけの列挙)と<code>defined_by_collect_matches</code>(変数名への束縛)は既に分離されている(TheoremDef改善で「片方だけ束縛」分岐にuses索引を追加済み)。残るのは「両方未束縛」の全件スキャン分岐で、Connected/Identicalと同じ型キー方式の共有キャッシュ(connected_join_cache/identical_self_bind_cacheと同じ発想)を適用できる。</div>
-          <div class="b-tags"><span class="tag">案4の続き</span><span class="tag">中規模リファクタ</span></div>
-        </div>
-      </div>
-
-      <div class="b-item">
-        <div class="b-rank">4</div>
-        <div>
           <h3>軽量な再統合機構(全リセットに代わる手段)</h3>
           <div class="desc">新規エンティティ1つのために <code>schedule_full_sweep</code> が非シードタスク全体を揺さぶる、という構図そのものが2度の撤回の共通原因だった――ただし実測(#1)により<code>schedule_full_sweep</code>自体のコストは無視できるほど小さいと判明したため、優先度はDefinedByの<code>constructions</code>フィールドを使った設計上の一貫性の話として据え置く。</div>
           <div class="b-tags"><span class="tag">優先度低下</span><span class="tag">設計上の一貫性</span></div>
@@ -465,7 +465,7 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">5</div>
+        <div class="b-rank">4</div>
         <div>
           <h3>本格的なRETE型ベータネットワーク</h3>
           <div class="desc">定理間で部分マッチそのものをインクリメンタルに伝播する、案4のもともとの構想。#1〜#3で得られる効果を見てから判断する規模の刷新。</div>
@@ -474,7 +474,7 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">6</div>
+        <div class="b-rank">5</div>
         <div>
           <h3>定理集合の増加が無関係な問題に課税する問題</h3>
           <div class="desc">新定理を1つ足すと、その定理を使わない問題まで「一度は試す」コストを払う。型シグネチャ事前フィルタ(#03既出)で軽減はしたが解消はしていない、既知の許容トレードオフとして監視を続ける。</div>
@@ -483,20 +483,20 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">7</div>
+        <div class="b-rank">6</div>
         <div>
-          <h3>bench_2011balkanmop1(スパイラル相似)が未解決</h3>
-          <div class="desc">「スパイラル相似の中点対応」定理を実装済みだが、前提(角度・比の等式)が確立される前に探索がStallし、定理が発火する機会自体がない。前提を能動的に組み立てる仕組みが要る。</div>
-          <div class="b-tags"><span class="tag">未解決問題</span></div>
+          <h3>bench_2011balkanmop1(スパイラル相似)未解決の根本原因: 定理の距離配置が合わない</h3>
+          <div class="desc">「スパイラル相似の中点対応」定理を実測診断した結果、以前の「前提がStallで確立されない」という推測は不正確だったと判明。本問題ではE=AC∩BD(円に内接する四角形ABCDの対角線の交点)で、実際にログ上でも方冪の定理相当の積の等式(EA・EC=EB・ED)は正しく確立されている――問題は前提の未確立ではなく、<b>定理の構造そのものがこの配置に噛み合わない</b>こと。定理は<code>LineEA,LineEB,LineED,LineEC</code>という4本の"Eを通る互いに異なる直線"を要求する(distinct制約)。これは一般の(円で結ばれていない)スパイラル相似中心のような「4方向に開いた頂点」を想定した設計だが、bench_2011balkanmop1のE=AC∩BDでは、Eを通る直線は実際にはAC・BDの2本しかなく(A,E,Cが共線、B,E,Dが共線)、4本のdistinct制約を原理的に満たせない。必要なのは4直線版ではなく、「共点二弦の相似」と同じ2直線配置(LineAB,LineCDがPを通り、LineAD,LineCBは通らない、という非対称な4直線)に相当する、"2直線が交わる点における中点対応"専用の新しい定理――既存定理の使い回しでは届かず、新規のTheoremDef設計(角度対応の一般化+中点という特定の対応点への相似の遺伝)が必要。</div>
+          <div class="b-tags"><span class="tag">精密診断済み</span><span class="tag">要・新定理設計</span></div>
         </div>
       </div>
 
       <div class="b-item">
-        <div class="b-rank">8</div>
+        <div class="b-rank">7</div>
         <div>
-          <h3>残り4/8のHAGeo-409ベンチが未解決</h3>
-          <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ何が足りないのか(定理・作図規則・探索の深さ)の切り分けがまだ済んでいない。</div>
-          <div class="b-tags"><span class="tag">要調査</span></div>
+          <h3>残り4/8のHAGeo-409ベンチ: 探索チューニングでは届かない、要新定理</h3>
+          <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ--time=45秒 + <code>--mcts</code>(無方向な補助構成探索を有効化)でも証明に届かないことを確認した(bench_2005usamop3は需要が尽きて自ら探索を打ち切るが、他の2つは時間いっぱい補助構成を作り続けて終わる)。これはdfs_capやヒューリスティックの調整で届く範囲ではなく、各問題が要求する古典的な補題(2012 EGMO P1は「AEDFの共円性」のような中間結論、2018 China Western MO P5・2005 USAMO P3も同様に固有の中間補題)が、現状の21定理のどの組み合わせでも再現できないことを示す。bench_2011balkanmop1(#6参照)は原因を1つ具体的に特定できたが、残り3問は「どの補題が足りないか」の特定自体がまだ済んでいない――各問題の模範解答を読み、必要な中間結論を既存定理群の言葉(AnglePair/LengthSq/Product等)に翻訳できるかを1問ずつ検討するところから始める必要がある。</div>
+          <div class="b-tags"><span class="tag">MCTS込みで確認済み・探索側の問題ではない</span><span class="tag">要・新定理設計×3</span></div>
         </div>
       </div>
 
