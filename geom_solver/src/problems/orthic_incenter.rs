@@ -40,12 +40,12 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     // DH は Alt_A そのもの(D, H はともにAlt_A上の点)なので、Dir(Alt_A)を
     // DHの方向としてそのまま使う。
-    let dir_dh = egraph.create_entity("Dir_Alt_A".to_string(), Definition::DirectionOf(alt_a), EntityType::Direction);
+    let dir_dh = egraph.create_entity("Dir_Alt_A".to_string(), Definition::DirectionOf(alt_a), EntityType::Point);
 
     let line_df = egraph.create_entity("Line_DF".to_string(), Definition::new_line(d, f), EntityType::Line);
     let line_de = egraph.create_entity("Line_DE".to_string(), Definition::new_line(d, e), EntityType::Line);
-    let dir_df = egraph.create_entity("Dir_DF".to_string(), Definition::DirectionOf(line_df), EntityType::Direction);
-    let dir_de = egraph.create_entity("Dir_DE".to_string(), Definition::DirectionOf(line_de), EntityType::Direction);
+    let dir_df = egraph.create_entity("Dir_DF".to_string(), Definition::DirectionOf(line_df), EntityType::Point);
+    let dir_de = egraph.create_entity("Dir_DE".to_string(), Definition::DirectionOf(line_de), EntityType::Point);
 
     // 目標: ∠(DH, DF) = ∠(DE, DH) すなわちDHが∠FDEを二等分する
     let ang_hdf = egraph.create_entity("Ang_HDF".to_string(), Definition::AnglePair(dir_dh, dir_df), EntityType::Angle);

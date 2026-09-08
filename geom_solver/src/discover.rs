@@ -389,7 +389,11 @@ struct RankedConjecture {
 /// 完結する使い捨てのラベル表。
 struct PrettyNamer {
     labels: rustc_hash::FxHashMap<ClassId, String>,
-    counters: rustc_hash::FxHashMap<EntityType, usize>,
+    // 🌟 EntityType::Direction撤廃(方向はL∞に接続されたただのPoint)に伴い、
+    // 表示上「有限点(P)」と「無限遠点(D、旧Direction)」を分けて数えるには
+    // もうEntityTypeだけでは足りない(is_connectedで判定した接頭辞そのもの
+    // をキーにする)。
+    counters: rustc_hash::FxHashMap<&'static str, usize>,
 }
 
 impl PrettyNamer {
@@ -414,16 +418,24 @@ impl PrettyNamer {
         let label = if !e.name.contains("_(") {
             e.name.clone()
         } else {
-            let prefix = match e.entity_type {
-                EntityType::Point => "P",
-                EntityType::Line => "L",
-                EntityType::Circle => "Cir",
-                EntityType::Direction => "D",
-                EntityType::Angle => "Ang",
-                EntityType::Scalar => "S",
-                EntityType::Conic => "Q",
+            // 🌟 EntityType::Direction撤廃により、「無限遠直線L∞上の点か」は
+            // 型ではなくincidence(is_connected)で判定する。ユーザー提案
+            // 「directionを検索するときもL∞上の点を探せばよい」をそのまま
+            // 表示ラベルの判定にも適用した形。
+            let prefix: &'static str = if e.entity_type == EntityType::Point
+                && egraph.is_connected(rep, egraph.line_infinity) {
+                "D"
+            } else {
+                match e.entity_type {
+                    EntityType::Point => "P",
+                    EntityType::Line => "L",
+                    EntityType::Circle => "Cir",
+                    EntityType::Angle => "Ang",
+                    EntityType::Scalar => "S",
+                    EntityType::Conic => "Q",
+                }
             };
-            let n = self.counters.entry(e.entity_type).or_insert(0);
+            let n = self.counters.entry(prefix).or_insert(0);
             *n += 1;
             format!("{}{}", prefix, n)
         };

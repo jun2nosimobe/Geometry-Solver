@@ -190,9 +190,15 @@ impl EGraph {
                 EntityType::Circle => {
                     if self.propagate_circle_uniqueness(rep_id) { changed_any = true; }
                 }
-                // 🌟 Directionは「無限遠直線上の点」として扱うので、通常の点と同じく
-                // propagate_point_uniquenessの対象にする。
-                EntityType::Point | EntityType::Direction => {
+                // 🌟 「方向」はもはや独立したEntityTypeではなく、L∞
+                // (line_infinity)にlink_logical_incidenceで接続しているだけの
+                // ただのPointである(EntityType::Direction撤廃、
+                // ユーザー提案「directionを検索するときもL∞上の点を探せば
+                // よい」を型システムのレベルで徹底した)。そのためこの分岐は
+                // 単純にEntityType::Pointだけを見ればよく、以前のように
+                // 「PointとDirectionをここでは同じに扱う」という特別扱いの
+                // コメントも不要になった。
+                EntityType::Point => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
 
                     // 🐛 FIX: 点/方向が変化(他の点/方向とマージ)しても、それを
@@ -221,9 +227,9 @@ impl EGraph {
                     // いるはずのCircumcircleが別実体のまま統合されない問題が
                     // 見つかったことへの対応。EGraph::merge_generationのドキュメント
                     // 参照のような大掛かりな仕組みは不要で、直線と全く同じ
-                    // パターンで解決できる)。Directionは円に乗ることが無いので
-                    // 実質Pointの場合だけ意味を持つが、フィルタが空になるだけで
-                    // 無害なのでDirection側でも同じコードパスを共有する。
+                    // パターンで解決できる)。無限遠直線上の点(旧Direction)が
+                    // 有限の円に乗ることは通常無いので、その場合はcirclesが
+                    // 空になるだけで無害。
                     let circles: Vec<ClassId> = self.entities[rep_id.0].components.first()
                         .map(|c| dedup_sorted_ids(c.subobjects.iter()
                             .map(|&s| self.get_rep(s))
@@ -244,8 +250,10 @@ impl EGraph {
     /// line 自身が乗っている点(局所・少数)だけを見て、それらの点が他に
     /// 乗っている直線との共有点数を調べる。全直線を舐めない。
     ///
-    /// Direction(方向)は「無限遠直線上の点」として扱うので、この関数では
-    /// 通常の点と全く区別しない。これにより「2直線が1点を共有しかつ方向が
+    /// 🌟 「方向」はEntityType::Directionという独立した型ではなく、L∞
+    /// (line_infinity)にlink_logical_incidenceで接続しているだけの
+    /// ただのPointなので(EntityType::Direction撤廃)、ここでPoint以外を
+    /// 特別扱いする必要はない。これにより「2直線が1点を共有しかつ方向が
     /// 同じなら同一直線」という以前の特別扱い(same_dir)は、単に
     /// 「無限遠直線上の共有点も含めて2点共有」という同じルールに統合される
     /// (平行なだけの別々の直線は無限遠点1つしか共有しないので誤ってマージ
@@ -253,9 +261,8 @@ impl EGraph {
     /// マージされる)。
     fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool {
         let mut line = self.get_rep(line);
-        let is_point_like = |et: EntityType| et == EntityType::Point || et == EntityType::Direction;
 
-        // 🐛 FIX: 共有点を数える前に、この直線上の点(方向を含む)どうしの
+        // 🐛 FIX: 共有点を数える前に、この直線上の点(無限遠点を含む)どうしの
         // 「2直線の交点の一意性」を先に局所的な不動点まで確定させておく。
         // これをやらないと、本来は同一になるはずだがまだ別IDのままの2つ
         // (例: 外心の候補O1とO2、あるいはまだ別々に導出された同じ方向)を
@@ -265,7 +272,7 @@ impl EGraph {
             let points: Vec<ClassId> = match self.entities[line.0].components.first() {
                 Some(c) => c.subobjects.iter()
                     .map(|&id| self.get_rep(id))
-                    .filter(|&id| is_point_like(self.entities[id.0].entity_type))
+                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
                     .collect(),
                 None => return false,
             };
@@ -284,7 +291,7 @@ impl EGraph {
         let points: Vec<ClassId> = match self.entities[line.0].components.first() {
             Some(c) => dedup_sorted_ids(c.subobjects.iter()
                 .map(|&id| self.get_rep(id))
-                .filter(|&id| is_point_like(self.entities[id.0].entity_type))),
+                .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)),
             None => return false,
         };
 
@@ -465,18 +472,17 @@ impl EGraph {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
             if existing_rep != point_rep {
-                // 🐛 FIX候補として「PointとDirectionのEntityType不一致を弾く」
-                // ガードを一度試したが、orthocenter/nine_point_fullが本物の
-                // 回帰(証明が届かなくなる)を起こしたため撤回した。これらの
-                // 問題は「2直線が実は平行 ⟹ 交点は無限遠点」という正しい構造的
-                // 推論の一部として、意図的にPoint型で登録された実体が後から
-                // Direction型の実体と同一視されることに依存している
-                // (原因はaction_space.rs::is_special_constant付近のコメント
-                // 参照: Intersection(l1,l2)は常にPoint型の実体を作るため)。
-                // 根本原因はaction_space.rs側(MCTSの候補生成が平行な2直線の
-                // 交点を素朴に候補に挙げてしまう場所)で塞ぐのが正しく、ここ
-                // (通常の証明探索でも必ず通る合同閉包の中枢)を型で一律に
-                // 塞ぐと必要な収束経路まで一緒に潰してしまう。
+                // 🌟 経緯: 以前はDirectionが独立したEntityTypeで、平行な2直線を
+                // Intersectionしてしまうと(常にPoint型で作られる)「Point型の
+                // 実体とDirection型の実体を統合しようとする」型混同が起こり
+                // 得た。ここに型不一致を弾くガードを試みたこともあったが、
+                // orthocenter/nine_point_fullがまさにこの「2直線が実は平行 ⟹
+                // 交点は無限遠点」という同一視に正しく依存していたため回帰した。
+                // ユーザー提案(directionはL∞上のPointとして扱い、検索も
+                // incidenceで行う)に沿ってEntityType::Directionを撤廃した今は、
+                // existing/point はどちらも常にPointであり、この種の型混同は
+                // 構造的に起こり得ない――ここで型を気にする必要が無くなった
+                // こと自体が、その設計変更の直接の効果。
                 // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
                 // 確定する前に数値的な裏付けを取る。
                 if self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {

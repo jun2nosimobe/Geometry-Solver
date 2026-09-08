@@ -32,5 +32,5 @@ pub fn angle_pair(egraph: &mut EGraph, dir1: ClassId, dir2: ClassId, name: &str)
 }
 
 pub fn direction_of(egraph: &mut EGraph, line: ClassId, name: &str) -> ClassId {
-    egraph.create_entity(format!("Dir_{}", name), Definition::DirectionOf(line), EntityType::Direction)
+    egraph.create_entity(format!("Dir_{}", name), Definition::DirectionOf(line), EntityType::Point)
 }

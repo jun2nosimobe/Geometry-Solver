@@ -14,9 +14,9 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let l_cd = egraph.create_entity("L_CD".to_string(), Definition::new_line(c, d), EntityType::Line);
     let l_ef = egraph.create_entity("L_EF".to_string(), Definition::new_line(e, f), EntityType::Line);
 
-    let dir_ab = egraph.create_entity("Dir_AB".to_string(), Definition::DirectionOf(l_ab), EntityType::Direction);
-    let dir_cd = egraph.create_entity("Dir_CD".to_string(), Definition::DirectionOf(l_cd), EntityType::Direction);
-    let dir_ef = egraph.create_entity("Dir_EF".to_string(), Definition::DirectionOf(l_ef), EntityType::Direction);
+    let dir_ab = egraph.create_entity("Dir_AB".to_string(), Definition::DirectionOf(l_ab), EntityType::Point);
+    let dir_cd = egraph.create_entity("Dir_CD".to_string(), Definition::DirectionOf(l_cd), EntityType::Point);
+    let dir_ef = egraph.create_entity("Dir_EF".to_string(), Definition::DirectionOf(l_ef), EntityType::Point);
 
     let ang1 = egraph.create_entity("Ang_AB_EF".to_string(), Definition::AnglePair(dir_ab, dir_ef), EntityType::Angle);
     let ang2 = egraph.create_entity("Ang_CD_EF".to_string(), Definition::AnglePair(dir_cd, dir_ef), EntityType::Angle);

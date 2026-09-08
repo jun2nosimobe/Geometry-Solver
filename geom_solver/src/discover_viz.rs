@@ -186,7 +186,11 @@ impl<'a> RealEvaluator<'a> {
                 let (pa, pb, pc) = (self.point_of(*a)?, self.point_of(*b)?, self.point_of(*c)?);
                 harmonic_conjugate_real(pa, pb, pc).map(|(x, y)| RealShape::Point(x, y))
             }
-            _ => None, // Angle/Scalar/Direction/Conic/CrossRatio系(描画不要と確認済み)
+            // Angle/Scalar/Conic/CrossRatio系、およびDirectionOf/PerpDirectionOf
+            // (EntityType::Direction撤廃後は単なるPoint型だが、無限遠点は
+            // アフィン平面のSVGには描画しようがないので変わらずNoneでよい)
+            // は描画不要と確認済み。
+            _ => None,
         }
     }
 }

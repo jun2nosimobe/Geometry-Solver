@@ -631,9 +631,9 @@ fn test_angle_pair_value_satisfies_cross_ratio_multiplicativity() {
     let l_ac = egraph.create_entity("L_AC".into(), Definition::new_line(a, c), EntityType::Line);
     let l_ad = egraph.create_entity("L_AD".into(), Definition::new_line(a, d), EntityType::Line);
 
-    let dir_ab = egraph.create_entity("Dir_AB".into(), Definition::DirectionOf(l_ab), EntityType::Direction);
-    let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Direction);
-    let dir_ad = egraph.create_entity("Dir_AD".into(), Definition::DirectionOf(l_ad), EntityType::Direction);
+    let dir_ab = egraph.create_entity("Dir_AB".into(), Definition::DirectionOf(l_ab), EntityType::Point);
+    let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Point);
+    let dir_ad = egraph.create_entity("Dir_AD".into(), Definition::DirectionOf(l_ad), EntityType::Point);
 
     let ang_ab_ac = egraph.create_entity("Ang_AB_AC".into(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);
     let ang_ac_ad = egraph.create_entity("Ang_AC_AD".into(), Definition::AnglePair(dir_ac, dir_ad), EntityType::Angle);

@@ -99,7 +99,12 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
     let mut set: std::collections::HashSet<EntityType> = std::collections::HashSet::new();
     for name in names {
         if let Some(&t) = theorem.entities.get(name) {
-            if !matches!(t, EntityType::Angle | EntityType::Direction | EntityType::Scalar) {
+            // 🌟 EntityType::Direction撤廃に伴い、旧DirectionはこのPoint除外の
+            // 対象に含まれる(方向は常にDefinedBy/Connected経由で導出され、
+            // 自由点のようにあらかじめ十分な数が存在するとは限らないため、
+            // 元々Angle/Scalarと同じく「必須の事前存在チェック」の対象外
+            // だった――Directionの分だけPointの扱いが変わったわけではない)。
+            if !matches!(t, EntityType::Angle | EntityType::Scalar) {
                 set.insert(t);
             }
         }
@@ -980,6 +985,21 @@ impl ProverEngine {
 
     /// 🌟 "Connected" パターン: child/parent の束縛状況の4通り(両方/片方×2/どちらも未束縛)
     /// で分岐する。
+    ///
+    /// 🐛 FIX(EntityType::Direction撤廃で新たに生まれたバグ): 「方向」が独立した
+    /// 型で無くなり、L∞に繋がっただけのPointになったため、「この直線に乗っている
+    /// 点を探す」という(Line,Point)型の"Connected"パターンが、以前は型で
+    /// 自動的に除外されていたその直線自身の方向(=L∞上の点)まで有効な候補として
+    /// 拾ってしまうようになった。逆に「この直線の方向を求める」という
+    /// (Line,Direction)パターンは、その直線上の"普通の"点(A,Bなど)まで候補に
+    /// 混ざってしまう。どちらも実際にcyclic_quad等で観測された(候補が2〜3倍に
+    /// 水増しされ、DFS予算を無駄食いして証明が届かなくなる/大幅に遅くなる)。
+    /// これまで一度も読まれていなかったFactPatternDef::target_type/sub_type
+    /// (「円周角の定理」のtarget_type=Some("Line")/sub_type=Some("Point")のような
+    /// 記述が既にコメント的に付いていた慣習)を、ここで初めて実際の判定に使う:
+    /// target_type=="Direction"ならparent側、sub_type=="Direction"ならchild側の
+    /// Point候補を「L∞上にある点だけ」に絞り、それ以外(既定)は逆に「L∞上に
+    /// ない点だけ」に絞る(型撤廃前と同じ、有限点だけを候補にする挙動)。
     fn match_connected_fact(
         &mut self,
         theorem: &TheoremDef,
@@ -990,10 +1010,22 @@ impl ProverEngine {
         failed_paths: &mut rustc_hash::FxHashSet<u64>,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
+        use crate::mmp_core::EntityType;
         let child_var = &def.args[0];
         let parent_var = &def.args[1];
         let expected_c_type = theorem.entities.get(child_var).copied();
         let expected_p_type = theorem.entities.get(parent_var).copied();
+        let wants_child_direction = def.sub_type.as_deref() == Some("Direction");
+        let wants_parent_direction = def.target_type.as_deref() == Some("Direction");
+        // 🌟 候補id(宣言型et)がこのパターン変数として受理できるかを判定する。
+        // et が Point 以外なら型一致だけで従来通り。et が Point なら、
+        // 「L∞上にあるか」がwants_direction(このパターン変数が方向を
+        // 欲しがっているか)と一致する場合だけ受理する。
+        let accept_point = |egraph: &crate::mmp_core::EGraph, id: ClassId, et: EntityType, wants_direction: bool| -> bool {
+            if egraph.entities[id.0].entity_type != et { return false; }
+            if et != EntityType::Point { return true; }
+            egraph.is_connected(id, egraph.line_infinity) == wants_direction
+        };
 
         match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
             (Some(c_id), Some(p_id)) => {
@@ -1021,7 +1053,7 @@ impl ProverEngine {
                         let p_rep = self.egraph.get_rep(sub);
                         if p_rep == c_rep || !self.egraph.entities[p_rep.0].is_active() { continue; }
                         if let Some(et) = expected_p_type {
-                            if self.egraph.entities[p_rep.0].entity_type != et { continue; }
+                            if !accept_point(&self.egraph, p_rep, et, wants_parent_direction) { continue; }
                         }
                         candidates.insert(p_rep);
                     }
@@ -1049,7 +1081,7 @@ impl ProverEngine {
                     }
                 }
                 child_candidates.retain(|&c_rep| {
-                    expected_c_type.map_or(true, |et| self.egraph.entities[c_rep.0].entity_type == et)
+                    expected_c_type.map_or(true, |et| accept_point(&self.egraph, c_rep, et, wants_child_direction))
                 });
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
@@ -1072,7 +1104,19 @@ impl ProverEngine {
                 // そうである)場合のみキャッシュを使い、型が不明な稀な
                 // フォールバックでは従来通りのフルスキャンを行う。
                 if let (Some(ct), Some(pt)) = (expected_c_type, expected_p_type) {
-                    let pairs = self.connected_pairs_for_types(ct, pt);
+                    let raw_pairs = self.connected_pairs_for_types(ct, pt);
+                    // 🌟 connected_pairs_for_typesは(child_type, parent_type)の
+                    // 組み合わせだけで結果を共有キャッシュするため、L∞上の点を
+                    // 含めるか除外するかはここで結果を受け取った後にふるいに
+                    // かける(キャッシュ自体は複数の定理・向きで安全に共有され続ける)。
+                    let pairs: Rc<Vec<(ClassId, ClassId)>> = if ct == EntityType::Point || pt == EntityType::Point {
+                        Rc::new(raw_pairs.iter().copied().filter(|&(c, p)| {
+                            (ct != EntityType::Point || self.egraph.is_connected(c, self.egraph.line_infinity) == wants_child_direction)
+                                && (pt != EntityType::Point || self.egraph.is_connected(p, self.egraph.line_infinity) == wants_parent_direction)
+                        }).collect())
+                    } else {
+                        raw_pairs
+                    };
                     // 🌟 ユーザー提案(「複比の透視射影不変性」を熱量駆動の考え方で
                     // 高速化したい)への対応: この分岐(Connected両方未束縛)は
                     // match_identical_fact/match_defined_by_factの類似分岐と違い、
@@ -1114,7 +1158,8 @@ impl ProverEngine {
                     let mut parent_candidates: Vec<ClassId> = Vec::new();
                     if let Some(et) = expected_p_type {
                         for p_rep in self.egraph.iter_reps_of_type(et) {
-                            if self.egraph.entities[p_rep.0].is_active() {
+                            if self.egraph.entities[p_rep.0].is_active()
+                                && accept_point(&self.egraph, p_rep, et, wants_parent_direction) {
                                 parent_candidates.push(p_rep);
                             }
                         }
@@ -1134,7 +1179,7 @@ impl ProverEngine {
                                 .filter(|&id| {
                                     if !self.egraph.entities[id.0].is_active() { return false; }
                                     match expected_c_type {
-                                        Some(et) => self.egraph.entities[id.0].entity_type == et,
+                                        Some(et) => accept_point(&self.egraph, id, et, wants_child_direction),
                                         None => true,
                                     }
                                 })
@@ -1393,7 +1438,7 @@ impl ProverEngine {
 
                 let e_type = match target_type {
                     "AnglePair" => EntityType::Angle,
-                    "DirectionOf" => EntityType::Direction,
+                    "DirectionOf" => EntityType::Point,
                     _ => EntityType::Scalar
                 };
 
@@ -1678,12 +1723,15 @@ impl ProverEngine {
                 self.egraph.get_rep(existing_id)
             } else {
                 let entity_type = match constr.target_type.as_str() {
-                    "Line" => EntityType::Line, 
-                    "Direction" => EntityType::Direction,
-                    "Angle" => EntityType::Angle, 
+                    "Line" => EntityType::Line,
+                    "Angle" => EntityType::Angle,
                     "Circle" => EntityType::Circle,
                     "Scalar" => EntityType::Scalar, // 🌟 スカラー型の追加
                     "Conic" => EntityType::Conic,
+                    // 🌟 EntityType::Direction撤廃(方向はL∞に接続された
+                    // ただのPoint): "Point"はもちろん、旧"Direction"文字列も
+                    // (theorems.rsを全て"Point"に置き換え済みだが)フォール
+                    // バックとして自然にここに落ちる。
                     _ => EntityType::Point,
                 };
                 
@@ -2309,7 +2357,7 @@ impl BlackboardEngine {
             return self.prover.egraph.get_rep(dir_id);
         }
         let name = format!("Dir_{}_(Fallback)", self.prover.egraph.entities[line_id.0].name);
-        let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Direction);
+        let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
         self.prover.egraph.apply_trivial_relations(new_id, &def);
         new_id
     }

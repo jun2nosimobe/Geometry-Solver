@@ -17,6 +17,15 @@ fn fact(f_type: &str, args: &[&str]) -> Pattern {
     })
 }
 
+/// target_type/sub_typeは大半のfact_typeでは(記録目的だけの)未使用フィールド
+/// だが、fact_type=="Connected"に限っては logic_core.rs::match_connected_fact が
+/// 実際に読む: target_type=="Direction"ならparent側(args[1])、
+/// sub_type=="Direction"ならchild側(args[0])を「L∞上の点(=方向)」に限定して
+/// 列挙し、それ以外(既定)は逆に「L∞上に無い有限点」に限定する
+/// (EntityType::Direction撤廃により、方向はもう独立した型ではなくL∞への
+/// incidenceで判定するしかないため。以前は"Line"上の点を探すfact_ext呼び出しが
+/// 別に"Direction"上の点を探すfact_ext呼び出しと型で自然に区別されていたが、
+/// 今は両方ともEntityType::Pointなので、このマーカーで明示的に伝える必要がある)。
 fn fact_ext(f_type: &str, args: &[&str], t_type: Option<&str>, s_type: Option<&str>, flip: bool, group: Option<&str>) -> Pattern {
     Pattern::Fact(FactPatternDef {
         fact_type: f_type.to_string(),
@@ -66,8 +75,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Circ", EntityType::Circle),
                 ("L_A1_B1", EntityType::Line), ("L_A1_B2", EntityType::Line),
                 ("L_A2_B1", EntityType::Line), ("L_A2_B2", EntityType::Line),
-                ("Dir_A1_B1", EntityType::Direction), ("Dir_A1_B2", EntityType::Direction),
-                ("Dir_A2_B1", EntityType::Direction), ("Dir_A2_B2", EntityType::Direction),
+                ("Dir_A1_B1", EntityType::Point), ("Dir_A1_B2", EntityType::Point),
+                ("Dir_A2_B1", EntityType::Point), ("Dir_A2_B2", EntityType::Point),
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
@@ -178,7 +187,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
                 ("M1", EntityType::Point), ("M2", EntityType::Point),
                 ("LineBC", EntityType::Line), ("LineM1M2", EntityType::Line),
-                ("DirBC", EntityType::Direction), ("DirM1M2", EntityType::Direction),
+                ("DirBC", EntityType::Point), ("DirM1M2", EntityType::Point),
             ]),
             patterns: vec![
                 fact_ext("DefinedBy", &["A", "B", "M1"], Some("Midpoint"), Some("Unordered"), false, None),
@@ -192,7 +201,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["DirBC".to_string(), "DirM1M2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["DirBC".to_string(), "DirM1M2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
             ],
         },
 
@@ -202,7 +211,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
                 ("Dist_AB", EntityType::Scalar), ("Dist_AC", EntityType::Scalar),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
-                ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirBC", EntityType::Direction),
+                ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
                 ("Ang_B", EntityType::Angle), ("Ang_C", EntityType::Angle),
             ]),
             patterns: vec![
@@ -253,7 +262,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
                 ("Dist_AB", EntityType::Scalar), ("Dist_AC", EntityType::Scalar),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
-                ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirBC", EntityType::Direction),
+                ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
                 ("Ang_B", EntityType::Angle), ("Ang_C", EntityType::Angle),
             ]),
             patterns: vec![
@@ -311,7 +320,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point), ("P", EntityType::Point),
                 ("LineAB", EntityType::Line), ("LineCD", EntityType::Line), ("LineAD", EntityType::Line), ("LineCB", EntityType::Line),
-                ("DirAB", EntityType::Direction), ("DirCD", EntityType::Direction), ("DirAD", EntityType::Direction), ("DirCB", EntityType::Direction),
+                ("DirAB", EntityType::Point), ("DirCD", EntityType::Point), ("DirAD", EntityType::Point), ("DirCB", EntityType::Point),
                 ("AngA", EntityType::Angle), ("AngC", EntityType::Angle),
                 ("LenPA", EntityType::Scalar), ("LenPB", EntityType::Scalar), ("LenPC", EntityType::Scalar), ("LenPD", EntityType::Scalar),
                 ("ProdAB", EntityType::Scalar), ("ProdCD", EntityType::Scalar),
@@ -428,8 +437,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("M", EntityType::Point), ("N", EntityType::Point),
                 ("LineEA", EntityType::Line), ("LineEB", EntityType::Line), ("LineED", EntityType::Line), ("LineEC", EntityType::Line),
                 ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
-                ("DirEA", EntityType::Direction), ("DirEB", EntityType::Direction), ("DirED", EntityType::Direction), ("DirEC", EntityType::Direction),
-                ("DirEM", EntityType::Direction), ("DirEN", EntityType::Direction),
+                ("DirEA", EntityType::Point), ("DirEB", EntityType::Point), ("DirED", EntityType::Point), ("DirEC", EntityType::Point),
+                ("DirEM", EntityType::Point), ("DirEN", EntityType::Point),
                 ("AngE_AB", EntityType::Angle), ("AngE_DC", EntityType::Angle), ("AngE_AM", EntityType::Angle), ("AngE_DN", EntityType::Angle),
                 ("LenSqEA", EntityType::Scalar), ("LenSqEB", EntityType::Scalar), ("LenSqEC", EntityType::Scalar), ("LenSqED", EntityType::Scalar),
                 ("LenSqEM", EntityType::Scalar), ("LenSqEN", EntityType::Scalar),
@@ -490,8 +499,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["D".to_string(), "C".to_string()], target_type: "Point".to_string(), bind_to: "N".to_string() },
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Line".to_string(), bind_to: "LineEM".to_string() },
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "N".to_string()], target_type: "Line".to_string(), bind_to: "LineEN".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEM".to_string()], target_type: "Direction".to_string(), bind_to: "DirEM".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEN".to_string()], target_type: "Direction".to_string(), bind_to: "DirEN".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEM".to_string()], target_type: "Point".to_string(), bind_to: "DirEM".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEN".to_string()], target_type: "Point".to_string(), bind_to: "DirEN".to_string() },
                 ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirEA".to_string(), "DirEM".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_AM".to_string() },
                 ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirED".to_string(), "DirEN".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_DN".to_string() },
                 ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Scalar".to_string(), bind_to: "LenSqEM".to_string() },
@@ -511,7 +520,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
                 ("Circ", EntityType::Circle), ("TanA", EntityType::Line),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
-                ("DirTan", EntityType::Direction), ("DirAB", EntityType::Direction), ("DirAC", EntityType::Direction), ("DirBC", EntityType::Direction),
+                ("DirTan", EntityType::Point), ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
                 ("AngTan", EntityType::Angle), ("AngBCA", EntityType::Angle),
             ]),
             patterns: vec![
@@ -543,8 +552,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             name: "円周角の定理の逆".to_string(),
             entities: entities(&[
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
-                ("Dir_L1", EntityType::Direction), ("Dir_L2", EntityType::Direction),
-                ("Dir_L3", EntityType::Direction), ("Dir_L4", EntityType::Direction),
+                ("Dir_L1", EntityType::Point), ("Dir_L2", EntityType::Point),
+                ("Dir_L3", EntityType::Point), ("Dir_L4", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
                 ("P_Apex1", EntityType::Point), ("P_Apex2", EntityType::Point),
                 ("P_Base1", EntityType::Point), ("P_Base2", EntityType::Point),
@@ -585,7 +594,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "同位角による平行判定(右共通)".to_string(),
             entities: entities(&[
-                ("D1", EntityType::Direction), ("D2", EntityType::Direction), ("D3", EntityType::Direction),
+                ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
@@ -596,13 +605,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
             ],
         },
         TheoremDef {
             name: "同位角による平行判定(左共通)".to_string(),
             entities: entities(&[
-                ("D1", EntityType::Direction), ("D2", EntityType::Direction), ("D3", EntityType::Direction),
+                ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
                 ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
             ]),
             patterns: vec![
@@ -613,7 +622,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Direction".to_string()), sub_type: None }
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
             ],
         },
         // ==========================================
@@ -622,8 +631,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "有向角の加法性".to_string(),
             entities: entities(&[
-                ("D1", EntityType::Direction), ("D2", EntityType::Direction), ("D3", EntityType::Direction),
-                ("D4", EntityType::Direction), ("D5", EntityType::Direction), ("D6", EntityType::Direction),
+                ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
+                ("D4", EntityType::Point), ("D5", EntityType::Point), ("D6", EntityType::Point),
                 ("Ang12", EntityType::Angle), ("Ang45", EntityType::Angle),
                 ("Ang23", EntityType::Angle), ("Ang56", EntityType::Angle),
                 ("Ang13", EntityType::Angle), ("Ang46", EntityType::Angle),
@@ -667,8 +676,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "有向角の交替律".to_string(),
             entities: entities(&[
-                ("D1", EntityType::Direction), ("D2", EntityType::Direction), 
-                ("D3", EntityType::Direction), ("D4", EntityType::Direction),
+                ("D1", EntityType::Point), ("D2", EntityType::Point), 
+                ("D3", EntityType::Point), ("D4", EntityType::Point),
                 ("Ang12", EntityType::Angle), ("Ang34", EntityType::Angle),
                 ("Ang13", EntityType::Angle), ("Ang24", EntityType::Angle),
             ]),
@@ -694,7 +703,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("A", EntityType::Point), ("C", EntityType::Point), ("H", EntityType::Point), ("M", EntityType::Point),
                 ("L_AH", EntityType::Line), ("L_CH", EntityType::Line), ("L_MH", EntityType::Line), ("L_CA", EntityType::Line),
-                ("Dir_AH", EntityType::Direction), ("Dir_CH", EntityType::Direction), ("Dir_MH", EntityType::Direction), ("Dir_CA", EntityType::Direction),
+                ("Dir_AH", EntityType::Point), ("Dir_CH", EntityType::Point), ("Dir_MH", EntityType::Point), ("Dir_CA", EntityType::Point),
                 ("Ang90", EntityType::Angle), ("Ang_AH_CH", EntityType::Angle), ("Ang_MH_CH", EntityType::Angle), ("Ang_CH_CA", EntityType::Angle),
             ]),
             patterns: vec![
@@ -720,8 +729,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             constructions: vec![
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["M".to_string(), "H".to_string()], target_type: "Line".to_string(), bind_to: "L_MH".to_string() },
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["C".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "L_CA".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_MH".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_MH".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_CA".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_CA".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_MH".to_string()], target_type: "Point".to_string(), bind_to: "Dir_MH".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_CA".to_string()], target_type: "Point".to_string(), bind_to: "Dir_CA".to_string() },
                 ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_MH".to_string(), "Dir_CH".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_MH_CH".to_string() },
                 ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_CH".to_string(), "Dir_CA".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_CH_CA".to_string() },
             ],
@@ -738,9 +747,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line),
-                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction),
+                ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
                 ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
-                ("Line_Median", EntityType::Line), ("Dir_Median", EntityType::Direction), // 🌟 復活
+                ("Line_Median", EntityType::Line), ("Dir_Median", EntityType::Point), // 🌟 復活
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
@@ -760,7 +769,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             constructions: vec![
                 // 🌟 FIX: 直線と方向をE-Graphに物理的に作図し、他の定理への架け橋を作る
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "Line_Median".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["Line_Median".to_string()], target_type: "Direction".to_string(), bind_to: "Dir_Median".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["Line_Median".to_string()], target_type: "Point".to_string(), bind_to: "Dir_Median".to_string() },
                 
                 ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MB".to_string() },
                 ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MA".to_string() },
@@ -784,7 +793,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line),
-                ("Dir1", EntityType::Direction), ("Dir2", EntityType::Direction),
+                ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
                 ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
@@ -798,8 +807,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             constructions: vec![
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Line".to_string(), bind_to: "L1".to_string() },
                 ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "L2".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L1".to_string()], target_type: "Direction".to_string(), bind_to: "Dir1".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L2".to_string()], target_type: "Direction".to_string(), bind_to: "Dir2".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L1".to_string()], target_type: "Point".to_string(), bind_to: "Dir1".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L2".to_string()], target_type: "Point".to_string(), bind_to: "Dir2".to_string() },
                 ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir1".to_string(), "Dir2".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_A".to_string() },
             ],
             conclusions: vec![

@@ -31,8 +31,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let line_de = egraph.create_entity("Line_DE".to_string(), Definition::new_line(d, e), EntityType::Line);
     let line_fd = egraph.create_entity("Line_FD".to_string(), Definition::new_line(f, d), EntityType::Line);
     
-    let dir_de = egraph.create_entity("Dir_DE".to_string(), Definition::DirectionOf(line_de), EntityType::Direction);
-    let dir_fd = egraph.create_entity("Dir_FD".to_string(), Definition::DirectionOf(line_fd), EntityType::Direction);
+    let dir_de = egraph.create_entity("Dir_DE".to_string(), Definition::DirectionOf(line_de), EntityType::Point);
+    let dir_fd = egraph.create_entity("Dir_FD".to_string(), Definition::DirectionOf(line_fd), EntityType::Point);
     
     egraph.apply_congruence_closure();
     

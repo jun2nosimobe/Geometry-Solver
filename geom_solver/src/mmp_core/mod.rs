@@ -28,9 +28,24 @@ mod tests;
 pub struct ClassId(pub usize);
 
 // 2. 図形の種類
+//
+// 🌟 EntityType::Direction撤廃の経緯: 「方向」はかつて独立した型として
+// 存在したが、実体としては常に「無限遠直線L∞(line_infinity)上の点」
+// (link_logical_incidenceで接続されたPoint)そのものだった。これが独立した
+// 型タグとしても存在していたことが、平行な2直線をIntersectionしてしまうと
+// (常にPoint型で作られる)本物のDirection型の実体と統合しようとして型が
+// 混ざる、という実際のバグ(triangle_centersプリセットでの自由探索中に
+// 発見)の温床になっていた。ユーザー提案「directionはL∞上にあるという
+// 条件が付与されたPoint型のオブジェクトで、検索もL∞上の点を探せばよい」
+// を型システムのレベルで徹底し、Directionという型タグ自体を廃止した――
+// 「無限遠点かどうか」はもう型ではなく、L∞へのincidence(is_connected)
+// という構造的事実だけで表現される。これにより上記の型混同はそもそも
+// 起こりようがなくなった(action_space.rs::entities_of_typeがPointの
+// 候補プールからL∞に繋がる点を明示的に除外しているのは、この設計の
+// 一部として「有限点だけを候補にしたい」既存の意図を保つため)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
-    Point, Line, Circle, Direction, Angle, Scalar,
+    Point, Line, Circle, Angle, Scalar,
     // 🌟 5点を通る一般二次曲線(Definition::ConicThrough5Points)専用の型。
     // Circleとは別型にしておくことで、既存のCircle前提のコード
     // (sample_point_on_circle等)を誤って二次曲線に適用してしまう事故を防ぐ
@@ -180,17 +195,18 @@ impl Definition {
             Definition::Midpoint(_, _) => EntityType::Point,
             Definition::HarmonicConjugateOf(_, _, _) => EntityType::Point,
             Definition::Circumcircle(_, _, _) => EntityType::Circle,
-            Definition::DirectionOf(_) => EntityType::Direction,
-            Definition::PerpDirectionOf(_) => EntityType::Direction,
+            Definition::DirectionOf(_) => EntityType::Point,
+            Definition::PerpDirectionOf(_) => EntityType::Point,
             Definition::AnglePair(_, _) => EntityType::Angle,
             Definition::LengthSq(_, _) => EntityType::Scalar,
             Definition::CrossRatio(_, _, _, _) => EntityType::Scalar,
             Definition::CrossRatioOfLines(_, _, _, _) => EntityType::Scalar,
             Definition::GivenPoint | Definition::FreePoint => EntityType::Point,
             // 🌟 円周点I,Jのように「同次座標を持つ定数」は、デフォルトでは
-            // Point(GivenPoint/FreePointと同じ)として扱っておく。実際の型は
-            // create_entity呼び出し側が明示するので(circ_i/circ_jはDirection)、
-            // ここはMCTS等の型不明時のフォールバックとしてのみ使われる。
+            // Point(GivenPoint/FreePointと同じ)として扱っておく。circ_i/circ_j
+            // も(EntityType::Direction撤廃により)実際にPointとして作られ、
+            // L∞上にあるという事実はlink_logical_incidence(EGraph::new参照)で
+            // 別途表現するので、ここは特別扱い不要でそのままフォールバックとして使える。
             Definition::ConstantHomogeneous(_, _, _) => EntityType::Point,
             Definition::ConicThrough5Points(_, _, _, _, _) => EntityType::Conic,
             Definition::Product(_, _) => EntityType::Scalar,
@@ -408,8 +424,16 @@ impl EGraph {
         // 事前に検証済み。
         let i = ModInt::new(3).pow((crate::mmp_math::PRIME - 1) / 4);
         let neg_i = -i;
-        egraph.circ_i = egraph.create_entity("CircI".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), i, ModInt::new(0)), EntityType::Direction);
-        egraph.circ_j = egraph.create_entity("CircJ".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), neg_i, ModInt::new(0)), EntityType::Direction);
+        egraph.circ_i = egraph.create_entity("CircI".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), i, ModInt::new(0)), EntityType::Point);
+        egraph.circ_j = egraph.create_entity("CircJ".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), neg_i, ModInt::new(0)), EntityType::Point);
+        // 🌟 EntityType::Direction撤廃に伴うFIX: I,Jは同次座標のz成分が0
+        // (=無限遠直線L∞上の点)という意味で、これまでDirectionという型タグで
+        // それを表現していた。型を撤廃した今、この事実は他の全ての方向と
+        // 同じくlink_logical_incidenceによるL∞への明示的な接続で表現する
+        // 必要がある(ConstantHomogeneousのapply_trivial_relationsには
+        // これに対応する分岐が無いため、ここで直接張る)。
+        egraph.link_logical_incidence(egraph.circ_i, egraph.line_infinity);
+        egraph.link_logical_incidence(egraph.circ_j, egraph.line_infinity);
         egraph
     }
 
@@ -807,7 +831,7 @@ impl EGraph {
                 self.link_logical_incidence(*p2, new_id);
                 let name = format!("Dir_{}_(Auto)", self.entities[new_id.0].name);
                 let dir_def = Definition::DirectionOf(new_id);
-                let dir_id = self.create_entity(name, dir_def, EntityType::Direction);
+                let dir_id = self.create_entity(name, dir_def, EntityType::Point);
                 self.link_logical_incidence(new_id, dir_id);
             },
             Definition::Intersection(l1, l2) => {
@@ -830,11 +854,11 @@ impl EGraph {
                 self.link_logical_incidence(*p, new_id);
 
                 let dir1_def = Definition::DirectionOf(*l);
-                let dir1_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[l.0].name), dir1_def, EntityType::Direction);
+                let dir1_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[l.0].name), dir1_def, EntityType::Point);
                 self.link_logical_incidence(*l, dir1_id);
 
                 let dir2_def = Definition::DirectionOf(new_id);
-                let dir2_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir2_def, EntityType::Direction);
+                let dir2_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir2_def, EntityType::Point);
                 self.link_logical_incidence(new_id, dir2_id);
 
                 if matches!(def, Definition::PerpendicularLine(_, _)) {
@@ -865,13 +889,13 @@ impl EGraph {
                     let dir1_name = self.entities[self.get_rep(dir1_id).0].name.clone();
                     let perp1_id = self.create_entity(
                         format!("PerpDir_{}_(Auto)", dir1_name),
-                        Definition::PerpDirectionOf(dir1_id), EntityType::Direction);
+                        Definition::PerpDirectionOf(dir1_id), EntityType::Point);
                     self.merge_entities_justified(perp1_id, dir2_id, Justification::Trivial { reason: "垂線の対合性(PerpDirectionOf): dir1に垂直な方向がdir2そのもの".to_string() });
 
                     let dir2_name = self.entities[self.get_rep(dir2_id).0].name.clone();
                     let perp2_id = self.create_entity(
                         format!("PerpDir_{}_(Auto)", dir2_name),
-                        Definition::PerpDirectionOf(dir2_id), EntityType::Direction);
+                        Definition::PerpDirectionOf(dir2_id), EntityType::Point);
                     self.merge_entities_justified(perp2_id, dir1_id, Justification::Trivial { reason: "垂線の対合性(PerpDirectionOf): dir2に垂直な方向がdir1そのもの".to_string() });
                 } else {
                     self.merge_entities_justified(dir1_id, dir2_id, Justification::Trivial { reason: "平行線の定義より2直線の方向は一致".to_string() });
@@ -881,7 +905,7 @@ impl EGraph {
                 self.link_logical_incidence(*c, new_id);
                 self.link_logical_incidence(*p, new_id);
                 let dir_def = Definition::DirectionOf(new_id);
-                let dir_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir_def, EntityType::Direction);
+                let dir_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir_def, EntityType::Point);
                 self.link_logical_incidence(new_id, dir_id);
             },
             Definition::Midpoint(a, b) => {

@@ -42,8 +42,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     // 目標: 直線CEと直線DFが平行 (方向が一致)
     let line_ce = egraph.create_entity("Line_CE".to_string(), Definition::new_line(c, e), EntityType::Line);
     let line_df = egraph.create_entity("Line_DF".to_string(), Definition::new_line(d, f), EntityType::Line);
-    let dir_ce = egraph.create_entity("Dir_CE".to_string(), Definition::DirectionOf(line_ce), EntityType::Direction);
-    let dir_df = egraph.create_entity("Dir_DF".to_string(), Definition::DirectionOf(line_df), EntityType::Direction);
+    let dir_ce = egraph.create_entity("Dir_CE".to_string(), Definition::DirectionOf(line_ce), EntityType::Point);
+    let dir_df = egraph.create_entity("Dir_DF".to_string(), Definition::DirectionOf(line_df), EntityType::Point);
 
     egraph.apply_congruence_closure();
 

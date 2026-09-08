@@ -25,10 +25,10 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let l_ab = egraph.create_entity("L_AB".to_string(), Definition::new_line(a, b), EntityType::Line);
     let l_cd = egraph.create_entity("L_CD".to_string(), Definition::new_line(c, d), EntityType::Line);
 
-    let dir_ac = egraph.create_entity("Dir_AC".to_string(), Definition::DirectionOf(l_ac), EntityType::Direction);
-    let dir_bd = egraph.create_entity("Dir_BD".to_string(), Definition::DirectionOf(l_bd), EntityType::Direction);
-    let dir_ab = egraph.create_entity("Dir_AB".to_string(), Definition::DirectionOf(l_ab), EntityType::Direction);
-    let dir_cd = egraph.create_entity("Dir_CD".to_string(), Definition::DirectionOf(l_cd), EntityType::Direction);
+    let dir_ac = egraph.create_entity("Dir_AC".to_string(), Definition::DirectionOf(l_ac), EntityType::Point);
+    let dir_bd = egraph.create_entity("Dir_BD".to_string(), Definition::DirectionOf(l_bd), EntityType::Point);
+    let dir_ab = egraph.create_entity("Dir_AB".to_string(), Definition::DirectionOf(l_ab), EntityType::Point);
+    let dir_cd = egraph.create_entity("Dir_CD".to_string(), Definition::DirectionOf(l_cd), EntityType::Point);
 
     // 目標: 円周角 ∠(AB, AC) ≡ ∠(DB, DC) が証明できるか
     let ang1 = egraph.create_entity("Ang_BAC".to_string(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);

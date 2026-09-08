@@ -112,18 +112,21 @@ impl ActionGenerator {
             if pair.len() < 2 { continue; }
             let (x, y) = (egraph.get_rep(pair[0]), egraph.get_rep(pair[1]));
             if x == y { continue; }
-            // 🐛 FIX(型混同の温床): 2直線が既に平行だと構造的にわかっている場合、
-            // その「交点」は有限の点ではなく無限遠点(=2直線が共有する方向、
-            // DirectionOfで既に表現済み)そのものであり、新しくPoint型の実体を
-            // 作る意味がない。にもかかわらずIntersection(l1,l2)は問答無用で
-            // EntityType::Pointの実体を作ってしまう(default_entity_type)ため、
-            // 後で2直線の交点の一意性判定(propagate_point_uniqueness)がこれを
-            // 本物のDirection実体と同一だと(数学的には正しく)結論し、
-            // Point型とDirection型をまたぐ統合が発生していた
-            // (discover.rsの自由探索で実測: ParallelLine(l,p)で作った新しい線と
-            // 元のlを later intersectionしようとする形で頻発し、Line_infinityの
+            // 🐛 FIX(無駄な退化構成の抑制): 2直線が既に平行だと構造的に
+            // わかっている場合、その「交点」は新しい有限点ではなく、
+            // 2直線が共有する無限遠点(DirectionOfで既に表現済みの実体)
+            // そのものである。以前はEntityType::Direction撤廃前で、この
+            // Intersection(l1,l2)が(常にPoint型で作られてしまうため)本物の
+            // Direction型の実体と型をまたいで統合されるバグの温床でもあった
+            // (discover.rsの自由探索で実測: ParallelLine(l,p)で作った新しい
+            // 線と元のlを later intersectionする形で頻発し、Line_infinityの
             // 接続点が汚染され、無関係な方向どうしを誤って同一視しようとする
             // 健全性チェック却下のスパムを大量に引き起こしていた)。
+            // EntityType::Direction撤廃(方向はL∞に接続されたただのPoint)に
+            // よりその型混同自体はもう構造的に起こり得なくなったが、この
+            // チェックは引き続き「どうせ既存の方向実体に統合されるだけの
+            // Point実体を新規に作る」という無駄自体を候補生成の時点で
+            // 省く効果があるので残す。
             // 両方向がまだ実体化されていない場合は判定できないので素通しする
             // (その場合はIntersectionが先に試され、その時点で初めて2つの
             // 方向が統合されるので、以後のサンプリングではこの分岐で弾かれる)。
@@ -239,6 +242,14 @@ impl ActionGenerator {
             || id == egraph.ang0 || id == egraph.ang90
     }
 
+    /// 🌟 EntityType::Direction撤廃(方向はL∞に接続されたただのPointに
+    /// 統一)への対応: entities_of_type(Point)がそのままだと、以前は型で
+    /// 自動的に分かれていた「有限点」と「無限遠点(旧Direction)」が
+    /// 一緒くたに返ってしまう。中点・外接円・垂線/平行線の"点"引数などは
+    /// 元々ずっと有限点だけを候補にしてきた(Midpoint(A, 無限遠点)や
+    /// Circumcircle(A, B, 無限遠点)は退化していて意味がない)ため、
+    /// Point型を要求する呼び出しではここで無限遠点を明示的に除外し、
+    /// 型撤廃前と全く同じ候補プールを保つ。
     fn entities_of_type(&self, egraph: &EGraph, ty: EntityType) -> Vec<ClassId> {
         (0..egraph.entities.len())
             .map(ClassId)
@@ -248,6 +259,7 @@ impl ActionGenerator {
                     && egraph.entities[id.0].is_active()
                     && egraph.entities[id.0].mcts_depth <= Self::MAX_MCTS_CHAIN_DEPTH
                     && !Self::is_special_constant(egraph, egraph.get_rep(id))
+                    && (ty != EntityType::Point || !egraph.is_connected(id, egraph.line_infinity))
             })
             .collect()
     }

@@ -21,10 +21,10 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let line_ed = egraph.create_entity("LineED".to_string(), Definition::new_line(e, d), EntityType::Line);
     let line_ec = egraph.create_entity("LineEC".to_string(), Definition::new_line(e, c), EntityType::Line);
 
-    let dir_ea = egraph.create_entity("DirEA".to_string(), Definition::DirectionOf(line_ea), EntityType::Direction);
-    let dir_eb = egraph.create_entity("DirEB".to_string(), Definition::DirectionOf(line_eb), EntityType::Direction);
-    let dir_ed = egraph.create_entity("DirED".to_string(), Definition::DirectionOf(line_ed), EntityType::Direction);
-    let dir_ec = egraph.create_entity("DirEC".to_string(), Definition::DirectionOf(line_ec), EntityType::Direction);
+    let dir_ea = egraph.create_entity("DirEA".to_string(), Definition::DirectionOf(line_ea), EntityType::Point);
+    let dir_eb = egraph.create_entity("DirEB".to_string(), Definition::DirectionOf(line_eb), EntityType::Point);
+    let dir_ed = egraph.create_entity("DirED".to_string(), Definition::DirectionOf(line_ed), EntityType::Point);
+    let dir_ec = egraph.create_entity("DirEC".to_string(), Definition::DirectionOf(line_ec), EntityType::Point);
 
     let ang_e_ab = egraph.create_entity("AngE_AB".to_string(), Definition::AnglePair(dir_ea, dir_eb), EntityType::Angle);
     let ang_e_dc = egraph.create_entity("AngE_DC".to_string(), Definition::AnglePair(dir_ed, dir_ec), EntityType::Angle);
@@ -41,8 +41,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let n = egraph.create_entity("N".to_string(), Definition::Midpoint(d, c), EntityType::Point);
     let line_em = egraph.create_entity("LineEM".to_string(), Definition::new_line(e, m), EntityType::Line);
     let line_en = egraph.create_entity("LineEN".to_string(), Definition::new_line(e, n), EntityType::Line);
-    let dir_em = egraph.create_entity("DirEM".to_string(), Definition::DirectionOf(line_em), EntityType::Direction);
-    let dir_en = egraph.create_entity("DirEN".to_string(), Definition::DirectionOf(line_en), EntityType::Direction);
+    let dir_em = egraph.create_entity("DirEM".to_string(), Definition::DirectionOf(line_em), EntityType::Point);
+    let dir_en = egraph.create_entity("DirEN".to_string(), Definition::DirectionOf(line_en), EntityType::Point);
     let ang_e_am = egraph.create_entity("AngE_AM".to_string(), Definition::AnglePair(dir_ea, dir_em), EntityType::Angle);
     let ang_e_dn = egraph.create_entity("AngE_DN".to_string(), Definition::AnglePair(dir_ed, dir_en), EntityType::Angle);
 
