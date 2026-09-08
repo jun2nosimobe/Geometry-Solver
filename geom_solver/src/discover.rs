@@ -226,7 +226,27 @@ fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize
         if !probed_pairs.insert(key) { continue; }
         let name_a = engine.prover.egraph.entities[engine.prover.egraph.get_rep(a).0].name.clone();
         let name_b = engine.prover.egraph.entities[engine.prover.egraph.get_rep(b).0].name.clone();
+        // 🐛 FIX(ユーザー報告で判明): 「P1 ≡ P2(2つの無関係な自由点)」の
+        // ような、明らかにおかしい"発見"が上位に来る実例が繰り返し
+        // 見つかった。原因は、ある前提を仮定した結果グラフの大部分
+        // (時には過半数)の実体が一斉に1つの同値類へ潰れる「全体崩壊」が
+        // 起きた場合、崩壊で生じた大量のペアのうち構成手順が最短のもの
+        // (=たまたま素の自由点同士だったペア)が「美しさ」スコアで最も
+        // 減点が少なく、たまたま最上位に来てしまうこと。全体崩壊は
+        // 前提そのものが既に破綻している(数値的な偶然ではなく単なる誤り)
+        // 兆候であり、そこから生まれた個々のペアはどれも「新しい発見」
+        // ではなく崩壊の言い換えに過ぎないので、崩壊の規模(仮定前の
+        // アクティブな同値類数に対する比率)が閾値を超えたら、この前提
+        // からの伝播を丸ごとスキップする。
+        let classes_before = engine.prover.egraph.count_active_classes();
         let discovered = engine.probe_conjecture(a, b, dfs_budget, sweep_rounds);
+        const COLLAPSE_SUSPECT_RATIO: f64 = 0.2;
+        let collapse_ratio = if classes_before > 0 { discovered.len() as f64 / classes_before as f64 } else { 0.0 };
+        if collapse_ratio >= COLLAPSE_SUSPECT_RATIO {
+            println!("  🚨 {} ≡ {} を仮定すると、{}件(仮定前の同値類{}件中、比率{:.0}%)もの実体が一斉に統合される全体崩壊が起きました。前提自体が既に破綻している可能性が高いため、この連鎖からの個別の\"発見\"は報告しません。",
+                name_a, name_b, discovered.len(), classes_before, collapse_ratio * 100.0);
+            continue;
+        }
         if !discovered.is_empty() {
             println!("  🧪 {} ≡ {} を仮定すると、定理の連鎖により{}件の別の等式が追加で導かれました。",
                 name_a, name_b, discovered.len());
@@ -325,8 +345,17 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
     }
 
     let total_entries = entries.len();
+    // 🌟 「全体崩壊」除外ルール(probe_and_expand_conjecturesと同じ閾値・
+    // 同じ理由)をここでも適用する。estimate_conjecture_value自体は合同
+    // 閉包1回だけの浅い見積もりだが、その浅い見積もりだけでもグラフの
+    // 大部分が一斉に統合されるようなら、前提(a≡b)自体が既に破綻している
+    // 可能性が高く、report_conjecturesが直接受け取る(プロービングを
+    // 経ていない)生の数値的偶然についても同じ扱いにする。
+    let classes_now = egraph.count_active_classes();
+    const COLLAPSE_SUSPECT_RATIO: f64 = 0.2;
     let mut ranked: Vec<RankedConjecture> = Vec::new();
     let mut degenerate_skipped = 0usize;
+    let mut collapse_skipped = 0usize;
     for ((ai, bi), hypothesis, occurrences) in entries {
         let (a, b) = (egraph.get_rep(ClassId(ai)), egraph.get_rep(ClassId(bi)));
         if a == b { continue; } // 探索の続きで別経路により既に証明済みになっていた
@@ -346,6 +375,10 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
             continue;
         }
         let value = egraph.estimate_conjecture_value(a, b, &None);
+        if classes_now > 0 && (value.additional_merges as f64 / classes_now as f64) >= COLLAPSE_SUSPECT_RATIO {
+            collapse_skipped += 1;
+            continue;
+        }
         // 🐛 FIX(実測で判明): 以前はmcts_depth(MCTSSearchEngine::apply_action
         // だけが設定する、MCTS自身の補助構成の連鎖の深さ)の和を「構成手順の
         // 長さ」の代わりに使っていたが、これはdfs_match(仮説駆動プロービング
@@ -386,13 +419,13 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
     // (total_entries==0)とは違う状態(何かは見つかったが、報告に値する
     // 未解決の関係としては残らなかった)なので、区別してメッセージを出す。
     if ranked.is_empty() {
-        println!("\n😶 探索中に{}件の数値的な偶然の一致が検出されましたが、いずれも(局所的な一意性判定による自明化、または退化した構成による除外)報告に値する未解決の関係としては残っていません(退化した構成による除外: {}件)。",
-            total_entries, degenerate_skipped);
+        println!("\n😶 探索中に{}件の数値的な偶然の一致が検出されましたが、いずれも(局所的な一意性判定による自明化、退化した構成、または全体崩壊による除外)報告に値する未解決の関係としては残っていません(退化した構成による除外: {}件、全体崩壊による除外: {}件)。",
+            total_entries, degenerate_skipped, collapse_skipped);
         return;
     }
 
-    println!("\n=== 🏛️  発見された「綺麗な」関係の候補 (美しさスコア降順、上位{}件 / 全{}件、退化した構成として除外{}件) ===",
-        top_n.min(ranked.len()), ranked.len(), degenerate_skipped);
+    println!("\n=== 🏛️  発見された「綺麗な」関係の候補 (美しさスコア降順、上位{}件 / 全{}件、退化した構成として除外{}件、全体崩壊として除外{}件) ===",
+        top_n.min(ranked.len()), ranked.len(), degenerate_skipped, collapse_skipped);
     // 🌟 ユーザー要望「報告が読めない問題に対処するため、図形を描画して
     // 確認できるようにしたい」への対応。テキストの構成手順と全く同じ実体
     // 集合・同じPrettyNamerラベルを使って、discover_viz::render_svgに
