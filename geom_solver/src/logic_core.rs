@@ -42,6 +42,34 @@ fn collect_pattern_vars<'a>(pat: &'a Pattern, out: &mut Vec<&'a str>) {
     }
 }
 
+/// 🌟 backlog#1「二重自己束縛/自己束縛×DefinedByペアリングの掛け合わせを
+/// 熱量駆動で絞る」のドキュメント参照(match_identical_factの(None,None)
+/// 自己束縛分岐で使う)。診断の結果、「有向角の加法性」(2つの独立した
+/// (None,None)自己束縛の掛け合わせ)だけでなく、「円周角の定理の逆」
+/// (1つの自己束縛Identical(v1,v2)から、v1・v2それぞれを結果変数とする
+/// 同じtarget_typeのDefinedByパターンが独立に2本ぶら下がる)でも、
+/// 自己束縛の候補数(cap)がそのまま下流全体の分岐係数になっていた
+/// (実測: Distinct(L1,L2,L3,L4)が最多選択パターンになるほど下流の
+/// Connectedチェーンまで含めて膨らむ)。この関数は後者の構造――
+/// 「Identical(v1,v2)のv1・v2それぞれに、同じtarget_typeのDefinedBy
+/// パターンがぶら下がっているか」――を定理の静的なパターン列だけから
+/// 判定する。定理名のハードコードはしない。
+fn has_paired_defined_by_fanout(theorem: &TheoremDef, v1: &str, v2: &str) -> bool {
+    let mut types_for_v1: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
+    let mut types_for_v2: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
+    for p in &theorem.patterns {
+        if let Pattern::Fact(d) = p {
+            if d.fact_type == "DefinedBy" {
+                if let (Some(result), Some(tt)) = (d.args.last(), d.target_type.as_deref()) {
+                    if result == v1 { types_for_v1.insert(tt); }
+                    if result == v2 { types_for_v2.insert(tt); }
+                }
+            }
+        }
+    }
+    types_for_v1.intersection(&types_for_v2).next().is_some()
+}
+
 /// 🌟 定理の型シグネチャ事前フィルタ本体: この定理のpatternsの中で実際に
 /// 照合される変数のうち、「DefinedByのマッチング中には自動生成されない型
 /// (=既にグラフ上に実体が無ければ絶対にマッチしようがない型)」だけを集めて
@@ -885,7 +913,15 @@ impl ProverEngine {
                         && d.args.len() == 2
                         && theorem.entities.get(&d.args[0]).copied() == expected_type)
                 }).count();
-                let max_candidates = if self_bind_pattern_count >= 2 { 10 } else { 40 };
+                // 🌟 診断(円周角の定理の逆)で判明した追加ケース: 自己束縛
+                // パターン自体は1つでも、そのIdentical(v1,v2)のv1・v2それぞれに
+                // 同じtarget_typeのDefinedByパターンが独立にぶら下がっている
+                // 場合(has_paired_defined_by_fanoutのドキュメント参照)、
+                // 自己束縛のcapがそのまま下流(DefinedByペアリング→Connected
+                // チェーン全体)の分岐係数になる。こちらも同じcap=10で絞る。
+                let squared_fanout = self_bind_pattern_count >= 2
+                    || has_paired_defined_by_fanout(theorem, v1, v2);
+                let max_candidates = if squared_fanout { 10 } else { 40 };
                 reps.truncate(max_candidates);
                 for rep in reps {
                     let mut next_bind = bind.clone();
