@@ -237,7 +237,7 @@
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
     <div class="stat"><div class="n">10</div><div class="l">出荷済み最適化</div></div>
-    <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
+    <div class="stat"><div class="n">5</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
 
@@ -352,6 +352,7 @@ flowchart TD
           <div class="desc">プロファイリング中に、シード済みタスクのポップ数が常にゼロという事実を発見。<code>apply_conclusions</code>がFact発行前に<code>self.facts</code>へpush済みのため、<code>run_step</code>側の「二重登録なら<code>schedule_matcher_task</code>を呼ばない」という判定が常にtrueになり、シード付き再マッチングが(Identical/Connectedとも)一度も起きていなかった。</div>
           <div class="evidence"><b>結果:</b> このバグを実際に直す(Identical単独/Connected単独/両方)実験をいずれも試したが、既存問題群の広範囲で重大な悪化を実測(simson 2〜3秒→35秒、miquel_quadrilateral→44.7秒、nine_point_full/bench_2010g1が新規に解けなくなる等)。UCB1・dfs_cap・熱ヒューリスティックが「シード付きタスクは実質発火しない」現状に暗黙に最適化されていたと考えられ、バグ修正自体は撤回。発見(バグの所在)は<code>docs/atlas.html</code>兼コミットログに記録し、計測基盤だけを残した。</div>
           <div class="evidence"><b>4回目の再挑戦(重複シード排除つき):</b> 「同じ代表元ペアへの再シードが際限なく積み重なる」ことが悪化の主因ではないかと仮説を立て、<code>(定理, パターン, 代表元ペア)</code>単位で一度シードしたら二度と作らない重複排除(<code>seeded_seen</code>)を追加した上で再挑戦。結果はむしろ悪化: bench_2005ctstp1(25.7秒→解けたのに57秒でも未解決)、bench_2010g1(15.8秒→解けたのに46秒でも未解決)、bench_2011armog10p6(9.7秒→解けたのに10.3秒で未解決)など、31問題スイートの最初の数問だけで壊滅的な回帰。重複排除は「全く同じ代表元ペアへの再発火」は防げても、多数の円・直線が次々に自動統合される複雑な配置(bench_2005ctstp1等)では、事実が発見されるたびに常に新しい・別個の代表元ペアが生まれ続けるため、根本的な組み合わせ爆発の幅そのものは減らせないと判明。この4回目も撤回し、コードはバグ発見直後の状態(<code>5d102de</code>相当)に戻した。</div>
+          <div class="evidence"><b>5回目の再挑戦(対象を5定理だけに限定):</b> TheoremDef改善作業で診断した「残る4定理+有向角の加法性」がいずれも自身のコメントで「本来シード起動前提で設計されている」(例: 共点二弦の相似の「🌟 シード: Identical(AngA,AngC)から始めて...全件スキャン不要」というコメント)と明記されていたことを踏まえ、<code>SEED_ENABLED_THEOREMS</code>という明示的な許可リストでこの5定理だけにシード生成を限定し、重複排除も併用して再挑戦した。結果はまたも悪化: simson 1.19s→4.0s(約3.4倍)、orthocenter 4.35s→10.7s、<b>nine_point_full(元々7秒で解けていた)がタイムアウト(60秒)で未解決化</b>。原因は、対象を5定理に絞ってもIdentical(Angle,Angle)という結論形式自体がこのドメインで極めて高頻度(どの定理由来かに関わらず、単に角度の等式が最もよく証明される結論だから)であり、証明探索全体を通じて発生するその全ての事実が、この5定理のパターンと照合され続けるため、絞り込み前と本質的に変わらない量のシードタスクを生み続けたこと。5回目もこの5定理限定版を撤回し、コードは<code>04aeb26</code>相当に戻した。<b>結論</b>: seeded task経路の再設計は、定理単位の許可リストだけでは不十分で、結論の「結果形式」(例: Angle同士のIdentical)そのものの発生頻度を考慮した、より細かい粒度の制御が必要と見られる。</div>
         </div>
       </div>
 
@@ -421,9 +422,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">2</div>
         <div>
-          <h3>seeded task経路を「角度追跡系の定理だけ」に絞って再設計</h3>
-          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直す・重複排除を足す、いずれも全定理×全結論形式に無差別適用したため、既存問題群の広範囲で重大な悪化を招き4回撤回した。次に試すなら、無差別適用ではなく<b>定理ごとにシード起動が必要かをタグ付け</b>し、まず「二重自己束縛」定理(有向角の加法性・円周角の定理の逆)だけに絞ってシード駆動へ切り替える――対象がこの2〜3定理に絞られれば、他の20近い定理のシード無効化前提のUCB1/dfs_capチューニングを壊さずに済む可能性が高い。ユーザー提案の「角度追跡→長さ比→構図→角度追跡…」というフェーズ的な人間の解き方は、この絞り込みの基準(TheoremDefに角度追跡/長さ比/構図のカテゴリタグを持たせ、フェーズに応じてシード優先度を切り替える)としてそのまま使えそうで、単なるバグ修正の再挑戦より筋が良い。</div>
-          <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">スコープを絞れば低リスク化できる可能性</span></div>
+          <h3>seeded task経路: 定理単位の絞り込みは5回中5回失敗、結論形式単位の制御が必要</h3>
+          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングの再有効化は、これまで5回すべて撤回している。1〜4回目は全定理×全結論形式への無差別適用、5回目(<code>SEED_ENABLED_THEOREMS</code>)は「本来シード起動前提で設計されている」と自身のコメントに明記された5定理だけへの絞り込みだったが、それでも悪化した(simson 1.19s→4.0s、nine_point_fullが7秒で解けていたのがタイムアウトで未解決化)。原因は、対象を定理単位で絞っても<b>Identical(Angle,Angle)という「結論の形」自体がこのドメインで極めて高頻度</b>で、どの定理が証明したかに関わらず証明探索全体でこの形の事実が大量に発生し、5定理のパターンと照合され続けるため。次に試すなら、定理単位ではなく<b>結論の形(fact_type+entity_type)単位で発生頻度に応じたシード抑制</b>(例: Angle同士のIdenticalだけ間引く、または一定時間内の同一結果型への再シード数に上限を設ける)が必要と見られる――ただしこれもまた新しい仮説であり、実測での検証必須。</div>
+          <div class="b-tags"><span class="tag">5戦5敗</span><span class="tag">定理単位ではなく結論形式単位の制御が必要</span></div>
         </div>
       </div>
 
