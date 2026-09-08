@@ -236,7 +236,7 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">5</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">6</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -355,6 +355,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">aeaa32b</span></div>
+        <div>
+          <div class="headline"><h3>TheoremDefの改善(uses索引化 + OrderNonStrict)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">ユーザー目標「Simson級を1秒未満に」への対応。dfs_matchの探索木でどのパターンが実際に何回選ばれているかを数える一時計測(診断後に削除済み)を作り、simsonで最もdfs_call消費量が大きい「有向角の加法性」を実測で追跡した。(1) <code>defined_by_valid_nodes</code>の見落とし修正: DefinedByパターンの親変数が一部だけ束縛されている場合(例: AnglePair(D2,D3,Ang23)でD2だけ既知)、以前は「両方未束縛」と同じフルスキャンにフォールバックしていた。束縛済みの親のGeoEntity::uses(mergeを跨いで正しく引き継がれる「自分を親として参照する実体」の集合)で候補を絞り込むようにした――返す候補は下流が独立に再検証するsupersetで十分なので安全。(2) 新パターン種別<code>Pattern::OrderNonStrict</code>("≤"判定のOrder): 「2つの役割を丸ごと入れ替えても同じ結論になる」対称性を持つ定理(有向角の加法性の[D1,D2,D3]⇄[D4,D5,D6])向けに、厳密なOrder("<")では失われるD1==D4(方向共有、角度チェイス本来のユースケース)のケースを失わずに対称な重複探索だけを半分に間引く。数学的に正しさを検証済み。</div>
+          <div class="evidence"><b>結果:</b> 診断の結果、有向角の加法性の真因は「Ang12≡Ang45とAng23≡Ang56という2つの独立な自己束縛が互いに無関係に全角度を列挙し掛け合わされる」ことだと判明し、この2つの修正だけではこの定理自体はほぼ変わらなかった(simson: 2.2s→2.1s)。しかしuses索引化はAnglePair以外のDefinedByパターン全般に効くため、31問題スイート全体では正誤を完全に保ったまま(全問題でbaselineと一致)、多くの問題で顕著な高速化を確認した: cyclic_quad 654ms→116ms、test_steiner 186ms→118ms、test_power_of_point 308ms→191ms、nine_point_full 27.0s→21.7s。Simson級を1秒未満にする目標にはまだ届いていない。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -367,26 +376,26 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>dfs_match本体の速さ・的中率そのものを上げる ★</h3>
-          <div class="desc">実測で壁時計時間の99%以上を占めるのはここだと判明した。<code>--stats</code>の<code>cap_hits</code>で「試行回数は少ないのにdfs_capへ何度も到達している」定理を名指しし、その定理の<code>estimate_cost</code>の優先順位付け・候補列挙が本当に最短経路を辿れているかを個別に見直す。schedule_full_sweep周りをこれ以上いじる前に、まずここが本丸。</div>
-          <div class="b-tags"><span class="tag">実測済みの本丸</span><span class="tag">中規模</span></div>
+          <h3>「二重自己束縛」定理を熱量駆動の起動に切り替える ★</h3>
+          <div class="desc">TheoremDefの改善作業(uses索引化+OrderNonStrict)で診断用計測を使って追跡した結果、「有向角の加法性」(simsonの最大コスト要因、平均dfs_call消費量トップ)の真因が判明した: Ang12≡Ang45とAng23≡Ang56という<b>2つの独立した自己束縛</b>が、互いに無関係に全角度エンティティを列挙して掛け合わされている。これは「円周角の定理の逆」(コスト2位)でも同種の構造だと推測される。人間が幾何を解くときの流れ(ユーザー提案: 角度追跡→長さ・比の情報→構図の適用→角度追跡→…の反復で、その中で直前の角度追跡/長さ比に役立つ補助点・補助線を作る)を踏まえると、これらの定理は本来「今まさにhot(heat_bonusが高い/直前に証明された)角度」から芋づる式に辿るべきで、「グラフ上の全角度を無差別に自己束縛して総当たりする」のは人間の解き方と根本的に違う。全角度を無差別スキャンする代わりに、直近でheat_bonusが上がった(=直前の推論で使われた)角度を優先的に自己束縛候補にする、または後述#2の熱量ゲート付きシードで完全に置き換えることを検討する。</div>
+          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">中〜大規模</span></div>
         </div>
       </div>
 
       <div class="b-item">
         <div class="b-rank">2</div>
         <div>
-          <h3>seeded task経路の再設計(現状は死んでいる)</h3>
-          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直すとIdenticalのような頻出結論で爆発的に増えて悪化する。(定理,パターン,代表元ペア)単位の重複排除も試したが同じく悪化した――多数の円・直線が連鎖的に自動統合される配置では、事実が見つかるたびに常に新しい代表元ペアが生まれ続けるため、重複排除では組み合わせの幅を削れない。「発火頻度の低い結論形式だけ許可する」「定理ごとにシード起動の可否を明示的にタグ付けする」「熱量や既存の需要スコアで発火を絞る」といった、定理集合そのものへの選別ロジックとセットでなければ効果が出せないと考えられる。UCB1・dfs_cap等の既存チューニングが無効化前提で調整されている点にも注意。</div>
-          <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">高リスク・高リターン</span></div>
+          <h3>seeded task経路を「角度追跡系の定理だけ」に絞って再設計</h3>
+          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直す・重複排除を足す、いずれも全定理×全結論形式に無差別適用したため、既存問題群の広範囲で重大な悪化を招き4回撤回した。次に試すなら、無差別適用ではなく<b>定理ごとにシード起動が必要かをタグ付け</b>し、まず#1で特定した「二重自己束縛」定理(有向角の加法性・円周角の定理の逆)だけに絞ってシード駆動へ切り替える――対象がこの2〜3定理に絞られれば、他の20近い定理のシード無効化前提のUCB1/dfs_capチューニングを壊さずに済む可能性が高い。ユーザー提案の「角度追跡→長さ比→構図→角度追跡…」というフェーズ的な人間の解き方は、この絞り込みの基準(TheoremDefに角度追跡/長さ比/構図のカテゴリタグを持たせ、フェーズに応じてシード優先度を切り替える)としてそのまま使えそうで、単なるバグ修正の再挑戦より筋が良い。</div>
+          <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">スコープを絞れば低リスク化できる可能性</span></div>
         </div>
       </div>
 
       <div class="b-item">
         <div class="b-rank">3</div>
         <div>
-          <h3>DefinedBy両方未束縛分岐の共有キャッシュ</h3>
-          <div class="desc"><code>defined_by_valid_nodes</code>(型だけの列挙)と<code>defined_by_collect_matches</code>(変数名への束縛)を分離すれば、Connected/Identicalと同じ型キー方式のキャッシュを適用できる。</div>
+          <h3>DefinedBy「両方未束縛」分岐の共有キャッシュ</h3>
+          <div class="desc"><code>defined_by_valid_nodes</code>(型だけの列挙)と<code>defined_by_collect_matches</code>(変数名への束縛)は既に分離されている(TheoremDef改善で「片方だけ束縛」分岐にuses索引を追加済み)。残るのは「両方未束縛」の全件スキャン分岐で、Connected/Identicalと同じ型キー方式の共有キャッシュ(connected_join_cache/identical_self_bind_cacheと同じ発想)を適用できる。</div>
           <div class="b-tags"><span class="tag">案4の続き</span><span class="tag">中規模リファクタ</span></div>
         </div>
       </div>
