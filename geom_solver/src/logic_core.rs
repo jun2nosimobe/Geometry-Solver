@@ -867,8 +867,26 @@ impl ProverEngine {
                 // ほぼ確実に先頭付近に来るため、候補数を適当な上限で打ち切っても
                 // 正解を逃すリスクは小さい――ワーストケースの青天井を防ぐ
                 // 安全弁として導入する(全問題で悪影響が無いことを確認済み)。
-                const MAX_IDENTICAL_SELF_BIND_CANDIDATES: usize = 40;
-                reps.truncate(MAX_IDENTICAL_SELF_BIND_CANDIDATES);
+                //
+                // 🌟 ユーザー提案(人間の解き方=角度追跡→長さ比→構図の反復。
+                // その中で「今まさにhotな」対象から芋づる式に辿る)への対応:
+                // 「有向角の加法性」のように、同じ型に対する(None,None)自己束縛
+                // パターンをこの定理が2つ以上持つ場合(Ang12≡Ang45とAng23≡Ang56)、
+                // それぞれ独立に候補集合を列挙して掛け合わせる(cap×cap通り)ため、
+                // 固定cap=40のままだと最悪1,600通りの組み合わせを生み、simsonの
+                // dfs_call消費量トップの直接原因になっていた(実測で確認済み)。
+                // 熱で降順ソート済みの列に対し「本当にhotな候補は少数のはず」という
+                // 前提で、こういう「二重自己束縛」定理に限ってcapを大きく絞り、
+                // 全角度を無差別スキャンする代わりに直近heat_bonusが乗った少数の
+                // 候補だけから辿らせる。単独の自己束縛(cap×1)しか持たない定理は
+                // 従来通り40のままなので、他の定理への影響は無い。
+                let self_bind_pattern_count = theorem.patterns.iter().filter(|p| {
+                    matches!(p, Pattern::Fact(d) if d.fact_type == "Identical"
+                        && d.args.len() == 2
+                        && theorem.entities.get(&d.args[0]).copied() == expected_type)
+                }).count();
+                let max_candidates = if self_bind_pattern_count >= 2 { 10 } else { 40 };
+                reps.truncate(max_candidates);
                 for rep in reps {
                     let mut next_bind = bind.clone();
                     next_bind.insert(v1.clone(), rep);
