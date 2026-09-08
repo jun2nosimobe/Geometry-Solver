@@ -236,7 +236,7 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">7</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">8</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -373,6 +373,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">82ce455</span></div>
+        <div>
+          <div class="headline"><h3>熱量駆動の自己束縛制限を一般化</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">「円周角の定理の逆」を診断計測で再追跡した結果、直前の記録の仮説(DefinedByペアリング自体にcapが無い)は外れていたと判明: そのペアリングが返す候補集合(Angle値1つ分の局所的な定義一覧)自体は元々小さかった。実際に最多選択されていたのは<code>Distinct(L1,L2,L3,L4)</code>で、これは「自己束縛(cap=40)がそのまま下流のDefinedByペアリング×Connectedチェーン全体の分岐係数になっている」ことを示していた――有向角の加法性(自己束縛×自己束縛)とは別形だが、根は同じ「自己束縛のcapが下流の掛け合わせを支配する」問題。<code>has_paired_defined_by_fanout</code>(新設): Identical(v1,v2)のv1・v2それぞれに同じtarget_typeのDefinedByパターンが独立にぶら下がっているかを定理の静的なパターン列だけから判定し、該当する場合は同じcap=10を自己束縛側に適用するよう一般化した。</div>
+          <div class="evidence"><b>結果:</b> 31問題スイート全問題でbaselineとsolved状態が完全一致し、広範囲でさらに顕著な高速化。simson 1.60s→1.21s(円周角の定理の逆のdfs_call消費量が19,745→8,491、約57%減)。orthocenter_alt 6.38s→2.43s、orthic_incenter 4.82s→2.26s、bench_2018chnwesternmop5 27.7s→9.1s(未解決のまま)、bench_2011armog10p6 8.09s→3.94s、nine_point_full 17.0s→10.5s。simson単体はまだ1秒未満(現在1.21s)に届いていない――残る最大コスト要因は「複比の透視射影不変性」で、9自由変数の大規模な定理という別種の構造。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -385,9 +394,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>DefinedByペアリングにも熱量駆動のcapを広げる ★</h3>
-          <div class="desc">「二重自己束縛」定理(有向角の加法性)は熱量駆動のcap(40→10、構造的に検出)で実測85%減の効果を確認・出荷済み。残る最大コスト要因は「円周角の定理の逆」で、こちらは自己束縛自体は1つだけだが、そこから先のDefinedByペアリング(Dir_L1,Dir_L2)×(Dir_L3,Dir_L4)がpool×poolで全件展開され、capが一切無い。ただしこの周辺(<code>defined_by_collect_matches</code>の次数ヒューリスティック)は過去に閾値調整を誤ってsimsonの非決定性を持ち込んだ経緯がある(THRESHOLD=10/MAX_D=4に落ち着いた際のドキュメント参照)ため、同じ轍を踏まないよう、まず現状のTHRESHOLD/MAX_Dの意味を壊さない形でtruncateを追加し、31問題スイートで正誤・再現性の両方を確認してから採用する。</div>
-          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">既存の次数ヒューリスティックとの相互作用に注意</span></div>
+          <h3>「複比の透視射影不変性」を熱量駆動で絞る ★</h3>
+          <div class="desc">有向角の加法性(自己束縛×自己束縛)・円周角の定理の逆(自己束縛×DefinedByペアリング)の2件は、どちらも「自己束縛のcap(40→10、構造的に検出)を絞る」ことで実測85%減・57%減の効果を確認・出荷済み(simson: 2.23s→1.21s)。残る最大コスト要因は「複比の透視射影不変性」で、これは自己束縛やペアリングの掛け合わせではなく、9自由変数を同時に扱う定理そのものの規模が原因(このファイル内の別ドキュメント参照: nine_point/orthic_incenter/miquel_quadrilateral向けに次数ヒューリスティックで既に一定の緩和は入れている)。上2件と違い単純な「候補cap」では効かない可能性が高く、変数を分割する設計変更(既にDefinedBy(点→線束)/(線束→点)の2定理への分解は済んでいるので、その先の絞り込み)が必要かもしれない。</div>
+          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">上2件とは異なる構造、単純なcapでは効かない可能性</span></div>
         </div>
       </div>
 
