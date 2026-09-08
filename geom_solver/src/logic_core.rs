@@ -292,6 +292,29 @@ pub struct ProverEngine {
     // ensure_theorem_required_typesで遅延計算する(theorem.patternsは実行中
     // 不変なので、一度計算すれば使い回せる)。
     pub theorem_required_types: Vec<Vec<crate::mmp_core::EntityType>>,
+    // 🌟 ユーザー提案(定理マッチングの最適化・案4): 定理横断の共有部分マッチ
+    // キャッシュ、第一弾。match_connected_fact の Connected(child, parent)
+    // 両方未束縛分岐は、実は「bindの中身に一切依存せず、(child_type, parent_type)
+    // という型の組み合わせだけで結果が決まるジョイン演算」になっている
+    // ――どの定理・どのタスクから呼ばれても、同じ型の組み合わせなら
+    // 全く同じ (child_rep, parent_rep) のペア集合が返る。RETEのアルファ/
+    // ベータメモリと同じ発想で、この結果を定理をまたいで共有キャッシュする。
+    // キーは(child_type, parent_type)、値は(結果, キャッシュ時点での
+    // child_typeのtype_generation, 同parent_typeのtype_generation)。
+    // 案3で導入したEGraph::type_generationが「この型の候補集合・接続関係が
+    // 変わったら必ず上がる」という健全な不変条件を満たすようになった
+    // (4つのゲートウェイに集約済み)ため、そのままこのキャッシュの
+    // 無効化判定に使い回せる。
+    pub connected_join_cache: FxHashMap<(crate::mmp_core::EntityType, crate::mmp_core::EntityType), (Rc<Vec<(ClassId, ClassId)>>, u64, u64)>,
+    // 🌟 同じ発想の第二弾: match_identical_fact の Identical(v1, v2) 両方
+    // 未束縛(自己束縛)分岐も、「期待される型」だけで決まる候補列挙
+    // (heatによる並べ替え前の生の候補集合)を、定理をまたいで共有できる。
+    // キーはexpected_type、値は(結果, キャッシュ時点でのtype_generation)。
+    // heat_bonusはバッチ中にも動的に変わるため、並べ替え・上位40件への
+    // 絞り込みは呼び出しのたびに毎回この生のリストに対して行う
+    // (キャッシュするのは「型で絞り込んだ後・heat基準で並べ替える前」の
+    // 集合だけ)。
+    pub identical_self_bind_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
 }
 
 impl ProverEngine {
@@ -306,7 +329,58 @@ impl ProverEngine {
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),
             theorem_required_types: Vec::new(),
+            connected_join_cache: FxHashMap::default(),
+            identical_self_bind_cache: FxHashMap::default(),
         }
+    }
+
+    /// 🌟 connected_join_cacheのドキュメント参照。Connected(child, parent)の
+    /// 両方未束縛分岐が問い合わせる、型だけで決まる(child_rep, parent_rep)
+    /// ペアの共有ジョイン結果を返す。type_generationが前回計算時と
+    /// 変わっていなければキャッシュをそのまま返し(定理をまたいだ再利用)、
+    /// 変わっていれば再計算してキャッシュを更新する。
+    fn connected_pairs_for_types(&mut self, c_type: crate::mmp_core::EntityType, p_type: crate::mmp_core::EntityType) -> Rc<Vec<(ClassId, ClassId)>> {
+        let cur_c_gen = self.egraph.type_generation.get(&c_type).copied().unwrap_or(0);
+        let cur_p_gen = self.egraph.type_generation.get(&p_type).copied().unwrap_or(0);
+        if let Some((cached, gen_c, gen_p)) = self.connected_join_cache.get(&(c_type, p_type)) {
+            if *gen_c == cur_c_gen && *gen_p == cur_p_gen {
+                return cached.clone();
+            }
+        }
+        let mut pairs = Vec::new();
+        for p_rep in self.egraph.iter_reps_of_type(p_type) {
+            if self.egraph.entities[p_rep.0].base_importance <= 0.0 { continue; }
+            if let Some(comp) = self.egraph.entities[p_rep.0].components.first() {
+                for &sub in &comp.subobjects {
+                    let c_rep = self.egraph.get_rep(sub);
+                    if c_rep == p_rep { continue; }
+                    if self.egraph.entities[c_rep.0].base_importance <= 0.0 { continue; }
+                    if self.egraph.entities[c_rep.0].entity_type != c_type { continue; }
+                    pairs.push((c_rep, p_rep));
+                }
+            }
+        }
+        let result = Rc::new(pairs);
+        self.connected_join_cache.insert((c_type, p_type), (result.clone(), cur_c_gen, cur_p_gen));
+        result
+    }
+
+    /// 🌟 identical_self_bind_cacheのドキュメント参照。Identical(v1, v2)の
+    /// 両方未束縛(自己束縛)分岐が問い合わせる、型だけで決まる候補代表元の
+    /// 共有列挙結果を返す(heatによる並べ替え・上位40件への絞り込みは
+    /// 呼び出し側が毎回この結果に対して行う)。
+    fn identical_self_bind_candidates(&mut self, et: crate::mmp_core::EntityType) -> Rc<Vec<ClassId>> {
+        let cur_gen = self.egraph.type_generation.get(&et).copied().unwrap_or(0);
+        if let Some((cached, cached_gen)) = self.identical_self_bind_cache.get(&et) {
+            if *cached_gen == cur_gen { return cached.clone(); }
+        }
+        let mut reps = Vec::new();
+        for id in self.egraph.iter_reps_of_type(et) {
+            if self.egraph.entities[id.0].base_importance > 0.0 { reps.push(id); }
+        }
+        let result = Rc::new(reps);
+        self.identical_self_bind_cache.insert(et, (result.clone(), cur_gen));
+        result
     }
 
     fn ensure_theorem_stats(&mut self) {
@@ -667,27 +741,27 @@ impl ProverEngine {
                 // Identical事実からD1..D6を具体的に束縛する経路)で使われる前提であり、
                 // シード無しの全探索(schedule_full_sweep)から来た場合はこの程度の
                 // 軽い足がかりで十分。Python版と同じ挙動に合わせて計算量を落とす。
-                // 🌟 型インデックス化(ユーザー提案「egraphの構造を生かした
-                // マッチング」への対応その1): 期待される型が分かっている場合、
-                // 全エンティティを舐める代わりにtype_index経由でその型の
-                // 代表元だけを引く(定理・エンティティが増えても計算量は
-                // 目的の型のエンティティ数だけに抑えられる)。
-                let mut reps: Vec<ClassId> = Vec::new();
-                if let Some(et) = expected_type {
-                    for id in self.egraph.iter_reps_of_type(et) {
-                        if self.egraph.entities[id.0].base_importance > 0.0 {
-                            reps.push(id);
+                // 🌟 RETE的な共有列挙キャッシュ(ユーザー提案「案4」、
+                // identical_self_bind_cacheのドキュメント参照): 期待される型が
+                // 分かっている場合、この生の候補集合はbindの中身に依存せず
+                // 型だけで決まるので、定理をまたいで共有する(型が不明な稀な
+                // フォールバックでは従来通りのフルスキャン)。heatによる
+                // 並べ替えは共有前の生の集合に対してではなく、キャッシュから
+                // 取り出した後に(常に最新のheat_bonusで)行う。
+                let mut reps: Vec<ClassId> = match expected_type {
+                    Some(et) => (*self.identical_self_bind_candidates(et)).clone(),
+                    None => {
+                        let mut reps = Vec::new();
+                        for i in 0..self.egraph.entities.len() {
+                            let id = ClassId(i);
+                            if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
+                            if self.egraph.entities[i].base_importance > 0.0 {
+                                reps.push(id);
+                            }
                         }
+                        reps
                     }
-                } else {
-                    for i in 0..self.egraph.entities.len() {
-                        let id = ClassId(i);
-                        if self.egraph.get_rep(id) != id { continue; } // 代表元のみ
-                        if self.egraph.entities[i].base_importance > 0.0 {
-                            reps.push(id);
-                        }
-                    }
-                }
+                };
                 // 🐛 実測に基づくFIX: このシード無し(両変数未束縛)経路は、
                 // apply_conclusionsが直後にheat_bonusを加算した「たった今マージ
                 // されたばかりの代表元」(=この定理が本来欲しがっている候補で
@@ -803,44 +877,59 @@ impl ProverEngine {
             // 親の型(例:Circle)で絞り込み、各親候補についてはその親自身が
             // 繋がっている子(局所的で少数)だけを見る形で列挙する。
             (None, None) => {
-                // 🌟 型インデックス化: 期待される親の型が分かっていれば
-                // type_index経由でその型の代表元だけを引く(理由は
-                // match_identical_factの(None,None)分岐と同じ)。
-                let mut parent_candidates: Vec<ClassId> = Vec::new();
-                if let Some(et) = expected_p_type {
-                    for p_rep in self.egraph.iter_reps_of_type(et) {
-                        if self.egraph.entities[p_rep.0].base_importance > 0.0 {
-                            parent_candidates.push(p_rep);
-                        }
-                    }
-                } else {
-                    for i in 0..self.egraph.entities.len() {
-                        let p_id = ClassId(i);
-                        let p_rep = self.egraph.get_rep(p_id);
-                        if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
-                        parent_candidates.push(p_rep);
-                    }
-                }
-
-                for p_rep in parent_candidates {
-                    let child_candidates: Vec<ClassId> = match self.egraph.entities[p_rep.0].components.first() {
-                        Some(comp) => comp.subobjects.iter()
-                            .map(|&id| self.egraph.get_rep(id))
-                            .filter(|&id| {
-                                if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
-                                match expected_c_type {
-                                    Some(et) => self.egraph.entities[id.0].entity_type == et,
-                                    None => true,
-                                }
-                            })
-                            .collect(),
-                        None => vec![],
-                    };
-                    for c_rep in child_candidates {
+                // 🌟 RETE的な共有ジョインキャッシュ(ユーザー提案「案4」、
+                // connected_join_cacheのドキュメント参照): この分岐は
+                // bindの中身に依存せず(child_type, parent_type)という
+                // 型の組み合わせだけで結果が決まるので、複数の定理・タスクが
+                // 同じ型の組み合わせを問い合わせる場合に定理をまたいで
+                // 共有できる。両方の型が分かっている(ほぼ全ての定理で
+                // そうである)場合のみキャッシュを使い、型が不明な稀な
+                // フォールバックでは従来通りのフルスキャンを行う。
+                if let (Some(ct), Some(pt)) = (expected_c_type, expected_p_type) {
+                    let pairs = self.connected_pairs_for_types(ct, pt);
+                    for &(c_rep, p_rep) in pairs.iter() {
                         let mut next_bind = bind.clone();
                         next_bind.insert(child_var.clone(), c_rep);
                         next_bind.insert(parent_var.clone(), p_rep);
                         self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                    }
+                } else {
+                    let mut parent_candidates: Vec<ClassId> = Vec::new();
+                    if let Some(et) = expected_p_type {
+                        for p_rep in self.egraph.iter_reps_of_type(et) {
+                            if self.egraph.entities[p_rep.0].base_importance > 0.0 {
+                                parent_candidates.push(p_rep);
+                            }
+                        }
+                    } else {
+                        for i in 0..self.egraph.entities.len() {
+                            let p_id = ClassId(i);
+                            let p_rep = self.egraph.get_rep(p_id);
+                            if p_rep != p_id || self.egraph.entities[i].base_importance <= 0.0 { continue; }
+                            parent_candidates.push(p_rep);
+                        }
+                    }
+
+                    for p_rep in parent_candidates {
+                        let child_candidates: Vec<ClassId> = match self.egraph.entities[p_rep.0].components.first() {
+                            Some(comp) => comp.subobjects.iter()
+                                .map(|&id| self.egraph.get_rep(id))
+                                .filter(|&id| {
+                                    if self.egraph.entities[id.0].base_importance <= 0.0 { return false; }
+                                    match expected_c_type {
+                                        Some(et) => self.egraph.entities[id.0].entity_type == et,
+                                        None => true,
+                                    }
+                                })
+                                .collect(),
+                            None => vec![],
+                        };
+                        for c_rep in child_candidates {
+                            let mut next_bind = bind.clone();
+                            next_bind.insert(child_var.clone(), c_rep);
+                            next_bind.insert(parent_var.clone(), p_rep);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                        }
                     }
                 }
             }
