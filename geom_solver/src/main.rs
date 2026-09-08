@@ -8,6 +8,7 @@ mod action_space;
 mod mcts;
 mod problems;
 mod discover;
+mod discover_viz;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};

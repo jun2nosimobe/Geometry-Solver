@@ -393,8 +393,14 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
 
     println!("\n=== 🏛️  発見された「綺麗な」関係の候補 (美しさスコア降順、上位{}件 / 全{}件、退化した構成として除外{}件) ===",
         top_n.min(ranked.len()), ranked.len(), degenerate_skipped);
+    // 🌟 ユーザー要望「報告が読めない問題に対処するため、図形を描画して
+    // 確認できるようにしたい」への対応。テキストの構成手順と全く同じ実体
+    // 集合・同じPrettyNamerラベルを使って、discover_viz::render_svgに
+    // SVG図を作らせ、result/discover_report.htmlへまとめて書き出す
+    // (--proveのように標準出力だけで済ませられる情報量ではないため)。
+    let mut html_sections: Vec<String> = Vec::new();
     for (rank, c) in ranked.iter().take(top_n).enumerate() {
-        let (name_a, name_b, steps) = describe_construction(egraph, c.a, c.b);
+        let (name_a, name_b, steps, order, labels) = describe_construction(egraph, c.a, c.b);
         println!("\n{}. [美しさ {:.1}] {} ≡ {}  (仮説: {}, 追加的帰結{}件, 観測{}回, 構成手順{}段)",
             rank + 1, c.beauty, name_a, name_b, c.hypothesis, c.additional_merges, c.occurrences,
             c.construction_steps);
@@ -402,11 +408,61 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
         for line in &steps {
             println!("     {}", line);
         }
+        let svg = crate::discover_viz::render_svg(egraph, &order, &labels, c.a, c.b, 24);
+        if svg.is_none() {
+            println!("   (この配置はランダムな実数座標では図示できませんでした――平行線・共線等の退化が常に起きる構成の可能性があります)");
+        }
+        html_sections.push(render_html_section(rank + 1, c, &name_a, &name_b, &steps, svg.as_deref()));
     }
+    write_discover_report_html(&html_sections);
 
     if try_prove {
         if let Some(top) = ranked.first() {
             attempt_proof(egraph, top.a, top.b, prove_time_secs);
+        }
+    }
+}
+
+/// 🌟 発見された関係1件分を、見出し・SVG図(あれば)・構成手順を並べた
+/// HTMLの断片として組み立てる。
+fn render_html_section(rank: usize, c: &RankedConjecture, name_a: &str, name_b: &str, steps: &[String], svg: Option<&str>) -> String {
+    let steps_html: String = steps.iter().map(|s| format!("<li>{}</li>", xml_escape_html(s))).collect();
+    let svg_html = svg.map(|s| s.to_string()).unwrap_or_else(|| "<p style=\"color:#999;\">(図示できませんでした)</p>".to_string());
+    format!(
+        "<section style=\"margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid #e3ddd0;\">\n\
+         <h2 style=\"font:600 16px/1.4 sans-serif;margin:0 0 6px;\">{rank}. [美しさ {beauty:.1}] {a} ≡ {b}</h2>\n\
+         <p style=\"font:13px monospace;color:#555;margin:0 0 12px;\">仮説: {hyp} / 追加的帰結{merges}件 / 観測{occ}回 / 構成手順{steps_n}段</p>\n\
+         <div style=\"display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;\">\n{svg}\n\
+         <ol style=\"font:13px monospace;margin:0;padding-left:20px;\">{steps_html}</ol>\n</div>\n</section>\n",
+        rank = rank, beauty = c.beauty, a = xml_escape_html(name_a), b = xml_escape_html(name_b),
+        hyp = xml_escape_html(&c.hypothesis), merges = c.additional_merges, occ = c.occurrences,
+        steps_n = c.construction_steps, svg = svg_html, steps_html = steps_html,
+    )
+}
+
+fn xml_escape_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// 🌟 result/discover_report.htmlへ、今回の実行で発見された上位候補の
+/// 図解付き報告をまとめて書き出す(main.rsのoutput_proof等と同じく、
+/// 「コンソールには要点、ファイルには詳細」の方針)。
+fn write_discover_report_html(sections: &[String]) {
+    if sections.is_empty() { return; }
+    let body = sections.join("\n");
+    let html = format!(
+        "<!doctype html>\n<html lang=\"ja\"><head><meta charset=\"utf-8\">\n\
+         <title>discover report</title></head>\n\
+         <body style=\"font-family:sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1f2733;background:#fff;\">\n\
+         <h1 style=\"font-size:20px;\">🏛️ discover: 発見された「綺麗な」関係</h1>\n{body}\n</body></html>\n",
+        body = body
+    );
+    let dir = "result";
+    if std::fs::create_dir_all(dir).is_ok() {
+        let path = format!("{}/discover_report.html", dir);
+        match std::fs::write(&path, &html) {
+            Ok(_) => println!("\n📄 図解付き報告を '{}' に保存しました(ブラウザで開いて確認できます)。", path),
+            Err(e) => println!("\n⚠️ discover報告ファイルの書き込みに失敗しました ({}): {}", path, e),
         }
     }
 }
@@ -464,8 +520,10 @@ fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -> bool {
 /// 何から作られたかを正確に復元する。表示にはPrettyNamerの付け替え名を
 /// 使う(実体本来の名前は構成が深くなると際限なく長くなり、報告が読めなく
 /// なるため――実測で数百文字超の名前が実際に出ることを確認した)。
-/// 戻り値は(aの付け替え名, bの付け替え名, 構成手順の行一覧)。
-fn describe_construction(egraph: &EGraph, a: ClassId, b: ClassId) -> (String, String, Vec<String>) {
+/// 戻り値は(aの付け替え名, bの付け替え名, 構成手順の行一覧, 依存関係順の
+/// ClassId列, 付け替え名の対応表)。最後の2つはdiscover_viz::render_svgが
+/// テキスト報告と全く同じ実体集合・同じラベルで図を描くために使う。
+fn describe_construction(egraph: &EGraph, a: ClassId, b: ClassId) -> (String, String, Vec<String>, Vec<ClassId>, rustc_hash::FxHashMap<ClassId, String>) {
     let mut seen = rustc_hash::FxHashSet::default();
     let mut order: Vec<ClassId> = Vec::new();
     fn visit(egraph: &EGraph, id: ClassId, seen: &mut rustc_hash::FxHashSet<ClassId>, order: &mut Vec<ClassId>) {
@@ -497,7 +555,9 @@ fn describe_construction(egraph: &EGraph, a: ClassId, b: ClassId) -> (String, St
             }
         }
     }).collect();
-    (namer.label(egraph, a), namer.label(egraph, b), lines)
+    let name_a = namer.label(egraph, a);
+    let name_b = namer.label(egraph, b);
+    (name_a, name_b, lines, order, namer.labels)
 }
 
 /// 🌟 format_definition_withへ渡すための、既に確定済みのPrettyNamerを
