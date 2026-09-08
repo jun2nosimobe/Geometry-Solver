@@ -236,7 +236,7 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">6</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">7</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -364,6 +364,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">b5ec59f</span></div>
+        <div>
+          <div class="headline"><h3>熱量駆動の自己束縛制限(backlog#1)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">ユーザー承認の上で着手。有向角の加法性のように「同じ型への(None,None)自己束縛パターンを2つ以上持つ」定理は、各自己束縛が(既存の仕組みで)熱降順ソート後に最大40候補まで試すため、2つ掛け合わせで最悪1,600通りを生んでいた。ユーザー提案(人間の解き方=角度追跡→長さ比→構図の反復、直前の推論で使われた「hot」な対象から芋づる式に辿る)を踏まえ、この「二重自己束縛」を定理構造から検出した場合に限り、cap を40→10に絞った。定理名のハードコードはせず、同型の(None,None)自己束縛パターンの個数という構造的な判定のみで発動するため、単独の自己束縛(cap×1)しか持たない他の定理には一切影響しない。</div>
+          <div class="evidence"><b>結果:</b> 31問題スイート全問題でbaselineとsolved状態が完全一致し、広範囲で顕著な高速化。simson 2.23s→1.60s(有向角の加法性のdfs_call消費量が19,317→2,941、約85%減)。nine_point_full 27.0s→17.0s、bench_2012egmop1 52.9s→27.4s(未解決のまま)、cyclic_quad 654ms→115ms、bench_2010g1 15.8s→10.7s。simson単体はまだ1秒未満に届いていない――新たな最大コスト要因は「円周角の定理の逆」で、こちらは自己束縛は1つだけだが、そこから先のDefinedByペアリング(pool×pool)側にcapが無く全件展開されるという別種の構造だと判明した。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -376,9 +385,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>「二重自己束縛」定理を熱量駆動の起動に切り替える ★</h3>
-          <div class="desc">TheoremDefの改善作業(uses索引化+OrderNonStrict)で診断用計測を使って追跡した結果、「有向角の加法性」(simsonの最大コスト要因、平均dfs_call消費量トップ)の真因が判明した: Ang12≡Ang45とAng23≡Ang56という<b>2つの独立した自己束縛</b>が、互いに無関係に全角度エンティティを列挙して掛け合わされている。これは「円周角の定理の逆」(コスト2位)でも同種の構造だと推測される。人間が幾何を解くときの流れ(ユーザー提案: 角度追跡→長さ・比の情報→構図の適用→角度追跡→…の反復で、その中で直前の角度追跡/長さ比に役立つ補助点・補助線を作る)を踏まえると、これらの定理は本来「今まさにhot(heat_bonusが高い/直前に証明された)角度」から芋づる式に辿るべきで、「グラフ上の全角度を無差別に自己束縛して総当たりする」のは人間の解き方と根本的に違う。全角度を無差別スキャンする代わりに、直近でheat_bonusが上がった(=直前の推論で使われた)角度を優先的に自己束縛候補にする、または後述#2の熱量ゲート付きシードで完全に置き換えることを検討する。</div>
-          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">中〜大規模</span></div>
+          <h3>DefinedByペアリングにも熱量駆動のcapを広げる ★</h3>
+          <div class="desc">「二重自己束縛」定理(有向角の加法性)は熱量駆動のcap(40→10、構造的に検出)で実測85%減の効果を確認・出荷済み。残る最大コスト要因は「円周角の定理の逆」で、こちらは自己束縛自体は1つだけだが、そこから先のDefinedByペアリング(Dir_L1,Dir_L2)×(Dir_L3,Dir_L4)がpool×poolで全件展開され、capが一切無い。ただしこの周辺(<code>defined_by_collect_matches</code>の次数ヒューリスティック)は過去に閾値調整を誤ってsimsonの非決定性を持ち込んだ経緯がある(THRESHOLD=10/MAX_D=4に落ち着いた際のドキュメント参照)ため、同じ轍を踏まないよう、まず現状のTHRESHOLD/MAX_Dの意味を壊さない形でtruncateを追加し、31問題スイートで正誤・再現性の両方を確認してから採用する。</div>
+          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">既存の次数ヒューリスティックとの相互作用に注意</span></div>
         </div>
       </div>
 
@@ -386,7 +395,7 @@ flowchart TD
         <div class="b-rank">2</div>
         <div>
           <h3>seeded task経路を「角度追跡系の定理だけ」に絞って再設計</h3>
-          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直す・重複排除を足す、いずれも全定理×全結論形式に無差別適用したため、既存問題群の広範囲で重大な悪化を招き4回撤回した。次に試すなら、無差別適用ではなく<b>定理ごとにシード起動が必要かをタグ付け</b>し、まず#1で特定した「二重自己束縛」定理(有向角の加法性・円周角の定理の逆)だけに絞ってシード駆動へ切り替える――対象がこの2〜3定理に絞られれば、他の20近い定理のシード無効化前提のUCB1/dfs_capチューニングを壊さずに済む可能性が高い。ユーザー提案の「角度追跡→長さ比→構図→角度追跡…」というフェーズ的な人間の解き方は、この絞り込みの基準(TheoremDefに角度追跡/長さ比/構図のカテゴリタグを持たせ、フェーズに応じてシード優先度を切り替える)としてそのまま使えそうで、単なるバグ修正の再挑戦より筋が良い。</div>
+          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直す・重複排除を足す、いずれも全定理×全結論形式に無差別適用したため、既存問題群の広範囲で重大な悪化を招き4回撤回した。次に試すなら、無差別適用ではなく<b>定理ごとにシード起動が必要かをタグ付け</b>し、まず「二重自己束縛」定理(有向角の加法性・円周角の定理の逆)だけに絞ってシード駆動へ切り替える――対象がこの2〜3定理に絞られれば、他の20近い定理のシード無効化前提のUCB1/dfs_capチューニングを壊さずに済む可能性が高い。ユーザー提案の「角度追跡→長さ比→構図→角度追跡…」というフェーズ的な人間の解き方は、この絞り込みの基準(TheoremDefに角度追跡/長さ比/構図のカテゴリタグを持たせ、フェーズに応じてシード優先度を切り替える)としてそのまま使えそうで、単なるバグ修正の再挑戦より筋が良い。</div>
           <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">スコープを絞れば低リスク化できる可能性</span></div>
         </div>
       </div>
