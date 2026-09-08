@@ -236,9 +236,9 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">4</div><div class="l">出荷済み最適化</div></div>
-    <div class="stat"><div class="n">2</div><div class="l">検証の末に撤回</div></div>
-    <div class="stat"><div class="n">7</div><div class="l">未着手の改善候補</div></div>
+    <div class="stat"><div class="n">5</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
+    <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
 
   <section id="pipeline">
@@ -336,6 +336,24 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">5d102de</span></div>
+        <div>
+          <div class="headline"><h3>実行時間プロファイリング基盤(--profile)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">「schedule_full_sweepが重いはず」という2回の推測ベースの撤回への反省として、メインループ3大フェーズ(dfs_match本体/回復フェーズ/MCTS)の壁時計時間、<code>schedule_full_sweep</code>自体の呼び出し回数・所要時間、タスクポップ数とdfs_call消費量のシード有無別内訳、定理ごとの<code>cap_hits</code>(dfs_capにほぼ到達した回数)を計測できるようにした。</div>
+          <div class="evidence"><b>実測(orthocenter等):</b> <code>schedule_full_sweep</code>自体は呼び出し回数6〜16回・累計0.001〜0.004秒で全体の0.0%、回復フェーズも0.1〜0.4%。壁時計時間の99%以上は<code>dfs_match</code>本体そのものが占めており、当初の仮説は実測により否定された。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">撤回</div>
+        <div>
+          <div class="headline"><h3>schedule_matcher_task の二重チェックバグ修正</h3><span class="pill reverted">reverted</span></div>
+          <div class="desc">プロファイリング中に、シード済みタスクのポップ数が常にゼロという事実を発見。<code>apply_conclusions</code>がFact発行前に<code>self.facts</code>へpush済みのため、<code>run_step</code>側の「二重登録なら<code>schedule_matcher_task</code>を呼ばない」という判定が常にtrueになり、シード付き再マッチングが(Identical/Connectedとも)一度も起きていなかった。</div>
+          <div class="evidence"><b>結果:</b> このバグを実際に直す(Identical単独/Connected単独/両方)実験をいずれも試したが、既存問題群の広範囲で重大な悪化を実測(simson 2〜3秒→35秒、miquel_quadrilateral→44.7秒、nine_point_full/bench_2010g1が新規に解けなくなる等)。UCB1・dfs_cap・熱ヒューリスティックが「シード付きタスクは実質発火しない」現状に暗黙に最適化されていたと考えられ、バグ修正自体は撤回。発見(バグの所在)は<code>docs/atlas.html</code>兼コミットログに記録し、計測基盤だけを残した。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -348,14 +366,23 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>schedule_full_sweepの実測プロファイリング ★</h3>
-          <div class="desc">2回の撤回はどちらも「<code>schedule_full_sweep</code>が重い」という推測から出発し、原因を突き止められなかった。次に何かを変える前に、1回の呼び出しが実際に何秒・何dfs_call消費しているか、リカバリーフェーズ全体の何割を占めるかを計測する。</div>
-          <div class="b-tags"><span class="tag">低リスク</span><span class="tag">前提条件</span></div>
+          <h3>dfs_match本体の速さ・的中率そのものを上げる ★</h3>
+          <div class="desc">実測で壁時計時間の99%以上を占めるのはここだと判明した。<code>--stats</code>の<code>cap_hits</code>で「試行回数は少ないのにdfs_capへ何度も到達している」定理を名指しし、その定理の<code>estimate_cost</code>の優先順位付け・候補列挙が本当に最短経路を辿れているかを個別に見直す。schedule_full_sweep周りをこれ以上いじる前に、まずここが本丸。</div>
+          <div class="b-tags"><span class="tag">実測済みの本丸</span><span class="tag">中規模</span></div>
         </div>
       </div>
 
       <div class="b-item">
         <div class="b-rank">2</div>
+        <div>
+          <h3>seeded task経路の再設計(現状は死んでいる)</h3>
+          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直すとIdenticalのような頻出結論で爆発的に増えて悪化するため、「発火頻度の低い結論形式だけ許可する」「熱量や既存の需要スコアで発火を絞る」といった選別ロジックとセットでなければ効果が出せない。UCB1・dfs_cap等の既存チューニングが無効化前提で調整されている点にも注意。</div>
+          <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">高リスク・高リターン</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">3</div>
         <div>
           <h3>DefinedBy両方未束縛分岐の共有キャッシュ</h3>
           <div class="desc"><code>defined_by_valid_nodes</code>(型だけの列挙)と<code>defined_by_collect_matches</code>(変数名への束縛)を分離すれば、Connected/Identicalと同じ型キー方式のキャッシュを適用できる。</div>
@@ -364,16 +391,16 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">3</div>
+        <div class="b-rank">4</div>
         <div>
           <h3>軽量な再統合機構(全リセットに代わる手段)</h3>
-          <div class="desc">新規エンティティ1つのために <code>schedule_full_sweep</code> が非シードタスク全体を揺さぶる、という構図そのものが2度の撤回の共通原因。「新しく出来た型に関係するタスクだけを狙い撃ちで再シードする」仕組みがあれば、DefinedBy純粋化・精密スケジューラの両方が現実的になる。</div>
-          <div class="b-tags"><span class="tag">要 #1</span><span class="tag">高リスク・高リターン</span></div>
+          <div class="desc">新規エンティティ1つのために <code>schedule_full_sweep</code> が非シードタスク全体を揺さぶる、という構図そのものが2度の撤回の共通原因だった――ただし実測(#1)により<code>schedule_full_sweep</code>自体のコストは無視できるほど小さいと判明したため、優先度はDefinedByの<code>constructions</code>フィールドを使った設計上の一貫性の話として据え置く。</div>
+          <div class="b-tags"><span class="tag">優先度低下</span><span class="tag">設計上の一貫性</span></div>
         </div>
       </div>
 
       <div class="b-item">
-        <div class="b-rank">4</div>
+        <div class="b-rank">5</div>
         <div>
           <h3>本格的なRETE型ベータネットワーク</h3>
           <div class="desc">定理間で部分マッチそのものをインクリメンタルに伝播する、案4のもともとの構想。#1〜#3で得られる効果を見てから判断する規模の刷新。</div>
@@ -382,7 +409,7 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">5</div>
+        <div class="b-rank">6</div>
         <div>
           <h3>定理集合の増加が無関係な問題に課税する問題</h3>
           <div class="desc">新定理を1つ足すと、その定理を使わない問題まで「一度は試す」コストを払う。型シグネチャ事前フィルタ(#03既出)で軽減はしたが解消はしていない、既知の許容トレードオフとして監視を続ける。</div>
@@ -391,7 +418,7 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">6</div>
+        <div class="b-rank">7</div>
         <div>
           <h3>bench_2011balkanmop1(スパイラル相似)が未解決</h3>
           <div class="desc">「スパイラル相似の中点対応」定理を実装済みだが、前提(角度・比の等式)が確立される前に探索がStallし、定理が発火する機会自体がない。前提を能動的に組み立てる仕組みが要る。</div>
@@ -400,7 +427,7 @@ flowchart TD
       </div>
 
       <div class="b-item">
-        <div class="b-rank">7</div>
+        <div class="b-rank">8</div>
         <div>
           <h3>残り4/8のHAGeo-409ベンチが未解決</h3>
           <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ何が足りないのか(定理・作図規則・探索の深さ)の切り分けがまだ済んでいない。</div>
