@@ -41,7 +41,17 @@ impl EGraph {
     }
 
     pub fn format_definition(&self, def: &Definition) -> String {
-        let get_name = |id: &ClassId| self.entities[self.get_rep(*id).0].name.clone();
+        self.format_definition_with(def, |id| self.entities[self.get_rep(id).0].name.clone())
+    }
+
+    /// 🌟 format_definitionの汎用版: 各親の表示に使う名前をname_ofに委ねる。
+    /// discover.rs(自由探索の発見レポート)が、実体本来の名前(自動生成の
+    /// たびに親の名前を連結するため、構成が深くなると際限なく長くなる)の
+    /// 代わりに短い付け替え名(P1, L1, M1...)を割り当てて表示するために
+    /// 追加した――既存の呼び出し元(dump_state, mcts.rs::describe_action)は
+    /// 全てformat_definition経由でこれまで通りの実際の名前を使う。
+    pub fn format_definition_with<F: Fn(ClassId) -> String>(&self, def: &Definition, name_of: F) -> String {
+        let get_name = |id: &ClassId| name_of(*id);
         match def {
             Definition::GivenPoint => "GivenPoint".to_string(),
             Definition::FreePoint => "FreePoint".to_string(),
