@@ -351,6 +351,7 @@ flowchart TD
           <div class="headline"><h3>schedule_matcher_task の二重チェックバグ修正</h3><span class="pill reverted">reverted</span></div>
           <div class="desc">プロファイリング中に、シード済みタスクのポップ数が常にゼロという事実を発見。<code>apply_conclusions</code>がFact発行前に<code>self.facts</code>へpush済みのため、<code>run_step</code>側の「二重登録なら<code>schedule_matcher_task</code>を呼ばない」という判定が常にtrueになり、シード付き再マッチングが(Identical/Connectedとも)一度も起きていなかった。</div>
           <div class="evidence"><b>結果:</b> このバグを実際に直す(Identical単独/Connected単独/両方)実験をいずれも試したが、既存問題群の広範囲で重大な悪化を実測(simson 2〜3秒→35秒、miquel_quadrilateral→44.7秒、nine_point_full/bench_2010g1が新規に解けなくなる等)。UCB1・dfs_cap・熱ヒューリスティックが「シード付きタスクは実質発火しない」現状に暗黙に最適化されていたと考えられ、バグ修正自体は撤回。発見(バグの所在)は<code>docs/atlas.html</code>兼コミットログに記録し、計測基盤だけを残した。</div>
+          <div class="evidence"><b>4回目の再挑戦(重複シード排除つき):</b> 「同じ代表元ペアへの再シードが際限なく積み重なる」ことが悪化の主因ではないかと仮説を立て、<code>(定理, パターン, 代表元ペア)</code>単位で一度シードしたら二度と作らない重複排除(<code>seeded_seen</code>)を追加した上で再挑戦。結果はむしろ悪化: bench_2005ctstp1(25.7秒→解けたのに57秒でも未解決)、bench_2010g1(15.8秒→解けたのに46秒でも未解決)、bench_2011armog10p6(9.7秒→解けたのに10.3秒で未解決)など、31問題スイートの最初の数問だけで壊滅的な回帰。重複排除は「全く同じ代表元ペアへの再発火」は防げても、多数の円・直線が次々に自動統合される複雑な配置(bench_2005ctstp1等)では、事実が発見されるたびに常に新しい・別個の代表元ペアが生まれ続けるため、根本的な組み合わせ爆発の幅そのものは減らせないと判明。この4回目も撤回し、コードはバグ発見直後の状態(<code>5d102de</code>相当)に戻した。</div>
         </div>
       </div>
 
@@ -376,7 +377,7 @@ flowchart TD
         <div class="b-rank">2</div>
         <div>
           <h3>seeded task経路の再設計(現状は死んでいる)</h3>
-          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直すとIdenticalのような頻出結論で爆発的に増えて悪化するため、「発火頻度の低い結論形式だけ許可する」「熱量や既存の需要スコアで発火を絞る」といった選別ロジックとセットでなければ効果が出せない。UCB1・dfs_cap等の既存チューニングが無効化前提で調整されている点にも注意。</div>
+          <div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングは、二重チェックバグにより実質的に一度も発火していなかった。単純に直すとIdenticalのような頻出結論で爆発的に増えて悪化する。(定理,パターン,代表元ペア)単位の重複排除も試したが同じく悪化した――多数の円・直線が連鎖的に自動統合される配置では、事実が見つかるたびに常に新しい代表元ペアが生まれ続けるため、重複排除では組み合わせの幅を削れない。「発火頻度の低い結論形式だけ許可する」「定理ごとにシード起動の可否を明示的にタグ付けする」「熱量や既存の需要スコアで発火を絞る」といった、定理集合そのものへの選別ロジックとセットでなければ効果が出せないと考えられる。UCB1・dfs_cap等の既存チューニングが無効化前提で調整されている点にも注意。</div>
           <div class="b-tags"><span class="tag">要#1の知見</span><span class="tag">高リスク・高リターン</span></div>
         </div>
       </div>
