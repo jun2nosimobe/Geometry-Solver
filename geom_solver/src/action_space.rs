@@ -154,17 +154,26 @@ impl ActionGenerator {
         // その第4調和点を作る完全四辺形作図を候補にする(円錐曲線は使わない)。
         for &l in &lines {
             let l = egraph.get_rep(l);
-            let pts_on_l: Vec<ClassId> = egraph.entities[l.0].components.first()
+            // 🐛 FIX: comp.subobjectsは同じ代表元を指す異なる(マージ前の)ClassIdを
+            // 重複して持ちうる(get_rep後の値が同じでも別々のスロットとして
+            // 積まれたまま)。dedupしないままweighted_pickに渡すと、同じ点が
+            // 「2つの別々の候補」として選ばれ、HarmonicConjugate(B,B,B)のような
+            // 退化した(3引数が同一点の)作図が実際に生成されてしまう(自由探索
+            // モードの実測で発見)。sort_unstable_by_key+dedupで候補プール自体を
+            // 一意な代表元だけにしてから渡す。
+            let mut pts_on_l: Vec<ClassId> = egraph.entities[l.0].components.first()
                 .map(|c| c.subobjects.iter().map(|&s| egraph.get_rep(s))
                     .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
                     .collect())
                 .unwrap_or_default();
+            pts_on_l.sort_unstable_by_key(|id| id.0);
+            pts_on_l.dedup();
             if pts_on_l.len() < 3 { continue; }
             let triple = self.weighted_pick(&pts_on_l, egraph, 3, target);
             if triple.len() < 3 { continue; }
             let (a, b) = if triple[0].0 > triple[1].0 { (triple[1], triple[0]) } else { (triple[0], triple[1]) };
             let c = triple[2];
-            if a == c || b == c { continue; }
+            if a == b || a == c || b == c { continue; }
             let key = (a, b, c);
             if self.historical_harmonic.contains(&key) { continue; }
             if egraph.memo.contains_key(&egraph.normalize_definition(&Definition::HarmonicConjugateOf(a, b, c))) { continue; }
