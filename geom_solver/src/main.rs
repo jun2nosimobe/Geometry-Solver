@@ -7,6 +7,7 @@ mod theorems;
 mod action_space;
 mod mcts;
 mod problems;
+mod discover;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
@@ -120,6 +121,15 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 && args[1] == "extract-proof" {
         run_extract_proof(&args);
+        return;
+    }
+    // 🌟 ユーザー要望:「MCTSと自由作図を通して初等幾何の『綺麗な』問題を
+    // 発見する」への対応。証明目標を持つ通常の問題実行とは別の入口として
+    // 用意した(discover.rsのドキュメント参照)。
+    // 使い方: geom_solver discover [--time=60] [--steps=80] [--sims=150]
+    //         [--top=5] [--prove] [--prove-time=15] [--seed-points=3]
+    if args.len() > 1 && args[1] == "discover" {
+        discover::run(&args);
         return;
     }
     let problem_name = if args.len() > 1 {
