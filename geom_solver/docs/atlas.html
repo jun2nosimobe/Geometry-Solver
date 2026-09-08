@@ -236,7 +236,7 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">9</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">10</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -391,6 +391,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">1b5448f</span></div>
+        <div>
+          <div class="headline"><h3>match_connected_factの局所スキャンにも熱量駆動cap(効果は限定的)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">残る4定理(円周角の定理の逆・複比の透視射影不変性・円周角の定理・共点二弦の相似)を診断計測で個別に再追跡。<code>match_connected_fact</code>の(Some,None)/(None,Some)局所スキャン分岐((None,None)分岐とは違い、これまで熱ソート・capとも無かった)に同じcap=40・熱降順ソート(<code>heat_capped_connected_candidates</code>)を追加した――円のように多くの点が乗る「ハブ」実体があれば効くはずという仮説。</div>
+          <div class="evidence"><b>結果:</b> simsonの上位4定理のdfs_call消費量(8,491/8,173/7,285/5,695)は全く変化しなかった――この配置では局所候補数がそもそも40件を超えていなかったと判明(仮説は外れ)。31問題スイート全問題でbaselineとsolved状態が完全一致し、時間の変動も誤差範囲内。<b>診断の結論</b>: これら4定理の残るコストは単一の見落とし(capの欠如)ではなく、10前後の変数を持つ定理の各段階(それぞれ中程度の分岐係数)が連鎖的に掛け合わさる「本物の組み合わせの複雑さ」だと判明した。単純なcap追加という手法は出尽くし、これ以上の削減にはより大きな構造変更(seeded task経路のこの4定理への限定的な再有効化、または探索木のメモ化)が必要と見られる。効果は確認できなかったが、他の配置(より「ハブ」が密な問題)での安全弁として無害な一般化のため維持した。simsonは2.23s→1.19s前後(約47%減)で足踏み中。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -403,9 +412,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>残る4定理(円周角の定理の逆/複比の透視射影不変性/円周角の定理/共点二弦の相似)を個別に診断する</h3>
-          <div class="desc">simsonは3回の連続した修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected capと正準順序)で2.23s→1.16s(約48%減)まで来たが、まだ1秒未満には届いていない。重要な教訓: <b>3回とも最初の仮説は外れ、診断計測(パターン選択回数のカウンタ)による再追跡が必須だった</b>――「有向角の加法性」は二重自己束縛、「円周角の定理の逆」は自己束縛×DefinedByペアリング(最初は逆に「DefinedByペアリング自体が無cap」と誤診)、「複比の透視射影不変性」はConnected両方未束縛のcap欠如+distinctの順列爆発(最初は「DefinedByペアリングにcapが無い」という円周角の定理の逆と同じ仮説を立てて外れた)、と3回とも構造が異なっていた。現在の上位4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)はどれか1つが突出しておらず、低リスクで構造的に検出できる「自己束縛/ペアリングの掛け合わせ」型の対策は出尽くした可能性が高い――残り2定理(円周角の定理・共点二弦の相似)は未診断のため、次に着手するならまずここに同じ診断手順(一時的なパターン選択回数カウンタ)を当てるところから始める。</div>
-          <div class="b-tags"><span class="tag">3勝3敗(仮説)、実測必須</span><span class="tag">残り2定理は未診断</span></div>
+          <h3>残る4定理の高速化には構造変更が要る(単純capは出尽くした)</h3>
+          <div class="desc">simsonは一連の修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected cap+正準順序)で2.23s→1.16s(約48%減)まで来たが、1秒未満には届いていない。残る4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)を診断計測で個別に再追跡した結果、2つの追加仮説(円周角の定理の逆へのDefinedByペアリングcap再挑戦、match_connected_factの局所スキャン分岐へのcap追加)は<b>いずれも効果ゼロ</b>だった。これは「見落とされたcap」がもう無いことを示す――残るコストは、10前後の変数を持つ定理の各段階(それぞれ中程度の分岐係数)が連鎖的に掛け合わさる<b>本物の組み合わせの複雑さ</b>である。全6回の仮説のうち3勝3敗で、実測なしに次の一手を当てるのはもう五分五分に近い。次に進むなら単純なcap追加ではなく、より大きな構造変更(seeded task経路をこの4定理だけに限定的に再有効化する、または探索木のメモ化)が必要。</div>
+          <div class="b-tags"><span class="tag">3勝3敗、単純capは打ち止め</span><span class="tag">要・構造変更</span></div>
         </div>
       </div>
 
