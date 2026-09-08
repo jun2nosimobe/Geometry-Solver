@@ -871,6 +871,18 @@ impl ProverEngine {
                     let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
                     Definition::LengthSq(a, b)
                 },
+                // 🌟 スパイラル相似の中点対応のために追加: LengthSqと全く同じく
+                // 可換(normalize_definitionがClassId順にソートする)なので同じ
+                // パターンで正規化する。以前はProductがDefinedByパターンの
+                // 前提として参照されたことが無かった(共点二弦の相似は
+                // constructionsでのみProductを作り、前提としては使わない)ため
+                // この分岐が無くても困らなかったが、「比の等式を前提として
+                // 要求する」定理(スパイラル相似)を書くにはProduct自体を
+                // DefinedByで前提チェックできる必要がある。
+                "Product" => {
+                    let (a,b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };
+                    Definition::Product(a, b)
+                },
                 "PerpendicularLine" => Definition::PerpendicularLine(parent_ids[0], parent_ids[1]),
                 "ParallelLine" => Definition::ParallelLine(parent_ids[0], parent_ids[1]),
                 "TangentLine" => Definition::TangentLine(parent_ids[0], parent_ids[1]),
@@ -894,7 +906,7 @@ impl ProverEngine {
 
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
-            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio" | "CrossRatioOfLines") {
+            } else if matches!(target_type, "AnglePair" | "DirectionOf" | "LengthSq" | "CrossRatio" | "CrossRatioOfLines" | "Product") {
                 // 🌟 ユーザー提案:「複比の定理を使うときは複比自体を次数を用いて
                 // 生成に制限をかけて」への対応。複比は4点(または4直線)から
                 // 作られるため、無関係な組み合わせ(透視射影不変性のような

@@ -373,6 +373,121 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
         },
 
+        // 🌟 スパイラル相似の中点対応
+        //
+        // ユーザー提案の経緯: 「△EABと△EDCが直接相似(Eを中心とするスパイラル
+        // 相似でA→D,B→C)」は、古典的に「(E,A,B,I,J)と(E,D,C,I,J)という2つの
+        // 5点配置が射影変換で移り合う」こと(I,Jは虚円点。相似変換=射影変換の
+        // うちI,Jを固定するものという古典的特徴づけ)と同値であり、これは
+        // (a)Eを中心とする線束の複比(角度だけを運ぶ)と(b)虚円点Iを中心とする
+        // 線束の複比(距離を含む計量的な情報を運ぶ)の両方が一致することと
+        // 同値、という指摘に基づく。実際にtest_spiral_similarity_characterized_by_two_pencil_cross_ratios
+        // (mmp_core/tests.rs)で数値的に検証した。
+        //
+        // (a)は既存のAnglePair等式と、(b)は既存のLengthSq/Product(方冪の
+        // 定理と同じ形)と、それぞれ既に完全に同値であることが分かった
+        // (射影的な言い回しはあくまで「なぜこの2つの条件だけで十分か」を
+        // 裏付ける理論的根拠であって、実装そのものはI,J/CrossRatioOfLinesを
+        // 新たに持ち出さなくても、既存の語彙(AnglePair, LengthSq, Product)
+        // だけで完結する)。
+        //
+        // 前提: ∠AEB=∠DEC(角度の一致)かつ EA・EC=EB・ED(比の一致、
+        // LengthSqの積として表現。共点二弦の相似と全く同じ形)。
+        // 結論: M=Midpoint(A,B), N=Midpoint(D,C) について、
+        //   ∠AEM=∠DEN(同じ回転角で対応する)
+        //   EA・EN=EM・ED(同じ比で対応する)
+        // これは「△EAM ∽ △EDN が同じスパイラル相似で結ばれている」ことを
+        // 意味し、特に「Eを中心とするスパイラル相似はA,Bの中点をD,Cの中点に
+        // 写す」という事実の(比と角度に分解した)言い換えになっている。
+        //
+        // 🌟 ProductをDefinedByパターンの前提として直接参照できるように
+        // logic_core.rs::defined_by_valid_nodesにProduct用の正規化分岐と
+        // 自動生成の許可を追加した(以前は共点二弦の相似がconstructionsで
+        // しか使っておらず、前提として要求されたことが無かったため未対応だった)。
+        TheoremDef {
+            name: "スパイラル相似の中点対応".to_string(),
+            entities: entities(&[
+                ("E", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("D", EntityType::Point), ("C", EntityType::Point),
+                ("M", EntityType::Point), ("N", EntityType::Point),
+                ("LineEA", EntityType::Line), ("LineEB", EntityType::Line), ("LineED", EntityType::Line), ("LineEC", EntityType::Line),
+                ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
+                ("DirEA", EntityType::Direction), ("DirEB", EntityType::Direction), ("DirED", EntityType::Direction), ("DirEC", EntityType::Direction),
+                ("DirEM", EntityType::Direction), ("DirEN", EntityType::Direction),
+                ("AngE_AB", EntityType::Angle), ("AngE_DC", EntityType::Angle), ("AngE_AM", EntityType::Angle), ("AngE_DN", EntityType::Angle),
+                ("LenSqEA", EntityType::Scalar), ("LenSqEB", EntityType::Scalar), ("LenSqEC", EntityType::Scalar), ("LenSqED", EntityType::Scalar),
+                ("LenSqEM", EntityType::Scalar), ("LenSqEN", EntityType::Scalar),
+                ("ProdEAEC", EntityType::Scalar), ("ProdEBED", EntityType::Scalar),
+                ("ProdEAEN", EntityType::Scalar), ("ProdEMED", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // シード: 角度の一致(∠AEB=∠DEC)から4方向を束縛する
+                // (共点二弦の相似と同じ理由でflip_groupはNone: AngE_AB,AngE_DCは
+                // 別々の定理(円周角の定理など)が独自の向きで作成済みの角を
+                // 後から読み取るだけなので、共通flip_groupを使うと正しい
+                // 組み合わせが噛み合わなくなる)。
+                fact_ext("Identical", &["AngE_AB", "AngE_DC"], Some("Angle"), None, false, None),
+                fact_ext("DefinedBy", &["DirEA", "DirEB", "AngE_AB"], Some("AnglePair"), None, true, None),
+                fact_ext("DefinedBy", &["DirED", "DirEC", "AngE_DC"], Some("AnglePair"), None, true, None),
+                distinct(&["DirEA", "DirEB"]),
+                distinct(&["DirED", "DirEC"]),
+
+                fact_ext("Connected", &["LineEA", "DirEA"], Some("Direction"), Some("Line"), false, None),
+                fact_ext("Connected", &["LineEB", "DirEB"], Some("Direction"), Some("Line"), false, None),
+                distinct(&["LineEA", "LineEB"]),
+                fact_ext("Connected", &["LineED", "DirED"], Some("Direction"), Some("Line"), false, None),
+                distinct(&["LineEA", "LineEB", "LineED"]),
+                fact_ext("Connected", &["LineEC", "DirEC"], Some("Direction"), Some("Line"), false, None),
+                distinct(&["LineEA", "LineEB", "LineED", "LineEC"]),
+
+                // E = LineEA ∩ LineEB (∠AEBの頂点)であり、かつLineED,LineEC
+                // 両方の上にもある(=△EDCの頂点も同じE、というスパイラル
+                // 相似の前提そのもの)。
+                fact_ext("Connected", &["E", "LineEA"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["E", "LineEB"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["E", "LineED"], Some("Line"), Some("Point"), false, None),
+                fact_ext("Connected", &["E", "LineEC"], Some("Line"), Some("Point"), false, None),
+
+                // A,B,D,C = それぞれの直線上のEでない方の点
+                fact_ext("Connected", &["A", "LineEA"], Some("Line"), Some("Point"), false, None),
+                distinct(&["E", "A"]),
+                fact_ext("Connected", &["B", "LineEB"], Some("Line"), Some("Point"), false, None),
+                distinct(&["E", "A", "B"]),
+                fact_ext("Connected", &["D", "LineED"], Some("Line"), Some("Point"), false, None),
+                distinct(&["E", "A", "B", "D"]),
+                fact_ext("Connected", &["C", "LineEC"], Some("Line"), Some("Point"), false, None),
+                distinct(&["E", "A", "B", "D", "C"]),
+
+                // 前提2: 比の一致 EA・EC=EB・ED (共点二弦の相似と同じ形)。
+                // E,A,B,D,Cはここまでで既に確定しているので、これは新規探索
+                // ではなく「本当にこの比が成り立っているか」の確認になる。
+                fact_ext("DefinedBy", &["E", "A", "LenSqEA"], Some("LengthSq"), None, true, None),
+                fact_ext("DefinedBy", &["E", "C", "LenSqEC"], Some("LengthSq"), None, true, None),
+                fact_ext("DefinedBy", &["LenSqEA", "LenSqEC", "ProdEAEC"], Some("Product"), None, true, None),
+                fact_ext("DefinedBy", &["E", "B", "LenSqEB"], Some("LengthSq"), None, true, None),
+                fact_ext("DefinedBy", &["E", "D", "LenSqED"], Some("LengthSq"), None, true, None),
+                fact_ext("DefinedBy", &["LenSqEB", "LenSqED", "ProdEBED"], Some("Product"), None, true, None),
+                fact_ext("Identical", &["ProdEAEC", "ProdEBED"], Some("Scalar"), None, false, None),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Point".to_string(), bind_to: "M".to_string() },
+                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["D".to_string(), "C".to_string()], target_type: "Point".to_string(), bind_to: "N".to_string() },
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Line".to_string(), bind_to: "LineEM".to_string() },
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "N".to_string()], target_type: "Line".to_string(), bind_to: "LineEN".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEM".to_string()], target_type: "Direction".to_string(), bind_to: "DirEM".to_string() },
+                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEN".to_string()], target_type: "Direction".to_string(), bind_to: "DirEN".to_string() },
+                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirEA".to_string(), "DirEM".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_AM".to_string() },
+                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirED".to_string(), "DirEN".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_DN".to_string() },
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Scalar".to_string(), bind_to: "LenSqEM".to_string() },
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["E".to_string(), "N".to_string()], target_type: "Scalar".to_string(), bind_to: "LenSqEN".to_string() },
+                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenSqEA".to_string(), "LenSqEN".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdEAEN".to_string() },
+                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenSqEM".to_string(), "LenSqED".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdEMED".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngE_AM".to_string(), "AngE_DN".to_string()], target_type: Some("Angle".to_string()), sub_type: None },
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["ProdEAEN".to_string(), "ProdEMED".to_string()], target_type: Some("Scalar".to_string()), sub_type: None },
+            ],
+        },
+
         TheoremDef {
             name: "接弦定理".to_string(),
             entities: entities(&[

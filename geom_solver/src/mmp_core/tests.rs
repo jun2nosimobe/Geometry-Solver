@@ -758,3 +758,94 @@ fn test_numeric_check_samples_consistent_point_on_conic() {
         "何の前提も無いRでは、P0..P3,Rを通る二次曲線は一般にConicとは別物になるべき"
     );
 }
+
+/// 🌟 ユーザー提案の検証: 「△EABと△EDCが直接相似(Eを中心とするスパイラル
+/// 相似でA→D,B→C)」は、(E,A,B,I,J)と(E,D,C,I,J)という2つの5点配置が
+/// 射影変換で移り合うことと同値であり、それは2つの独立な複比――
+/// (a) Eを中心とする線束の複比(角度の情報だけを運ぶ)
+/// (b) 虚円点Iを中心とする線束の複比(距離を含む計量的な情報を運ぶ)
+/// ――が両方一致することと同値なはず、という仮説を数値的に検証する。
+///
+/// 複素数z=x+iy(iはこの体内のsqrt(-1)、circ_i/circ_jと全く同じもの)を使い、
+/// D=E+k(A-E), C=E+k(B-E)というスパイラル相似(比k=kx+i*ky)で具体的にD,Cを
+/// 構成し、(a)(b)の複比が確かにEABの配置とEDCの配置で一致することを確認する。
+/// 対照実験として、Cだけ別の比k'で作った(=△EABと△EDCがもはや相似ではない)
+/// 配置では、(b)(距離の情報を運ぶ方)が一致しなくなることも確認し、この複比が
+/// 「常に一致してしまう自明な恒等式」ではなく実際に相似性を検出する非自明な
+/// 不変量であることを確かめる。
+#[test]
+fn test_spiral_similarity_characterized_by_two_pencil_cross_ratios() {
+    let mut egraph = EGraph::new();
+    let e = egraph.create_entity("E".into(), Definition::FreePoint, EntityType::Point);
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+
+    let circ_i = egraph.circ_i;
+    let circ_j = egraph.circ_j;
+
+    // (a) Eを中心とする線束: EA,EB,EI,EJ ↔ ED,EC,EI,EJ
+    let l_ea = egraph.create_entity("L_EA".into(), Definition::new_line(e, a), EntityType::Line);
+    let l_eb = egraph.create_entity("L_EB".into(), Definition::new_line(e, b), EntityType::Line);
+    let l_ed = egraph.create_entity("L_ED".into(), Definition::new_line(e, d), EntityType::Line);
+    let l_ec = egraph.create_entity("L_EC".into(), Definition::new_line(e, c), EntityType::Line);
+    let l_ei = egraph.create_entity("L_EI".into(), Definition::new_line(e, circ_i), EntityType::Line);
+    let l_ej = egraph.create_entity("L_EJ".into(), Definition::new_line(e, circ_j), EntityType::Line);
+    let cr_e_ab = egraph.create_entity("CR_E_AB".into(), Definition::CrossRatioOfLines(l_ea, l_eb, l_ei, l_ej), EntityType::Scalar);
+    let cr_e_dc = egraph.create_entity("CR_E_DC".into(), Definition::CrossRatioOfLines(l_ed, l_ec, l_ei, l_ej), EntityType::Scalar);
+
+    // (b) 虚円点Iを中心とする線束: IE,IA,IB,IJ ↔ IE,ID,IC,IJ
+    let l_ie = egraph.create_entity("L_IE".into(), Definition::new_line(circ_i, e), EntityType::Line);
+    let l_ia = egraph.create_entity("L_IA".into(), Definition::new_line(circ_i, a), EntityType::Line);
+    let l_ib = egraph.create_entity("L_IB".into(), Definition::new_line(circ_i, b), EntityType::Line);
+    let l_id = egraph.create_entity("L_ID".into(), Definition::new_line(circ_i, d), EntityType::Line);
+    let l_ic = egraph.create_entity("L_IC".into(), Definition::new_line(circ_i, c), EntityType::Line);
+    let l_ij = egraph.create_entity("L_IJ".into(), Definition::new_line(circ_i, circ_j), EntityType::Line);
+    let cr_i_ab = egraph.create_entity("CR_I_AB".into(), Definition::CrossRatioOfLines(l_ie, l_ia, l_ib, l_ij), EntityType::Scalar);
+    let cr_i_dc = egraph.create_entity("CR_I_DC".into(), Definition::CrossRatioOfLines(l_ie, l_id, l_ic, l_ij), EntityType::Scalar);
+
+    // E,A,Bへ具体的な座標を与え、D,Cは複素数演算 D=E+k(A-E), C=E+k(B-E) で
+    // 「本物のスパイラル相似」になるよう構成する(k=5+2i、単なる回転ではなく
+    // 拡大率も伴う値を選ぶことで、角度だけでなく距離の情報も試験対象にする)。
+    let i_val = ModInt::new(3).pow((crate::mmp_math::PRIME - 1) / 4);
+    let cmul = |ax: ModInt, ay: ModInt, bx: ModInt, by: ModInt| -> (ModInt, ModInt) {
+        (ax * bx - ay * by, ax * by + ay * bx)
+    };
+    let (kx, ky) = (ModInt::new(5), ModInt::new(2));
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    let (ex, ey) = (ModInt::new(1), ModInt::new(7));
+    let (ax, ay) = (ModInt::new(4), ModInt::new(2));
+    let (bx, by) = (ModInt::new(-3), ModInt::new(6));
+    vars.insert("E_x".into(), ex); vars.insert("E_y".into(), ey);
+    vars.insert("A_x".into(), ax); vars.insert("A_y".into(), ay);
+    vars.insert("B_x".into(), bx); vars.insert("B_y".into(), by);
+
+    let (dax, day) = cmul(kx, ky, ax - ex, ay - ey);
+    vars.insert("D_x".into(), ex + dax); vars.insert("D_y".into(), ey + day);
+    let (dbx, dby) = cmul(kx, ky, bx - ex, by - ey);
+    vars.insert("C_x".into(), ex + dbx); vars.insert("C_y".into(), ey + dby);
+
+    let mut cache = FxHashMap::default();
+    let v_e_ab = egraph.evaluate_node(cr_e_ab, &vars, &mut cache).expect("計算できるはず")[0];
+    let v_e_dc = egraph.evaluate_node(cr_e_dc, &vars, &mut cache).expect("計算できるはず")[0];
+    let v_i_ab = egraph.evaluate_node(cr_i_ab, &vars, &mut cache).expect("計算できるはず")[0];
+    let v_i_dc = egraph.evaluate_node(cr_i_dc, &vars, &mut cache).expect("計算できるはず")[0];
+
+    assert_eq!(v_e_ab, v_e_dc, "本物のスパイラル相似では、Eを中心とする線束の複比が一致するはず(角度の一致)");
+    assert_eq!(v_i_ab, v_i_dc, "本物のスパイラル相似では、Iを中心とする線束の複比も一致するはず(距離を含む一致)");
+    let _ = i_val; // i自体は複素数演算の定義に暗黙に埋め込まれているだけで直接は使わないが、記録として残す
+
+    // 対照実験: Cだけ全く別の比k'=(2,9)で作り直す(△EABと△EDCはもはや
+    // 相似ではない)。角度の複比(Eからの線束)はEA,ED間の関係だけで決まる
+    // ので依然として一致し得るが(EA,EBの間の角度がたまたま保たれる保証は
+    // 一般には無いのでこちらも通常は崩れる)、距離を運ぶIからの線束の複比は
+    // 確実に崩れるはずである。
+    let (kx2, ky2) = (ModInt::new(2), ModInt::new(9));
+    let (dbx2, dby2) = cmul(kx2, ky2, bx - ex, by - ey);
+    vars.insert("C_x".into(), ex + dbx2); vars.insert("C_y".into(), ey + dby2);
+    let mut cache2 = FxHashMap::default();
+    let v_i_dc_broken = egraph.evaluate_node(cr_i_dc, &vars, &mut cache2).expect("計算できるはず")[0];
+    assert_ne!(v_i_ab, v_i_dc_broken, "比kが△EABと△EDCで食い違えば、距離を運ぶIからの線束の複比は一致しないはず(この不変量が非自明であることの確認)");
+}

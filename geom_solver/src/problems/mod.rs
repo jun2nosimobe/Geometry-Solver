@@ -29,6 +29,7 @@ pub mod bench_2018chnwesternmop5;
 pub mod bench_2005ctstp1;
 pub mod bench_2005usamop3;
 pub mod bench_2011balkanmop1;
+pub mod test_spiral_similarity;
 
 use crate::mmp_core::{ClassId, EGraph, Fact}; // Factを追加
 
@@ -69,6 +70,7 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "bench_2005ctstp1" => bench_2005ctstp1::setup(egraph),
         "bench_2005usamop3" => bench_2005usamop3::setup(egraph),
         "bench_2011balkanmop1" => bench_2011balkanmop1::setup(egraph),
+        "test_spiral_similarity" => test_spiral_similarity::setup(egraph),
         _ => panic!("未知の問題名です: {}", name),
     }
 }
