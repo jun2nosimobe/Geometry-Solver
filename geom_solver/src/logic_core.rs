@@ -79,6 +79,38 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
     set.into_iter().collect()
 }
 
+/// 🌟 ユーザー提案(定理マッチングの最適化・案3)への対応: この定理が
+/// theorem.entitiesで宣言している全ての型を重複無く返す。
+/// MatchTask::cached_failed_pathsの持ち越し可否判定(下のsnapshot_type_generations
+/// と合わせて使う)に使う。
+///
+/// 🌟 この判定が安全であるための前提(mmp_core::EGraph::type_generationの
+/// ドキュメント参照): e-graphの生の構造フィールド(components/subobjects/
+/// uses/memo)を書き換える操作はcreate_entity/merge_entities/
+/// link_logical_incidence/insert_memoの4つのゲートウェイだけに集約されており、
+/// それぞれが必ずtype_generationを更新する。この不変条件が崩れる(=新しい
+/// ゲートウェイ相当の直接書き込みが追加され、type_generationの更新を
+/// 忘れる)と、ここでの判定が古い(既に無効な)failed_pathsを誤って再利用
+/// してしまい、本来見つかるはずのマッチを静かに逃す――過去に実際にこの
+/// 見落としで複数のベンチマーク問題が回帰したことがある。今後EGraphに
+/// 新しい構造変更手段を追加する際は、必ずこの4つのゲートウェイのどれかを
+/// 経由するか、新規に追加してnote_type_changedを呼ぶこと。
+fn theorem_all_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType> {
+    let mut set: std::collections::HashSet<crate::mmp_core::EntityType> = std::collections::HashSet::new();
+    for &t in theorem.entities.values() { set.insert(t); }
+    set.into_iter().collect()
+}
+
+/// 🌟 指定した型それぞれについて、現在のEGraph::type_generationの値を
+/// 記録したスナップショットを作る。MatchTaskがdfs_cap到達で再キューされる
+/// 際にこれを保存しておき、再開時に現在値と比較することで、「この定理が
+/// 使う型のどれかで、キャッシュ時点以降に変化(マージ・新規生成・接続関係の
+/// 追加・memoの事後登録のいずれか)が起きたか」を判定する(1つでも変わって
+/// いれば安全側に倒してfailed_pathsを空から作り直す)。
+fn snapshot_type_generations(egraph: &EGraph, types: &[crate::mmp_core::EntityType]) -> Vec<(crate::mmp_core::EntityType, u64)> {
+    types.iter().map(|&t| (t, egraph.type_generation.get(&t).copied().unwrap_or(0))).collect()
+}
+
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
     if items.len() <= 1 { return vec![items.to_vec()]; }
     let mut result = Vec::new();
@@ -163,18 +195,33 @@ pub struct MatchTask {
     // 別種の試行なので、混ぜると「シードでよく呼ばれるが素の全探索では
     // ほぼ失敗する定理」の見込みスコアを不当に引き上げてしまう)。
     pub is_seeded: bool,
-    // 🌟 failed_pathsの持ち越し(EGraph::merge_generationのドキュメント参照):
-    // dfs_cap到達でこのタスクが再キューされた時点でのdfs_match失敗状態
-    // キャッシュと、その時点のegraph.merge_generationの値。再度popされた
-    // 時にmerge_generationが変わっていなければ(=このタスクが中断されて
-    // 以降、e-graphで一度もマージが起きていなければ)そのまま再利用し、
-    // 既に探索済みの行き止まりを再訪しない。変わっていれば安全側に倒して
-    // 空のfailed_pathsから再開する(run_step側の判定)。新規タスク
-    // (schedule_full_sweep/schedule_matcher_task由来)は常に空・世代0から
-    // 始まる(egraphのmerge_generationが0のままなら初回はそのまま有効な
-    // キャッシュとして扱われるが、中身が空なので実質的な違いはない)。
+    // 🌟 failed_pathsの持ち越し: dfs_cap到達でこのタスクが再キューされた
+    // 時点でのdfs_match失敗状態キャッシュと、その時点でのこの定理が使う
+    // 型ごとのEGraph::type_generationのスナップショット(snapshot_type_generations
+    // 参照)。再度popされた時に、記録した型のどれか1つでもtype_generationが
+    // 変わっていれば(=このタスクが中断されて以降、この定理が使う型のどれかで
+    // e-graphに変化が起きていれば)安全側に倒して空のfailed_pathsから再開し、
+    // 1つも変わっていなければそのまま再利用して既に探索済みの行き止まりを
+    // 再訪しない。
+    //
+    // 🐛 以前はEGraph::merge_generationという単一のグローバルカウンタで
+    // 「e-graphのどこかで1回でも変化が起きたか」だけを見ていたため、
+    // 例えば円の一意性統合によるCircle-Circleのマージが、点・直線・角度
+    // しか使わない定理のキャッシュまで無関係に巻き添えで捨てていた
+    // (HAGeo-409ベンチマークでの調査で判明)。型ごとに独立してカウンタを
+    // 持たせることで、このタスク自身が実際に依存する型の変化だけを
+    // 見て判定できるようにした――ただし、これが安全であるためには
+    // EGraph側で「マッチングに影響し得る構造変更が漏れなくtype_generationを
+    // 更新する」という不変条件が必須で、実際に最初の実装では見落としが
+    // あり複数のベンチマーク問題で回帰した(EGraph::type_generationの
+    // ドキュメント参照)。生の構造フィールドへの書き込みをEGraph側の
+    // 4つのゲートウェイに集約したことで、この不変条件が構造的に保たれる
+    // ようにしてから再導入している。
+    // 新規タスク(schedule_full_sweep/schedule_matcher_task由来)は生成時点の
+    // スナップショットを持って空のcached_failed_pathsから始まる(比較して
+    // 一致しても中身が空なので実質的な違いはない)。
     pub cached_failed_paths: rustc_hash::FxHashSet<u64>,
-    pub failed_paths_generation: u64,
+    pub failed_paths_type_gens: Vec<(crate::mmp_core::EntityType, u64)>,
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
@@ -1557,7 +1604,7 @@ impl BlackboardEngine {
                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
                 cached_failed_paths: rustc_hash::FxHashSet::default(),
-                failed_paths_generation: self.prover.egraph.merge_generation,
+                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph, &theorem_all_types(theorem)),
             });
         }
     }
@@ -1601,7 +1648,7 @@ impl BlackboardEngine {
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                                 is_seeded: true,
                                 cached_failed_paths: rustc_hash::FxHashSet::default(),
-                                failed_paths_generation: self.prover.egraph.merge_generation,
+                                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph, &theorem_all_types(theorem)),
                             });
                         }
                     }
@@ -1660,14 +1707,29 @@ impl BlackboardEngine {
                 // 「dfs_cap到達で再キューされるたびにfailed_pathsが空に戻り、
                 // 同じ行き止まりを何度も再訪して探索し直す」という無駄そのもの
                 // だった。これを解消するため、このタスクがdfs_cap到達で再キュー
-                // されたものであり、かつ再キュー時点から今この瞬間まで(他の
-                // タスクの成功も含め)e-graphで一度もマージが起きていなければ
-                // (EGraph::merge_generationが一致していれば)、前回のfailed_paths
-                // をそのまま引き継いで再開する。マージが1回でも起きていれば
-                // (union-findの代表元が動き、古いハッシュが別の状態を指し得る
-                // ため)安全側に倒して空から作り直す。
-                let current_gen = self.prover.egraph.merge_generation;
-                let mut failed_paths = if task.failed_paths_generation == current_gen {
+                // されたものであり、かつ再キュー時点から今この瞬間まで、この定理が
+                // 使う型のどれについても(他のタスクの成功も含め)e-graphで変化が
+                // 起きていなければ(型ごとのtype_generationが全て一致していれば)、
+                // 前回のfailed_pathsをそのまま引き継いで再開する。1つでも変わって
+                // いれば(union-findの代表元が動く、あるいは候補集合そのものが
+                // 変わり、古いハッシュが別の状態を指し得るため)安全側に倒して
+                // 空から作り直す。
+                //
+                // 🌟 ユーザー提案(定理マッチングの最適化・案3)への対応: 以前は
+                // EGraph::merge_generationという単一のグローバルカウンタで
+                // 「e-graphのどこかで1回でも変化が起きたか」だけを見ていた
+                // ため、この定理が全く使わない型どうしの変化(例: 円の
+                // 一意性統合)でも無関係にキャッシュ全体を捨てていた。この定理の
+                // theorem_all_typesに絞った型ごとのtype_generationスナップショット
+                // (snapshot_type_generations)で比較することで、無関係な型の
+                // 変化頻度が高い問題ほどキャッシュの生存率が上がるようにした
+                // (この判定が安全であるための前提はEGraph::type_generationの
+                // ドキュメント参照――生の構造変更を4つのゲートウェイに
+                // 集約してから導入している)。
+                let theorem_types = theorem_all_types(&theorem);
+                let types_unchanged = task.failed_paths_type_gens.iter()
+                    .all(|&(t, saved_gen)| self.prover.egraph.type_generation.get(&t).copied().unwrap_or(0) == saved_gen);
+                let mut failed_paths = if types_unchanged {
                     std::mem::take(&mut task.cached_failed_paths)
                 } else {
                     rustc_hash::FxHashSet::default()
@@ -1702,10 +1764,11 @@ impl BlackboardEngine {
                         task.priority -= 5;
                         if task.priority >= -20 { // 諦める閾値
                             // 🌟 再開時に引き継げるよう、このタスク専用の
-                            // failed_pathsとその時点のmerge_generationを保存する
-                            // (再開条件のチェックはこのブロックの直前を参照)。
+                            // failed_pathsとその時点の型ごとのtype_generation
+                            // スナップショットを保存する(再開条件のチェックは
+                            // このブロックの直前を参照)。
                             task.cached_failed_paths = failed_paths;
-                            task.failed_paths_generation = current_gen;
+                            task.failed_paths_type_gens = snapshot_type_generations(&self.prover.egraph, &theorem_types);
                             self.task_queue.push(task);
                         }
                     }

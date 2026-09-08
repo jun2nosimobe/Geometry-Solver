@@ -291,6 +291,27 @@ pub struct EGraph {
     // しておけば、目的の型のエンティティ数だけのスキャンで済む
     // (特にCircle/Conicのような個体数の少ない型で効果が大きい)。
     pub type_index: rustc_hash::FxHashMap<EntityType, Vec<ClassId>>,
+    // 🌟 ユーザー提案(定理マッチングの最適化・案3→ゲートウェイ集約による
+    // リファクタリング)への対応: EntityTypeごとに独立した「この型に関する
+    // マッチング候補集合(候補エンティティ・接続関係・memo経由の到達可能性)が
+    // 最後に変化した世代」のカウンタ。logic_core.rs::MatchTaskのfailed_paths
+    // 持ち越し判定に使う――単一のグローバルmerge_generationだと「e-graphの
+    // どこかで1回でも変化が起きたか」しか区別できず、無関係な型の変化でも
+    // 全タスクのキャッシュを巻き添えで捨てていたため、型ごとに絞り込めるよう
+    // 分解した。
+    //
+    // 🐛 この値を正しく保つには「マッチングに影響し得る構造
+    // (components/subobjects/uses/memo)を変更する操作を漏れなくここに
+    // 通知する」ことが不可欠で、実際に最初の実装では複数箇所を見落として
+    // (新規エンティティ生成、接続関係の新規追加、apply_congruence_closure内で
+    // 既存エンティティにmemoを事後登録するケースの3つ)HAGeo-409ベンチマークの
+    // 複数問題で回帰を起こした。そこで生の構造フィールドへの書き込みを
+    // create_entity/merge_entities/link_logical_incidence/insert_memoの
+    // 4つのゲートウェイ関数だけに集約し(この4つ以外がentities[..].components/
+    // subobjects/usesやself.memoに直接書き込むことは無い、という不変条件を
+    // 保つ)、それぞれの内部でnote_type_changedを呼ぶことで「この値を
+    // 更新し忘れる」余地を構造的に無くした。
+    pub type_generation: rustc_hash::FxHashMap<EntityType, u64>,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -374,6 +395,7 @@ impl EGraph {
             merge_generation: 0,
             rejected_circle_pairs: rustc_hash::FxHashMap::default(),
             type_index: rustc_hash::FxHashMap::default(),
+            type_generation: rustc_hash::FxHashMap::default(),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
@@ -434,6 +456,9 @@ impl EGraph {
         self.entities.push(entity);
         self.parents.push(Cell::new(id.0));
         self.type_index.entry(e_type).or_default().push(id);
+        // 🌟 新規エンティティの誕生そのものが「この型の候補集合が変わった」
+        // 変化点(note_type_changedのドキュメント参照)。
+        self.note_type_changed(e_type);
 
         for p in norm_def.get_parents() {
             let p_rep = self.get_rep(p);
@@ -441,11 +466,36 @@ impl EGraph {
         }
 
         if should_memoize {
-            self.memo.insert(norm_def.clone(), id);
+            self.insert_memo(norm_def.clone(), id);
         }
 
         self.apply_trivial_relations(id, &norm_def);
         id
+    }
+
+    /// 🌟 type_generationのドキュメント参照。EGraphの生の構造フィールド
+    /// (entities[..].components/subobjects/uses/self.memo)を書き換える
+    /// create_entity/merge_entities/link_logical_incidence/insert_memoの
+    /// 4つのゲートウェイだけがこれを呼ぶ――呼び出し忘れが起きないよう、
+    /// 「新しいゲートウェイを追加するときは必ずここも呼ぶ」という単純な
+    /// ルール1つに集約している。
+    fn note_type_changed(&mut self, et: EntityType) {
+        *self.type_generation.entry(et).or_insert(0) += 1;
+    }
+
+    /// 🌟 self.memoへの書き込みを一箇所に集約するゲートウェイ。以前は
+    /// create_entityとapply_congruence_closure(congruence.rs)の2箇所が
+    /// それぞれ直接self.memo.insertを呼んでおり、後者(既存エンティティに
+    /// 対して正規化後の定義を事後的にmemo登録するケース)がnote_type_changedの
+    /// 呼び出し漏れの原因になっていた(HAGeo-409ベンチマークで実際に
+    /// 回帰として顕在化)。memoへの新規登録は「このDefinitionから
+    /// このエンティティへ到達できるようになった」という、defined_by_valid_nodes等の
+    /// memoルックアップの結果を変え得る変化なので、登録したエンティティの
+    /// 型を必ずnote_type_changedに通知する。
+    fn insert_memo(&mut self, def: Definition, id: ClassId) {
+        let et = self.entities[id.0].entity_type;
+        self.memo.insert(def, id);
+        self.note_type_changed(et);
     }
 
     /// 🌟 type_indexを使い、指定した型を持つ「現在の代表元」だけを列挙する。
@@ -576,11 +626,22 @@ impl EGraph {
         let rep1 = self.get_rep(id1);
         let rep2 = self.get_rep(id2);
 
+        let mut added_new_link = false;
         if let Some(comp1) = self.entities[rep1.0].components.first_mut() {
-            if !comp1.subobjects.contains(&rep2) { comp1.subobjects.push(rep2); }
+            if !comp1.subobjects.contains(&rep2) { comp1.subobjects.push(rep2); added_new_link = true; }
         }
         if let Some(comp2) = self.entities[rep2.0].components.first_mut() {
-            if !comp2.subobjects.contains(&rep1) { comp2.subobjects.push(rep1); }
+            if !comp2.subobjects.contains(&rep1) { comp2.subobjects.push(rep1); added_new_link = true; }
+        }
+
+        // 🌟 type_generationのドキュメント参照: 既存の2エンティティ間に
+        // 新しい接続関係(incidence)ができるのは、マージでも新規生成でもない
+        // 第三の「マッチングに影響し得る変化」。match_connected_factの
+        // is_connected判定・subobjects列挙の結果を変え得るので、両側の型に
+        // 通知する(実際に何も変わらなかった場合は通知しない)。
+        if added_new_link {
+            self.note_type_changed(self.entities[rep1.0].entity_type);
+            self.note_type_changed(self.entities[rep2.0].entity_type);
         }
 
         // 🌟 新しい接続関係(incidence)ができたので、apply_congruence_closure の

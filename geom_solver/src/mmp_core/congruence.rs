@@ -78,6 +78,12 @@ impl EGraph {
         // 🌟 実際に併合が起きた印。logic_core.rs::MatchTaskのfailed_paths
         // 持ち越し判定(merge_generationのドキュメント参照)が使う。
         self.merge_generation += 1;
+        // 🌟 type_generationのドキュメント参照。merge_entities/
+        // merge_entities_justifiedは常に同じEntityType同士しか統合しない
+        // (点は点、円は円としか併合されない)不変条件があるため、root1
+        // (生き残った側、今はroot2の内容も統合済み)のentity_typeを見るだけで
+        // 「どちらの型で併合が起きたか」を一意に特定できる。
+        self.note_type_changed(self.entities[root1.0].entity_type);
         true
     }
 
@@ -145,7 +151,14 @@ impl EGraph {
                         }
                     } else {
                         def_map.insert(norm_def.clone(), u_rep);
-                        self.memo.insert(norm_def, u_rep); // 🌟 グローバルにも登録
+                        // 🌟 ゲートウェイ集約(type_generationのドキュメント参照):
+                        // 以前はここが直接self.memo.insertしており、
+                        // note_type_changedの呼び出し漏れの原因になっていた
+                        // (このエンティティは既存だがこの正規化後の定義では
+                        // 初めてmemoに載る、というケースなので、他のタスクの
+                        // memoルックアップ結果を変え得る)。insert_memo経由に
+                        // 統一する。
+                        self.insert_memo(norm_def, u_rep); // 🌟 グローバルにも登録
                     }
                 }
             }
