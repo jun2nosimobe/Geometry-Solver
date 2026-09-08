@@ -37,7 +37,7 @@ pub type FlipStates = im::HashMap<String, bool, std::hash::BuildHasherDefault<st
 fn collect_pattern_vars<'a>(pat: &'a Pattern, out: &mut Vec<&'a str>) {
     match pat {
         Pattern::Fact(def) => { for v in &def.args { out.push(v.as_str()); } }
-        Pattern::Distinct(vars) | Pattern::Order(vars) => { for v in vars { out.push(v.as_str()); } }
+        Pattern::Distinct(vars) | Pattern::Order(vars) | Pattern::OrderNonStrict(vars) => { for v in vars { out.push(v.as_str()); } }
         Pattern::Not(inner) => collect_pattern_vars(inner, out),
     }
 }
@@ -140,6 +140,22 @@ pub enum Pattern {
     Fact(FactPatternDef),
     Distinct(Vec<String>),
     Order(Vec<String>),
+    // 🌟 ユーザー要望「TheoremDefの改善(Simson級を1秒未満に)」への対応:
+    // Order(厳密な "<") は、隣接する2変数が「本質的に等しくなり得ない」場合
+    // (例: distinctが別途要求されている)にしか安全に使えない。角の加法性
+    // ([D1,D2,D3] と [D4,D5,D6] という2組の方向トリプルを入れ替えても
+    // 同じ結論(Ang13≡Ang46、Identicalは順序を問わない)になる)のような
+    // 「2つの役割を丸ごと入れ替えても同じ結論になる」対称性を潰したい
+    // だけの場合、Orderの厳密な "<" だと D1==D4(方向を共有する、まさに
+    // 角度チェイスの本来のユースケース)の場合に両方向とも弾かれ、
+    // その代表元ペアだけ結論に到達できなくなる致命的なバグになる。
+    // OrderNonStrict は "<=" (等しい場合は許可)で判定し、非自明な
+    // (D1≠D4)ケースの入れ替え対称性だけを半分に間引く。数学的な証明:
+    // D1>D4を満たす任意の充足解は、[D1..D3]と[D4..D6]をまるごと入れ替えた
+    // 解(結論のIdenticalは順序を問わないので同じ結論を生む)が必ず存在し、
+    // その入れ替え解は D1'=D4<D4'=D1 なので D1'<=D4' を満たす。
+    // つまりD1==D4の解を一切失わずに、対称な重複探索だけを削減できる。
+    OrderNonStrict(Vec<String>),
     Not(Box<Pattern>),
 }
 
@@ -253,6 +269,12 @@ pub struct TheoremBanditStats {
     // --statsでattempts列と併記し、「試行回数は少ないのに時間を食っている」
     // 定理を名指しできるようにする。
     pub cap_hits: u64,
+    // 🌟 Simsonクラスの問題を1秒未満で解く目標のための一時的な内訳計測:
+    // この定理のシードなしタスク1回あたりが実際に何dfs_call消費したかの
+    // 累計。cap_hitsだけだと「上限に張り付いた回数」しか分からず、
+    // 上限未満でも1回あたり数千〜数万callを毎回消費するような定理を
+    // 名指しできないため追加した。attempts で割れば平均コストになる。
+    pub total_dfs_calls: u64,
 }
 
 impl TheoremBanditStats {
@@ -499,6 +521,7 @@ impl ProverEngine {
         if let Some(stats) = self.theorem_stats.get_mut(idx) {
             stats.attempts += 1;
             stats.total_reward += reward;
+            stats.total_dfs_calls += dfs_calls_used;
             if dfs_calls_used >= self.dfs_cap {
                 stats.cap_hits += 1;
             }
@@ -571,7 +594,7 @@ impl ProverEngine {
                 
                 (base_cost - heat).max(0.1) // 完全に0にはせず僅かなコストを残す[cite: 5]
             }
-            Pattern::Order(vars) | Pattern::Distinct(vars) => {
+            Pattern::Order(vars) | Pattern::Distinct(vars) | Pattern::OrderNonStrict(vars) => {
                 if vars.iter().any(|v| !bind.contains_key(v)) { std::f64::INFINITY } else { 0.0 }
             }
             Pattern::Not(inner_pat) => self.estimate_cost(inner_pat, bind, theorem),
@@ -690,6 +713,17 @@ impl ProverEngine {
                 for i in 0..vars.len().saturating_sub(1) {
                     if let (Some(id1), Some(id2)) = (bind.get(&vars[i]), bind.get(&vars[i+1])) {
                         if self.egraph.get_rep(*id1).0 >= self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
+                    }
+                }
+                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
+            }
+            // 🌟 Pattern::OrderNonStrictのドキュメント参照。Orderとの違いは
+            // "<"ではなく"<="(等しい場合は許可)で判定する点のみ。
+            Pattern::OrderNonStrict(vars) => {
+                let mut is_ordered = true;
+                for i in 0..vars.len().saturating_sub(1) {
+                    if let (Some(id1), Some(id2)) = (bind.get(&vars[i]), bind.get(&vars[i+1])) {
+                        if self.egraph.get_rep(*id1).0 > self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
                 if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
@@ -1249,6 +1283,38 @@ impl ProverEngine {
                     self.egraph.detect_cross_ratio_coincidences(new_id);
                 }
                 valid_nodes.push(new_id);
+            }
+        }
+        // 🌟 高速化(ユーザー要望「TheoremDefの改善、Simson級を1秒未満に」への
+        // 対応): 親変数の一部だけが束縛されている場合(例: AnglePair(D2,D3,Ang23)
+        // でD2だけ既知)。以前はこのケースを見落として下のフルスキャン
+        // (期待される結果の型の全代表元、または全エンティティ)にそのまま
+        // フォールバックしていた。実測(--profileの診断カウンタで「有向角の
+        // 加法性」の探索木を追跡)で、この見落としがsimson全体のdfs_call
+        // 消費量トップ(平均19,000回超/試行、全体の約1/4)の直接の原因だと
+        // 判明した。
+        //
+        // 束縛済みの親(anchor)のGeoEntity::usesは「anchorをDefinitionの
+        // 親として参照する実体」の集合で、create_entity時に登録され
+        // (mod.rs参照)、mergeのたびにcongruence.rs::merge_entitiesが
+        // 生き残った側へ正しく引き継ぐ(=マージを経ても取りこぼさない)。
+        // 安全性: ここで返すvalid_nodesはdefined_by_collect_matchesが
+        // 実際のDefinition(target_type・全親の一致)で改めて検証する
+        // 「候補プール」に過ぎないため、真に有効な候補を含む上位集合
+        // (superset)でありさえすれば正しい――そしてtarget_typeの定義上、
+        // 真に有効な結果ノードは必ずanchorを親の1つとして持つ(=create_entity
+        // 時にanchorのusesへ登録済み)ため、この絞り込みは取りこぼしが起きない。
+        else if let Some(&anchor_raw) = parent_vars.iter().find_map(|v| bind.get(v)) {
+            let anchor = self.egraph.get_rep(anchor_raw);
+            let mut seen = rustc_hash::FxHashSet::default();
+            for &used_id in &self.egraph.entities[anchor.0].uses {
+                let u_rep = self.egraph.get_rep(used_id);
+                if let Some(et) = expected_r_type {
+                    if self.egraph.entities[u_rep.0].entity_type != et { continue; }
+                }
+                if seen.insert(u_rep) {
+                    valid_nodes.push(u_rep);
+                }
             }
         }
         // 🌟 FIX 3: どちらも未バインドの場合のみフルスキャン

@@ -431,13 +431,21 @@ fn main() {
         // --profileが「dfs_match本体が壁時計時間の大半を占める」ことを
         // 示した後の自然な追跡調査: attempts列だけでは分からない
         // 「1回あたりどれだけ高くついたか」を可視化する。
-        let mut rows: Vec<(String, u64, u64, f64)> = engine.prover.theorem_stats.iter().enumerate()
+        // 🌟 Simsonクラスの問題を1秒未満で解く目標のための追跡調査:
+        // cap_hitsだけでは「上限未満だが毎回数千〜数万call消費する」定理を
+        // 名指しできないため、平均dfs_call消費量(total_dfs_calls/attempts)で
+        // 降順ソートする(cap_hits→attemptsのソートから変更)。これにより
+        // 「壁時計時間を実際に一番食っている定理」がそのまま上位に来る。
+        let mut rows: Vec<(String, u64, u64, u64, f64)> = engine.prover.theorem_stats.iter().enumerate()
             .filter(|(_, s)| s.attempts > 0)
-            .map(|(idx, s)| (engine.prover.theorems[idx].name.clone(), s.attempts, s.cap_hits, s.total_reward / s.attempts as f64))
+            .map(|(idx, s)| (engine.prover.theorems[idx].name.clone(), s.attempts, s.cap_hits, s.total_dfs_calls, s.total_reward / s.attempts as f64))
             .collect();
-        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        for (name, attempts, cap_hits, avg_reward) in rows.iter().take(20) {
-            println!("  {:>6}回試行 (うちcap到達{:>3}回) / 平均報酬 {:>+6.3} : {}", attempts, cap_hits, avg_reward, name);
+        // 整数除算での丸め誤差を避けるため、平均同士の比較を交差乗算で行う
+        // (avg(b) vs avg(a) を b.3*a.1 vs a.3*b.1 の比較に置き換え、降順ソート)。
+        rows.sort_by(|a, b| (b.3 as u128 * a.1 as u128).cmp(&(a.3 as u128 * b.1 as u128)));
+        for (name, attempts, cap_hits, total_dfs_calls, avg_reward) in rows.iter().take(20) {
+            let avg_dfs = *total_dfs_calls as f64 / *attempts as f64;
+            println!("  {:>6}回試行 (うちcap到達{:>3}回) / 平均dfs_call {:>9.0} / 平均報酬 {:>+6.3} : {}", attempts, cap_hits, avg_dfs, avg_reward, name);
         }
         println!("=============================\n");
     }

@@ -32,6 +32,13 @@ fn distinct(args: &[&str]) -> Pattern {
     Pattern::Distinct(args.iter().map(|s| s.to_string()).collect())
 }
 
+// 🌟 Pattern::OrderNonStrictのドキュメント参照(logic_core.rs)。「2つの役割
+// (方向トリプルの組など)を丸ごと入れ替えても同じ結論になる」定理の
+// 対称的な重複探索を、正当な解を一切失わずに約半分に間引くためのヘルパー。
+fn order_le(args: &[&str]) -> Pattern {
+    Pattern::OrderNonStrict(args.iter().map(|s| s.to_string()).collect())
+}
+
 fn not(pat: Pattern) -> Pattern {
     Pattern::Not(Box::new(pat))
 }
@@ -623,7 +630,18 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 
                 distinct(&["D1", "D2", "D3"]),
                 distinct(&["D4", "D5", "D6"]),
-                
+
+                // 🌟 高速化(Simson級を1秒未満にする目標への対応): [D1,D2,D3]と
+                // [D4,D5,D6]という2組の方向トリプルは丸ごと入れ替えても同じ
+                // 結論(Ang13≡Ang46、Identicalは順序を問わない)になる対称性が
+                // あり、この定理はまさにこの対称な重複探索(組×組の直積)が
+                // simsonでdfs_call消費量トップ(平均19,317回/試行)の主因だった。
+                // order_le(D1,D4)で「入れ替えて片方だけ残す」を行い、正当な解を
+                // 一切失わずに(D1==D4という方向共有ケース――角度チェイスの
+                // 本来のユースケース――も証明可能なOrderNonStrictのドキュメント
+                // 参照)対称な重複だけを間引く。
+                order_le(&["D1", "D4"]),
+
                 fact_ext("DefinedBy", &["D1", "D3", "Ang13"], Some("AnglePair"), None, true, Some("Add3")),
                 fact_ext("DefinedBy", &["D4", "D6", "Ang46"], Some("AnglePair"), None, true, Some("Add3")),
             ],
