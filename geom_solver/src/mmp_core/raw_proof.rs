@@ -60,6 +60,10 @@ fn encode_justification(j: &Justification) -> (&'static str, String) {
             "PointUniqueness",
             format!("{},{}", via_lines.0.0, via_lines.1.0),
         ),
+        Justification::CircleUniqueness { shared_points } => (
+            "CircleUniqueness",
+            shared_points.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(","),
+        ),
         Justification::Trivial { reason } => ("Trivial", reason.clone()),
     }
 }
@@ -363,23 +367,27 @@ impl RawProof {
                 }
                 DeepStep { headline, reason: format!("定理「{}」", name), children, is_gap: false, gap_reason: None, is_shortcut: false }
             }
-            "LineUniqueness" | "PointUniqueness" => {
+            "LineUniqueness" | "CircleUniqueness" | "PointUniqueness" => {
                 let ids: Vec<usize> = edge.payload.split(',').filter_map(|s| s.parse().ok()).collect();
-                let (reason, related_lines): (String, Vec<usize>) = if edge.kind == "LineUniqueness" {
-                    (format!("2直線が点({})を共有しているため同一直線", ids.iter().map(|&i| self.name_of(i)).collect::<Vec<_>>().join(", ")),
-                     vec![from, edge.to])
-                } else {
+                // 🌟 CircleUniquenessはLineUniquenessと全く同じ構造(N点の共有→
+                // 同一の図形)なので、対象を表す語("直線"/"円")だけ差し替えて
+                // 同じロジックを共有する。
+                let (reason, related_lines): (String, Vec<usize>) = if edge.kind == "PointUniqueness" {
                     (format!("直線 {} と直線 {} の交点として一意に定まる", self.name_of(ids.first().copied().unwrap_or(0)), self.name_of(ids.get(1).copied().unwrap_or(0))),
                      ids.clone())
+                } else {
+                    let obj_word = if edge.kind == "LineUniqueness" { "直線" } else { "円" };
+                    (format!("2{}が点({})を共有しているため同一{}", obj_word, ids.iter().map(|&i| self.name_of(i)).collect::<Vec<_>>().join(", "), obj_word),
+                     vec![from, edge.to])
                 };
                 // 🌟 「共有している」という前提の由来を子ノードとして展開する。
-                // LineUniquenessならids=共有点、related_lines=2直線。
+                // LineUniqueness/CircleUniquenessならids=共有点、related_lines=2つの図形。
                 // PointUniquenessならids=2直線(via_lines)、related_lines=同じ2直線
                 // (この場合はfrom/edge.toの側=2点それぞれの接続を調べる)。
                 // 🌟 今まさに検証している辺(from, edge.to)自身を除外する
                 // (下記build_grounding_stepのexclude参照)。
                 let mut children = Vec::new();
-                if edge.kind == "LineUniqueness" {
+                if edge.kind != "PointUniqueness" {
                     for &p in &ids {
                         children.push(self.build_grounding_step(p, &related_lines, (from, edge.to), visited, depth + 1));
                     }

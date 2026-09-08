@@ -1780,6 +1780,76 @@ impl BlackboardEngine {
         applied
     }
 
+    // 🌟 フェーズ2.9: 目標駆動のオンデマンド作図(最後の砦、MCTSに頼る直前)。
+    //
+    // 背景(HAGeo-409ベンチマークで判明): resolve_demands/resolve_point_demands/
+    // resolve_angle_demandsはいずれも「ある定理のDFSが実際にその組み合わせを
+    // 束縛しようとして初めて需要として記録される」という反応的な仕組みで
+    // 統一されている。これは無関係な直線・点を無差別に作り続ける組み合わせ
+    // 爆発を避けるための健全な設計だが、逆に言うと「証明したい目標
+    // (target_fact)には出てくるのに、重要度が低くどの定理からも一度も
+    // 束縛されない孤立点」には永遠に需要が発生しないという穴がある
+    // (実例: bench_2005usamop3のQ。B1,C1,Pとは共円関係の探索が活発に
+    // 進む一方、Qは他の3点への直線が一度も引かれずグラフから孤立したまま
+    // 探索がStallしていた)。
+    //
+    // 目標の引数に現れる点同士は「最終的に何らかの関係を証明したい」という
+    // 意味で構造的に重要なはずなので、他の需要駆動フェーズが尽きた場合に
+    // 限り(MCTSのような無方向な探索に頼る前の最後の一手として)、まだ
+    // 直線で結ばれていない目標点のペアに無条件で補助線を引いてみる。
+    // 需要の頻度・次数による絞り込みが無い分、resolve_demandsより無防備な
+    // 最終手段なので、他の全ての需要駆動フェーズが失敗した後にだけ呼ぶこと。
+    pub fn resolve_target_demands(&mut self, target: &Option<(String, Vec<ClassId>)>) -> bool {
+        let Some((_, target_args)) = target else { return false; };
+
+        let mut points: Vec<ClassId> = target_args.iter()
+            .map(|&id| self.prover.egraph.get_rep(id))
+            .filter(|&id| self.prover.egraph.entities[id.0].entity_type == EntityType::Point)
+            .collect();
+        points.sort_unstable_by_key(|id| id.0);
+        points.dedup();
+
+        let mut applied = false;
+        let mut count = 0;
+        'outer: for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                let (p1, p2) = (points[i], points[j]);
+                let def = Definition::new_line(p1, p2);
+                if self.prover.egraph.memo.contains_key(&def) { continue; }
+                // 🐛 FIX: p1,p2が既に何らかの直線を共有しているなら、その直線を
+                // 差し置いて別の新しいLineThroughPointsエンティティを作っては
+                // いけない。理論上は「2点が決める直線」は1本しかないので数値的にも
+                // 同一のはずだが、新しい直線を作るとapply_trivial_relationsが
+                // p1,p2それぞれにこの新しい直線への接続をもう1本追加してしまい、
+                // 「この点は複数の互いに矛盾しうる接続を持つ」と見なされて
+                // (has_extraneous_incidence)数値サンプリングが特定の直線上に
+                // 座標を固定できなくなる(assign_free_point_coordsが安全側に倒れて
+                // 無制約の乱数を返す)。実際にminiquelで、既にLineBC上にある
+                // C,DについてLine(C,D)を新規に作った結果、Dの数値サンプリングが
+                // 壊れてLineBCとの合流はおろか無関係な円の合流まで数値的健全性
+                // チェックに軒並み却下される、という副作用が実測で見つかった。
+                // find_common_lineで「既に共有する直線があるか」を確認し、あれば
+                // 何もしない(その直線は既に存在するので、そもそも需要ではない)。
+                if self.prover.egraph.find_common_line(&[p1, p2]).is_some() { continue; }
+                let name = format!("Line_{}_{}_(TargetDemand)", self.prover.egraph.entities[p1.0].name, self.prover.egraph.entities[p2.0].name);
+                println!("  💡 [目標駆動オンデマンド作図] 証明目標に現れる点を結ぶ {} を生成", name);
+                let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Line);
+                // 🌟 他のDemand系と同様、新規図形の重要度は下げて推論の主軸がブレるのを防ぐ
+                self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+                self.prover.egraph.apply_trivial_relations(new_id, &def);
+                applied = true;
+                count += 1;
+                if count >= 3 { break 'outer; }
+            }
+        }
+
+        if applied {
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep();
+        }
+        applied
+    }
+
     // 🌟 フェーズ2.5: 交点(Point)の需要を解消する。2種類の需要源を合流させる:
     //   (a) match_defined_by_fact由来のpoint_construction_demands――今のところ
     //       どの定理も"Intersection"をDefinedByパターンとして問い合わせて

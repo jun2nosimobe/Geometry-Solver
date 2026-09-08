@@ -264,6 +264,19 @@ pub struct EGraph {
     // 得る。そのため「保存時のこの値」と「再開時のこの値」が一致する場合
     // だけ再利用し、1つでもずれていれば安全側に倒して空から作り直す。
     pub merge_generation: u64,
+    // 🌟 propagate_circle_uniqueness用の「却下済みペア」キャッシュ。
+    // キーは(小さい方の代表元インデックス, 大きい方の代表元インデックス)、
+    // 値はそのペアを数値的健全性チェックで却下した時点のmerge_generation。
+    // 円は直線よりも同一点集合上に多数の重複エンティティが積み上がりやすく
+    // (HAGeo-409ベンチマークで実測: ある問題では全円エンティティの100%が
+    // 統合されるべき重複だった)、あるペアが一度「共有点はあるが数値的には
+    // 別の円」と判定されても、そのペアの片方に別の(無関係な)点がマージ
+    // されるたびに(円自体のrepは変わっていなくても)再チェックされてしまい、
+    // 同じ却下を何度も繰り返すことがrealorthocenterで実測された(壁時計時間
+    // 4.5秒→17.5秒への劣化の主因)。マージが1件も起きていない間は再チェック
+    // しても結果が変わりようがないので、merge_generationが前回の却下時点から
+    // 変わっていなければ即座にスキップする。
+    pub rejected_circle_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -311,6 +324,12 @@ pub enum Justification {
     LineUniqueness { shared_points: Vec<ClassId> },
     /// 「2直線の交点の一意性」局所伝播
     PointUniqueness { via_lines: (ClassId, ClassId) },
+    /// 🌟 「円の一致条件」局所伝播: 2つのCircumcircle等が3点以上を共有していた
+    /// (直線は2点、円は3点で一意に決まるという違いだけで、propagate_line_uniqueness
+    /// と全く同じ発想)。HAGeo-409ベンチマークの調査で、同じ4点が乗っている
+    /// はずのCircumcircle(A,B,C)とCircumcircle(A,B,D)が別実体のまま統合されず、
+    /// エンティティ数の肥大化と証明の断絶を引き起こしていたことが分かったため追加。
+    CircleUniqueness { shared_points: Vec<ClassId> },
     /// apply_trivial_relations由来の構造的な結合(垂線→Ang90、
     /// PerpDirectionOf/HarmonicConjugateOfの対合性など、定義から機械的に従うもの)
     Trivial { reason: String },
@@ -339,6 +358,7 @@ impl EGraph {
             incidence_provenance: rustc_hash::FxHashMap::default(),
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
+            rejected_circle_pairs: rustc_hash::FxHashMap::default(),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);

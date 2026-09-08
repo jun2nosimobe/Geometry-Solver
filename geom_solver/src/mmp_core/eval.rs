@@ -566,9 +566,43 @@ impl EGraph {
             Some(c) => c.definitions.clone(),
             None => return false,
         };
-        curve_defs.iter().any(|def| {
-            def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep)
-        })
+        // 🐛 FIX (HAGeo-409ベンチマークで判明、propagate_circle_uniquenessの
+        // 導入で顕在化): 以前はcurve_defsの「いずれか」の定義でpointが親なら
+        // 自然な接続とみなしていた。しかしpropagate_line_uniqueness/
+        // propagate_circle_uniquenessが「異なる点ペア(3点組)から作られた
+        // 同じ直線(円)」を正しく統合すると、その直線(円)のdefinitionsは
+        // 両方の点ペア(3点組)のUNIONになる――例えばLineThroughPoints(A,B)
+        // と後から合流したLineThroughPoints(A,F)が両方残る。ここで「いずれか」
+        // 判定をすると、Fは「line_ab上にある」という証明された(が本質的には
+        // A,Bという真の生成点に対しては従属した)事実によってではなく、
+        // 「LineThroughPoints(A,F)というdefinitionの親だから自然」という
+        // 理由でnatural=trueになってしまい、以後Fの数値サンプリングが
+        // 「line_ab上にある」という制約を無視した完全な乱数になる
+        // (実測: miquelでこれが原因でLineAB自身とその需要駆動の複製が
+        // 誤って「別の直線」と判定され、本来解けていた証明が解けなくなった)。
+        // 対策として、curve_defsの中から常に同じ1つ(canonical_shape_definition、
+        // 親のClassIdが辞書順最小のもの)だけを「真の自由な生成点の定義」として
+        // 採用する。後から合流した(=canonicalではない)definitionの親は、
+        // 直線/円が確かに通ることが証明された点ではあっても、それ自体は
+        // 従属点として引き続き制約付きサンプリング(sample_point_on_constraint)
+        // の対象にする――これは不健全化ではなく、むしろより正確な扱いになる
+        // (F自身の座標はどのみちline_ab上に拘束されるべきものなので)。
+        match Self::canonical_shape_definition(&curve_defs) {
+            Some(def) => def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep),
+            None => false,
+        }
+    }
+
+    /// 🌟 is_natural_incidenceのための決定論的な選択: 複数のdefinitionsが
+    /// 合流して溜まっている場合でも、常に同じ1つ(親のClassId列が辞書順
+    /// 最小のもの)を選ぶことで、「この直線/円の真の自由な生成点は誰か」を
+    /// 一意に固定する(選び方が実行のたびにブレると、is_natural_incidenceの
+    /// 判定結果ひいては数値サンプリングの安定性がブレてしまうため)。
+    /// DirectionOf等の1引数のdefinitionは対象外(生成点のペア/組ではないため)。
+    fn canonical_shape_definition(defs: &[Definition]) -> Option<&Definition> {
+        defs.iter()
+            .filter(|d| d.get_parents().len() >= 2)
+            .min_by_key(|d| d.get_parents().iter().map(|p| p.0).collect::<Vec<_>>())
     }
 
     /// 🌟 このFreePointが、自身の座標では裏付けられない接続(incidence)を
@@ -738,10 +772,37 @@ impl EGraph {
         None
     }
 
-    /// 🌟 has_extraneous_incidence(fp)が真の自由点について、find_incidence_constraintで
-    /// 選んだ直線/円/二次曲線の上に乗るランダムな座標をサンプリングする。
+    /// 🌟 has_extraneous_incidence(fp)が真の自由点について、乗っていると
+    /// 分かっている直線/円/二次曲線の上に乗るランダムな座標をサンプリングする。
+    ///
+    /// 🐛 FIX (HAGeo-409ベンチマークで判明): 以前はfind_incidence_constraint
+    /// (複数の「構造的前提」のうち最初の1つだけを返す)が選んだ制約だけを
+    /// 満たす座標を割り当てていた。1点が2本以上の直線に乗っていること
+    /// (例: 「Fはline_ab上」という前提に加え、後からpropagate_line_uniqueness/
+    /// propagate_circle_uniquenessの需要駆動作図が「Fはline_bf上」という
+    /// 別の前提を追加した場合)が構造的には両立するはずの状況でも、
+    /// 最初に見つかった1本だけを満たす座標では、選ばれなかった側の直線とは
+    /// 数値的に食い違ってしまい、本来正しいはずの合流をnumeric_plausibility_checkが
+    /// 誤って却下する(実測: miquelでLine_B_F_(Demand)とLineAB自体が
+    /// 誤って「別の直線」と判定された)。乗っている直線が2本以上あって
+    /// どちらも(依存する自由点の座標が既に揃っていて)評価可能なら、
+    /// 1本だけ選ぶのではなくその2本の交点を計算することで、両方の前提を
+    /// 同時に満たす一意な座標が求まる(2直線の交点は常に一意なので、
+    /// 3本以上あっても最初の2本だけで位置は確定し、残りは自動的に
+    /// 満たされているはずの構造的主張と整合する)。
     fn sample_point_on_constraint(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
         let rep = self.get_rep(fp);
+        let ready_lines: Vec<ClassId> = self.find_extraneous_incidences(rep).into_iter()
+            .filter(|&c| self.entities[c.0].entity_type == EntityType::Line && self.free_point_ancestors_ready(c, vars))
+            .collect();
+        if ready_lines.len() >= 2 {
+            let v1 = self.evaluate_node(ready_lines[0], vars, cache)?;
+            let v2 = self.evaluate_node(ready_lines[1], vars, cache)?;
+            let inter = mmp_calculators::calc_intersection(&v1, &v2);
+            if inter.len() < 3 || inter[2].0 == 0 { return None; } // 平行(無限遠)や退化は諦める
+            return Some((inter[0] / inter[2], inter[1] / inter[2]));
+        }
+
         let curve = self.find_incidence_constraint(rep)?;
         match self.entities[curve.0].entity_type {
             EntityType::Line => self.sample_point_on_line(curve, vars, cache),
@@ -749,6 +810,23 @@ impl EGraph {
             EntityType::Conic => self.sample_point_on_conic(curve, vars, cache),
             _ => None,
         }
+    }
+
+    /// 🌟 find_incidence_constraintの「複数版」: has_extraneous_incidenceが
+    /// 真となる原因になっている(=自身の定義からは自然に従わない)接続を
+    /// 全て列挙する。sample_point_on_constraintが「2本以上の直線に同時に
+    /// 乗っている」ケースを検出するために使う。
+    fn find_extraneous_incidences(&self, free_point: ClassId) -> Vec<ClassId> {
+        let rep = self.get_rep(free_point);
+        let comp = match self.entities[rep.0].components.first() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        comp.subobjects.iter()
+            .map(|&s| self.get_rep(s))
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic)
+                && !self.is_natural_incidence(rep, s))
+            .collect()
     }
 
     /// 🌟 numeric_plausibility_check用に、祖先の自由点それぞれへ座標を割り当てる。

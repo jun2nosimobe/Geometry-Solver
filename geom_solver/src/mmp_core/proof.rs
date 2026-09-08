@@ -117,7 +117,7 @@ impl EGraph {
     pub fn proof_uses_numeric_shortcut(edges: &[ProofEdge]) -> bool {
         edges.iter().any(|e| matches!(
             e.justification,
-            Justification::LineUniqueness { .. } | Justification::PointUniqueness { .. }
+            Justification::LineUniqueness { .. } | Justification::PointUniqueness { .. } | Justification::CircleUniqueness { .. }
         ))
     }
 
@@ -152,6 +152,11 @@ impl EGraph {
             Justification::PointUniqueness { via_lines } => format!(
                 "直線 {} と直線 {} の交点として一意に定まる",
                 name(via_lines.0), name(via_lines.1)
+            ),
+            Justification::CircleUniqueness { shared_points } => format!(
+                "2円が{}点を共有({})しているため同一円",
+                shared_points.len(),
+                shared_points.iter().map(|&p| name(p)).collect::<Vec<_>>().join(", ")
             ),
             Justification::Trivial { reason } => reason.clone(),
         }

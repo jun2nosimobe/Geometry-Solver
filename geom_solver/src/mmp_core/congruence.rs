@@ -172,6 +172,11 @@ impl EGraph {
                 EntityType::Line => {
                     if self.propagate_line_uniqueness(rep_id) { changed_any = true; }
                 }
+                // 🌟 円も直線と全く同じ理由(点/方向が変化しても、それを含む円側の
+                // 「円の一致条件」は自動的には再トリガーされない)でここに追加。
+                EntityType::Circle => {
+                    if self.propagate_circle_uniqueness(rep_id) { changed_any = true; }
+                }
                 // 🌟 Directionは「無限遠直線上の点」として扱うので、通常の点と同じく
                 // propagate_point_uniquenessの対象にする。
                 EntityType::Point | EntityType::Direction => {
@@ -196,6 +201,23 @@ impl EGraph {
                         .unwrap_or_default();
                     for l in lines {
                         if self.propagate_line_uniqueness(l) { changed_any = true; }
+                    }
+
+                    // 🌟 同じ理由で、この点が乗っている円側の「円の一致条件」も
+                    // 再トリガーする(HAGeo-409ベンチマークで、同じ4点が乗って
+                    // いるはずのCircumcircleが別実体のまま統合されない問題が
+                    // 見つかったことへの対応。EGraph::merge_generationのドキュメント
+                    // 参照のような大掛かりな仕組みは不要で、直線と全く同じ
+                    // パターンで解決できる)。Directionは円に乗ることが無いので
+                    // 実質Pointの場合だけ意味を持つが、フィルタが空になるだけで
+                    // 無害なのでDirection側でも同じコードパスを共有する。
+                    let circles: Vec<ClassId> = self.entities[rep_id.0].components.first()
+                        .map(|c| dedup_sorted_ids(c.subobjects.iter()
+                            .map(|&s| self.get_rep(s))
+                            .filter(|&s| self.entities[s.0].entity_type == EntityType::Circle)))
+                        .unwrap_or_default();
+                    for c in circles {
+                        if self.propagate_circle_uniqueness(c) { changed_any = true; }
                     }
                 }
                 _ => {}
@@ -290,6 +312,99 @@ impl EGraph {
                 let justification = Justification::LineUniqueness { shared_points: shared.clone() };
                 if self.merge_entities_justified(line, other_line, justification) {
                     println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により直線を結合: {} ≡ {}",
+                        shared.len(), name1, name2);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 🌟 「円の一致条件」の局所伝播版。propagate_line_uniquenessと全く同じ
+    /// 発想だが、直線が2点で一意に決まるのに対し円は(非共線な)3点で
+    /// 一意に決まるため、しきい値だけが2→3に変わる。
+    ///
+    /// HAGeo-409ベンチマークの調査で判明した問題への対応: 例えば
+    /// Circumcircle(A,B,C)とCircumcircle(A,B,D)がどちらも「A,B,C,Dの4点が
+    /// 乗っている」ことまで構造的に分かっていても、この伝播が無いと
+    /// 永遠に別々の円エンティティのまま残り、(a)エンティティ数が無駄に
+    /// 膨れ上がりマッチングを遅くする、(b)片方の円だけに乗っている
+    /// 情報(接線・他の点の接続等)がもう片方には伝わらず証明が断絶する、
+    /// という2つの問題を引き起こしていた。
+    fn propagate_circle_uniqueness(&mut self, circle: ClassId) -> bool {
+        let mut circle = self.get_rep(circle);
+
+        // 🐛 propagate_line_uniquenessと同じ理由: 共有点を数える前に、この円上の
+        // 点どうしの「2直線の交点の一意性」を先に局所的な不動点まで確定させて
+        // おく。これをやらないと、本来は同一になるはずだがまだ別IDのままの2点を
+        // 「別々の2点」と誤認し、共有点数を過小評価して本来マージすべき円を
+        // 見逃すことがある。
+        loop {
+            let points: Vec<ClassId> = match self.entities[circle.0].components.first() {
+                Some(c) => c.subobjects.iter()
+                    .map(|&id| self.get_rep(id))
+                    .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)
+                    .collect(),
+                None => return false,
+            };
+            let mut any = false;
+            for p in points {
+                if self.propagate_point_uniqueness(p) { any = true; }
+            }
+            circle = self.get_rep(circle);
+            if !any { break; }
+        }
+
+        let points: Vec<ClassId> = match self.entities[circle.0].components.first() {
+            Some(c) => dedup_sorted_ids(c.subobjects.iter()
+                .map(|&id| self.get_rep(id))
+                .filter(|&id| self.entities[id.0].entity_type == EntityType::Point)),
+            None => return false,
+        };
+
+        // circle上の各点について、他に乗っている円ごとに共有数を数える。
+        let mut shared_points: FxHashMap<ClassId, Vec<ClassId>> = FxHashMap::default();
+        for &p in &points {
+            if let Some(comp) = self.entities[p.0].components.first() {
+                let other_circles_of_p: Vec<ClassId> = dedup_sorted_ids(comp.subobjects.iter()
+                    .map(|&id| self.get_rep(id))
+                    .filter(|&id| id != circle && self.entities[id.0].entity_type == EntityType::Circle));
+                for other in other_circles_of_p {
+                    shared_points.entry(other).or_default().push(p);
+                }
+            }
+        }
+
+        for (other_circle, shared) in shared_points {
+            let circle = self.get_rep(circle); // 途中のマージでrepが変わっている可能性
+            let other_circle = self.get_rep(other_circle);
+            if circle == other_circle { continue; }
+
+            // 🌟 直線は2点、円は(非共線な)3点で一意に決まる。
+            if shared.len() >= 3 {
+                // 🌟 却下済みペアキャッシュ(EGraph::rejected_circle_pairsの
+                // ドキュメント参照): 前回このペアを却下した時点からマージが
+                // 1件も起きていなければ、結果は変わりようがないので数値
+                // チェックを省略する。
+                let cache_key = if circle.0 < other_circle.0 { (circle.0, other_circle.0) } else { (other_circle.0, circle.0) };
+                if self.rejected_circle_pairs.get(&cache_key) == Some(&self.merge_generation) {
+                    continue;
+                }
+                // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
+                // 確定する前に数値的な裏付けを取る。
+                if self.numeric_plausibility_check(circle, other_circle, 2) == Some(false) {
+                    self.rejected_circle_pairs.insert(cache_key, self.merge_generation);
+                    let name1 = self.entities[circle.0].name.clone();
+                    let name2 = self.entities[other_circle.0].name.clone();
+                    println!("  🚫 [健全性チェック] {} と {} は共有点={}だが数値的に別の円のため結合を却下",
+                        name1, name2, shared.len());
+                    continue;
+                }
+                let name1 = self.entities[circle.0].name.clone();
+                let name2 = self.entities[other_circle.0].name.clone();
+                let justification = Justification::CircleUniqueness { shared_points: shared.clone() };
+                if self.merge_entities_justified(circle, other_circle, justification) {
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により円を結合: {} ≡ {}",
                         shared.len(), name1, name2);
                     return true;
                 }

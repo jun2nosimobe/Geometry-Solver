@@ -369,6 +369,12 @@ fn main() {
             if engine.resolve_angle_demands() {
                 recovered = true;
             }
+            // 🌟 最後の砦(MCTSに頼る直前): 証明目標に現れる点同士でまだ
+            // 直線が引かれていないペアに補助線を引いてみる
+            // (BlackboardEngine::resolve_target_demandsのドキュメント参照)。
+            if !recovered && engine.resolve_target_demands(&problem.target_fact) {
+                recovered = true;
+            }
             if !recovered {
                 if !use_mcts {
                     println!("  -> 要求がなく、MCTSも無効(--mctsで有効化できます)なため探索を打ち切ります。");
