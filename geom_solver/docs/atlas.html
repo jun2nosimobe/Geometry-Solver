@@ -236,7 +236,7 @@
   <div class="stats">
     <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
     <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">8</div><div class="l">出荷済み最適化</div></div>
+    <div class="stat"><div class="n">9</div><div class="l">出荷済み最適化</div></div>
     <div class="stat"><div class="n">4</div><div class="l">検証の末に撤回</div></div>
     <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
   </div>
@@ -382,6 +382,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">b6896cc</span></div>
+        <div>
+          <div class="headline"><h3>複比の透視射影不変性を熱量駆動+正準順序で高速化</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">ユーザー要望「複比の透視射影不変性はあまり使われないが、最適化できれば今後の知見として大きい」への対応。この定理は自己束縛の掛け合わせ構造こそ無いが、9自由変数で天然のシードが無い。診断計測で再追跡し、2つの独立な原因を特定した: (1) <code>match_connected_fact</code>の(None,None)両方未束縛分岐(<code>Connected(A,L)</code>のような入口)が、<code>identical_self_bind_candidates</code>/<code>defined_by_valid_nodes</code>とは違い熱ソートもcapも一切無いまま<code>connected_pairs_for_types</code>の全ペアを試していたので、同じcap=40・熱降順ソートを追加した。(2) 実際の最多選択パターンは<code>Distinct(A,B,C,D)</code>/<code>Distinct(LOA,LOB,LOC,LOD)</code>で、同じ直線上のN点からA,B,C,Dを選ぶ際にdistinctだけでは同じ4点集合のN!通りの並べ替えを全て試していたと判明。distinctを新設の<code>Pattern::Order</code>ヘルパーに置き換え、代表元ID昇順という1つの正準形だけを通すようにした。複比はクライン4群の下でしか値が保存されないため(正準順序が「外部の目標複比と数値一致させる必要がある問題」で必要な特定の値を排除するリスクがある)、この定理に実際に依存するtest_cross_ratio/test_involutionを重点的に検証した。</div>
+          <div class="evidence"><b>結果:</b> test_cross_ratio・test_involutionとも引き続き正しく解け、正準順序によるcorrectness劣化は確認されなかった。31問題スイート全問題でbaselineとsolved状態が完全一致。simson: 1.21s→1.16s(この定理のdfs_call消費が10,881→8,173、約25%減――simsonの証明自体には使われない定理なので効果は限定的)。副次効果として他の問題で大きな改善: orthocenter 17.2s→4.5s、nine_point_full 10.5s→7.4s、miquel_quadrilateral 2.16s→1.48s。唯一bench_2018chnwesternmop5(元々未解決)が9.1s→18.1sと時間が伸びたが未解決状態は変わらず。simson単体はまだ1秒未満(現在1.16s)に届いていない。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -394,9 +403,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
-          <h3>「複比の透視射影不変性」を熱量駆動で絞る ★</h3>
-          <div class="desc">有向角の加法性(自己束縛×自己束縛)・円周角の定理の逆(自己束縛×DefinedByペアリング)の2件は、どちらも「自己束縛のcap(40→10、構造的に検出)を絞る」ことで実測85%減・57%減の効果を確認・出荷済み(simson: 2.23s→1.21s)。残る最大コスト要因は「複比の透視射影不変性」で、これは自己束縛やペアリングの掛け合わせではなく、9自由変数を同時に扱う定理そのものの規模が原因(このファイル内の別ドキュメント参照: nine_point/orthic_incenter/miquel_quadrilateral向けに次数ヒューリスティックで既に一定の緩和は入れている)。上2件と違い単純な「候補cap」では効かない可能性が高く、変数を分割する設計変更(既にDefinedBy(点→線束)/(線束→点)の2定理への分解は済んでいるので、その先の絞り込み)が必要かもしれない。</div>
-          <div class="b-tags"><span class="tag">実測で特定済み</span><span class="tag">上2件とは異なる構造、単純なcapでは効かない可能性</span></div>
+          <h3>残る4定理(円周角の定理の逆/複比の透視射影不変性/円周角の定理/共点二弦の相似)を個別に診断する</h3>
+          <div class="desc">simsonは3回の連続した修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected capと正準順序)で2.23s→1.16s(約48%減)まで来たが、まだ1秒未満には届いていない。重要な教訓: <b>3回とも最初の仮説は外れ、診断計測(パターン選択回数のカウンタ)による再追跡が必須だった</b>――「有向角の加法性」は二重自己束縛、「円周角の定理の逆」は自己束縛×DefinedByペアリング(最初は逆に「DefinedByペアリング自体が無cap」と誤診)、「複比の透視射影不変性」はConnected両方未束縛のcap欠如+distinctの順列爆発(最初は「DefinedByペアリングにcapが無い」という円周角の定理の逆と同じ仮説を立てて外れた)、と3回とも構造が異なっていた。現在の上位4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)はどれか1つが突出しておらず、低リスクで構造的に検出できる「自己束縛/ペアリングの掛け合わせ」型の対策は出尽くした可能性が高い――残り2定理(円周角の定理・共点二弦の相似)は未診断のため、次に着手するならまずここに同じ診断手順(一時的なパターン選択回数カウンタ)を当てるところから始める。</div>
+          <div class="b-tags"><span class="tag">3勝3敗(仮説)、実測必須</span><span class="tag">残り2定理は未診断</span></div>
         </div>
       </div>
 
