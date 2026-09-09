@@ -561,9 +561,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">3</div>
         <div>
-          <h3>failed_pathsのグローバル化後、実際のdfs_call削減量は未計測</h3>
-          <div class="desc">「探索木のメモ化」(旧#3、§03「failed_pathsキャッシュをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格」で出荷)は、タスクをまたいだ共有という設計上の目的を達成し、32問題×3回集計でsolved/unsolvedの正誤とスコア(78/96)を完全に保ったまま(=既存の全パスに悪影響が無いことは確認済み)出荷した。ただし出荷判断は「正誤が変わらないこと」だけを根拠にしており、当初の診断で見つけた「dfs_matchの全呼び出しの約38%がタスクをまたいだ再訪問」という数字が実際にどこまで削れたか(dfs_call消費量やsimsonのようなタイミング指標)は、このグローバル化単体では計測していない。<code>--profile</code>やタスクポップ数/dfs_call消費量の内訳(既存のProfileStats)を使って、グローバル化前後でこの数字を直接比較すると、次にどこへ手を入れるべきかの手がかりになる。</div>
-          <div class="b-tags"><span class="tag">正誤は検証済み・速度効果は未計測</span></div>
+          <h3>failed_pathsのグローバル化、速度効果はノイズに埋もれて未確認</h3>
+          <div class="desc">「探索木のメモ化」(旧#3、§03「failed_pathsキャッシュをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格」で出荷)は、タスクをまたいだ共有という設計上の目的を達成し、32問題×3回集計でsolved/unsolvedの正誤とスコア(78/96)を完全に保ったまま(=既存の全パスに悪影響が無いことは確認済み)出荷した。出荷直後に<code>--profile</code>でグローバル化前後(コミット15cbb84 vs a242796)を単発A/Bした結果: simson 1.19s→1.12s、nine_point_full 7.21s→7.24s、miquel_quadrilateral 1.41s→1.36s、orthic_incenter 1.90s→1.88s――いずれも数%の揺れの範囲内で、単発比較では明確な高速化とは言えなかった(orthocenterは元々ボーダーラインな不安定問題のため単発比較に使えなかった)。当初の診断で見つけた「dfs_matchの全呼び出しの約38%がタスクをまたいだ再訪問」がどこまで削れたかを確かめるには、単発の壁時計時間ではなく複数回平均、または<code>ProfileStats</code>のdfs_call消費量の内訳を直接比較する必要がある――過剰にコストをかける優先度ではないが、正確な効果測定はまだ済んでいない。</div>
+          <div class="b-tags"><span class="tag">正誤は検証済み・単発A/Bでは効果不明瞭</span></div>
         </div>
       </div>
 
