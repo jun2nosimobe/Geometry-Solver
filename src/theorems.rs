@@ -188,73 +188,6 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
         },
 
-        // ==========================================
-        // 🌟 中心角の定理
-        // ==========================================
-        // OがA,B,Cから等距離(=外接円の中心)であるとき、中心角∠BOCは
-        // 円周角∠BACの2倍になる。
-        //
-        // 有向角(mod π)は「方向2つと円周点I,Jとの複比」k=e^{2iθ}として
-        // 評価されている(AnglePairのeval参照)ので、θを2倍した角の値は
-        // 単純にk²になる: A=(1,0),B=(cosβ,sinβ),C=(cosγ,sinγ)という
-        // 単位円+中心Oの具体例で確認すると、円周角∠BAC(Aから見た向き)の
-        // 値はk=e^{i(γ-β)}、中心角∠BOC(Oから見た向き、B→Cの順で対応)の
-        // 値はk²=e^{2i(γ-β)}に一致する。つまり「2倍」は既存のProduct
-        // (2つのScalarの積、方冪の定理で使っているのと同じ構成要素)を
-        // AngBACに対して自分自身との積として使うだけで表現でき、
-        // 新しい計算プリミティブは一切要らない。
-        //
-        // トリガーとなる「OがA,B,Cから等距離」は、外心を2本の垂直二等分線の
-        // 交点として作図した場合、上の「垂直二等分線の距離の等価性」が
-        // 自動的に示してくれる(problems/geo_helpers.rs::circumcenterを
-        // 使う限り、この定理はいつでも発火可能な状態になる)。
-        //
-        // ユーザー指摘: bench_2012egmop1(2012 EGMO P1)の本質はこの定理
-        // (∠FKE=2∠FAE、KはAEFの外心)であり、これが無いと同じ中間結論に
-        // 到達できない。
-        TheoremDef {
-            name: "中心角の定理".to_string(),
-            entities: entities(&[
-                ("O", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
-                ("LenOA", EntityType::Scalar), ("LenOB", EntityType::Scalar), ("LenOC", EntityType::Scalar),
-                ("L_AB", EntityType::Line), ("L_AC", EntityType::Line), ("L_OB", EntityType::Line), ("L_OC", EntityType::Line),
-                ("Dir_AB", EntityType::Point), ("Dir_AC", EntityType::Point), ("Dir_OB", EntityType::Point), ("Dir_OC", EntityType::Point),
-                ("AngBAC", EntityType::Scalar), ("AngBOC", EntityType::Scalar), ("AngBAC_Sq", EntityType::Scalar),
-            ]),
-            patterns: vec![
-                // 前提: OA=OB=OC (Oは外心)
-                fact_ext("DefinedBy", &["O", "A", "LenOA"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["O", "B", "LenOB"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["LenOA", "LenOB"], Some("Scalar"), None, false, None),
-                fact_ext("DefinedBy", &["O", "C", "LenOC"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["LenOA", "LenOC"], Some("Scalar"), None, false, None),
-                distinct(&["O", "A", "B", "C"]),
-
-                // 円周角∠BAC(A→B, A→C)と中心角∠BOC(O→B, O→C)を同じ
-                // 向き(B側→C側)で構成する。
-                fact_ext("DefinedBy", &["A", "B", "L_AB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "L_AC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L_AB", "L_AC"]),
-                fact_ext("DefinedBy", &["O", "B", "L_OB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["O", "C", "L_OC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L_OB", "L_OC"]),
-
-                fact_ext("DefinedBy", &["L_AB", "Dir_AB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_AC", "Dir_AC"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_OB", "Dir_OB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_OC", "Dir_OC"], Some("DirectionOf"), None, false, None),
-
-                fact_ext("DefinedBy", &["Dir_AB", "Dir_AC", "AngBAC"], Some("AnglePair"), None, false, None),
-                fact_ext("DefinedBy", &["Dir_OB", "Dir_OC", "AngBOC"], Some("AnglePair"), None, false, None),
-            ],
-            constructions: vec![
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["AngBAC".to_string(), "AngBAC".to_string()], target_type: "Scalar".to_string(), bind_to: "AngBAC_Sq".to_string() },
-            ],
-            conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngBOC".to_string(), "AngBAC_Sq".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
-            ],
-        },
-
         // 3. 中点連結定理
         TheoremDef {
             name: "中点連結定理".to_string(),
@@ -888,6 +821,84 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             conclusions: vec![
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_A".to_string(), "Ang90".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+            ],
+        },
+    ]
+}
+
+/// 🌟 中心角の定理: OがA,B,Cから等距離(=外接円の中心)であるとき、
+/// 中心角∠BOCは円周角∠BACの2倍になる。
+///
+/// 有向角(mod π)は「方向2つと円周点I,Jとの複比」k=e^{2iθ}として評価
+/// されている(AnglePairのeval参照)ので、θを2倍した角の値は単純にk²に
+/// なる: A=(1,0),B=(cosβ,sinβ),C=(cosγ,sinγ)という単位円+中心Oの
+/// 具体例で確認すると、円周角∠BAC(Aから見た向き)の値はk=e^{i(γ-β)}、
+/// 中心角∠BOC(Oから見た向き、B→Cの順で対応)の値はk²=e^{2i(γ-β)}に
+/// 一致する。つまり「2倍」は既存のProduct(2つのScalarの積、方冪の定理で
+/// 使っているのと同じ構成要素)をAngBACに対して自分自身との積として
+/// 使うだけで表現でき、新しい計算プリミティブは一切要らない。
+///
+/// トリガーとなる「OがA,B,Cから等距離」は、外心を2本の垂直二等分線の
+/// 交点として作図した場合、「垂直二等分線の距離の等価性」が自動的に
+/// 示してくれる(problems/geo_helpers.rs::circumcenterを使う限り、
+/// この定理はいつでも発火可能な状態になる)。
+///
+/// ユーザー指摘: bench_2012egmop1(2012 EGMO P1)の本質はこの定理
+/// (∠FKE=2∠FAE、KはAEFの外心)であり、これが無いと同じ中間結論に
+/// 到達できない。
+///
+/// 🐛 get_all_theoremsに含めなかった理由(get_projective_theoremsと同じ
+/// opt-in方式にした理由): この定理自体のdfs_call消費は軽量(実測で平均
+/// 9~16回、cap到達0回)だが、外心を持つ問題では大抵いつでも前提
+/// (OA=OB=OC)が満たされているため、定理を1つ追加しただけでUCB1
+/// バンディットの試行対象が1つ増え、無関係な問題も「一度は試す」固定
+/// コストを全問題が払うことになる(backlog#5で既知の構造的コスト)。
+/// 実測でorthocenter/orthocenter_altがデフォルト設定(5秒・MCTS無効)で
+/// 安定して失敗するようになる退行を引き起こしたため、get_all_theorems
+/// への統合は見送り、必要な問題(bench_2012egmop1)側でmain.rsが明示的に
+/// 追加するopt-in方式にした。
+pub fn get_central_angle_theorem() -> Vec<TheoremDef> {
+    vec![
+        TheoremDef {
+            name: "中心角の定理".to_string(),
+            entities: entities(&[
+                ("O", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
+                ("LenOA", EntityType::Scalar), ("LenOB", EntityType::Scalar), ("LenOC", EntityType::Scalar),
+                ("L_AB", EntityType::Line), ("L_AC", EntityType::Line), ("L_OB", EntityType::Line), ("L_OC", EntityType::Line),
+                ("Dir_AB", EntityType::Point), ("Dir_AC", EntityType::Point), ("Dir_OB", EntityType::Point), ("Dir_OC", EntityType::Point),
+                ("AngBAC", EntityType::Scalar), ("AngBOC", EntityType::Scalar), ("AngBAC_Sq", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 前提: OA=OB=OC (Oは外心)
+                fact_ext("DefinedBy", &["O", "A", "LenOA"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["O", "B", "LenOB"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("Identical", &["LenOA", "LenOB"], Some("Scalar"), None, false, None),
+                fact_ext("DefinedBy", &["O", "C", "LenOC"], Some("LengthSq"), Some("Unordered"), false, None),
+                fact_ext("Identical", &["LenOA", "LenOC"], Some("Scalar"), None, false, None),
+                distinct(&["O", "A", "B", "C"]),
+
+                // 円周角∠BAC(A→B, A→C)と中心角∠BOC(O→B, O→C)を同じ
+                // 向き(B側→C側)で構成する。
+                fact_ext("DefinedBy", &["A", "B", "L_AB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "L_AC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L_AB", "L_AC"]),
+                fact_ext("DefinedBy", &["O", "B", "L_OB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["O", "C", "L_OC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L_OB", "L_OC"]),
+
+                fact_ext("DefinedBy", &["L_AB", "Dir_AB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["L_AC", "Dir_AC"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["L_OB", "Dir_OB"], Some("DirectionOf"), None, false, None),
+                fact_ext("DefinedBy", &["L_OC", "Dir_OC"], Some("DirectionOf"), None, false, None),
+
+                fact_ext("DefinedBy", &["Dir_AB", "Dir_AC", "AngBAC"], Some("AnglePair"), None, false, None),
+                fact_ext("DefinedBy", &["Dir_OB", "Dir_OC", "AngBOC"], Some("AnglePair"), None, false, None),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "Product".to_string(), args: vec!["AngBAC".to_string(), "AngBAC".to_string()], target_type: "Scalar".to_string(), bind_to: "AngBAC_Sq".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngBOC".to_string(), "AngBAC_Sq".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
             ],
         },
     ]

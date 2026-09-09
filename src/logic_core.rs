@@ -2160,7 +2160,9 @@ impl ProverEngine {
                         if self.egraph.merge_entities_justified(r1, r2, justification) {
                             println!("  🟢 [マージ実行] {} ≡ {} (理由: {})", name1, name2, theorem_name);
                             // 🌟 マージされた代表元の熱を上げて今後のDFSで優先させる[cite: 5]
-                            self.egraph.entities[r1.0].heat_bonus += 1.5;
+                            // (EGraph::bump_heat_bonus経由: degeneration_groupsが計算済みなら
+                            // 同じ退化グループの他のメンバーにも小さいボーナスを伝播する)
+                            self.egraph.bump_heat_bonus(r1, 1.5);
                             applied_anything = true;
                         }
                     }

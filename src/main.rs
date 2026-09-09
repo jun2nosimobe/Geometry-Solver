@@ -10,6 +10,8 @@ mod problems;
 mod discover;
 mod discover_viz;
 mod padic;
+mod padic_eval;
+mod discover_degenerate;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
@@ -134,6 +136,14 @@ fn main() {
         discover::run(&args);
         return;
     }
+    // 🌟 ユーザー提案:「図形を退化させた時の振る舞いを観察して関連が深い
+    // オブジェクトを発見する」への対応(padic.rs/padic_eval.rsのドキュメント
+    // 参照)。使い方: geom_solver discover-degenerate <problem> [--seed=N]
+    //         [--min-hits=N]
+    if args.len() > 1 && args[1] == "discover-degenerate" {
+        discover_degenerate::run(&args);
+        return;
+    }
     let problem_name = if args.len() > 1 {
         &args[1]
     } else {
@@ -210,6 +220,16 @@ fn main() {
         .find_map(|a| a.strip_prefix("--fanout-heat-cap="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
+    // 🌟 ユーザー提案:「図形を退化させた時の振る舞いを観察して関連が深い
+    // オブジェクトを発見し、それをheatのボーナスに使う」への対応
+    // (padic.rs/padic_eval.rsのドキュメント参照)。既定では計算しない
+    // (問題設定ごとに自由点ペア数×乱数drawの分だけ起動時コストが増える
+    // 実験的機能のため、opt-inにする――射影定理のopt-in化と同じ方針)。
+    let use_degen_heat = args.iter().any(|a| a == "--degen-heat");
+    let degen_heat_seed: u64 = args.iter()
+        .find_map(|a| a.strip_prefix("--degen-heat-seed="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12345);
 
     println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {}, heat-cap: {}/{})",
         problem_name, time_budget_secs,
@@ -223,12 +243,28 @@ fn main() {
     // コマンドライン引数で問題を動的にロード
     let problem = problems::load_problem(problem_name, &mut egraph);
 
+    if use_degen_heat {
+        let start = std::time::Instant::now();
+        let groups = padic_eval::compute_degeneration_groups(&egraph, degen_heat_seed, 2);
+        println!("  🧊 [退化発見] 自由点の退化ペアを走査して関連グループを計算しました ({:.2?})。以後、熱の伝播ボーナスに使います。", start.elapsed());
+        egraph.degeneration_groups = Some(groups);
+    }
+
     let mut prover = ProverEngine::new(egraph);
     prover.heat_cap = heat_cap;
     prover.fanout_heat_cap = fanout_heat_cap;
     // 🌟 Rc化: theorems は Vec<Rc<TheoremDef>>。定理は実行中不変なので、
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
     let mut all_theorems = theorems::get_all_theorems();
+    // 🌟 「中心角の定理」はget_all_theoremsに含めていない(opt-in、
+    // theorems.rs::get_central_angle_theoremのドキュメント参照)。
+    // 実測でorthocenter/orthocenter_altがデフォルト設定で安定して失敗する
+    // 退行(UCB1バンディットの試行対象が1つ増える固定コスト)を引き起こす
+    // ことが分かったため、この定理を本当に必要とするbench_2012egmop1側
+    // だけに追加する。
+    if problem_name == "bench_2012egmop1" {
+        all_theorems.extend(theorems::get_central_angle_theorem());
+    }
     // 🌟 複比の透視射影不変性/シュタイナーの定理群(get_projective_theorems)は
     // 「点→線束→点」の2定理分解によりシード自体は軽くなったが、その後
     // シュタイナー系3定理(順方向・接線版・逆)が追加されたことで、実際には

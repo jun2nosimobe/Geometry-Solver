@@ -386,6 +386,13 @@ pub struct EGraph {
     /// だけがこれを更新する。
     pub angle_generation: u64,
     pub plain_scalar_generation: u64,
+    // 🌟 ユーザー提案:「図形を退化させた時の振る舞いを観察して関連が深い
+    // オブジェクトを発見し、それをheatのボーナスに使う」への対応
+    // (padic.rs/padic_eval.rsのドキュメント参照)。既定ではNone(計算しない
+    // 限り一切のコストが無い)。discover_degenerate::compute_degeneration_groups
+    // で計算した結果をここへ差し込むと、bump_heat_bonusが同じグループの
+    // 他のメンバーにも(小さい)ボーナスを伝播するようになる。
+    pub degeneration_groups: Option<crate::padic_eval::DegenerationRelations>,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -472,6 +479,7 @@ impl EGraph {
             type_generation: rustc_hash::FxHashMap::default(),
             angle_generation: 0,
             plain_scalar_generation: 0,
+            degeneration_groups: None,
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Scalar);
@@ -495,6 +503,37 @@ impl EGraph {
         egraph.link_logical_incidence(egraph.circ_i, egraph.line_infinity);
         egraph.link_logical_incidence(egraph.circ_j, egraph.line_infinity);
         egraph
+    }
+
+    // 🌟 ユーザー提案:「同じ退化グループにあるかはすぐ判定できるはずだから
+    // それを用いてheatにボーナスすることを考えている」への対応。通常の
+    // heat_bonus加算をこの関数経由に統一し、degeneration_groupsが計算済み
+    // (Some)であれば、退化のもとで直接関連が観測された他のエンティティにも
+    // (割り引いた)ボーナスを伝播する(推移閉包は取らない、padic_eval.rs::
+    // DegenerationRelationsのドキュメント参照――union-findで推移閉包を
+    // 取ると異なる退化パターンの関係まで無差別に合併され、実測で明確な
+    // 悪化を引き起こしたため、直接観測された辺だけを使う設計にした)。
+    // degeneration_groupsがNone(既定、計算していない問題)の場合は従来通り
+    // entities[rep].heat_bonus += amountと完全に同じ挙動になり、このボーナス
+    // 伝播機構を使わない既存の全ての呼び出し元・全ての問題に一切の副作用が
+    // 無い。
+    pub fn bump_heat_bonus(&mut self, id: ClassId, amount: f64) {
+        const GROUP_PROPAGATION_FACTOR: f64 = 0.5;
+        let rep = self.get_rep(id);
+        self.entities[rep.0].heat_bonus += amount;
+        // members_of は &self のみ(直接観測された辺を返すだけで推移閉包を
+        // 取らないため経路圧縮も不要)なので、この不変借用はここで完結し、
+        // 以降のself.entitiesへの可変アクセスと衝突しない。
+        let members = match &self.degeneration_groups {
+            Some(rel) => rel.members_of(rep),
+            None => return,
+        };
+        for m in members {
+            let m_rep = self.get_rep(m);
+            if m_rep != rep {
+                self.entities[m_rep.0].heat_bonus += amount * GROUP_PROPAGATION_FACTOR;
+            }
+        }
     }
 
     // Union-Find: 代表元の取得 (経路圧縮付き)

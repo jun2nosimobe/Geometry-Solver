@@ -538,13 +538,13 @@ impl EGraph {
                 // 🌟 "🎯"は既存のリーチ通知(健全に完全マッチした定理の通知)で使われて
                 // いるため紛らわしい。こちらは未証明の仮定に基づく評価なので"🏆"を使う。
                 println!("  🏆 [予想の評価] {} ≡ {} を仮定するだけで証明目標に到達しました！この2点への注目度を大きく引き上げます。", name_a, name_b);
-                self.entities[*a_idx].heat_bonus += HEAT_BOOST_TARGET;
-                self.entities[*b_idx].heat_bonus += HEAT_BOOST_TARGET;
+                self.bump_heat_bonus(a, HEAT_BOOST_TARGET);
+                self.bump_heat_bonus(b, HEAT_BOOST_TARGET);
             } else if value.additional_merges >= MERGE_THRESHOLD {
                 println!("  📈 [予想の評価] {} ≡ {} は仮定するだけで{}件の追加的な帰結を生むため、この2点への注目度を引き上げます。",
                     name_a, name_b, value.additional_merges);
-                self.entities[*a_idx].heat_bonus += HEAT_BOOST;
-                self.entities[*b_idx].heat_bonus += HEAT_BOOST;
+                self.bump_heat_bonus(a, HEAT_BOOST);
+                self.bump_heat_bonus(b, HEAT_BOOST);
             }
         }
         pending.len()
