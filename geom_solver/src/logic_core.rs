@@ -1526,6 +1526,15 @@ impl ProverEngine {
                     arr.sort_unstable();
                     Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
                 }
+                // 🌟 mmp_core/mod.rs::Definition::SecondIntersectionOfLineAndConic
+                // のドキュメント参照。TangentLine/Circumcircleと同じく自動生成
+                // ホワイトリスト(下のmatches!)には含めない――既知の点・直線・
+                // 曲線の組み合わせから無差別に生成すると全件スキャン時に無駄な
+                // 補助点が量産されかねないため、既存のエンティティ(MCTSが
+                // 既に作ったもの、または定理のconstructionsが明示的に作った
+                // もの)を探すだけに留める。
+                "SecondIntersectionOfLineAndConic" if parent_ids.len() == 3 =>
+                    Definition::SecondIntersectionOfLineAndConic(parent_ids[0], parent_ids[1], parent_ids[2]),
                 // 🌟 CrossRatioのV4正規化はここで手書きで複製せず、mod.rs側の
                 // normalize_definitionをそのまま呼ぶ(4元クライン群の畳み込みは
                 // 単純なソートより複雑なので、ロジックを1箇所に保つ)。
@@ -1821,6 +1830,11 @@ impl ProverEngine {
                     arr.sort_unstable();
                     Definition::Circumcircle(ClassId(arr[0]), ClassId(arr[1]), ClassId(arr[2]))
                 },
+                // 🌟 mmp_core/mod.rs::Definition::SecondIntersectionOfLineAndConic
+                // のドキュメント参照。定理のconstructionsテンプレートから明示的に
+                // (known_point, line, conic) → もう一方の交点、を作れるようにする。
+                "SecondIntersectionOfLineAndConic" if parent_ids.len() == 3 =>
+                    Definition::SecondIntersectionOfLineAndConic(parent_ids[0], parent_ids[1], parent_ids[2]),
                 // 🌟 FIX: 不足していた作図定義を追加（これがないと return false で沈黙する）
                 "LengthSq" => {
                     let (a, b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };

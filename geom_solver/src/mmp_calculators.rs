@@ -264,3 +264,42 @@ pub fn calc_conic_through_5_points(pts: &[Vec<ModInt>]) -> Vec<ModInt> {
     if coeffs.iter().all(|v| v.0 == 0) { return vec![]; }
     normalize(&coeffs)
 }
+
+// 🌟 補助構成の汎用化(オンデマンド作図/MCTSの補助点作図の改善): 直線と
+// 二次曲線が既に共有していることが分かっている1点P(known_point)から、
+// 「もう一方の」交点を求める。オリンピック幾何で頻出する「直線を延長して
+// 円と再び交わる点」という補助構成そのものを、個別の定理としてではなく
+// 汎用の作図プリミティブとして提供する(このコメントの上のuser指示
+// 「無闇に定理を追加してもノイズが増えるだけ」への対応)。
+//
+// 直線L=(a,b,c)上の点はP+tR(Rは方向ベクトル(b,-a,0)。a*b+b*(-a)+c*0=0は
+// 恒等的に成り立つので、Rは常にL上にある)とパラメータ化できる。これを
+// 二次曲線Q(x,y,z)=Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0に代入すると、Pが既に根で
+// あることからQ(P+tR)=c1*t+c2*t²という(定数項の無い)2次式になる
+// (c1はPとRの双線形形式の2倍、c2=Q(R))。もう一方の根はt=-c1/c2で、
+// 対応する点はP-(c1/c2)*R ―― 斉次座標なので割り算を避けてc2倍し、
+// c2*P-c1*Rとして返す。c2=0の場合はこの式が-c1*R(=Rそのもの、方向Rが
+// 曲線に含まれる退化配置での正しい第2交点)に一致する。c1=c2=0のときのみ
+// 真に退化(直線が二次曲線に含まれる等)として空Vecを返す。
+pub fn calc_second_intersection_of_line_and_conic(known_point: &[ModInt], line: &[ModInt], conic: &[ModInt]) -> Vec<ModInt> {
+    if known_point.len() < 3 || line.len() < 3 || conic.len() < 6 { return vec![]; }
+    let (p1, p2, p3) = (known_point[0], known_point[1], known_point[2]);
+    let (a, b) = (line[0], line[1]);
+    let (r1, r2, r3) = (b, -a, ModInt::new(0));
+    let (ca, cb, cc, cd, ce, cf) = (conic[0], conic[1], conic[2], conic[3], conic[4], conic[5]);
+
+    let two = ModInt::new(2);
+    let c1 = two * ca * p1 * r1
+        + cb * (p1 * r2 + p2 * r1)
+        + two * cc * p2 * r2
+        + cd * (p1 * r3 + p3 * r1)
+        + ce * (p2 * r3 + p3 * r2)
+        + two * cf * p3 * r3;
+    let c2 = ca * r1 * r1 + cb * r1 * r2 + cc * r2 * r2 + cd * r1 * r3 + ce * r2 * r3 + cf * r3 * r3;
+
+    if c1.0 == 0 && c2.0 == 0 { return vec![]; }
+
+    let result = [c2 * p1 - c1 * r1, c2 * p2 - c1 * r2, c2 * p3 - c1 * r3];
+    if result.iter().all(|v| v.0 == 0) { return vec![]; }
+    normalize(&result)
+}

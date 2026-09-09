@@ -147,6 +147,17 @@ pub enum Definition {
     // 「2辺の長さの積」を1つのScalarとして比較したい場合に使う。
     // LengthSq等と同じ「値,1,1」の3要素形式で評価される。
     Product(ClassId, ClassId),
+    // 🌟 ユーザー指示(「無闇に定理を追加してもノイズが増えるだけなので、
+    // ondemand作図やMCTSによる補助点作図の改善もすべき」)への対応:
+    // オリンピック幾何で頻出する「直線を延長して既存の円/二次曲線と
+    // 再び交わる点」という補助構成を、個別の定理ではなく汎用の作図
+    // プリミティブとして追加した。(known_point, line, conic)の3引数――
+    // known_pointは既にlineとconicの両方に乗っていることが前提の
+    // 「もう一方ではない方」の交点で、順不同にはならない(3者はそれぞれ
+    // 役割が違う)。計算はmmp_calculators::calc_second_intersection_of_
+    // line_and_conicのドキュメント参照(直線をP+tRとパラメータ化し、
+    // Pが根であることを使ってもう一方の根を斉次座標のまま求める)。
+    SecondIntersectionOfLineAndConic(ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -176,6 +187,7 @@ impl Definition {
             Definition::ConstantHomogeneous(_,_,_) => "ConstantHomogeneous",
             Definition::ConicThrough5Points(_,_,_,_,_) => "ConicThrough5Points",
             Definition::Product(_,_) => "Product",
+            Definition::SecondIntersectionOfLineAndConic(_,_,_) => "SecondIntersectionOfLineAndConic",
         }
     }
 
@@ -197,6 +209,7 @@ impl Definition {
             Definition::CrossRatioOfLines(a, b, c, d) => vec![*a, *b, *c, *d],
             Definition::ConicThrough5Points(a, b, c, d, e) => vec![*a, *b, *c, *d, *e],
             Definition::Product(a, b) => vec![*a, *b],
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => vec![*p, *l, *c],
             _ => vec![],
         }
     }
@@ -231,6 +244,7 @@ impl Definition {
             Definition::ConstantHomogeneous(_, _, _) => EntityType::Point,
             Definition::ConicThrough5Points(_, _, _, _, _) => EntityType::Conic,
             Definition::Product(_, _) => EntityType::Scalar,
+            Definition::SecondIntersectionOfLineAndConic(_, _, _) => EntityType::Point,
         }
     }
 }
@@ -883,6 +897,12 @@ impl EGraph {
                 let r_b = self.get_rep(*b);
                 if r_a.0 > r_b.0 { Definition::Product(r_b, r_a) } else { Definition::Product(r_a, r_b) }
             },
+            // 🌟 known_point/line/conicはそれぞれ役割が違うので順序はそのまま、
+            // get_repだけ適用する(併合後も同じ構成が正しくmemoで重複除去される
+            // ようにする)。
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
+                Definition::SecondIntersectionOfLineAndConic(self.get_rep(*p), self.get_rep(*l), self.get_rep(*c))
+            },
             _ => def.clone(),
         }
     }
@@ -987,6 +1007,15 @@ impl EGraph {
                 let dir_def = Definition::DirectionOf(new_id);
                 let dir_id = self.create_entity(format!("Dir_{}_(Auto)", self.entities[new_id.0].name), dir_def, EntityType::Point);
                 self.link_logical_incidence(new_id, dir_id);
+            },
+            // 🌟 新しくできた点は、定義上lineにもconicにも乗っている
+            // (known_pointと同じ構造的な立場)。ここでincidenceを張って
+            // おかないと、match_connected_factの「この直線/この曲線上の点」
+            // 探索や、円の一意性局所伝播(propagate_conic_uniqueness)から
+            // 見えなくなってしまう。
+            Definition::SecondIntersectionOfLineAndConic(_p, l, c) => {
+                self.link_logical_incidence(new_id, *l);
+                self.link_logical_incidence(new_id, *c);
             },
             Definition::Midpoint(a, b) => {
                 self.link_logical_incidence(*a, new_id);

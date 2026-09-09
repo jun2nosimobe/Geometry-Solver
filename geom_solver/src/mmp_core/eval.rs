@@ -230,6 +230,15 @@ impl EGraph {
                 };
                 Self::to_option(result)
             }
+            // 🌟 mmp_core/mod.rs::Definition::SecondIntersectionOfLineAndConic
+            // のドキュメント参照。既知の交点p、直線l、二次曲線cから、
+            // もう一方の交点を斉次座標のまま(割り算無しで)直接求める。
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
+                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
+                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
+                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
+                Self::to_option(mmp_calculators::calc_second_intersection_of_line_and_conic(&vp, &vl, &vc))
+            }
             Definition::HarmonicConjugateOf(a, b, c) => {
                 let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
                 let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;

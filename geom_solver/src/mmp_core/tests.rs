@@ -373,6 +373,52 @@ fn test_tangent_line_to_general_conic_is_numerically_correct() {
 }
 
 #[test]
+fn test_second_intersection_of_line_and_conic_is_numerically_correct() {
+    // 🌟 オンデマンド作図/MCTS補助点作図の改善(ユーザー指示「無闇に定理を
+    // 追加してもノイズが増えるだけなので、ondemand作図やmctsによる補助点
+    // 作図の改善もすべき」)への対応として追加したDefinition::
+    // SecondIntersectionOfLineAndConicの検証。
+    // 円 x²+y²-4x-3y=0 (A=(0,0),B=(4,0),C=(0,3)を通る、接線テストと同じ
+    // 配置)上で、Bを通る垂直線x=4を考える。x=4を円の式に代入すると
+    // 16+y²-16-3y=0 → y²-3y=0 → y=0,3、つまりこの直線は円をB=(4,0)と
+    // (4,3)の2点で切る。既知の交点Bからこの直線に沿ってもう一方の交点を
+    // 求めると(4,3)に一致するはずである――A,B,Cのいずれとも異なる値なので、
+    // 座標の並び順を取り違えるような実装バグを検出できる
+    // (calc_tangent_lineの係数順バグの教訓と同じく、対称な配置は避ける)。
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+    let line_bd = egraph.create_entity("LineBD".into(), Definition::new_line(b, d), EntityType::Line);
+    let second = egraph.create_entity(
+        "Second".into(),
+        Definition::SecondIntersectionOfLineAndConic(b, line_bd, circ),
+        EntityType::Point,
+    );
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    vars.insert("A_x".into(), ModInt::new(0));
+    vars.insert("A_y".into(), ModInt::new(0));
+    vars.insert("B_x".into(), ModInt::new(4));
+    vars.insert("B_y".into(), ModInt::new(0));
+    vars.insert("C_x".into(), ModInt::new(0));
+    vars.insert("C_y".into(), ModInt::new(3));
+    // Dは直線BD(=垂直線x=4)を定めるためだけの補助点で、円の上にある必要はない。
+    vars.insert("D_x".into(), ModInt::new(4));
+    vars.insert("D_y".into(), ModInt::new(10));
+
+    let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+    let vsecond = egraph.evaluate_node(second, &vars, &mut cache).expect("直線と二次曲線のもう一方の交点が数値的に計算できるべき");
+    let vsecond = mmp_calculators::normalize(&vsecond);
+
+    let expected = mmp_calculators::normalize(&[ModInt::new(4), ModInt::new(3), ModInt::new(1)]);
+    assert_eq!(vsecond, expected,
+        "円x²+y²-4x-3y=0と直線x=4のBでない方の交点は(4,3)であるべき");
+}
+
+#[test]
 fn test_harmonic_conjugate_is_an_involution() {
     // 🌟 対合性: H(A,B,D) は、Dを求めるための2回目の作図をやり直さずとも
     // 合同閉包だけで自動的にCへ一致するべき(construct_harmonic_conjugateの

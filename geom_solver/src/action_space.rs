@@ -205,6 +205,52 @@ impl ActionGenerator {
             if !is_simulation { self.historical_harmonic.insert(key); }
         }
 
+        // 7. 直線×二次曲線 -> もう一方の交点。ユーザー指示(「無闇に定理を
+        // 追加してもノイズが増えるだけなので、ondemand作図やMCTSによる
+        // 補助点作図の改善もすべき」)への対応: オリンピック幾何で頻出する
+        // 「直線を延長して既存の円/二次曲線と再び交わる点」という補助構成
+        // (例: 「AOの延長が外接円と再び交わる点」)を、個別の定理を増やす
+        // 代わりにMCTSの一般的な作図候補として追加した。
+        // Definition::SecondIntersectionOfLineAndConicは「既に両方に乗って
+        // いる1点(known_point)」を要求するので、各二次曲線について「既に
+        // その曲線に乗っている点」→「その点を通る既存の直線」という2段階で
+        // 候補を絞り込む(is_connectedの構造的な事実だけで判定できるので、
+        // 数値計算は一切不要)。
+        let conics: Vec<ClassId> = self.entities_of_type(egraph, EntityType::Conic);
+        for &c in &conics {
+            let c = egraph.get_rep(c);
+            let mut pts_on_c: Vec<ClassId> = egraph.entities[c.0].components.first()
+                .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
+                    .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
+                    .collect())
+                .unwrap_or_default();
+            pts_on_c.sort_unstable_by_key(|id| id.0);
+            pts_on_c.dedup();
+            if pts_on_c.is_empty() { continue; }
+
+            for &p in self.weighted_pick(&pts_on_c, egraph, (num_samples / 4).max(1), target).iter() {
+                let p = egraph.get_rep(p);
+                let mut lines_on_p: Vec<ClassId> = egraph.entities[p.0].components.first()
+                    .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
+                        // 🌟 L∞との「もう一方の交点」は無限遠点の相方(円ならI/Jの
+                        // どちらか)にしかならず、補助構成として意味を持たないので
+                        // 除外する(resolve_angle_demandsのL∞除外と同じ理由)。
+                        .filter(|&s| s != egraph.line_infinity
+                            && egraph.entities[s.0].entity_type == EntityType::Line)
+                        .collect())
+                    .unwrap_or_default();
+                lines_on_p.sort_unstable_by_key(|id| id.0);
+                lines_on_p.dedup();
+                if lines_on_p.is_empty() { continue; }
+
+                for &l in self.weighted_pick(&lines_on_p, egraph, 2, target).iter() {
+                    let l = egraph.get_rep(l);
+                    let def = Definition::SecondIntersectionOfLineAndConic(p, l, c);
+                    self.try_push_def(&mut actions, egraph, def, is_simulation);
+                }
+            }
+        }
+
         actions
     }
 

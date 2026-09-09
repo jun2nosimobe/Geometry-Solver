@@ -109,6 +109,7 @@ impl EGraph {
             Definition::ConstantHomogeneous(a, b, c) => format!("Constant({:?}, {:?}, {:?})", a, b, c),
             Definition::ConicThrough5Points(a, b, c, d, e) => format!("ConicThrough5Points({}, {}, {}, {}, {})", get_name(a), get_name(b), get_name(c), get_name(d), get_name(e)),
             Definition::Product(a, b) => format!("Product({}, {})", get_name(a), get_name(b)),
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => format!("SecondIntersection({}; {}, {})", get_name(p), get_name(l), get_name(c)),
         }
     }
 
