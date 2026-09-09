@@ -229,14 +229,14 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/action_space.rs・src/main.rs</span>
       <span><b>ベンチ</b> 既存24問 + HAGeo-409由来8問 + 単体検証</span>
-      <span><b>最新コミット</b> 762972d</span>
+      <span><b>最新コミット</b> 81b879e</span>
     </div>
   </div>
 
   <div class="stats">
     <div class="stat"><div class="n">22</div><div class="l">登録済み定理(射影5定理はopt-in)</div></div>
     <div class="stat"><div class="n">2/8</div><div class="l">HAGeo-409ベンチ 既定設定でsolved</div></div>
-    <div class="stat"><div class="n">76/96</div><div class="l">32問題×3回集計のベストスコア</div></div>
+    <div class="stat"><div class="n">78/96</div><div class="l">32問題×3回集計のベストスコア(3回とも完全一致)</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
     <div class="stat"><div class="n">4</div><div class="l">並行して走っている方針トラック(§00)</div></div>
   </div>
@@ -258,8 +258,8 @@
       <div class="entry">
         <div class="when">方針B<span class="sha">マッチング高速化</span></div>
         <div>
-          <div class="headline"><h3>型統合が暗黙にキャッシュ粒度も粗くする問題への対処</h3><span class="pill shipped">教訓を確立</span></div>
-          <div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。</div>
+          <div class="headline"><h3>型統合が暗黙にキャッシュ粒度も粗くする問題への対処</h3><span class="pill shipped">78/96まで到達</span></div>
+          <div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。さらにユーザー提案「接続の弱いfailed pathは型に関わらず保持できるはず」を受け、<code>MatchTask::cached_failed_paths</code>の無効化を「定理単位で1つでも型が変われば全滅」から「個々の失敗状態ごとの依存マスク(<code>entity_type_bit</code>)」に細分化(§03参照)し、76/96→<b>78/96、しかも3回とも完全に同一の結果</b>(従来揺れていたnine_point_full/orthocenterが一度も落ちなくなった)まで到達した。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。次の一手はこのマスクをタスクをまたいだグローバルキャッシュに昇格させること(§04参照、未着手)。</div>
         </div>
       </div>
 
@@ -513,6 +513,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">81b879e</span></div>
+        <div>
+          <div class="headline"><h3>failed_pathsを型単位から個々の失敗状態単位の依存マスクへ細分化</h3><span class="pill shipped">78/96・3回完全一致</span></div>
+          <div class="desc">ユーザー提案「新規作図でfailed pathが破棄されるのはある程度どうしようもないが、接続の弱いfailed pathは型に関わらず保持できるのでは」への対応。以前の<code>MatchTask::cached_failed_paths</code>は「この定理が使う型のどれか1つでも変わったら全体を空にする」という定理単位(<code>theorem_all_types</code>)の粗い判定で、新規作図のたびに学習が丸ごと消えていた。個々のキャッシュ済み失敗状態(<code>state_sig</code>)ごとに「実際にどの型のプール列挙に依存したか」を表すu8ビットマスク(<code>entity_type_bit</code>、EntityTypeが4種類なので1バイトで足りる)を紐付ける方式に変更: <code>dfs_match</code>以下の全マッチング関数に<code>dep_mask: &mut u8</code>という出力引数を追加し、各関数が自分専用のローカルマスクを作って子への再帰に渡し、末尾で(成功・失敗を問わず)呼び出し元のdep_maskへORして返す(戻り値を変えない、出力引数によるスレッディング)。Distinct/Order/両方束縛済みのチェックだけで確定した失敗はマスク0のまま=永続的に有効であり続ける。</div>
+          <div class="evidence"><b>実装中に発見した2件のstalenessバグ:</b> (1) <code>match_connected_fact</code>の(Some,Some)分岐(<code>is_connected</code>チェック)は<code>state_sig</code>に含まれない"追加の状態"(incidence構造)に依存しているのにマスク0にしていた――後から<code>link_logical_incidence</code>で新たに接続されても古い失敗が残り続ける実バグ。(2) <code>defined_by_valid_nodes</code>の「result_var既に束縛済み」分岐も、その実体が後からマージで新しい定義を吸収しうる(<code>components[0].definitions</code>は生成時とマージ時にしか増えない)のにマスク0にしていた。どちらも該当する型をマスクに含めて修正――一度は76/96→74/96へ悪化(nine_point_fullが不安定化)したが、この2件を直したことで78/96まで到達した。<b>検証:</b> cargo test 40件全パス、32問題×3回集計で78/96、3回とも完全に同一の結果(従来揺れていたnine_point_full/orthocenterが一度も落ちなくなった)。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -543,9 +552,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">3</div>
         <div>
-          <h3>探索木のメモ化: タスク単位は不発、真に効くのはグローバルキャッシュ</h3>
-          <div class="desc">診断計測で、dfs_matchの全呼び出しの約38%が「過去に成功した状態への再訪問」だと判明したが、実際に(failed_pathsと同じ寿命の)<b>タスク単位</b>の成功キャッシュ(<code>MatchCache</code>)を実装して測ると、dfs_match呼び出し回数がほぼ不変(182,367→181,367)で効果ゼロ、simsonはキャッシュ管理のオーバーヘッド分だけ悪化した。原因: 38%の再訪問の大半は<b>タスクをまたいだ</b>もの(UCB1が同じ定理をschedule_full_sweepのたびに新しいtask/新しいbindで何度も試す)で、タスク単位のキャッシュでは捕捉できなかった。真に効かせるには、connected_join_cache/identical_self_bind_cacheと同じ発想のグローバル共有キャッシュが要るが、これらが「型」という粗い単位でキーを持つのに対し、成功結果キャッシュは「任意のbind内容」というずっと細かい単位をキーにするため、無効化の粒度・タイミングの設計(型ごとのtype_generationだけで十分か、より細かい依存関係追跡が要るか)がまだ詰め切れていない――今回のタスク単位実装よりもう一段階大きい設計変更になる。</div>
-          <div class="b-tags"><span class="tag">実測でタスク単位は不発と判明</span><span class="tag">要・グローバルキャッシュの無効化設計</span></div>
+          <h3>探索木のメモ化: 無効化の粒度は解決済み(78/96)、残るはタスクをまたいだグローバル化</h3>
+          <div class="desc">診断計測で、dfs_matchの全呼び出しの約38%が「過去に成功した状態への再訪問」だと判明したが、実際に(failed_pathsと同じ寿命の)<b>タスク単位</b>の成功キャッシュ(<code>MatchCache</code>)を実装して測ると、dfs_match呼び出し回数がほぼ不変(182,367→181,367)で効果ゼロ、simsonはキャッシュ管理のオーバーヘッド分だけ悪化した。原因: 38%の再訪問の大半は<b>タスクをまたいだ</b>もの(UCB1が同じ定理をschedule_full_sweepのたびに新しいtask/新しいbindで何度も試す)で、タスク単位のキャッシュでは捕捉できなかった。<b>更新(§03「failed_pathsを型単位から個々の失敗状態単位の依存マスクへ細分化」参照)</b>: 「無効化の粒度・タイミングの設計」の前半(failed_pathsをどこまで細かく無効化できるか)は、entity_type_bitによるu8依存マスクという形で解決し、タスク単位のままでも78/96・3回完全一致という明確な改善を得た。残る後半――このマスク付きキャッシュを<b>タスクをまたいだグローバル共有</b>(connected_join_cache/identical_self_bind_cacheと同じ発想だが、キーがbind内容というより細かい単位になる)へ昇格させる部分――はまだ手が付いていない。今のマスク設計はキー(state_sig)がbind内容ベースの依存マスクは持つので、理論上はこのままグローバルキャッシュのキー/無効化基盤として転用できるはずだが、実際に昇格させて38%のタスク間再訪問(未検証のまま残っている数字)がどこまで削れるかは未検証。</div>
+          <div class="b-tags"><span class="tag">無効化粒度は解決・78/96達成</span><span class="tag">残るはタスクをまたいだグローバル化</span></div>
         </div>
       </div>
 
