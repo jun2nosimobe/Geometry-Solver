@@ -332,6 +332,23 @@ impl EGraph {
             if line == other_line { continue; }
 
             if shared.len() >= 2 {
+                // 🐛 propagate_conic_uniquenessと全く同じ構造のバグ
+                // (ユーザー指摘「そもそも誤った結合は起こらないはず」への
+                // 対応): sharedはline自身の点として重複除去済みだが、まだ
+                // e-graph上で正式にマージされていない2つの異なる代表元が
+                // 実は同じ幾何学的な点を指している場合を区別できず、真に
+                // 相異なる共有点が実際には1点しかないのに2点と誤カウント
+                // され得る。1点だけの共有では直線の一意性を主張できない
+                // (直線は2点で決まる)ため、ここでも数値的に等しい代表元を
+                // 1つにまとめてから改めて閾値判定する。
+                let mut distinct_shared: Vec<ClassId> = Vec::new();
+                for &p in &shared {
+                    let is_dup = distinct_shared.iter()
+                        .any(|&q| self.numeric_plausibility_check(p, q, 2) == Some(true));
+                    if !is_dup { distinct_shared.push(p); }
+                }
+                if distinct_shared.len() < 2 { continue; }
+
                 // 🌟 健全性の穴の修正: マージを確定する前に、ランダムな座標での
                 // 具体例で本当にこの2直線が等しいかを検算する。数値的に明確に
                 // 矛盾する場合(Some(false))はこの偶然の一致を却下し、このペアは
@@ -339,16 +356,16 @@ impl EGraph {
                 if self.numeric_plausibility_check(line, other_line, 2) == Some(false) {
                     let name1 = self.entities[line.0].name.clone();
                     let name2 = self.entities[other_line.0].name.clone();
-                    println!("  🚫 [健全性チェック] {} と {} は共有点={}だが数値的に別の直線のため結合を却下",
-                        name1, name2, shared.len());
+                    println!("  🚫 [健全性チェック] {} と {} は共有点={}(重複除去後)だが数値的に別の直線のため結合を却下",
+                        name1, name2, distinct_shared.len());
                     continue;
                 }
                 let name1 = self.entities[line.0].name.clone();
                 let name2 = self.entities[other_line.0].name.clone();
-                let justification = Justification::LineUniqueness { shared_points: shared.clone() };
+                let justification = Justification::LineUniqueness { shared_points: distinct_shared.clone() };
                 if self.merge_entities_justified(line, other_line, justification) {
-                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により直線を結合: {} ≡ {}",
-                        shared.len(), name1, name2);
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}、重複除去後)により直線を結合: {} ≡ {}",
+                        distinct_shared.len(), name1, name2);
                     return true;
                 }
             }
@@ -428,6 +445,30 @@ impl EGraph {
 
             // 🌟 直線は2点、二次曲線は(一般の位置にある)5点で一意に決まる。
             if shared.len() >= 5 {
+                // 🐛 実際に発見されたバグ(ユーザー指摘「そもそも誤った結合は
+                // 起こらないはず」への対応): sharedは「conic自身の点として
+                // 重複除去済み」なだけで、まだe-graph上で正式にマージされて
+                // いない2つの異なる代表元が、実は同じ幾何学的な点(例:
+                // 「2本の高さの交点」として別々に構築された、同じ垂心H)を
+                // 指している場合を区別できない。この場合、真に相異なる
+                // 共有点は実際には5点未満なのに、5点以上あるかのように
+                // 誤ってカウントされ、本来は一意に定まらない(5点未満でしか
+                // 共有していない)2つの二次曲線を「同じ曲線だ」と誤って
+                // 提案してしまう(orthocenterで実際に観測: H_AltA_AltBと
+                // H_AltB_AltCが2重カウントされ、真の共有点はI,J,H,Hcの4点
+                // しかないのに5点と誤認された)。数値的に等しい(=同じ点の
+                // 可能性が高い)代表元どうしをここで1つにまとめてから、
+                // 改めて5点以上あるかを判定する――数が少ない(shared.len()
+                // が5前後)候補でしか実行されないため、O(shared.len()²)の
+                // numeric_plausibility_check呼び出しはコスト上無視できる。
+                let mut distinct_shared: Vec<ClassId> = Vec::new();
+                for &p in &shared {
+                    let is_dup = distinct_shared.iter()
+                        .any(|&q| self.numeric_plausibility_check(p, q, 2) == Some(true));
+                    if !is_dup { distinct_shared.push(p); }
+                }
+                if distinct_shared.len() < 5 { continue; }
+
                 // 🌟 却下済みペアキャッシュ(EGraph::rejected_conic_pairsの
                 // ドキュメント参照): 前回このペアを却下した時点からマージが
                 // 1件も起きていなければ、結果は変わりようがないので数値
@@ -442,16 +483,16 @@ impl EGraph {
                     self.rejected_conic_pairs.insert(cache_key, self.merge_generation);
                     let name1 = self.entities[conic.0].name.clone();
                     let name2 = self.entities[other_conic.0].name.clone();
-                    println!("  🚫 [健全性チェック] {} と {} は共有点={}だが数値的に別の二次曲線のため結合を却下",
-                        name1, name2, shared.len());
+                    println!("  🚫 [健全性チェック] {} と {} は共有点={}(重複除去後)だが数値的に別の二次曲線のため結合を却下",
+                        name1, name2, distinct_shared.len());
                     continue;
                 }
                 let name1 = self.entities[conic.0].name.clone();
                 let name2 = self.entities[other_conic.0].name.clone();
-                let justification = Justification::ConicUniqueness { shared_points: shared.clone() };
+                let justification = Justification::ConicUniqueness { shared_points: distinct_shared.clone() };
                 if self.merge_entities_justified(conic, other_conic, justification) {
-                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={})により二次曲線を結合: {} ≡ {}",
-                        shared.len(), name1, name2);
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}、重複除去後)により二次曲線を結合: {} ≡ {}",
+                        distinct_shared.len(), name1, name2);
                     return true;
                 }
             }
