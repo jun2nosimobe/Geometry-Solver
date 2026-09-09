@@ -1069,6 +1069,72 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             ],
         },
         // ==========================================
+        // 🌟 シュタイナーの定理(接線版)/接弦定理の射影版
+        // ==========================================
+        // ユーザー提案「射影幾何への移植を進めたい(円周角は移植後の定理も
+        // あるはず)」への対応。既存の"接弦定理"(theorems.rs先頭側、円+
+        // AnglePairによるEuclid版)の射影一般化で、上の「シュタイナーの定理」
+        // (二次曲線上の6点の複比不変性)からもう1点Qを消した極限
+        // (Q→P1、すなわち"P1から見た弦P1Q"が"P1における接線"に退化する
+        // 極限)にあたる。接弦定理(接線と弦のなす角=同じ弧に対する円周角)は
+        // まさにこの極限そのもの: 円周角の定理が「2定点から見た2定点への
+        // 角が一致」なら、接弦定理は「その2定点のうち片方が接点そのものに
+        // 退化した」特別な場合であり、シュタイナーの定理とその接線版の
+        // 関係も同じ極限操作で対応する。
+        //
+        // 二次曲線の生成元5点P1..P5だけで完結し(シュタイナーの定理が
+        // 必要としていた「二次曲線上のもう1点Qを局所スキャンで探す」手順が
+        // 丸ごと不要になる)、その分マッチングも軽い: P1における接線T1と、
+        // P1から見たP2,P3,P4への3直線の複比(視点P1)が、P5から見た
+        // P2,P3,P4,P1への4直線の複比(視点P5、P1は"ただの弦"として扱う)と
+        // 一致する。
+        TheoremDef {
+            name: "シュタイナーの定理(接線版)/接弦定理(射影版)".to_string(),
+            entities: entities(&[
+                ("P1", EntityType::Point), ("P2", EntityType::Point), ("P3", EntityType::Point),
+                ("P4", EntityType::Point), ("P5", EntityType::Point),
+                ("Conic", EntityType::Conic),
+                ("T1", EntityType::Line),
+                ("L1_P2", EntityType::Line), ("L1_P3", EntityType::Line), ("L1_P4", EntityType::Line),
+                ("L5_P2", EntityType::Line), ("L5_P3", EntityType::Line), ("L5_P4", EntityType::Line), ("L5_P1", EntityType::Line),
+                ("CR_P1", EntityType::Scalar), ("CR_P5", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 🌟 シード: シュタイナーの定理と全く同じ発想で、二次曲線自身の
+                // 定義からP1..P5とConicを直接束縛する(全件スキャン不要)。
+                fact_ext("DefinedBy", &["P1", "P2", "P3", "P4", "P5", "Conic"], Some("ConicThrough5Points"), None, false, None),
+                distinct(&["P1", "P2", "P3", "P4", "P5"]),
+
+                // P1における接線T1(円周角の定理の逆の"TanA"と同じ発想の
+                // DefinedBy+作図需要)。
+                fact_ext("DefinedBy", &["Conic", "P1", "T1"], Some("TangentLine"), None, false, None),
+
+                // P1から見たP2,P3,P4への3直線。
+                fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L1_P2", "L1_P3"]),
+                fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L1_P2", "L1_P3", "L1_P4"]),
+
+                // P5から見たP2,P3,P4,P1への4直線(P1は接点ではなく"ただの弦"
+                // として、シュタイナーの定理のQと同じ役割で扱う)。
+                fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3"]),
+                fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3", "L5_P4"]),
+                fact_ext("DefinedBy", &["P5", "P1", "L5_P1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_P1"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L1_P2".to_string(), "L1_P3".to_string(), "L1_P4".to_string(), "T1".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P1".to_string() },
+                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L5_P2".to_string(), "L5_P3".to_string(), "L5_P4".to_string(), "L5_P1".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P5".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR_P1".to_string(), "CR_P5".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+            ],
+        },
+        // ==========================================
         // 🌟 シュタイナーの定理の逆(射影版・円周角の定理の逆)
         // ==========================================
         // 「円周角の定理の逆」(2定点から見た2定点への角が等しいなら4点は

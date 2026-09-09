@@ -16,6 +16,7 @@ pub mod two_circles_reim;
 pub mod orthic_incenter;
 pub mod test_cross_ratio;
 pub mod test_steiner;
+pub mod test_steiner_tangent;
 pub mod test_involution;
 pub mod test_isosceles_converse;
 pub mod test_power_of_point;
@@ -58,6 +59,7 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "orthic_incenter" => orthic_incenter::setup(egraph),
         "test_cross_ratio" => test_cross_ratio::setup(egraph),
         "test_steiner" => test_steiner::setup(egraph),
+        "test_steiner_tangent" => test_steiner_tangent::setup(egraph),
         "test_involution" => test_involution::setup(egraph),
         "test_isosceles_converse" => test_isosceles_converse::setup(egraph),
         "test_power_of_point" => test_power_of_point::setup(egraph),

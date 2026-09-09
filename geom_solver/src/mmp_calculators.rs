@@ -197,7 +197,31 @@ pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
     let a = a_val * x0 + d / two;
     let b = a_val * y0 + e / two;
     let c = (d / two) * x0 + (e / two) * y0 + f;
-    
+
+    normalize(&[a, b, c])
+}
+
+// 🌟 一般の二次曲線 Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0(calc_conic_through_5_pointsの
+// 係数[A,B,C,D,E,F])上の点における接線(=極線)。射影幾何への移植
+// (接弦定理→シュタイナーの定理の接線版)のために追加した、calc_tangent_line
+// (円専用、円は「x²とy²の係数が等しくxyの係数が0」という特殊な二次曲線)の
+// 一般化。二次曲線を対称行列M(対角がA,C,F、非対角がB/2,D/2,E/2)で表した
+// Q(v)=v^T M v とみなすと、点p=(x0,y0,z0)における極線の係数は単純に M*p
+// (Qの各変数についての偏微分を2で割ったもの、と一致する)。接点pが二次曲線
+// 上にあれば、この極線は文字通りその点における接線になる(射影幾何の標準的な
+// 事実)。calc_tangent_lineと違ってvpは斉次座標のまま(アフィン座標への
+// 正規化やz=0のガードは不要): 円の場合と違い、二次曲線側は最初から
+// (x,y,z)の斉次多項式として書かれているため、z0で割る必要が無い。
+pub fn calc_tangent_to_conic(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
+    if vc.len() < 6 || vp.len() < 3 { return vec![]; }
+    let (a_c, b_c, c_c, d_c, e_c, f_c) = (vc[0], vc[1], vc[2], vc[3], vc[4], vc[5]);
+    let (x0, y0, z0) = (vp[0], vp[1], vp[2]);
+
+    let two = ModInt::new(2);
+    let a = a_c * x0 + (b_c / two) * y0 + (d_c / two) * z0;
+    let b = (b_c / two) * x0 + c_c * y0 + (e_c / two) * z0;
+    let c = (d_c / two) * x0 + (e_c / two) * y0 + f_c * z0;
+
     normalize(&[a, b, c])
 }
 

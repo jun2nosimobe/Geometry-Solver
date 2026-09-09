@@ -205,7 +205,18 @@ impl EGraph {
             Definition::TangentLine(c, p) => {
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
                 let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_tangent_line(&vc, &vp))
+                // 🌟 射影幾何への移植(接弦定理→シュタイナーの定理の接線版):
+                // TangentLineの第1引数はCircle(4係数[A,D,E,F])だけでなく
+                // 一般のConic(6係数[A,B,C,D,E,F]、calc_conic_through_5_points参照)
+                // にもなり得るようにした。円と二次曲線は係数ベクトルの長さが
+                // 4/6で必ず異なる(円は「4点目の生成元」を要求しないので同じ
+                // Definitionを共有していても混同しない)ため、長さで振り分ける。
+                let result = if vc.len() >= 6 {
+                    mmp_calculators::calc_tangent_to_conic(&vc, &vp)
+                } else {
+                    mmp_calculators::calc_tangent_line(&vc, &vp)
+                };
+                Self::to_option(result)
             }
             Definition::HarmonicConjugateOf(a, b, c) => {
                 let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;

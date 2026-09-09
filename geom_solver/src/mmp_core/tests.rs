@@ -291,6 +291,48 @@ fn test_tangent_line_to_circle_is_numerically_correct() {
 }
 
 #[test]
+fn test_tangent_line_to_general_conic_is_numerically_correct() {
+    // 🌟 射影幾何への移植(接弦定理→シュタイナーの定理の接線版)のために
+    // TangentLineを一般のConicにも対応させた(calc_tangent_to_conic)。
+    // 放物線 y=x² (斉次形: x²-yz=0、係数[A,B,C,D,E,F]=[1,0,0,0,-1,0]) 上の
+    // 5点 (0,0),(1,1),(-1,1),(2,4),(-2,4) からConicThrough5Pointsで
+    // この放物線を復元し、(1,1)における接線を計算する。
+    // dy/dx=2xより(1,1)での接線の傾きは2: y-1=2(x-1) → 2x-y-1=0。
+    let mut egraph = EGraph::new();
+    let p0 = egraph.create_entity("P0".into(), Definition::FreePoint, EntityType::Point);
+    let p1 = egraph.create_entity("P1".into(), Definition::FreePoint, EntityType::Point);
+    let p2 = egraph.create_entity("P2".into(), Definition::FreePoint, EntityType::Point);
+    let p3 = egraph.create_entity("P3".into(), Definition::FreePoint, EntityType::Point);
+    let p4 = egraph.create_entity("P4".into(), Definition::FreePoint, EntityType::Point);
+    let conic = egraph.create_entity(
+        "Conic".into(),
+        Definition::ConicThrough5Points(p0, p1, p2, p3, p4),
+        EntityType::Conic,
+    );
+    let tan = egraph.create_entity("Tan".into(), Definition::TangentLine(conic, p1), EntityType::Line);
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    vars.insert("P0_x".into(), ModInt::new(0));
+    vars.insert("P0_y".into(), ModInt::new(0));
+    vars.insert("P1_x".into(), ModInt::new(1));
+    vars.insert("P1_y".into(), ModInt::new(1));
+    vars.insert("P2_x".into(), ModInt::new(-1));
+    vars.insert("P2_y".into(), ModInt::new(1));
+    vars.insert("P3_x".into(), ModInt::new(2));
+    vars.insert("P3_y".into(), ModInt::new(4));
+    vars.insert("P4_x".into(), ModInt::new(-2));
+    vars.insert("P4_y".into(), ModInt::new(4));
+
+    let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+    let vtan = egraph.evaluate_node(tan, &vars, &mut cache).expect("二次曲線への接線が数値的に計算できるべき");
+    let vtan = mmp_calculators::normalize(&vtan);
+
+    let expected = mmp_calculators::normalize(&[ModInt::new(2), ModInt::new(-1), ModInt::new(-1)]);
+    assert_eq!(vtan, expected,
+        "放物線y=x²上の(1,1)における接線は2x-y-1=0であるべき");
+}
+
+#[test]
 fn test_harmonic_conjugate_is_an_involution() {
     // 🌟 対合性: H(A,B,D) は、Dを求めるための2回目の作図をやり直さずとも
     // 合同閉包だけで自動的にCへ一致するべき(construct_harmonic_conjugateの
