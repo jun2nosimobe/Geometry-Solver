@@ -358,8 +358,19 @@ pub struct ProverEngine {
     // 同じ型への(None,None)自己束縛を2つ以上持つ、または円周角の定理の逆
     // のように自己束縛の下流に同じtarget_typeのDefinedByペアリングが
     // ぶら下がる定理)は、自己束縛のcapがそのまま下流の分岐係数(cap×cap)
-    // になるため、通常より大きく絞った専用のcapを使ってきた(既定10)。
+    // になるため、通常より大きく絞った専用のcapを使ってきた。
     // --fanout-heat-cap=Nで調整できる。
+    //
+    // 🌟 実測診断(ユーザー提案「解く速度も見るべき、行き詰まったら幅を
+    // 広げる」)の結果、既定値10→5に変更した。32問題×3回集計で77/96→
+    // 80/96に改善する一方、orthocenter_altのように「dfs_capに一度も
+    // 到達していないのに、必要な候補がcap5では最初から除外される」問題が
+    // 新たに生まれることも判明した(--time=15でも変わらず、時間不足では
+    // ない)。1つの固定値では両立しないため、既定は狭い(=速い)5から
+    // 始め、main.rsのメインループが需要駆動の回復・MCTSより先にこの値を
+    // 段階的に広げる(FANOUT_HEAT_CAP_CEILING参照)ことで、大半の問題は
+    // 5のまま速く解きつつ、cap不足が真因の問題だけ追加コストを払って
+    // 解けるようにしている。
     pub fanout_heat_cap: usize,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>, // 🌟 Blackboardから移動
     // 🌟 「2直線は既にあるが、その交点がまだ図形として存在しない」ことへの
@@ -489,7 +500,7 @@ impl ProverEngine {
             dfs_calls: 0,
             dfs_cap: 100_000,
             heat_cap: 40,
-            fanout_heat_cap: 10,
+            fanout_heat_cap: 5,
             construction_demands: FxHashMap::default(), // 🌟 追加
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),

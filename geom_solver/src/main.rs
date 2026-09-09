@@ -195,8 +195,12 @@ fn main() {
     let mcts_target_bias_enabled = !args.iter().any(|a| a == "--no-mcts-target-bias");
     // 🌟 ユーザー提案(「マッチングを熱の上位だけを見るようにしていた
     // パラメータを調整できないか」)への対応。logic_core.rs::ProverEngine::
-    // heat_cap/fanout_heat_capのドキュメント参照。既定は従来通り40/10で、
-    // --heat-cap=N / --fanout-heat-cap=Nで再コンパイルせずに実験できる。
+    // heat_cap/fanout_heat_capのドキュメント参照(logic_core.rs::
+    // ProverEngine)。既定はheat_cap=40・fanout_heat_cap=5(実測で77/96→
+    // 80/96に改善した値)で、--heat-cap=N / --fanout-heat-cap=Nで
+    // 再コンパイルせずに実験できる。fanout_heat_capが不足して手詰まりに
+    // なった場合はFANOUT_HEAT_CAP_CEILINGまで自動的に広げるので、ここは
+    // あくまで初期値。
     let heat_cap: usize = args.iter()
         .find_map(|a| a.strip_prefix("--heat-cap="))
         .and_then(|v| v.parse().ok())
@@ -204,7 +208,7 @@ fn main() {
     let fanout_heat_cap: usize = args.iter()
         .find_map(|a| a.strip_prefix("--fanout-heat-cap="))
         .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
+        .unwrap_or(5);
 
     println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {}, heat-cap: {}/{})",
         problem_name, time_budget_secs,
@@ -257,6 +261,22 @@ fn main() {
     mcts.target_bias_enabled = mcts_target_bias_enabled;
     let mut mcts_consecutive_failures = 0;
     const MCTS_MAX_CONSECUTIVE_FAILURES: usize = 3;
+    // 🌟 ユーザー提案(「行き詰まってきたらだんだん探索の幅を広げる」)への
+    // 対応。fanout_heat_cap(logic_core.rs::ProverEngineのドキュメント参照、
+    // 「二重自己束縛」定理の候補cap)の実測診断で、これを狭く(既定10→5)
+    // すると一部の問題(bench_2018silkroadp1)は速く解けるようになる一方、
+    // orthocenter_altのように「dfs_capには一度も到達していないのに、
+    // 必要な候補がそもそも狭いcapで最初から除外されて試されない」ため
+    // 解けなくなる問題が出ることが判明した(--time=15でも変わらず=時間
+    // 不足ではなく除外そのものが原因、と--statsで確認済み)。1つの固定値
+    // では両立できないため、既定は狭い(=速い)cap5から始め、需要駆動の
+    // 回復もMCTSも尽きた「本当に手詰まり」の時だけ、MCTSに頼るより先に
+    // このcapを2倍ずつ広げて同じ決定的な探索をやり直す――狭いcapで
+    // 解ける問題はこのコストを一切払わず、cap不足が真因の問題だけが
+    // 追加の時間を払って解けるようになる。global_failed_pathsは
+    // 既に試した(まだ有効な)候補の探索を安全に再利用し、新しく候補に
+    // 加わった分だけ新規に探索するので、二重に無駄な再探索にはならない。
+    const FANOUT_HEAT_CAP_CEILING: usize = 40;
     
     for fact in &problem.initial_facts {
         match fact {
@@ -426,6 +446,16 @@ fn main() {
                 recovered = true;
             }
             engine.prover.profile.recovery_time += recovery_start.elapsed();
+            // 🌟 FANOUT_HEAT_CAP_CEILINGのドキュメント参照。需要駆動の回復が
+            // 尽きても、MCTS(無方向な探索)へ頼る前に、まず今の決定的な
+            // 探索の候補capを広げて再挑戦する――除外されていただけの候補が
+            // 見つかれば、MCTSより遥かに安上がりに解決する。
+            if !recovered && engine.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
+                engine.prover.fanout_heat_cap = (engine.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
+                println!("  -> 需要による補助線が尽きたため、MCTSの前に候補capを広げて再探索します(fanout_heat_cap={})。", engine.prover.fanout_heat_cap);
+                engine.schedule_full_sweep();
+                recovered = true;
+            }
             if !recovered {
                 if !use_mcts {
                     println!("  -> 要求がなく、MCTSも無効(--mctsで有効化できます)なため探索を打ち切ります。");
