@@ -170,13 +170,25 @@ pub fn calc_cross_ratio(a: &[ModInt], b: &[ModInt], c: &[ModInt], d: &[ModInt]) 
 // 無かった。cross_productと同様、退化した入力に対してpanicせずvec![]
 // (計算不能)を返すようにする。
 pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
-    // vc: [D, E, F, A] (A(x^2+y^2) + Dx + Ey + F = 0)
+    // vc: [A, D, E, F] (A(x^2+y^2) + Dx + Ey + F = 0)
     // vp: [x, y, z] (接点)
+    // 🐛 FIX: 以前はここを[D,E,F,A](Aが最後)だと思ってvc[0..3]を読んでいたが、
+    // calc_circumcircleが実際に返す並びは[A,D,E,F](Aが先頭)だった
+    // (eval.rs::sample_point_on_circleのコメント、および
+    // test_tangent_line_to_circle_is_numerically_correctで非対称な円
+    // (D,E,Fが全て非自明な値を持つ配置)を使って実測・確認済み――対称な
+    // 単位円ではD=E=0になり、この食い違いが偶然打ち消し合って検出でき
+    // なかった)。この食い違いはtangent_orthic.rs等の既存問題では、証明が
+    // 純粋に記号的な定理適用(接弦定理)だけで届き、接線の数値そのものを
+    // 検算する経路を一度も通っていなかったため症状として顕在化していな
+    // かった。射影版(シュタイナーの定理)の接弦定理を二次曲線の接線を使って
+    // 構築するにあたり、複比という本質的に数値/代数的な量を経由するため、
+    // 誤った係数のままでは正しく動かない。
     if vc.len() < 4 || vp.len() < 3 || vp[2].0 == 0 { return vec![]; }
-    let d = vc[0];
-    let e = vc[1];
-    let f = vc[2];
-    let a_val = vc[3];
+    let a_val = vc[0];
+    let d = vc[1];
+    let e = vc[2];
+    let f = vc[3];
     
     let x0 = vp[0] / vp[2];
     let y0 = vp[1] / vp[2];

@@ -252,6 +252,45 @@ fn test_harmonic_conjugate_construction_is_numerically_correct() {
 }
 
 #[test]
+fn test_tangent_line_to_circle_is_numerically_correct() {
+    // 🌟 経緯: eval.rs::sample_point_on_circleのコメントで「calc_circumcircleが
+    // 実際に返す係数の並びは[A,D,E,F](0番目がx²+y²の係数)だが、
+    // calc_tangent_line側のコメント/実装は[D,E,F,A](Aが最後)を前提にしており、
+    // この不一致がtangent_orthic.rs等では症状として顕在化していなかった
+    // (証明が純粋に記号的な定理適用だけで届き、接線の数値そのものを
+    // 検算する経路を通っていなかったため)」という既知の疑いがあった。
+    // 円 x²+y²-4x-3y=0 (原点(0,0),(4,0),(0,3)を通る、中心(2,1.5)・半径2.5)
+    // 上の(4,0)における接線を計算すると、古典的な公式
+    // x*x0+y*y0+D(x+x0)/2+E(y+y0)/2+F=0 から 4x-3y-16=0 になるはずである。
+    // 最初のバージョンはA=(1,0),B=(0,1),C=(-1,0)という単位円だったが、
+    // これはD=E=0になる対称な配置で、係数の並び順の取り違えを検出できない
+    // (0と0を入れ替えても違いが出ない)ことが後で判明したため、D,E,Fが
+    // すべて非自明な値を持つこの非対称な配置に変更した。
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let tan = egraph.create_entity("Tan".into(), Definition::TangentLine(circ, b), EntityType::Line);
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    vars.insert("A_x".into(), ModInt::new(0));
+    vars.insert("A_y".into(), ModInt::new(0));
+    vars.insert("B_x".into(), ModInt::new(4));
+    vars.insert("B_y".into(), ModInt::new(0));
+    vars.insert("C_x".into(), ModInt::new(0));
+    vars.insert("C_y".into(), ModInt::new(3));
+
+    let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+    let vtan = egraph.evaluate_node(tan, &vars, &mut cache).expect("接線が数値的に計算できるべき");
+    let vtan = mmp_calculators::normalize(&vtan);
+
+    let expected = mmp_calculators::normalize(&[ModInt::new(4), ModInt::new(-3), ModInt::new(-16)]);
+    assert_eq!(vtan, expected,
+        "円x²+y²-4x-3y=0上の(4,0)における接線は4x-3y-16=0であるべき");
+}
+
+#[test]
 fn test_harmonic_conjugate_is_an_involution() {
     // 🌟 対合性: H(A,B,D) は、Dを求めるための2回目の作図をやり直さずとも
     // 合同閉包だけで自動的にCへ一致するべき(construct_harmonic_conjugateの
