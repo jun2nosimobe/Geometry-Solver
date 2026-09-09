@@ -9,6 +9,7 @@ mod mcts;
 mod problems;
 mod discover;
 mod discover_viz;
+mod padic;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
