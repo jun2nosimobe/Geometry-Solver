@@ -22,8 +22,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let dir_ac = egraph.create_entity("DirAC".to_string(), Definition::DirectionOf(l_ac), EntityType::Point);
     let dir_bc = egraph.create_entity("DirBC".to_string(), Definition::DirectionOf(l_bc), EntityType::Point);
 
-    let ang_b = egraph.create_entity("Ang_B".to_string(), Definition::AnglePair(dir_ab, dir_bc), EntityType::Angle);
-    let ang_c = egraph.create_entity("Ang_C".to_string(), Definition::AnglePair(dir_bc, dir_ac), EntityType::Angle);
+    let ang_b = egraph.create_entity("Ang_B".to_string(), Definition::AnglePair(dir_ab, dir_bc), EntityType::Scalar);
+    let ang_c = egraph.create_entity("Ang_C".to_string(), Definition::AnglePair(dir_bc, dir_ac), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
 

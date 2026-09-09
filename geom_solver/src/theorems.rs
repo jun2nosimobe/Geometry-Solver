@@ -80,7 +80,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("L_A2_B1", EntityType::Line), ("L_A2_B2", EntityType::Line),
                 ("Dir_A1_B1", EntityType::Point), ("Dir_A1_B2", EntityType::Point),
                 ("Dir_A2_B1", EntityType::Point), ("Dir_A2_B2", EntityType::Point),
-                ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
+                ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
             ]),
             patterns: vec![
                 // 🌟 Concyclicという専用Factをやめ、「4点が同じ円Circに乗っている」を
@@ -220,7 +220,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_AB", EntityType::Scalar), ("Dist_AC", EntityType::Scalar),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
                 ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
-                ("Ang_B", EntityType::Angle), ("Ang_C", EntityType::Angle),
+                ("Ang_B", EntityType::Scalar), ("Ang_C", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Dist_AB", "Dist_AC"], None, None, false, None),
@@ -271,7 +271,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_AB", EntityType::Scalar), ("Dist_AC", EntityType::Scalar),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
                 ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
-                ("Ang_B", EntityType::Angle), ("Ang_C", EntityType::Angle),
+                ("Ang_B", EntityType::Scalar), ("Ang_C", EntityType::Scalar),
             ]),
             patterns: vec![
                 // 🌟 シード: Identical(Ang_B,Ang_C)(底角が等しいという前提)から
@@ -329,7 +329,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point), ("P", EntityType::Point),
                 ("LineAB", EntityType::Line), ("LineCD", EntityType::Line), ("LineAD", EntityType::Line), ("LineCB", EntityType::Line),
                 ("DirAB", EntityType::Point), ("DirCD", EntityType::Point), ("DirAD", EntityType::Point), ("DirCB", EntityType::Point),
-                ("AngA", EntityType::Angle), ("AngC", EntityType::Angle),
+                ("AngA", EntityType::Scalar), ("AngC", EntityType::Scalar),
                 ("LenPA", EntityType::Scalar), ("LenPB", EntityType::Scalar), ("LenPC", EntityType::Scalar), ("LenPD", EntityType::Scalar),
                 ("ProdAB", EntityType::Scalar), ("ProdCD", EntityType::Scalar),
             ]),
@@ -447,7 +447,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
                 ("DirEA", EntityType::Point), ("DirEB", EntityType::Point), ("DirED", EntityType::Point), ("DirEC", EntityType::Point),
                 ("DirEM", EntityType::Point), ("DirEN", EntityType::Point),
-                ("AngE_AB", EntityType::Angle), ("AngE_DC", EntityType::Angle), ("AngE_AM", EntityType::Angle), ("AngE_DN", EntityType::Angle),
+                ("AngE_AB", EntityType::Scalar), ("AngE_DC", EntityType::Scalar), ("AngE_AM", EntityType::Scalar), ("AngE_DN", EntityType::Scalar),
                 ("LenSqEA", EntityType::Scalar), ("LenSqEB", EntityType::Scalar), ("LenSqEC", EntityType::Scalar), ("LenSqED", EntityType::Scalar),
                 ("LenSqEM", EntityType::Scalar), ("LenSqEN", EntityType::Scalar),
                 ("ProdEAEC", EntityType::Scalar), ("ProdEBED", EntityType::Scalar),
@@ -529,7 +529,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Circ", EntityType::Conic), ("TanA", EntityType::Line),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
                 ("DirTan", EntityType::Point), ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
-                ("AngTan", EntityType::Angle), ("AngBCA", EntityType::Angle),
+                ("AngTan", EntityType::Scalar), ("AngBCA", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("DefinedBy", &["A", "B", "C", "Circ"], Some("Circumcircle"), Some("Unordered"), false, None),
@@ -559,7 +559,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         TheoremDef {
             name: "円周角の定理の逆".to_string(),
             entities: entities(&[
-                ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
+                ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
                 ("Dir_L1", EntityType::Point), ("Dir_L2", EntityType::Point),
                 ("Dir_L3", EntityType::Point), ("Dir_L4", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
@@ -603,7 +603,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             name: "同位角による平行判定(右共通)".to_string(),
             entities: entities(&[
                 ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
-                ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
+                ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
@@ -620,7 +620,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             name: "同位角による平行判定(左共通)".to_string(),
             entities: entities(&[
                 ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
-                ("Ang1", EntityType::Angle), ("Ang2", EntityType::Angle),
+                ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
@@ -641,9 +641,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("D1", EntityType::Point), ("D2", EntityType::Point), ("D3", EntityType::Point),
                 ("D4", EntityType::Point), ("D5", EntityType::Point), ("D6", EntityType::Point),
-                ("Ang12", EntityType::Angle), ("Ang45", EntityType::Angle),
-                ("Ang23", EntityType::Angle), ("Ang56", EntityType::Angle),
-                ("Ang13", EntityType::Angle), ("Ang46", EntityType::Angle),
+                ("Ang12", EntityType::Scalar), ("Ang45", EntityType::Scalar),
+                ("Ang23", EntityType::Scalar), ("Ang56", EntityType::Scalar),
+                ("Ang13", EntityType::Scalar), ("Ang46", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang12", "Ang45"], Some("Angle"), None, false, None),
@@ -686,8 +686,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("D1", EntityType::Point), ("D2", EntityType::Point), 
                 ("D3", EntityType::Point), ("D4", EntityType::Point),
-                ("Ang12", EntityType::Angle), ("Ang34", EntityType::Angle),
-                ("Ang13", EntityType::Angle), ("Ang24", EntityType::Angle),
+                ("Ang12", EntityType::Scalar), ("Ang34", EntityType::Scalar),
+                ("Ang13", EntityType::Scalar), ("Ang24", EntityType::Scalar),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang12", "Ang34"], Some("Angle"), None, false, None),
@@ -712,7 +712,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("C", EntityType::Point), ("H", EntityType::Point), ("M", EntityType::Point),
                 ("L_AH", EntityType::Line), ("L_CH", EntityType::Line), ("L_MH", EntityType::Line), ("L_CA", EntityType::Line),
                 ("Dir_AH", EntityType::Point), ("Dir_CH", EntityType::Point), ("Dir_MH", EntityType::Point), ("Dir_CA", EntityType::Point),
-                ("Ang90", EntityType::Angle), ("Ang_AH_CH", EntityType::Angle), ("Ang_MH_CH", EntityType::Angle), ("Ang_CH_CA", EntityType::Angle),
+                ("Ang90", EntityType::Scalar), ("Ang_AH_CH", EntityType::Scalar), ("Ang_MH_CH", EntityType::Scalar), ("Ang_CH_CA", EntityType::Scalar),
             ]),
             patterns: vec![
                 // 爆速化: まず中点を探す
@@ -756,7 +756,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line),
                 ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
-                ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
+                ("Ang_A", EntityType::Scalar), ("Ang90", EntityType::Scalar),
                 ("Line_Median", EntityType::Line), ("Dir_Median", EntityType::Point), // 🌟 復活
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
@@ -802,7 +802,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("Mid_BC", EntityType::Point),
                 ("L1", EntityType::Line), ("L2", EntityType::Line),
                 ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
-                ("Ang_A", EntityType::Angle), ("Ang90", EntityType::Angle),
+                ("Ang_A", EntityType::Scalar), ("Ang90", EntityType::Scalar),
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
@@ -1170,7 +1170,14 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             patterns: vec![
                 // 🌟 シード: Identical(CR_P1,CR_P5)から始めて、それぞれの定義
                 // から4直線を直接束縛する(全件スキャン不要)。
-                fact_ext("Identical", &["CR_P1", "CR_P5"], Some("Scalar"), None, false, None),
+                // 🌟 sub_type="CrossRatioOfLines"マーカー(logic_core.rs::
+                // match_identical_factの(None,None)自己束縛分岐が消費する)を
+                // 付与: CR_P1/CR_P5は次のDefinedByパターンでCrossRatioOfLines
+                // としてしか使われないので、自己束縛の候補を最初から
+                // CrossRatioOfLines由来のScalarだけに絞ってよい(長さ・積・
+                // 点の複比まで無差別に含む自己束縛プールに埋もれて無関係な
+                // 値ばかり試す性能問題への対処、miquel_quadrilateralで観測)。
+                fact_ext("Identical", &["CR_P1", "CR_P5"], Some("Scalar"), Some("CrossRatioOfLines"), false, None),
                 fact_ext("DefinedBy", &["L1_P2", "L1_P3", "L1_P4", "L1_Q", "CR_P1"], Some("CrossRatioOfLines"), None, false, None),
                 fact_ext("DefinedBy", &["L5_P2", "L5_P3", "L5_P4", "L5_Q", "CR_P5"], Some("CrossRatioOfLines"), None, false, None),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),

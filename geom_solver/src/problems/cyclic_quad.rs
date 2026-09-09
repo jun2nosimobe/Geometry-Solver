@@ -31,8 +31,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let dir_cd = egraph.create_entity("Dir_CD".to_string(), Definition::DirectionOf(l_cd), EntityType::Point);
 
     // 目標: 円周角 ∠(AB, AC) ≡ ∠(DB, DC) が証明できるか
-    let ang1 = egraph.create_entity("Ang_BAC".to_string(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);
-    let ang2 = egraph.create_entity("Ang_BDC".to_string(), Definition::AnglePair(dir_bd, dir_cd), EntityType::Angle);
+    let ang1 = egraph.create_entity("Ang_BAC".to_string(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Scalar);
+    let ang2 = egraph.create_entity("Ang_BDC".to_string(), Definition::AnglePair(dir_bd, dir_cd), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
 

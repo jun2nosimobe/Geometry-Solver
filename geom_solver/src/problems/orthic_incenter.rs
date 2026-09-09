@@ -48,8 +48,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let dir_de = egraph.create_entity("Dir_DE".to_string(), Definition::DirectionOf(line_de), EntityType::Point);
 
     // 目標: ∠(DH, DF) = ∠(DE, DH) すなわちDHが∠FDEを二等分する
-    let ang_hdf = egraph.create_entity("Ang_HDF".to_string(), Definition::AnglePair(dir_dh, dir_df), EntityType::Angle);
-    let ang_edh = egraph.create_entity("Ang_EDH".to_string(), Definition::AnglePair(dir_de, dir_dh), EntityType::Angle);
+    let ang_hdf = egraph.create_entity("Ang_HDF".to_string(), Definition::AnglePair(dir_dh, dir_df), EntityType::Scalar);
+    let ang_edh = egraph.create_entity("Ang_EDH".to_string(), Definition::AnglePair(dir_de, dir_dh), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
 

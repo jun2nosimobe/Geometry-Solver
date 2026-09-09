@@ -11,6 +11,35 @@ impl EGraph {
         (0..self.entities.len()).filter(|&i| self.get_rep(ClassId(i)).0 == i).count()
     }
 
+    /// 🌟 EntityType::Angle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント参照)
+    /// により、「この値が有向角(AnglePair)か、それとも別の(長さ・積・複比等の)
+    /// Scalarか」はもう型では区別できない。代わりに、このIDが吸収してきた
+    /// 全ての定義(merge_entitiesが両側の定義集合を合流させて蓄積する)の
+    /// どれかがAnglePairかどうかで判定する――単にoriginal_definitionだけを
+    /// 見ると、AnglePairで作られた実体が後からAng90/Ang0(GivenPoint定義)の
+    /// ような非AnglePair起源の実体に吸収された場合を見逃す。
+    /// logic_core.rsの自己束縛候補の絞り込み(角度追跡系定理の
+    /// Identical(Ang1,Ang2)シードが、無関係な長さ・複比のScalarまで
+    /// 候補に含めてしまわないようにする)で使う。
+    pub fn is_angle_value(&self, id: ClassId) -> bool {
+        let rep = self.get_rep(id);
+        self.entities[rep.0].components.first()
+            .is_some_and(|c| c.definitions.iter().any(|d| matches!(d, Definition::AnglePair(_, _))))
+    }
+
+    /// 🌟 is_angle_valueと同じ発想: このScalarがCrossRatioOfLines(線束の複比)
+    /// 由来かどうかを、吸収してきた定義のどれかがCrossRatioOfLinesかどうかで
+    /// 判定する。「シュタイナーの定理の逆」のIdentical(CR_P1,CR_P5)自己束縛
+    /// (logic_core.rs::match_identical_fact)が、長さ・積・点の複比まで
+    /// 無差別に含む自己束縛候補プールに埋もれて無関係な値ばかり試すのを防ぐ
+    /// ために使う(miquel_quadrilateralで実際に観測した、この自己束縛が
+    /// dfs_capを繰り返し使い切る性能問題への対応)。
+    pub fn is_cross_ratio_of_lines_value(&self, id: ClassId) -> bool {
+        let rep = self.get_rep(id);
+        self.entities[rep.0].components.first()
+            .is_some_and(|c| c.definitions.iter().any(|d| matches!(d, Definition::CrossRatioOfLines(_, _, _, _))))
+    }
+
     pub fn is_connected(&self, id1: ClassId, id2: ClassId) -> bool {
         let r1 = self.get_rep(id1);
         let r2 = self.get_rep(id2);

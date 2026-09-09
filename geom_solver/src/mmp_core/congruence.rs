@@ -31,6 +31,11 @@ impl EGraph {
         // Vecに集めてから dedup_sorted_ids で仕上げる(生のHashSetを
         // そのまま最終的な順序として使わない)。
         let mut merged_subs_raw: Vec<ClassId> = Vec::new();
+        // 🌟 mmp_core/mod.rs::angle_generation/plain_scalar_generationの
+        // ドキュメント参照。この併合の結果、統合後の実体がAnglePair定義を
+        // 1つでも吸収しているか(=角度由来のScalarになるか)を、
+        // merged_defsが消費される前に控えておく。
+        let mut merge_touches_angle = false;
 
         for comp in root1_comps.drain(..) {
             for def in comp.definitions {
@@ -49,6 +54,9 @@ impl EGraph {
             }
         }
         let merged_subs = dedup_sorted_ids(merged_subs_raw);
+        // 🌟 merged_defsがこの直後にinto_iter().collect()で消費される前に、
+        // AnglePair定義を1つでも含むか(=角度由来のScalarか)を確認する。
+        merge_touches_angle = merged_defs.iter().any(|d| matches!(d, Definition::AnglePair(_, _)));
 
         // ここで再度 root1_entity の可変参照を取得
         let root1_entity = &mut self.entities[root1.0];
@@ -84,6 +92,12 @@ impl EGraph {
         // (生き残った側、今はroot2の内容も統合済み)のentity_typeを見るだけで
         // 「どちらの型で併合が起きたか」を一意に特定できる。
         self.note_type_changed(self.entities[root1.0].entity_type);
+        // 🌟 mmp_core/mod.rs::angle_generation/plain_scalar_generationの
+        // ドキュメント参照。上と同じ理由(常に同じEntityType同士しか
+        // 併合されない)で、root1のentity_typeを見るだけで判定できる。
+        if self.entities[root1.0].entity_type == EntityType::Scalar {
+            self.note_scalar_kind_changed(merge_touches_angle);
+        }
         true
     }
 

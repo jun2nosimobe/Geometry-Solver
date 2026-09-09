@@ -26,8 +26,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let dir_ed = egraph.create_entity("DirED".to_string(), Definition::DirectionOf(line_ed), EntityType::Point);
     let dir_ec = egraph.create_entity("DirEC".to_string(), Definition::DirectionOf(line_ec), EntityType::Point);
 
-    let ang_e_ab = egraph.create_entity("AngE_AB".to_string(), Definition::AnglePair(dir_ea, dir_eb), EntityType::Angle);
-    let ang_e_dc = egraph.create_entity("AngE_DC".to_string(), Definition::AnglePair(dir_ed, dir_ec), EntityType::Angle);
+    let ang_e_ab = egraph.create_entity("AngE_AB".to_string(), Definition::AnglePair(dir_ea, dir_eb), EntityType::Scalar);
+    let ang_e_dc = egraph.create_entity("AngE_DC".to_string(), Definition::AnglePair(dir_ed, dir_ec), EntityType::Scalar);
 
     let lensq_ea = egraph.create_entity("LenSqEA".to_string(), Definition::LengthSq(e, a), EntityType::Scalar);
     let lensq_eb = egraph.create_entity("LenSqEB".to_string(), Definition::LengthSq(e, b), EntityType::Scalar);
@@ -43,8 +43,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let line_en = egraph.create_entity("LineEN".to_string(), Definition::new_line(e, n), EntityType::Line);
     let dir_em = egraph.create_entity("DirEM".to_string(), Definition::DirectionOf(line_em), EntityType::Point);
     let dir_en = egraph.create_entity("DirEN".to_string(), Definition::DirectionOf(line_en), EntityType::Point);
-    let ang_e_am = egraph.create_entity("AngE_AM".to_string(), Definition::AnglePair(dir_ea, dir_em), EntityType::Angle);
-    let ang_e_dn = egraph.create_entity("AngE_DN".to_string(), Definition::AnglePair(dir_ed, dir_en), EntityType::Angle);
+    let ang_e_am = egraph.create_entity("AngE_AM".to_string(), Definition::AnglePair(dir_ea, dir_em), EntityType::Scalar);
+    let ang_e_dn = egraph.create_entity("AngE_DN".to_string(), Definition::AnglePair(dir_ed, dir_en), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
 

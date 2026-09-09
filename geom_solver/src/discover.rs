@@ -424,19 +424,26 @@ impl PrettyNamer {
             // 表示ラベルの判定にも適用した形。EntityType::Circle撤廃も同じ
             // 発想: 「円周点I,Jを両方通るか」で二次曲線が円かどうかを判定し、
             // 表示上は円らしく"Cir"、そうでなければ一般の二次曲線として"Q"を使う
-            // (内部的にはどちらも同じEntityType::Conic)。
+            // (内部的にはどちらも同じEntityType::Conic)。EntityType::Angle撤廃も
+            // 同じ発想だが、角度か否かはincidenceでは判定できない(有向角は
+            // L∞上の何か特定の点を通るという構造的特徴を持たない)ので、
+            // 代わりにoriginal_definitionがAnglePairかどうかで判定する
+            // (このIDが元々どんな定義で作られたかを問うだけの、こちらも
+            // 表示専用の判定なので、厳密さより手軽さを優先する)。
             let prefix: &'static str = if e.entity_type == EntityType::Point
                 && egraph.is_connected(rep, egraph.line_infinity) {
                 "D"
             } else if e.entity_type == EntityType::Conic
                 && egraph.is_connected(rep, egraph.circ_i) && egraph.is_connected(rep, egraph.circ_j) {
                 "Cir"
+            } else if e.entity_type == EntityType::Scalar
+                && matches!(e.original_definition, Definition::AnglePair(_, _)) {
+                "Ang"
             } else {
                 match e.entity_type {
                     EntityType::Point => "P",
                     EntityType::Line => "L",
                     EntityType::Conic => "Q",
-                    EntityType::Angle => "Ang",
                     EntityType::Scalar => "S",
                 }
             };

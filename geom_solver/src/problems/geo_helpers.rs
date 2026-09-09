@@ -28,7 +28,7 @@ pub fn circumcenter(egraph: &mut EGraph, a: ClassId, b: ClassId, c: ClassId, nam
 
 /// 有向角(dir1,dir2)がang90に等しい、という「直交」の目標/仮定を作る便利関数。
 pub fn angle_pair(egraph: &mut EGraph, dir1: ClassId, dir2: ClassId, name: &str) -> ClassId {
-    egraph.create_entity(format!("Ang_{}", name), Definition::AnglePair(dir1, dir2), EntityType::Angle)
+    egraph.create_entity(format!("Ang_{}", name), Definition::AnglePair(dir1, dir2), EntityType::Scalar)
 }
 
 pub fn direction_of(egraph: &mut EGraph, line: ClassId, name: &str) -> ClassId {

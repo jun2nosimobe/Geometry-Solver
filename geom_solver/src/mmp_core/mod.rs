@@ -54,9 +54,22 @@ pub struct ClassId(pub usize);
 // propagate_conic_uniqueness(二次曲線は5点で一意)へ統合できた――円どうしが
 // 実点3点を共有していれば、構造的に共有しているI,Jの2点と合わせて常に5点
 // 共有になるので、特別扱いなしに同じ規則から「円は3点で決まる」が導かれる。
+// 🌟 EntityType::Angle撤廃の経緯: 有向角AnglePair(D1,D2)の数値評価は既に
+// 「無限遠直線上の4点I,J,D1,D2の複比」として実装されていた(circ_i/circ_jの
+// ドキュメント参照)――つまり角度は数値的には最初からただのScalar(複比値)
+// だった。EntityType::Direction/Circle撤廃と全く同じ理由で、この事実を
+// 型システムにも反映し、AnglePairの結果もEntityType::Scalarにした
+// (Definition::AnglePair自体は2引数のまま残す――CrossRatioへの書き換えは
+// せず、あくまで「この構成が作る実体の型タグ」だけを変える、Circumcircleと
+// 同じ最小限のアプローチ)。有向角の加法性・交替律・二等辺三角形の底角
+// といった定理は、角度どうしのIdentical比較でしか使われておらず、角度値の
+// 向き(flip)の一致判定(logic_core.rs::apply_conclusions/is_already_proven)は
+// 実はEntityTypeではなくFlipStates(allow_flipで"AnglePair"ターゲットの
+// DefinedByだけが populate する、文字列ベースで既に型非依存な機構)で
+// 完結していたため、型タグの撤廃で追加の分岐は一切必要なかった。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
-    Point, Line, Angle, Scalar,
+    Point, Line, Scalar,
     // 🌟 5点を通る一般二次曲線(Definition::ConicThrough5Points)。円も
     // (I,Jを通るという特殊な場合として)この型に含まれる。
     Conic,
@@ -205,7 +218,7 @@ impl Definition {
             Definition::Circumcircle(_, _, _) => EntityType::Conic,
             Definition::DirectionOf(_) => EntityType::Point,
             Definition::PerpDirectionOf(_) => EntityType::Point,
-            Definition::AnglePair(_, _) => EntityType::Angle,
+            Definition::AnglePair(_, _) => EntityType::Scalar,
             Definition::LengthSq(_, _) => EntityType::Scalar,
             Definition::CrossRatio(_, _, _, _) => EntityType::Scalar,
             Definition::CrossRatioOfLines(_, _, _, _) => EntityType::Scalar,
@@ -336,6 +349,29 @@ pub struct EGraph {
     // 保つ)、それぞれの内部でnote_type_changedを呼ぶことで「この値を
     // 更新し忘れる」余地を構造的に無くした。
     pub type_generation: rustc_hash::FxHashMap<EntityType, u64>,
+    /// 🌟 EntityType::Angle撤廃(このモジュールのEntityTypeドキュメント参照)
+    /// により、有向角(AnglePair)は他の全てのScalar(長さ・積・複比等)と
+    /// 同じEntityType::Scalarを共有し、type_generation[Scalar]も
+    /// 共有するようになった。これをそのまま角度連鎖定理の自己束縛
+    /// キャッシュ(logic_core.rs::identical_self_bind_angle_cache)の
+    /// 無効化判定に使うと、無関係な長さ・積の新規生成のたびに角度側の
+    /// キャッシュまで無効化されてしまい、統合前には無かったキャッシュ
+    /// ヒット率の急落(=無関係イベントによる過剰な再計算)を招く
+    /// (実測でベンチマーク合格率が69/96→57/96に悪化する回帰として
+    /// 顕在化した)。そこでtype_generation[Scalar]はこれまで通り
+    /// (他の消費者が依存する「全てのScalarの変化で必ず上がる」という
+    /// 健全性は崩さず)残したまま、「実際に角度(AnglePair)が絡む変化か
+    /// どうか」だけを追跡する専用カウンタを別途持つ。plain_scalar_
+    /// generationはその裏返し(角度以外のScalarの変化だけを追跡する)で、
+    /// 角度側と対称にキャッシュを分離することで、非角度の自己束縛
+    /// クエリが逆に角度側の変化で無駄に無効化されるのも防ぐ。
+    /// note_type_changedと同じ4つのゲートウェイ(create_entity/
+    /// merge_entities/insert_memo。link_logical_incidenceは対象外――
+    /// 接続関係の追加はEntityType::Scalarの「代表元集合」自体を
+    /// 変えないため、この2カウンタが守る自己束縛候補プールには無関係)
+    /// だけがこれを更新する。
+    pub angle_generation: u64,
+    pub plain_scalar_generation: u64,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -420,10 +456,12 @@ impl EGraph {
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
+            angle_generation: 0,
+            plain_scalar_generation: 0,
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
-        egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Angle);
-        egraph.ang0 = egraph.create_entity("Ang0".to_string(), Definition::GivenPoint, EntityType::Angle);
+        egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Scalar);
+        egraph.ang0 = egraph.create_entity("Ang0".to_string(), Definition::GivenPoint, EntityType::Scalar);
         egraph.line_infinity = egraph.create_entity("Line_infinity".to_string(), Definition::GivenPoint, EntityType::Line);
         // 🌟 円周点 I=(1,i,0), J=(1,-i,0) (i=√-1)。このプロジェクトの法
         // 998244353 は p≡1(mod4) なので体内に平方根が存在し、原始根3を使って
@@ -491,6 +529,10 @@ impl EGraph {
         // 🌟 新規エンティティの誕生そのものが「この型の候補集合が変わった」
         // 変化点(note_type_changedのドキュメント参照)。
         self.note_type_changed(e_type);
+        // 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
+        if e_type == EntityType::Scalar {
+            self.note_scalar_kind_changed(matches!(norm_def, Definition::AnglePair(_, _)));
+        }
 
         for p in norm_def.get_parents() {
             let p_rep = self.get_rep(p);
@@ -515,6 +557,19 @@ impl EGraph {
         *self.type_generation.entry(et).or_insert(0) += 1;
     }
 
+    /// 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
+    /// EntityType::Scalarに関する変化(生成・併合)が起きたときだけ、
+    /// note_type_changedに加えて呼ぶ。is_angleは「この変化がAnglePair側
+    /// (角度)か、それ以外のScalar(長さ・積・複比等)側か」を呼び出し側が
+    /// 判定して渡す。
+    fn note_scalar_kind_changed(&mut self, is_angle: bool) {
+        if is_angle {
+            self.angle_generation += 1;
+        } else {
+            self.plain_scalar_generation += 1;
+        }
+    }
+
     /// 🌟 self.memoへの書き込みを一箇所に集約するゲートウェイ。以前は
     /// create_entityとapply_congruence_closure(congruence.rs)の2箇所が
     /// それぞれ直接self.memo.insertを呼んでおり、後者(既存エンティティに
@@ -526,6 +581,13 @@ impl EGraph {
     /// 型を必ずnote_type_changedに通知する。
     fn insert_memo(&mut self, def: Definition, id: ClassId) {
         let et = self.entities[id.0].entity_type;
+        // 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
+        // memoへの新規登録もdefined_by_valid_nodes等の列挙結果を変え得る、
+        // note_type_changedと同格の「型の候補集合が変わった」変化点なので、
+        // 同じ判定をここでも行う。
+        if et == EntityType::Scalar {
+            self.note_scalar_kind_changed(matches!(def, Definition::AnglePair(_, _)));
+        }
         self.memo.insert(def, id);
         self.note_type_changed(et);
     }
@@ -884,11 +946,11 @@ impl EGraph {
                     // パターンに持つ既存定理(接弦定理・直角三角形の斜辺の中線など)が
                     // 引き続き動くよう、そのまま残す。
                     let ang1_def = Definition::AnglePair(dir1_id, dir2_id);
-                    let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Angle);
+                    let ang1_id = self.create_entity(format!("Ang90_{}_{}", dir1_id.0, dir2_id.0), ang1_def, EntityType::Scalar);
                     self.merge_entities_justified(ang1_id, self.ang90, Justification::Trivial { reason: "垂線の定義より2方向のなす角は90度".to_string() });
 
                     let ang2_def = Definition::AnglePair(dir2_id, dir1_id);
-                    let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Angle);
+                    let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Scalar);
                     self.merge_entities_justified(ang2_id, self.ang90, Justification::Trivial { reason: "垂線の定義より2方向のなす角は90度(逆順)".to_string() });
 
                     // 🌟 射影的な表現を追加: dir2 は「dir1に垂直な方向」そのものとして

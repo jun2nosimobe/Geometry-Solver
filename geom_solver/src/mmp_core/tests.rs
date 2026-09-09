@@ -173,8 +173,8 @@ fn test_angle_pair_symmetry_and_normalization() {
     let d2 = *egraph.memo.get(&Definition::DirectionOf(l2)).unwrap();
 
     // 異なる順序で有向角を作成
-    let ang1 = egraph.create_entity("Ang1".into(), Definition::AnglePair(d1, d2), EntityType::Angle);
-    let ang2 = egraph.create_entity("Ang2".into(), Definition::AnglePair(d1, d2), EntityType::Angle);
+    let ang1 = egraph.create_entity("Ang1".into(), Definition::AnglePair(d1, d2), EntityType::Scalar);
+    let ang2 = egraph.create_entity("Ang2".into(), Definition::AnglePair(d1, d2), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
     assert_eq!(egraph.get_rep(ang1), egraph.get_rep(ang2), "同一の方向ペアから作られた有向角は一意にマージされるべき");
@@ -196,7 +196,7 @@ fn test_ang90_constant_propagation() {
     let dir_ab = *egraph.memo.get(&Definition::DirectionOf(l_ab)).unwrap();
     let dir_perp = *egraph.memo.get(&Definition::DirectionOf(perp)).unwrap();
 
-    let ang_test = egraph.create_entity("AngTest".into(), Definition::AnglePair(dir_ab, dir_perp), EntityType::Angle);
+    let ang_test = egraph.create_entity("AngTest".into(), Definition::AnglePair(dir_ab, dir_perp), EntityType::Scalar);
     egraph.apply_congruence_closure();
 
     assert_eq!(egraph.get_rep(ang_test), egraph.get_rep(egraph.ang90), "垂直な2直線の有向角はグローバルなang90と一致するべき");
@@ -756,9 +756,9 @@ fn test_angle_pair_value_satisfies_cross_ratio_multiplicativity() {
     let dir_ac = egraph.create_entity("Dir_AC".into(), Definition::DirectionOf(l_ac), EntityType::Point);
     let dir_ad = egraph.create_entity("Dir_AD".into(), Definition::DirectionOf(l_ad), EntityType::Point);
 
-    let ang_ab_ac = egraph.create_entity("Ang_AB_AC".into(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);
-    let ang_ac_ad = egraph.create_entity("Ang_AC_AD".into(), Definition::AnglePair(dir_ac, dir_ad), EntityType::Angle);
-    let ang_ab_ad = egraph.create_entity("Ang_AB_AD".into(), Definition::AnglePair(dir_ab, dir_ad), EntityType::Angle);
+    let ang_ab_ac = egraph.create_entity("Ang_AB_AC".into(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Scalar);
+    let ang_ac_ad = egraph.create_entity("Ang_AC_AD".into(), Definition::AnglePair(dir_ac, dir_ad), EntityType::Scalar);
+    let ang_ab_ad = egraph.create_entity("Ang_AB_AD".into(), Definition::AnglePair(dir_ab, dir_ad), EntityType::Scalar);
 
     let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
     vars.insert("A_x".into(), ModInt::new(0)); vars.insert("A_y".into(), ModInt::new(0));

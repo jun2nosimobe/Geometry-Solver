@@ -99,12 +99,13 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
     let mut set: std::collections::HashSet<EntityType> = std::collections::HashSet::new();
     for name in names {
         if let Some(&t) = theorem.entities.get(name) {
-            // 🌟 EntityType::Direction撤廃に伴い、旧DirectionはこのPoint除外の
-            // 対象に含まれる(方向は常にDefinedBy/Connected経由で導出され、
-            // 自由点のようにあらかじめ十分な数が存在するとは限らないため、
-            // 元々Angle/Scalarと同じく「必須の事前存在チェック」の対象外
-            // だった――Directionの分だけPointの扱いが変わったわけではない)。
-            if !matches!(t, EntityType::Angle | EntityType::Scalar) {
+            // 🌟 EntityType::Direction/Angle撤廃に伴い、旧Direction(今はPoint)・
+            // 旧Angle(今はScalar)はこのExcalar除外の対象に含まれる(方向・角度は
+            // 常にDefinedBy/Connected経由で導出され、自由点のようにあらかじめ
+            // 十分な数が存在するとは限らないため、元々Scalarと同じく「必須の
+            // 事前存在チェック」の対象外だった――撤廃の前後でこの判定自体の
+            // 意味は変わらない: 単にEntityType::Scalarを素通しするだけ)。
+            if !matches!(t, EntityType::Scalar) {
                 set.insert(t);
             }
         }
@@ -378,6 +379,21 @@ pub struct ProverEngine {
     // (キャッシュするのは「型で絞り込んだ後・heat基準で並べ替える前」の
     // 集合だけ)。
     pub identical_self_bind_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
+    // 🌟 identical_self_bind_cacheをEntityType::Scalarについてだけ、
+    // さらに「角度(AnglePair)由来かどうか」で2分割した専用キャッシュ。
+    // EGraph::angle_generation/plain_scalar_generationのドキュメント
+    // (mmp_core/mod.rs)参照。EntityType::Angle撤廃により長さ・積・複比・
+    // 角度が全てEntityType::Scalarを共有するようになった結果、
+    // identical_self_bind_cache(Scalar)はこれらどれか1つが新規生成
+    // されるだけで無効化されてしまい、角度連鎖定理の自己束縛が
+    // (逆に非角度の自己束縛も)キャッシュヒットしなくなっていた
+    // (実測でベンチマーク合格率が69/96→57/96に悪化する回帰として
+    // 顕在化した)。type_generation[Scalar]ではなくangle_generation/
+    // plain_scalar_generationという、それぞれ角度側・非角度側の変化にしか
+    // 反応しない専用カウンタで無効化判定することで、無関係な側の
+    // 生成イベントに引きずられて再計算されるのを防ぐ。
+    pub identical_self_bind_angle_cache: Option<(Rc<Vec<ClassId>>, u64)>,
+    pub identical_self_bind_plain_scalar_cache: Option<(Rc<Vec<ClassId>>, u64)>,
     // 🌟 同じ発想の第三弾: defined_by_valid_nodes の「両方未束縛」分岐
     // (親変数もresult_varも未束縛で、期待される結果の型だけで全代表元を
     // 列挙するフォールバック)も、identical_self_bind_cacheと全く同じ形の
@@ -441,6 +457,8 @@ impl ProverEngine {
             theorem_required_types: Vec::new(),
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
+            identical_self_bind_angle_cache: None,
+            identical_self_bind_plain_scalar_cache: None,
             defined_by_full_scan_cache: FxHashMap::default(),
             profile: ProfileStats::default(),
         }
@@ -492,6 +510,53 @@ impl ProverEngine {
         }
         let result = Rc::new(reps);
         self.identical_self_bind_cache.insert(et, (result.clone(), cur_gen));
+        result
+    }
+
+    /// 🌟 identical_self_bind_angle_cache/identical_self_bind_plain_scalar_cache
+    /// のドキュメント参照。EntityType::Scalarの自己束縛候補を「角度
+    /// (AnglePair)由来のものだけ」に絞った専用キャッシュ。angle_generation
+    /// (mmp_core/mod.rs)が変わっていなければ(=角度が絡む生成・併合が
+    /// 一度も起きていなければ)、無関係な長さ・積・複比の生成では
+    /// 再計算しない。
+    fn identical_self_bind_angle_candidates(&mut self) -> Rc<Vec<ClassId>> {
+        let cur_gen = self.egraph.angle_generation;
+        if let Some((cached, cached_gen)) = &self.identical_self_bind_angle_cache {
+            if *cached_gen == cur_gen { return cached.clone(); }
+        }
+        let mut reps = Vec::new();
+        for id in self.egraph.iter_reps_of_type(crate::mmp_core::EntityType::Scalar) {
+            if self.egraph.entities[id.0].is_active() && self.egraph.is_angle_value(id) {
+                reps.push(id);
+            }
+        }
+        let result = Rc::new(reps);
+        self.identical_self_bind_angle_cache = Some((result.clone(), cur_gen));
+        result
+    }
+
+    /// 🌟 上のidentical_self_bind_angle_candidatesの裏返し: EntityType::Scalarの
+    /// うち角度(AnglePair)由来ではないもの(長さ・積・複比等)だけに絞った
+    /// 専用キャッシュ。plain_scalar_generation(mmp_core/mod.rs)が変わって
+    /// いなければ再計算しない――角度側の生成・併合だけが起きた場合に、
+    /// こちらまで無駄に無効化されるのを防ぐ。EntityType::Angle撤廃より前は
+    /// EntityType::Scalarに角度が混ざること自体が無かったので、この絞り込みは
+    /// 撤廃前の挙動をそのまま再現するためのものでもある(絞り込まずに
+    /// 返すと、角度に無関係なIdentical自己束縛のheatソート済みcapが
+    /// 角度候補に食われてしまう)。
+    fn identical_self_bind_plain_scalar_candidates(&mut self) -> Rc<Vec<ClassId>> {
+        let cur_gen = self.egraph.plain_scalar_generation;
+        if let Some((cached, cached_gen)) = &self.identical_self_bind_plain_scalar_cache {
+            if *cached_gen == cur_gen { return cached.clone(); }
+        }
+        let mut reps = Vec::new();
+        for id in self.egraph.iter_reps_of_type(crate::mmp_core::EntityType::Scalar) {
+            if self.egraph.entities[id.0].is_active() && !self.egraph.is_angle_value(id) {
+                reps.push(id);
+            }
+        }
+        let result = Rc::new(reps);
+        self.identical_self_bind_plain_scalar_cache = Some((result.clone(), cur_gen));
         result
     }
 
@@ -665,14 +730,22 @@ impl ProverEngine {
                         let rep1 = self.egraph.get_rep(id1);
                         let rep2 = self.egraph.get_rep(id2);
                         // 🌟 FIX: 型に関わらず、代表元が同じなら証明済みとみなす
-                        if rep1 != rep2 { return false; } 
-                        
-                        // 角の場合はフリップの向きも一致しているか確認
-                        if self.egraph.entities[rep1.0].entity_type == crate::mmp_core::EntityType::Angle {
-                            let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
-                            let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
-                            if f1 != f2 { return false; }
-                        }
+                        if rep1 != rep2 { return false; }
+
+                        // 🌟 EntityType::Angle撤廃(mmp_core/mod.rs::EntityTypeの
+                        // ドキュメント参照)により、以前ここにあった
+                        // 「entity_type==Angleの場合だけフリップの向きを確認する」
+                        // という型による絞り込みは撤廃した。FlipStates自体が
+                        // match_defined_by(target_type=="AnglePair"の場合だけ)で
+                        // しか populate されない、既に型非依存な文字列ベースの
+                        // 仕組みだったため、非角度のIdentical比較では
+                        // flips.get(...)が常にNone(→false)になり、
+                        // f1==f2(false==false)は自動的に成り立つ――つまり
+                        // 型チェックは元々冗長で、外しても角度以外の判定は
+                        // 一切変わらない。
+                        let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
+                        let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
+                        if f1 != f2 { return false; }
                     } else { return false; }
                 },
                 "Connected" => {
@@ -885,8 +958,47 @@ impl ProverEngine {
                 // フォールバックでは従来通りのフルスキャン)。heatによる
                 // 並べ替えは共有前の生の集合に対してではなく、キャッシュから
                 // 取り出した後に(常に最新のheat_bonusで)行う。
+                // 🌟 EntityType::Angle撤廃(mmp_core/mod.rs::EntityTypeの
+                // ドキュメント参照)への対応: 角度追跡系定理のIdentical(Ang1,Ang2)
+                // シード(theorems.rsで既にtarget_type=Some("Angle")が付いている、
+                // 元々は記録目的だけの慣習だったマーカー)は、統合後の
+                // EntityType::Scalarの自己束縛候補プールが長さ・積・複比まで
+                // 無差別に含むようになった影響を受けやすい――「有向角の加法性」
+                // のようにこの分岐から始まる定理で、無関係なScalarまで候補に
+                // 混ざるとheatソート済みcapを無駄に消費し、証明が届かなくなる
+                // (miquel_quadrilateralで実際に観測)。
+                // 🌟 当初はidentical_self_bind_candidates(Scalar)の共有結果を
+                // 取り出した後にis_angle_valueで絞り込むだけの実装だったが、
+                // それだと絞り込む「前」の共有キャッシュ自体が
+                // type_generation[Scalar]で無効化判定されたままなので、
+                // 無関係な長さ・積・複比の新規生成のたびに(角度候補を
+                // 一切含まない場合でも)このキャッシュが丸ごと無効化・
+                // 再列挙され続け、期待したキャッシュ効果が得られなかった
+                // (3回集計でベンチマーク合格率69/96→57/96に悪化する回帰と
+                // して実測された)。identical_self_bind_angle_candidates/
+                // identical_self_bind_plain_scalar_candidatesという、
+                // angle_generation/plain_scalar_generationという互いに
+                // 独立した専用カウンタで無効化判定する2つの専用キャッシュに
+                // 分離し、角度側・非角度側どちらの生成イベントも「無関係な
+                // もう一方」のキャッシュを無効化しないようにする。
+                let wants_angle = def.target_type.as_deref() == Some("Angle");
+                // 🌟 is_cross_ratio_of_lines_valueのドキュメント(mmp_core/query.rs)
+                // 参照。同じ理由(自己束縛プールの無関係な値による汚染)で、
+                // sub_type="CrossRatioOfLines"マーカーが付いているパターンは
+                // さらにCrossRatioOfLines由来のものだけに絞る。
+                let wants_cr_of_lines = def.sub_type.as_deref() == Some("CrossRatioOfLines");
                 let mut reps: Vec<ClassId> = match expected_type {
-                    Some(et) => (*self.identical_self_bind_candidates(et)).clone(),
+                    Some(EntityType::Scalar) if wants_angle => (*self.identical_self_bind_angle_candidates()).clone(),
+                    Some(EntityType::Scalar) if wants_cr_of_lines => {
+                        (*self.identical_self_bind_plain_scalar_candidates()).iter()
+                            .copied()
+                            .filter(|&id| self.egraph.is_cross_ratio_of_lines_value(id))
+                            .collect()
+                    }
+                    Some(EntityType::Scalar) => (*self.identical_self_bind_plain_scalar_candidates()).clone(),
+                    Some(et) => {
+                        (*self.identical_self_bind_candidates(et)).clone()
+                    }
                     None => {
                         let mut reps = Vec::new();
                         for i in 0..self.egraph.entities.len() {
@@ -1461,7 +1573,7 @@ impl ProverEngine {
                 }
 
                 let e_type = match target_type {
-                    "AnglePair" => EntityType::Angle,
+                    "AnglePair" => EntityType::Scalar,
                     "DirectionOf" => EntityType::Point,
                     _ => EntityType::Scalar
                 };
@@ -1748,7 +1860,7 @@ impl ProverEngine {
             } else {
                 let entity_type = match constr.target_type.as_str() {
                     "Line" => EntityType::Line,
-                    "Angle" => EntityType::Angle,
+                    "Angle" => EntityType::Scalar,
                     "Circle" => EntityType::Conic,
                     "Scalar" => EntityType::Scalar, // 🌟 スカラー型の追加
                     "Conic" => EntityType::Conic,
@@ -1833,12 +1945,16 @@ impl ProverEngine {
                         let r2 = self.egraph.get_rep(id2);
                         if r1 == r2 { continue; } // 既にマージ済みならスキップ
 
-                        // 🌟 FIX: EntityType::Angle 以外の図形 (Scalar, Direction等) はそのまま無条件でマージする
-                        if self.egraph.entities[r1.0].entity_type == EntityType::Angle {
-                            let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
-                            let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
-                            if f1 != f2 { continue; } // 向きが違うならマージしない
-                        }
+                        // 🌟 EntityType::Angle撤廃(is_already_proven側と同じ
+                        // 理由。mmp_core/mod.rs::EntityTypeのドキュメント参照)
+                        // により、型による絞り込みを外し常にf1==f2を確認する
+                        // ようにした。FlipStatesは元々match_defined_by側で
+                        // target_type=="AnglePair"の場合だけpopulateされる
+                        // 型非依存の仕組みなので、角度以外のIdentical結論では
+                        // f1・f2とも常にNone(→false)になり判定は変わらない。
+                        let f1 = flips.get(&conc.args[0]).copied().unwrap_or(false);
+                        let f2 = flips.get(&conc.args[1]).copied().unwrap_or(false);
+                        if f1 != f2 { continue; } // 向きが違うならマージしない
 
                         let name1 = self.egraph.entities[r1.0].name.clone();
                         let name2 = self.egraph.entities[r2.0].name.clone();
@@ -2319,10 +2435,21 @@ impl BlackboardEngine {
             if self.prover.egraph.get_rep(pt_id) != pt_id { continue; }
             if self.prover.egraph.entities[i].entity_type != EntityType::Point { continue; }
 
+            // 🐛 FIX: line_infinity自身は普通の「直線」として数えない。
+            // EntityType::Direction撤廃(方向はL∞に接続されたただのPoint)以降、
+            // ここでのptがDirectionだと、その定義上line_infinityに必ず
+            // 接続されている(=lines_on_ptに常にline_infinityを含む)ため、
+            // 「Directionの直線+line_infinity」というペアから
+            // AnglePair(その方向, DirectionOf(line_infinity))という無意味な
+            // 退化した有向角を自動生成してしまっていた
+            // (miquel_quadrilateralで実際に観測: EntityType::Angle撤廃で
+            // これがEntityType::Scalarに合流したことで、他の定理の自己束縛
+            // 候補プールを無駄な退化角で汚染し証明を妨げるまでになった)。
             let mut lines_on_pt = Vec::new();
             for comp in &self.prover.egraph.entities[i].components {
                 for &sub_id in &comp.subobjects {
                     let sub_rep = self.prover.egraph.get_rep(sub_id);
+                    if sub_rep == self.prover.egraph.line_infinity { continue; }
                     if self.prover.egraph.entities[sub_rep.0].entity_type == EntityType::Line {
                         lines_on_pt.push(sub_rep);
                     }
@@ -2358,7 +2485,7 @@ impl BlackboardEngine {
             let def = Definition::AnglePair(d1, d2);
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("AnglePair_{}_{}_(Auto)", self.prover.egraph.entities[d1.0].name, self.prover.egraph.entities[d2.0].name);
-                let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Angle);
+                let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Scalar);
                 
                 // 🌟 FIX: Auto生成されたAngleの重要度を下げ、無駄なヒューリスティック探索を抑制
                 self.prover.egraph.entities[new_id.0].base_importance = 0.2;

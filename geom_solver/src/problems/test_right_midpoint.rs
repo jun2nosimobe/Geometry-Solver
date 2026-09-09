@@ -15,14 +15,14 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let dir_ac = egraph.create_entity("Dir_AC".to_string(), Definition::DirectionOf(l_ac), EntityType::Point);
     let dir_bc = egraph.create_entity("Dir_BC".to_string(), Definition::DirectionOf(l_bc), EntityType::Point);
 
-    let ang_a = egraph.create_entity("Ang_A".to_string(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Angle);
+    let ang_a = egraph.create_entity("Ang_A".to_string(), Definition::AnglePair(dir_ab, dir_ac), EntityType::Scalar);
     let m = egraph.create_entity("M".to_string(), Definition::Midpoint(b, c), EntityType::Point);
 
     let l_am = egraph.create_entity("L_AM".to_string(), Definition::new_line(a, m), EntityType::Line);
     let dir_am = egraph.create_entity("Dir_AM".to_string(), Definition::DirectionOf(l_am), EntityType::Point);
 
-    let ang_mab = egraph.create_entity("Ang_MAB".to_string(), Definition::AnglePair(dir_am, dir_ab), EntityType::Angle);
-    let ang_mba = egraph.create_entity("Ang_MBA".to_string(), Definition::AnglePair(dir_ab, dir_bc), EntityType::Angle);
+    let ang_mab = egraph.create_entity("Ang_MAB".to_string(), Definition::AnglePair(dir_am, dir_ab), EntityType::Scalar);
+    let ang_mba = egraph.create_entity("Ang_MBA".to_string(), Definition::AnglePair(dir_ab, dir_bc), EntityType::Scalar);
 
     egraph.apply_congruence_closure();
 
