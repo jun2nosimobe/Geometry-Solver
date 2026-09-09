@@ -41,7 +41,7 @@ dist/
 build/
 *.egg-info/
 
-# Rust (geom_solver) のビルド成果物
+# Rust (geom_solver、プロジェクト直下に移動済み)のビルド成果物
 # ※ Cargo.lock はバイナリクレートなので追跡対象のまま残す
 target/
 
