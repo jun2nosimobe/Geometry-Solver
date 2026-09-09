@@ -229,7 +229,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/action_space.rs・src/main.rs</span>
       <span><b>ベンチ</b> 既存24問 + HAGeo-409由来8問 + 単体検証</span>
-      <span><b>最新コミット</b> 81b879e</span>
+      <span><b>最新コミット</b> a242796</span>
     </div>
   </div>
 
@@ -522,6 +522,15 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">a242796</span></div>
+        <div>
+          <div class="headline"><h3>failed_pathsをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格</h3><span class="pill shipped">正誤維持・速度効果は未計測</span></div>
+          <div class="desc">前段(81b879e)で「無効化の粒度」は解決したが、キャッシュ自体はまだ<code>MatchTask::cached_failed_paths</code>としてタスク単位の寿命のままだった。診断で判明していた「dfs_matchの再訪問の38%はタスクをまたいだもの(UCB1が同じ定理を新しいtask/新しいbindで何度も試す)」を捕捉するため、<code>state_sig</code>が元々bind内容だけで決まる(特定のタスクインスタンスとは無関係な)ハッシュであることを利用し、<code>ProverEngine::global_failed_paths</code>(theorem_idxで引く永続マップのVec、値は(依存マスク, 挿入時点でのtype_generationスナップショット))へ昇格させた。<code>dfs_match</code>は<code>&mut self</code>を要求するため自分のフィールドを借用したまま再帰できない――<code>run_step</code>側で<code>std::mem::take</code>により一時的に取り出し、呼び出し後に必ず書き戻す(既存のper-task運用と同じ常套手段)。有効性の検証もエントリ挿入時ではなく参照時に都度行う方式に変え、<code>MatchTask</code>の2フィールドとその持ち越しロジックを丸ごと削除できた。</div>
+          <div class="evidence"><b>検証:</b> cargo test 40件全パス、32問題×3回集計で78/96・3回とも前段と完全に同一の結果を維持(新規の回帰なし)。<b>注記(§04参照)</b>: この昇格自体が実際にdfs_call消費量をどれだけ削減したかは未計測――今回の検証は「正誤・スコアが変わらないこと」だけを確認しており、当初の診断で見つかった38%という数字がどこまで解消したかは別途<code>--profile</code>等で計測する必要がある。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -552,9 +561,9 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">3</div>
         <div>
-          <h3>探索木のメモ化: 無効化の粒度は解決済み(78/96)、残るはタスクをまたいだグローバル化</h3>
-          <div class="desc">診断計測で、dfs_matchの全呼び出しの約38%が「過去に成功した状態への再訪問」だと判明したが、実際に(failed_pathsと同じ寿命の)<b>タスク単位</b>の成功キャッシュ(<code>MatchCache</code>)を実装して測ると、dfs_match呼び出し回数がほぼ不変(182,367→181,367)で効果ゼロ、simsonはキャッシュ管理のオーバーヘッド分だけ悪化した。原因: 38%の再訪問の大半は<b>タスクをまたいだ</b>もの(UCB1が同じ定理をschedule_full_sweepのたびに新しいtask/新しいbindで何度も試す)で、タスク単位のキャッシュでは捕捉できなかった。<b>更新(§03「failed_pathsを型単位から個々の失敗状態単位の依存マスクへ細分化」参照)</b>: 「無効化の粒度・タイミングの設計」の前半(failed_pathsをどこまで細かく無効化できるか)は、entity_type_bitによるu8依存マスクという形で解決し、タスク単位のままでも78/96・3回完全一致という明確な改善を得た。残る後半――このマスク付きキャッシュを<b>タスクをまたいだグローバル共有</b>(connected_join_cache/identical_self_bind_cacheと同じ発想だが、キーがbind内容というより細かい単位になる)へ昇格させる部分――はまだ手が付いていない。今のマスク設計はキー(state_sig)がbind内容ベースの依存マスクは持つので、理論上はこのままグローバルキャッシュのキー/無効化基盤として転用できるはずだが、実際に昇格させて38%のタスク間再訪問(未検証のまま残っている数字)がどこまで削れるかは未検証。</div>
-          <div class="b-tags"><span class="tag">無効化粒度は解決・78/96達成</span><span class="tag">残るはタスクをまたいだグローバル化</span></div>
+          <h3>failed_pathsのグローバル化後、実際のdfs_call削減量は未計測</h3>
+          <div class="desc">「探索木のメモ化」(旧#3、§03「failed_pathsキャッシュをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格」で出荷)は、タスクをまたいだ共有という設計上の目的を達成し、32問題×3回集計でsolved/unsolvedの正誤とスコア(78/96)を完全に保ったまま(=既存の全パスに悪影響が無いことは確認済み)出荷した。ただし出荷判断は「正誤が変わらないこと」だけを根拠にしており、当初の診断で見つけた「dfs_matchの全呼び出しの約38%がタスクをまたいだ再訪問」という数字が実際にどこまで削れたか(dfs_call消費量やsimsonのようなタイミング指標)は、このグローバル化単体では計測していない。<code>--profile</code>やタスクポップ数/dfs_call消費量の内訳(既存のProfileStats)を使って、グローバル化前後でこの数字を直接比較すると、次にどこへ手を入れるべきかの手がかりになる。</div>
+          <div class="b-tags"><span class="tag">正誤は検証済み・速度効果は未計測</span></div>
         </div>
       </div>
 
