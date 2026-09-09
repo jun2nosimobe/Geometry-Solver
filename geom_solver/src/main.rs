@@ -193,11 +193,24 @@ fn main() {
     // 導入前の「entity_weightのみによる完全に目標非依存なサンプリング」に
     // 戻す。既定は有効。
     let mcts_target_bias_enabled = !args.iter().any(|a| a == "--no-mcts-target-bias");
+    // 🌟 ユーザー提案(「マッチングを熱の上位だけを見るようにしていた
+    // パラメータを調整できないか」)への対応。logic_core.rs::ProverEngine::
+    // heat_cap/fanout_heat_capのドキュメント参照。既定は従来通り40/10で、
+    // --heat-cap=N / --fanout-heat-cap=Nで再コンパイルせずに実験できる。
+    let heat_cap: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--heat-cap="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    let fanout_heat_cap: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--fanout-heat-cap="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
 
-    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {})",
+    println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {}, heat-cap: {}/{})",
         problem_name, time_budget_secs,
         if bandit_enabled { "有効" } else { "無効" },
-        if mcts_target_bias_enabled { "有効" } else { "無効" });
+        if mcts_target_bias_enabled { "有効" } else { "無効" },
+        heat_cap, fanout_heat_cap);
 
     let mut egraph = EGraph::new();
     let tester = MMPTester::new();
@@ -206,6 +219,8 @@ fn main() {
     let problem = problems::load_problem(problem_name, &mut egraph);
 
     let mut prover = ProverEngine::new(egraph);
+    prover.heat_cap = heat_cap;
+    prover.fanout_heat_cap = fanout_heat_cap;
     // 🌟 Rc化: theorems は Vec<Rc<TheoremDef>>。定理は実行中不変なので、
     // ここで一度だけ Rc に包めば、以降の参照はすべてポインタ共有になる。
     let mut all_theorems = theorems::get_all_theorems();

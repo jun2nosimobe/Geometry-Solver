@@ -345,6 +345,22 @@ pub struct ProverEngine {
     // 既に変数の多くが具体的な値に束縛されているため速く失敗/成功するので
     // 上限は据え置き、シードなしタスクだけ上限を大幅に下げて早期に諦めさせる。
     pub dfs_cap: u64,
+    // 🌟 ユーザー提案(「マッチングを熱の上位だけを見るようにしていた
+    // パラメータを調整できないか」)への対応。熱で降順ソートした後に
+    // 候補を打ち切る上限が複数箇所(match_identical_factの(None,None)
+    // 自己束縛、match_connected_factの局所スキャン/(None,None)ジョイン)に
+    // 40というマジックナンバーでハードコードされていたのを、CLIから
+    // --heat-cap=Nで一括調整できるフィールドに切り出した(既定は従来通り
+    // 40)。既存の3箇所は全て同じ値を共有してきた経緯があるため、当面は
+    // 分離せず1つのつまみにまとめる。
+    pub heat_cap: usize,
+    // 🌟 同じ提案への対応。「二重自己束縛」定理(有向角の加法性のように
+    // 同じ型への(None,None)自己束縛を2つ以上持つ、または円周角の定理の逆
+    // のように自己束縛の下流に同じtarget_typeのDefinedByペアリングが
+    // ぶら下がる定理)は、自己束縛のcapがそのまま下流の分岐係数(cap×cap)
+    // になるため、通常より大きく絞った専用のcapを使ってきた(既定10)。
+    // --fanout-heat-cap=Nで調整できる。
+    pub fanout_heat_cap: usize,
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>, // 🌟 Blackboardから移動
     // 🌟 「2直線は既にあるが、その交点がまだ図形として存在しない」ことへの
     // 需要。キーは2直線(ソート済み)。construction_demandsと同じ役割を
@@ -472,6 +488,8 @@ impl ProverEngine {
             theorems: Vec::new(),
             dfs_calls: 0,
             dfs_cap: 100_000,
+            heat_cap: 40,
+            fanout_heat_cap: 10,
             construction_demands: FxHashMap::default(), // 🌟 追加
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),
@@ -1143,7 +1161,7 @@ impl ProverEngine {
                 // チェーン全体)の分岐係数になる。こちらも同じcap=10で絞る。
                 let squared_fanout = self_bind_pattern_count >= 2
                     || has_paired_defined_by_fanout(theorem, v1, v2);
-                let max_candidates = if squared_fanout { 10 } else { 40 };
+                let max_candidates = if squared_fanout { self.fanout_heat_cap } else { self.heat_cap };
                 reps.truncate(max_candidates);
                 // 🌟 dep_maskのドキュメント参照。expected_typeが分かっていれば
                 // その型のプールを列挙したことになる。Noneの(稀な)フォール
@@ -1172,15 +1190,14 @@ impl ProverEngine {
     /// 既に入れているのと同じ熱降順cap(=40)を、候補が実際に多い場合に
     /// 限って適用する(少ない場合はソートのコストも省き従来通り全件試す)。
     fn heat_capped_connected_candidates(&self, candidates: rustc_hash::FxHashSet<ClassId>) -> Vec<ClassId> {
-        const MAX_LOCAL_CONNECTED_CANDIDATES: usize = 40;
         let mut v: Vec<ClassId> = candidates.into_iter().collect();
-        if v.len() > MAX_LOCAL_CONNECTED_CANDIDATES {
+        if v.len() > self.heat_cap {
             v.sort_by(|&a, &b| {
                 let ha = self.egraph.entities[a.0].heat();
                 let hb = self.egraph.entities[b.0].heat();
                 hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
             });
-            v.truncate(MAX_LOCAL_CONNECTED_CANDIDATES);
+            v.truncate(self.heat_cap);
         }
         v
     }
@@ -1390,8 +1407,7 @@ impl ProverEngine {
                     // ここにも適用する: 候補が多い場合のみ熱(base_importance+
                     // heat_bonus、両端の合計)で降順ソートしてから絞り、少数の
                     // 場合はこれまで通り全件試す(ソートのコストも省く)。
-                    const MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES: usize = 40;
-                    if pairs.len() <= MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES {
+                    if pairs.len() <= self.heat_cap {
                         for &(c_rep, p_rep) in pairs.iter() {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
@@ -1406,7 +1422,7 @@ impl ProverEngine {
                             let h2 = heat_of(c2) + heat_of(p2);
                             h2.partial_cmp(&h1).unwrap_or(std::cmp::Ordering::Equal)
                         });
-                        ordered.truncate(MAX_CONNECTED_BOTH_UNBOUND_CANDIDATES);
+                        ordered.truncate(self.heat_cap);
                         for (c_rep, p_rep) in ordered {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
