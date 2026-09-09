@@ -229,14 +229,14 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/action_space.rs・src/main.rs</span>
       <span><b>ベンチ</b> 既存24問 + HAGeo-409由来8問 + 単体検証</span>
-      <span><b>最新コミット</b> a242796</span>
+      <span><b>最新コミット</b> d303e6d</span>
     </div>
   </div>
 
   <div class="stats">
     <div class="stat"><div class="n">22</div><div class="l">登録済み定理(射影5定理はopt-in)</div></div>
-    <div class="stat"><div class="n">2/8</div><div class="l">HAGeo-409ベンチ 既定設定でsolved</div></div>
-    <div class="stat"><div class="n">78/96</div><div class="l">32問題×3回集計のベストスコア(3回とも完全一致)</div></div>
+    <div class="stat"><div class="n">3/8</div><div class="l">HAGeo-409ベンチ 既定設定でsolved(+ctstp1が時々)</div></div>
+    <div class="stat"><div class="n">82/96</div><div class="l">32問題×3回集計のベストスコア</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
     <div class="stat"><div class="n">4</div><div class="l">並行して走っている方針トラック(§00)</div></div>
   </div>
@@ -258,8 +258,8 @@
       <div class="entry">
         <div class="when">方針B<span class="sha">マッチング高速化</span></div>
         <div>
-          <div class="headline"><h3>型統合が暗黙にキャッシュ粒度も粗くする問題への対処</h3><span class="pill shipped">78/96まで到達</span></div>
-          <div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。さらにユーザー提案「接続の弱いfailed pathは型に関わらず保持できるはず」を受け、<code>MatchTask::cached_failed_paths</code>の無効化を「定理単位で1つでも型が変われば全滅」から「個々の失敗状態ごとの依存マスク(<code>entity_type_bit</code>)」に細分化(§03参照)し、76/96→<b>78/96、しかも3回とも完全に同一の結果</b>(従来揺れていたnine_point_full/orthocenterが一度も落ちなくなった)まで到達した。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。次の一手はこのマスクをタスクをまたいだグローバルキャッシュに昇格させること(§04参照、未着手)。</div>
+          <div class="headline"><h3>型統合が暗黙にキャッシュ粒度も粗くする問題への対処</h3><span class="pill shipped">82/96まで到達</span></div>
+          <div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。ユーザー提案「接続の弱いfailed pathは型に関わらず保持できるはず」を受け、<code>MatchTask::cached_failed_paths</code>の無効化を「定理単位で1つでも型が変われば全滅」から「個々の失敗状態ごとの依存マスク(<code>entity_type_bit</code>)」に細分化し、さらにタスクをまたいだ永続グローバルキャッシュへ昇格させて76/96→78/96(3回とも完全に同一の結果、従来揺れていたnine_point_full/orthocenterが一度も落ちなくなった)に到達。続けてユーザー提案「熱cap関連のパラメータを調整できないか、行き詰まったら幅を広げる」に基づき、狭い(=速い)<code>fanout_heat_cap</code>から始め手詰まり時だけ段階的に広げる適応的な探索を実装し、<b>82/96</b>まで更新した(§03参照)。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。単一の固定パラメータで複数の問題を同時に最適化しようとすると綱引きが起きる場合、適応的な段階拡張が有効な解決策になりうる。</div>
         </div>
       </div>
 
@@ -528,6 +528,15 @@ flowchart TD
           <div class="headline"><h3>failed_pathsをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格</h3><span class="pill shipped">正誤維持・速度効果は未計測</span></div>
           <div class="desc">前段(81b879e)で「無効化の粒度」は解決したが、キャッシュ自体はまだ<code>MatchTask::cached_failed_paths</code>としてタスク単位の寿命のままだった。診断で判明していた「dfs_matchの再訪問の38%はタスクをまたいだもの(UCB1が同じ定理を新しいtask/新しいbindで何度も試す)」を捕捉するため、<code>state_sig</code>が元々bind内容だけで決まる(特定のタスクインスタンスとは無関係な)ハッシュであることを利用し、<code>ProverEngine::global_failed_paths</code>(theorem_idxで引く永続マップのVec、値は(依存マスク, 挿入時点でのtype_generationスナップショット))へ昇格させた。<code>dfs_match</code>は<code>&mut self</code>を要求するため自分のフィールドを借用したまま再帰できない――<code>run_step</code>側で<code>std::mem::take</code>により一時的に取り出し、呼び出し後に必ず書き戻す(既存のper-task運用と同じ常套手段)。有効性の検証もエントリ挿入時ではなく参照時に都度行う方式に変え、<code>MatchTask</code>の2フィールドとその持ち越しロジックを丸ごと削除できた。</div>
           <div class="evidence"><b>検証:</b> cargo test 40件全パス、32問題×3回集計で78/96・3回とも前段と完全に同一の結果を維持(新規の回帰なし)。<b>注記(§04参照)</b>: この昇格自体が実際にdfs_call消費量をどれだけ削減したかは未計測――今回の検証は「正誤・スコアが変わらないこと」だけを確認しており、当初の診断で見つかった38%という数字がどこまで解消したかは別途<code>--profile</code>等で計測する必要がある。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">5367875 / d303e6d</span></div>
+        <div>
+          <div class="headline"><h3>fanout_heat_capを既定5に下げ、手詰まり時に段階的に広げる適応的な探索へ</h3><span class="pill shipped">82/96・過去最高</span></div>
+          <div class="desc">ユーザー提案「マッチングを熱の上位だけを見るようにしていたパラメータを調整できないか」への対応としてまず<code>heat_cap</code>/<code>fanout_heat_cap</code>(match_identical_fact/match_connected_factが熱降順ソート後に候補を打ち切る上限、従来40/10固定)を<code>--heat-cap=N</code>/<code>--fanout-heat-cap=N</code>で調整可能にし、32問題スイープを行った。<code>fanout_heat_cap</code>を10→5に下げるとbench_2018silkroadp1が安定して速く解けるようになる一方、orthocenter_altが解けなくなるという明確なトレードオフ(5と6の間に鋭い閾値がある)を発見。ユーザー指示「orthocenter altが何が原因で解けなくなったかを見るべき」に従い<code>--stats</code>で診断すると、orthocenter_altはdfs_capに一度も到達しておらず(cap到達0回)、必要な候補が狭いcapでは熱ソート後の上位に入らず<b>最初から候補にすら含まれていない</b>ことが原因で、<code>--time=15</code>でも変わらなかった(時間不足ではなく除外そのものが原因)。1つの固定値では両立しないため、ユーザー提案「行き詰まってきたらだんだん探索の幅を広げる」を実装: 既定は狭い(=速い)cap5から始め、main.rsのメインループで需要駆動の回復が尽きた「本当の手詰まり」の時だけ、MCTS(無方向な探索)に頼るより先に<code>fanout_heat_cap</code>を2倍ずつ広げて同じ決定的な探索をやり直す(<code>FANOUT_HEAT_CAP_CEILING</code>=40まで)。<code>global_failed_paths</code>が既に試した候補の結果を安全に再利用するため、広げても二重に無駄な再探索にはならない。</div>
+          <div class="evidence"><b>検証:</b> 単体確認でorthocenter_altはcap5→10への自動拡張で1.81秒、bench_2018silkroadp1は拡張なし(cap5のまま)で4.23秒、両方とも成功することを確認。cargo test 40件全パス。32問題×3回集計で28,27,27=<b>82/96</b>(直前の78/96を大幅に更新)。orthocenter_alt/bench_2018silkroadp1/bench_2010g1/bench_2011armog10p6/nine_point_full/orthocenterが軒並み解消し、残る失敗はbench_2012egmop1/bench_2018chnwesternmop5/bench_2005usamop3/bench_2011balkanmop1(+時々bench_2005ctstp1)という、本当に新定理・新補題を要する問題群だけになった。</div>
         </div>
       </div>
 
