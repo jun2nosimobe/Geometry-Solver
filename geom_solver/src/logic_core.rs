@@ -113,10 +113,46 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
     set.into_iter().collect()
 }
 
-/// 🌟 ユーザー提案(定理マッチングの最適化・案3)への対応: この定理が
-/// theorem.entitiesで宣言している全ての型を重複無く返す。
-/// MatchTask::cached_failed_pathsの持ち越し可否判定(下のsnapshot_type_generations
-/// と合わせて使う)に使う。
+/// 🌟 探索木キャッシュの型依存追跡(ユーザー提案「新規作図でfailed pathが
+/// 破棄されるのはある程度どうしようもないが、接続が弱い(=特定の型の
+/// プール列挙に依存しない)failed pathは定理によっては保持できるのでは」
+/// への対応)。EntityTypeは4種類しかないため、u8のビットマスク1つで
+/// 「この失敗が実際にどの型のプール列挙に依存したか」を表現できる。
+/// 以前は定理全体が使う型の和集合(theorem_all_types、今は撤去)という
+/// 定理単位の粗い粒度で「1つでも変わったらfailed_paths全体を破棄」して
+/// いたが、これを「個々のキャッシュ済み失敗状態ごとに、実際に依存した
+/// 型だけ」という細かい粒度に変える。Distinct/Order/両方束縛済みの
+/// チェックだけで確定した失敗はどの型のプールも覗いていない(マスク0)ため、
+/// 新規エンティティがいくつ生まれようと永続的に有効であり続ける。
+pub(crate) fn entity_type_bit(t: crate::mmp_core::EntityType) -> u8 {
+    use crate::mmp_core::EntityType::*;
+    match t {
+        Point => 0b0001,
+        Line => 0b0010,
+        Scalar => 0b0100,
+        Conic => 0b1000,
+    }
+}
+/// 🌟 「型が不明なフォールバック」など、依存先を型単位で特定できない
+/// 経路が安全側に倒すときに使う、全型への依存を表すマスク。
+pub(crate) const ALL_TYPES_MASK: u8 = 0b1111;
+/// 🌟 MatchTask再開時に、現在のtype_generationスナップショットを取る
+/// ための固定順序の全型リスト。以前は定理ごとに使う型を絞っていた
+/// (theorem_all_types)が、判定自体を個々のキャッシュ済み失敗状態の
+/// マスク単位に移したことで、スナップショットは常に全4型で十分かつ
+/// 単純になった(4回のHashMapルックアップなので絞る動機自体が薄い)。
+const ALL_ENTITY_TYPES: [crate::mmp_core::EntityType; 4] = [
+    crate::mmp_core::EntityType::Point,
+    crate::mmp_core::EntityType::Line,
+    crate::mmp_core::EntityType::Scalar,
+    crate::mmp_core::EntityType::Conic,
+];
+
+/// 🌟 指定した型それぞれについて、現在のEGraph::type_generationの値を
+/// 記録したスナップショットを作る。MatchTaskがdfs_cap到達で再キューされる
+/// 際にこれを保存しておき、再開時に現在値と比較することで、「この型で
+/// キャッシュ時点以降に変化(マージ・新規生成・接続関係の追加・memoの
+/// 事後登録のいずれか)が起きたか」を判定する。
 ///
 /// 🌟 この判定が安全であるための前提(mmp_core::EGraph::type_generationの
 /// ドキュメント参照): e-graphの生の構造フィールド(components/subobjects/
@@ -129,20 +165,8 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
 /// 見落としで複数のベンチマーク問題が回帰したことがある。今後EGraphに
 /// 新しい構造変更手段を追加する際は、必ずこの4つのゲートウェイのどれかを
 /// 経由するか、新規に追加してnote_type_changedを呼ぶこと。
-fn theorem_all_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType> {
-    let mut set: std::collections::HashSet<crate::mmp_core::EntityType> = std::collections::HashSet::new();
-    for &t in theorem.entities.values() { set.insert(t); }
-    set.into_iter().collect()
-}
-
-/// 🌟 指定した型それぞれについて、現在のEGraph::type_generationの値を
-/// 記録したスナップショットを作る。MatchTaskがdfs_cap到達で再キューされる
-/// 際にこれを保存しておき、再開時に現在値と比較することで、「この定理が
-/// 使う型のどれかで、キャッシュ時点以降に変化(マージ・新規生成・接続関係の
-/// 追加・memoの事後登録のいずれか)が起きたか」を判定する(1つでも変わって
-/// いれば安全側に倒してfailed_pathsを空から作り直す)。
-fn snapshot_type_generations(egraph: &EGraph, types: &[crate::mmp_core::EntityType]) -> Vec<(crate::mmp_core::EntityType, u64)> {
-    types.iter().map(|&t| (t, egraph.type_generation.get(&t).copied().unwrap_or(0))).collect()
+fn snapshot_type_generations(egraph: &EGraph) -> [u64; 4] {
+    std::array::from_fn(|i| egraph.type_generation.get(&ALL_ENTITY_TYPES[i]).copied().unwrap_or(0))
 }
 
 fn get_permutations(items: &[ClassId]) -> Vec<Vec<ClassId>> {
@@ -246,13 +270,8 @@ pub struct MatchTask {
     // ほぼ失敗する定理」の見込みスコアを不当に引き上げてしまう)。
     pub is_seeded: bool,
     // 🌟 failed_pathsの持ち越し: dfs_cap到達でこのタスクが再キューされた
-    // 時点でのdfs_match失敗状態キャッシュと、その時点でのこの定理が使う
-    // 型ごとのEGraph::type_generationのスナップショット(snapshot_type_generations
-    // 参照)。再度popされた時に、記録した型のどれか1つでもtype_generationが
-    // 変わっていれば(=このタスクが中断されて以降、この定理が使う型のどれかで
-    // e-graphに変化が起きていれば)安全側に倒して空のfailed_pathsから再開し、
-    // 1つも変わっていなければそのまま再利用して既に探索済みの行き止まりを
-    // 再訪しない。
+    // 時点でのdfs_match失敗状態キャッシュと、その時点でのEGraph::type_generation
+    // の全型スナップショット(snapshot_type_generations参照)。
     //
     // 🐛 以前はEGraph::merge_generationという単一のグローバルカウンタで
     // 「e-graphのどこかで1回でも変化が起きたか」だけを見ていたため、
@@ -267,11 +286,23 @@ pub struct MatchTask {
     // ドキュメント参照)。生の構造フィールドへの書き込みをEGraph側の
     // 4つのゲートウェイに集約したことで、この不変条件が構造的に保たれる
     // ようにしてから再導入している。
+    //
+    // 🌟 ユーザー提案(接続の弱いfailed pathは型に関わらず保持できるはず)
+    // への対応: 以前は「この定理が使う型のどれか1つでも変わったら
+    // cached_failed_paths全体を空にする」という定理単位の粗い判定
+    // だったが、それだと『新規作図のたびにこのタスクの学習が全て
+    // 消える』のがほぼ避けられなかった。今は各キャッシュ済み失敗状態
+    // (u64のstate_sig)に「実際にどの型のプール列挙に依存したか」という
+    // u8ビットマスク(entity_type_bit参照)を紐付けて保存する――
+    // Distinct/Order/両方束縛済みのチェックだけで確定した失敗はマスクが
+    // 0になり、新規エンティティがいくつ生まれようと型を問わず永続的に
+    // 再利用できる。再開時の判定はdfs_match呼び出し直前で行う(値を
+    // エントリごとに選別してから渡す)。
     // 新規タスク(schedule_full_sweep/schedule_matcher_task由来)は生成時点の
     // スナップショットを持って空のcached_failed_pathsから始まる(比較して
     // 一致しても中身が空なので実質的な違いはない)。
-    pub cached_failed_paths: rustc_hash::FxHashSet<u64>,
-    pub failed_paths_type_gens: Vec<(crate::mmp_core::EntityType, u64)>,
+    pub cached_failed_paths: rustc_hash::FxHashMap<u64, u8>,
+    pub failed_paths_type_gens: [u64; 4],
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
@@ -759,13 +790,25 @@ impl ProverEngine {
         true
     }
 
+    /// 🌟 dep_mask引数のドキュメント参照(entity_type_bit/ALL_TYPES_MASK、
+    /// mod冒頭)。「呼び出し元が本来欲しいのは戻り値」だが全ての中間関数
+    /// (match_fact_pattern以下)のシグネチャを戻り値ありに変えるのは
+    /// 侵襲が大きいため、代わりに末尾の&mut u8引数として同じ情報を運ぶ。
+    /// 各呼び出しは以下の規約を守る:
+    ///   1. 受け取ったdep_maskは「呼び出し元(親)が集計したい先」を指す。
+    ///   2. 自分自身の探索(このstate_sig1つ分)にはローカルなmy_maskを
+    ///      新たに作り、子への再帰呼び出しにはdep_maskではなく&mut my_mask
+    ///      を渡す(自分の探索に閉じた集計にするため)。
+    ///   3. 末尾で、matched_anyがfalseならfailed_pathsにmy_maskを添えて
+    ///      記録し、成功/失敗を問わずmy_maskを親のdep_maskへORして返す。
     pub fn dfs_match(
         &mut self,
         theorem: &TheoremDef,
         remaining: Rc<Vec<Pattern>>,
         bind: Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>, // 🌟 追加
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         self.dfs_calls += 1;
@@ -775,14 +818,14 @@ impl ProverEngine {
         let state_sig = {
             let mut hasher = rustc_hash::FxHasher::default();
             remaining.len().hash(&mut hasher);
-            
+
             let mut pairs: Vec<_> = bind.iter().collect();
             pairs.sort_unstable_by_key(|k| k.0);
             for (k, v) in pairs {
                 k.hash(&mut hasher);
                 self.egraph.get_rep(*v).0.hash(&mut hasher);
             }
-            
+
             // 🌟 FIX: フリップ状態もハッシュに含めないと、向き違いの正当な探索が枝刈りされてしまう
             let mut flips: Vec<_> = flip_states.iter().collect();
             flips.sort_unstable_by_key(|k| k.0);
@@ -790,11 +833,17 @@ impl ProverEngine {
                 k.hash(&mut hasher);
                 v.hash(&mut hasher);
             }
-            
+
             hasher.finish()
         };
 
-        if failed_paths.contains(&state_sig) { return; }
+        // 🌟 キャッシュヒット時も、そのエントリが実際に依存していた型
+        // マスクを呼び出し元へ伝播する(呼び出し元がさらに失敗して
+        // キャッシュされる場合に、この部分木の依存を正しく引き継ぐため)。
+        if let Some(&cached_mask) = failed_paths.get(&state_sig) {
+            *dep_mask |= cached_mask;
+            return;
+        }
 
         if remaining.is_empty() {
             for (v_name, id) in &bind {
@@ -829,6 +878,9 @@ impl ProverEngine {
             Rc::new(owned)
         };
         let mut matched_any = false;
+        // 🌟 このstate_sig(このdfs_match呼び出し1回分)の探索が実際に
+        // 依存した型の集計。子への再帰にはdep_maskではなくこちらを渡す。
+        let mut my_mask: u8 = 0;
 
         // クロージャをラップして、1度でもマッチしたかを記録する
         let mut wrapped_on_match = |b: &Bind, f: &FlipStates| {
@@ -844,7 +896,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 >= self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
-                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
+                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             // 🌟 Pattern::OrderNonStrictのドキュメント参照。Orderとの違いは
             // "<"ではなく"<="(等しい場合は許可)で判定する点のみ。
@@ -855,7 +907,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 > self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
-                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
+                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Distinct(vars) => {
                 let mut unique_ids = rustc_hash::FxHashSet::default();
@@ -866,26 +918,33 @@ impl ProverEngine {
                         if !unique_ids.insert(rep_id.0) { is_distinct = false; break; }
                     }
                 }
-                if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match); }
+                if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Fact(def) => {
-                self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, flip_states, failed_paths, &mut wrapped_on_match);
+                self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
             }
             Pattern::Not(inner_pat) => {
                 let mut inner_matched = false;
-                self.dfs_match(theorem, Rc::new(vec![*inner_pat.clone()]), bind.clone(), flip_states.clone(), failed_paths, &mut |_, _| {
+                self.dfs_match(theorem, Rc::new(vec![*inner_pat.clone()]), bind.clone(), flip_states.clone(), failed_paths, &mut my_mask, &mut |_, _| {
                     inner_matched = true;
                 });
                 if !inner_matched {
-                    self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut wrapped_on_match);
+                    self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
                 }
             }
         }
 
         // 🌟 どこにも進めなかった場合、この状態を失敗として記録する
+        // (実際に依存した型マスクmy_maskを添えて――Distinct/Order/両方
+        // 束縛済みのチェックだけで確定した失敗はmy_mask=0のままなので、
+        // 型がいくつ変化しても永続的に有効なエントリとして残る)。
         if !matched_any {
-            failed_paths.insert(state_sig);
+            failed_paths.insert(state_sig, my_mask);
         }
+        // 🌟 成功・失敗を問わず、この部分木が触れた型を呼び出し元(親)へ
+        // 伝播する。親が(この呼び出しとは別の枝の失敗を含めて)最終的に
+        // 失敗してfailed_pathsに記録する際、この情報も正しく合算される。
+        *dep_mask |= my_mask;
     }
     /// 🌟 match_fact_pattern はfact_typeごとの処理を振り分けるだけの薄いディスパッチャ。
     /// 以前はこの関数自体が360行あり(Identical/Connected/DefinedBy/汎用の4種の
@@ -898,14 +957,15 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         match def.fact_type.as_str() {
-            "Identical" => self.match_identical_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
-            "Connected" => self.match_connected_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
-            "DefinedBy" => self.match_defined_by_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
-            _ => self.match_generic_fact(theorem, def, remaining, bind, flip_states, failed_paths, on_match),
+            "Identical" => self.match_identical_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
+            "Connected" => self.match_connected_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
+            "DefinedBy" => self.match_defined_by_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
+            _ => self.match_generic_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
         }
     }
 
@@ -918,7 +978,8 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         let v1 = &def.args[0];
@@ -926,18 +987,25 @@ impl ProverEngine {
         let expected_type = theorem.entities.get(v1).copied(); // 🌟 型情報取得
 
         match (bind.get(v1).copied(), bind.get(v2).copied()) {
+            // 🌟 dep_maskのドキュメント参照(dfs_match)。両方束縛済み/片方だけ
+            // 束縛済みの分岐は、既に束縛済みの代表元を直接見るだけで
+            // どの型のプールも列挙しないため、依存マスクを一切追加しない
+            // (=dep_maskをそのまま子に渡す、new my_maskを作らない)。
             (Some(id1), Some(id2)) => {
                 if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
-                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
+                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             (Some(id), None) | (None, Some(id)) => {
                 let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
                 let mut next_bind = bind.clone();
                 next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
-                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
             }
             (None, None) => {
+                // 🌟 dep_maskのドキュメント参照。ここから先は「型のプールを
+                // 列挙する」分岐なので、実際に問い合わせた型をdep_maskへ
+                // 記録する(全ての候補に対する再帰呼び出しで共有する)。
                 // 🐛 移植バグ修正: 以前はここで「同じ代表元(=既にマージ済み)を持つ
                 // 異なる ClassId のペア」を全列挙しており、1つの等価クラスに
                 // N個のエンティティが吸収されていると N*(N-1) 通りに爆発していた
@@ -1063,11 +1131,19 @@ impl ProverEngine {
                     || has_paired_defined_by_fanout(theorem, v1, v2);
                 let max_candidates = if squared_fanout { 10 } else { 40 };
                 reps.truncate(max_candidates);
+                // 🌟 dep_maskのドキュメント参照。expected_typeが分かっていれば
+                // その型のプールを列挙したことになる。Noneの(稀な)フォール
+                // バックは全エンティティを舐めるので安全側に倒して全型を
+                // 依存対象にする。
+                *dep_mask |= match expected_type {
+                    Some(et) => entity_type_bit(et),
+                    None => ALL_TYPES_MASK,
+                };
                 for rep in reps {
                     let mut next_bind = bind.clone();
                     next_bind.insert(v1.clone(), rep);
                     next_bind.insert(v2.clone(), rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
         }
@@ -1119,7 +1195,8 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         use crate::mmp_core::EntityType;
@@ -1159,13 +1236,30 @@ impl ProverEngine {
         };
 
         match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
+            // 🐛 実装時に見落としかけたバグ: match_identical_factの(Some,Some)と
+            // 違い、こちらはis_connected(=incidenceという、state_sigのハッシュ
+            // (bindの値=代表元IDだけ)には含まれない"追加の状態")を見ている。
+            // 同じ2つの代表元のまま、後からlink_logical_incidenceで新たに
+            // 接続されると(それ自体はマージではないのでstate_sigは変わらない)、
+            // この判定結果は変わり得る。link_logical_incidenceは接続する
+            // 両実体の型を必ずnote_type_changedするので、その型を依存対象に
+            // しておけば正しく無効化できる。
             (Some(c_id), Some(p_id)) => {
+                let c_type = self.egraph.entities[self.egraph.get_rep(c_id).0].entity_type;
+                let p_type = self.egraph.entities[self.egraph.get_rep(p_id).0].entity_type;
+                *dep_mask |= entity_type_bit(c_type) | entity_type_bit(p_type);
                 // 🌟 FIX
                 if self.egraph.is_connected(c_id, p_id) {
-                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, on_match);
+                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             (Some(c_id), None) => {
+                // 🌟 dep_maskのドキュメント参照。このローカルスキャンはc_repに
+                // 実際に繋がっている候補をexpected_p_typeで絞り込むので、
+                // 新たにその型の実体がc_repへ接続されると結果が変わりうる
+                // (link_logical_incidenceは接続する両実体の型を必ずnote_type_
+                // changedするので、これで正しく捕捉できる)。型が不明なら
+                // 安全側に倒して全型に依存するとみなす。
                 // 🌟 最適化: 以前はここが「全エンティティを舐めてis_connectedで
                 // 判定する」O(全エンティティ数)の総当たりになっていた
                 // ((None, Some(p_id))側の分岐は既にp_rep自身のsubobjectsだけを
@@ -1195,12 +1289,17 @@ impl ProverEngine {
                 // (None,None)分岐に加えたのと同じ熱降順cap(=40)を、候補が
                 // 実際に多い場合に限って適用する(heat_capped_connected_
                 // candidatesのドキュメント参照)。
+                *dep_mask |= match expected_p_type {
+                    Some(et) => entity_type_bit(et),
+                    None => ALL_TYPES_MASK,
+                };
                 for p_rep in self.heat_capped_connected_candidates(candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(parent_var.clone(), p_rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
+            // 🌟 dep_maskのドキュメント参照。(Some,None)と対称。
             (None, Some(p_id)) => {
                 let p_rep = self.egraph.get_rep(p_id);
                 let mut child_candidates = rustc_hash::FxHashSet::default();
@@ -1214,10 +1313,14 @@ impl ProverEngine {
                 child_candidates.retain(|&c_rep| {
                     expected_c_type.map_or(true, |et| accept_point(&self.egraph, c_rep, et, wants_child_direction, wants_child_circle))
                 });
+                *dep_mask |= match expected_c_type {
+                    Some(et) => entity_type_bit(et),
+                    None => ALL_TYPES_MASK,
+                };
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(child_var.clone(), c_rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             // 🐛 FIX: 以前は子・親どちらも未束縛の場合に何もせず候補ゼロで
@@ -1234,6 +1337,13 @@ impl ProverEngine {
                 // 共有できる。両方の型が分かっている(ほぼ全ての定理で
                 // そうである)場合のみキャッシュを使い、型が不明な稀な
                 // フォールバックでは従来通りのフルスキャンを行う。
+                // 🌟 dep_maskのドキュメント参照。以下の全ての分岐(型が既知の
+                // キャッシュ済みジョイン/型不明のフルスキャン)がここで
+                // プールを列挙するので、まとめて記録する。
+                *dep_mask |= match (expected_c_type, expected_p_type) {
+                    (Some(ct), Some(pt)) => entity_type_bit(ct) | entity_type_bit(pt),
+                    _ => ALL_TYPES_MASK,
+                };
                 if let (Some(ct), Some(pt)) = (expected_c_type, expected_p_type) {
                     let raw_pairs = self.connected_pairs_for_types(ct, pt);
                     // 🌟 connected_pairs_for_typesは(child_type, parent_type)の
@@ -1272,7 +1382,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     } else {
                         let mut ordered: Vec<(ClassId, ClassId)> = (*pairs).clone();
@@ -1287,7 +1397,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
                 } else {
@@ -1326,7 +1436,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, on_match);
+                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
                 }
@@ -1345,7 +1455,8 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         let target_type = def.target_type.as_deref().unwrap_or("");
@@ -1353,7 +1464,7 @@ impl ProverEngine {
         let parent_vars = &def.args[0..def.args.len() - 1];
         let expected_r_type = theorem.entities.get(result_var).copied();
 
-        let valid_nodes = self.defined_by_valid_nodes(target_type, result_var, parent_vars, expected_r_type, bind);
+        let valid_nodes = self.defined_by_valid_nodes(target_type, result_var, parent_vars, expected_r_type, bind, dep_mask);
         let mut matches = self.defined_by_collect_matches(def, target_type, parent_vars, result_var, &valid_nodes, bind, &flip_states);
 
         if matches.is_empty() && target_type == "LineThroughPoints" && parent_vars.len() == 2 {
@@ -1464,7 +1575,7 @@ impl ProverEngine {
             format!("{:?}", keys)
         });
         for (new_bind, new_flip) in matches {
-            self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, on_match);
+            self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, dep_mask, on_match);
         }
     }
 
@@ -1479,14 +1590,32 @@ impl ProverEngine {
         parent_vars: &[String],
         expected_r_type: Option<EntityType>,
         bind: &Bind,
+        dep_mask: &mut u8,
     ) -> Vec<ClassId> {
         let mut valid_nodes = Vec::new();
 
+        // 🐛 実装時に見落としかけたバグ(match_connected_factの(Some,Some)と
+        // 同種): この候補は「res_idという特定の1実体」を直接見るだけに
+        // 見えるが、defined_by_collect_matches側がres_idのcomponents[0].
+        // definitions(target_typeの定義を実際に持つか)を検証する。
+        // GeoEntity::componentsは生成時にしか新規の定義を追加されず、
+        // 唯一の例外はmerge_entitiesが吸収した側の定義を合流させる場合
+        // ――つまりres_idが後から(同じEntityType同士としか併合されない)
+        // 別の実体とマージされると、新しく目的の定義を獲得しうる。
+        // res_idの型を依存対象にしておけば正しく無効化できる。
         if let Some(&res_id) = bind.get(result_var) {
-            valid_nodes.push(self.egraph.get_rep(res_id));
+            let res_rep = self.egraph.get_rep(res_id);
+            *dep_mask |= entity_type_bit(self.egraph.entities[res_rep.0].entity_type);
+            valid_nodes.push(res_rep);
         }
         // 🌟 FIX: *v ではなく v をそのまま渡す
         else if parent_vars.iter().all(|v| bind.contains_key(v)) {
+            // 🌟 dep_maskのドキュメント参照。この枝は「(全親から決まる)この
+            // 正確なDefinitionを持つ実体が既に存在するか」を見る。無ければ
+            // 生成する(ホワイトリスト対象)か諦めるかのどちらだが、いずれの
+            // 結果も「結果の型に新しい実体が現れたかどうか」に依存するため、
+            // 結果の型を依存対象とする(型が不明な場合だけ安全側に倒す)。
+            *dep_mask |= expected_r_type.map(entity_type_bit).unwrap_or(ALL_TYPES_MASK);
             let parent_ids: Vec<ClassId> = parent_vars.iter().map(|v| self.egraph.get_rep(bind[v])).collect();
 
             // 🌟 FIX: 全ての DefinedBy 対象型を網羅する
@@ -1631,6 +1760,9 @@ impl ProverEngine {
         // 真に有効な結果ノードは必ずanchorを親の1つとして持つ(=create_entity
         // 時にanchorのusesへ登録済み)ため、この絞り込みは取りこぼしが起きない。
         else if let Some(&anchor_raw) = parent_vars.iter().find_map(|v| bind.get(v)) {
+            // 🌟 dep_maskのドキュメント参照。anchorのusesは新しい結果型の
+            // 実体がanchorを親として作られるたびに増える。
+            *dep_mask |= expected_r_type.map(entity_type_bit).unwrap_or(ALL_TYPES_MASK);
             let anchor = self.egraph.get_rep(anchor_raw);
             let mut seen = rustc_hash::FxHashSet::default();
             for &used_id in &self.egraph.entities[anchor.0].uses {
@@ -1648,9 +1780,11 @@ impl ProverEngine {
         // type_index経由でその型の代表元だけを引く(理由は
         // match_identical_fact/match_connected_factの(None,None)分岐と同じ)。
         else if let Some(et) = expected_r_type {
+            *dep_mask |= entity_type_bit(et);
             let cached = self.defined_by_type_scan_candidates(et);
             valid_nodes.extend(cached.iter().copied());
         } else {
+            *dep_mask |= ALL_TYPES_MASK;
             for i in 0..self.egraph.entities.len() {
                 let id = ClassId(i);
                 if self.egraph.get_rep(id) == id {
@@ -1766,9 +1900,15 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashSet<u64>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
+        // 🌟 dep_maskのドキュメント参照(dfs_match)。ここはself.facts(任意の
+        // fact_typeを持ち得る、動的に増減する事実ストア)を舐める稀な
+        // フォールバック経路で、依存先を型単位で正確に特定できないため
+        // 安全側に倒して全型に依存するとみなす。
+        *dep_mask |= ALL_TYPES_MASK;
         let mut matches = Vec::new();
         for fact in &self.facts {
             matches.extend(self.get_fact_bindings(theorem, fact, &def.fact_type, &def.args, bind));
@@ -1791,7 +1931,7 @@ impl ProverEngine {
         });
 
         for new_bind in matches {
-            self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, on_match);
+            self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
         }
     }
 
@@ -2211,8 +2351,8 @@ impl BlackboardEngine {
                 flip_states: FlipStates::default(),
                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
-                cached_failed_paths: rustc_hash::FxHashSet::default(),
-                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph, &theorem_all_types(theorem)),
+                cached_failed_paths: rustc_hash::FxHashMap::default(),
+                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph),
             });
             self.prover.profile.sfs_tasks_created += 1;
         }
@@ -2257,8 +2397,8 @@ impl BlackboardEngine {
                                 flip_states: FlipStates::default(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                                 is_seeded: true,
-                                cached_failed_paths: rustc_hash::FxHashSet::default(),
-                                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph, &theorem_all_types(theorem)),
+                                cached_failed_paths: rustc_hash::FxHashMap::default(),
+                                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph),
                             });
                         }
                     }
@@ -2325,32 +2465,37 @@ impl BlackboardEngine {
                 // 変わり、古いハッシュが別の状態を指し得るため)安全側に倒して
                 // 空から作り直す。
                 //
-                // 🌟 ユーザー提案(定理マッチングの最適化・案3)への対応: 以前は
-                // EGraph::merge_generationという単一のグローバルカウンタで
-                // 「e-graphのどこかで1回でも変化が起きたか」だけを見ていた
-                // ため、この定理が全く使わない型どうしの変化(例: 円の
-                // 一意性統合)でも無関係にキャッシュ全体を捨てていた。この定理の
-                // theorem_all_typesに絞った型ごとのtype_generationスナップショット
-                // (snapshot_type_generations)で比較することで、無関係な型の
-                // 変化頻度が高い問題ほどキャッシュの生存率が上がるようにした
-                // (この判定が安全であるための前提はEGraph::type_generationの
-                // ドキュメント参照――生の構造変更を4つのゲートウェイに
-                // 集約してから導入している)。
-                let theorem_types = theorem_all_types(&theorem);
-                let types_unchanged = task.failed_paths_type_gens.iter()
-                    .all(|&(t, saved_gen)| self.prover.egraph.type_generation.get(&t).copied().unwrap_or(0) == saved_gen);
-                let mut failed_paths = if types_unchanged {
-                    std::mem::take(&mut task.cached_failed_paths)
-                } else {
-                    rustc_hash::FxHashSet::default()
-                };
+                // 🌟 ユーザー提案(「新規作図でfailed pathが破棄されるのは
+                // ある程度どうしようもないが、接続の弱いfailed pathは型に
+                // 関わらず保持できるはず」)への対応: 以前は定理単位の粗い
+                // 判定(この定理が使う型のどれか1つでも変わったら
+                // cached_failed_paths全体を空にする)だったが、それだと
+                // 新規作図のたびに学習が丸ごと消えるのがほぼ避けられなかった。
+                // 今は個々のキャッシュ済み失敗状態ごとに保存されたu8依存
+                // マスク(entity_type_bit参照、Distinct/Order/両方束縛済みの
+                // チェックだけで確定した失敗はマスク0=永続的に有効)を見て、
+                // 「そのエントリが実際に依存した型」だけが変化したかどうかで
+                // 個別に選別する――全滅させず、無関係な型の変化なら生き残る。
+                let cur_gens = snapshot_type_generations(&self.prover.egraph);
+                let old_gens = task.failed_paths_type_gens;
+                let mut failed_paths: rustc_hash::FxHashMap<u64, u8> = std::mem::take(&mut task.cached_failed_paths)
+                    .into_iter()
+                    .filter(|&(_, mask)| {
+                        // 🌟 entity_type_bitはALL_ENTITY_TYPESと同じ並び(Point=bit0,
+                        // Line=bit1, Scalar=bit2, Conic=bit3)で単調に割り当てている
+                        // ので、ビット位置iはそのままsnapshot配列の添字iに対応する。
+                        (0..4).all(|i| (mask & (1 << i)) == 0 || old_gens[i] == cur_gens[i])
+                    })
+                    .collect();
 
+                let mut dep_mask: u8 = 0;
                 self.prover.dfs_match(
                     &theorem,
                     task.remaining_patterns.clone(), // Rc なのでポインタコピーのみ
-                    task.bind.clone(), 
-                    task.flip_states.clone(), 
+                    task.bind.clone(),
+                    task.flip_states.clone(),
                     &mut failed_paths,
+                    &mut dep_mask,
                     &mut |bind, flips| {
                         new_binds.push((bind.clone(), flips.clone()));
                     }
@@ -2385,7 +2530,7 @@ impl BlackboardEngine {
                             // スナップショットを保存する(再開条件のチェックは
                             // このブロックの直前を参照)。
                             task.cached_failed_paths = failed_paths;
-                            task.failed_paths_type_gens = snapshot_type_generations(&self.prover.egraph, &theorem_types);
+                            task.failed_paths_type_gens = snapshot_type_generations(&self.prover.egraph);
                             self.task_queue.push(task);
                         }
                     }
