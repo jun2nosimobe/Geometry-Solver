@@ -626,9 +626,45 @@ impl EGraph {
         // の対象にする――これは不健全化ではなく、むしろより正確な扱いになる
         // (F自身の座標はどのみちline_ab上に拘束されるべきものなので)。
         match Self::canonical_shape_definition(&curve_defs) {
-            Some(def) => def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep),
-            None => false,
+            Some(def) if def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep) => return true,
+            _ => {}
         }
+        // 🌟 ユーザー指摘への対応: pointが直接の親でなくても、curveの
+        // (canonicalな)定義を辿った先の祖先にpoint自身が現れる場合も
+        // 自然な接続として扱う。この場合、pointが「curveの上にある」という
+        // 事実はpointの真の(自由な)位置さえ決まればcurveの構築を通じて
+        // 自動的に成り立つ帰結であり、それを独立した追加の制約として
+        // sample_point_on_constraintに満たさせようとする必要はない――
+        // そもそもcurve自身の評価がpointの値に依存するため、制約として
+        // 扱うと必ず循環依存になり、assign_free_point_coordsが解決不能
+        // (false)に陥って以後のnumeric_plausibility_checkを全滅させる
+        // (実測: orthocenterで、三角形の頂点Aが「円周角の定理の逆」に
+        // よって後から円に接続され、その円自体がAから作られていたため、
+        // 以後ずっと数値健全性チェックがNone=判定不能になり、本来
+        // 数値的に却下すべき誤った二次曲線の結合を素通りさせていた)。
+        let mut visited = HashSet::new();
+        self.point_is_ancestor_of_curve(point_rep, curve_rep, &mut visited)
+    }
+
+    /// 🌟 is_natural_incidenceのドキュメント参照。point_repがcurve(の
+    /// canonicalな定義)を根から辿った祖先に含まれるかどうかを判定する。
+    /// canonical_shape_definitionが無い(2引数以上の定義を持たない)
+    /// 場合だけ、安全側に倒して持っている定義全てを辿る――そのような
+    /// 定義は複数の生成経路が合流して曖昧になる心配自体が無いため
+    /// (is_natural_incidenceの「いずれか」判定バグとは別種)。
+    fn point_is_ancestor_of_curve(&self, point_rep: ClassId, of: ClassId, visited: &mut HashSet<usize>) -> bool {
+        let of_rep = self.get_rep(of);
+        if of_rep == point_rep { return true; }
+        if !visited.insert(of_rep.0) { return false; }
+        let defs = match self.entities[of_rep.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => return false,
+        };
+        let parents: Vec<ClassId> = match Self::canonical_shape_definition(&defs) {
+            Some(def) => def.get_parents(),
+            None => defs.iter().flat_map(|d| d.get_parents()).collect(),
+        };
+        parents.iter().any(|&p| self.point_is_ancestor_of_curve(point_rep, p, visited))
     }
 
     /// 🌟 is_natural_incidenceのための決定論的な選択: 複数のdefinitionsが
