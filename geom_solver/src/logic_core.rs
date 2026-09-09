@@ -269,40 +269,13 @@ pub struct MatchTask {
     // 別種の試行なので、混ぜると「シードでよく呼ばれるが素の全探索では
     // ほぼ失敗する定理」の見込みスコアを不当に引き上げてしまう)。
     pub is_seeded: bool,
-    // 🌟 failed_pathsの持ち越し: dfs_cap到達でこのタスクが再キューされた
-    // 時点でのdfs_match失敗状態キャッシュと、その時点でのEGraph::type_generation
-    // の全型スナップショット(snapshot_type_generations参照)。
-    //
-    // 🐛 以前はEGraph::merge_generationという単一のグローバルカウンタで
-    // 「e-graphのどこかで1回でも変化が起きたか」だけを見ていたため、
-    // 例えば円の一意性統合によるCircle-Circleのマージが、点・直線・角度
-    // しか使わない定理のキャッシュまで無関係に巻き添えで捨てていた
-    // (HAGeo-409ベンチマークでの調査で判明)。型ごとに独立してカウンタを
-    // 持たせることで、このタスク自身が実際に依存する型の変化だけを
-    // 見て判定できるようにした――ただし、これが安全であるためには
-    // EGraph側で「マッチングに影響し得る構造変更が漏れなくtype_generationを
-    // 更新する」という不変条件が必須で、実際に最初の実装では見落としが
-    // あり複数のベンチマーク問題で回帰した(EGraph::type_generationの
-    // ドキュメント参照)。生の構造フィールドへの書き込みをEGraph側の
-    // 4つのゲートウェイに集約したことで、この不変条件が構造的に保たれる
-    // ようにしてから再導入している。
-    //
-    // 🌟 ユーザー提案(接続の弱いfailed pathは型に関わらず保持できるはず)
-    // への対応: 以前は「この定理が使う型のどれか1つでも変わったら
-    // cached_failed_paths全体を空にする」という定理単位の粗い判定
-    // だったが、それだと『新規作図のたびにこのタスクの学習が全て
-    // 消える』のがほぼ避けられなかった。今は各キャッシュ済み失敗状態
-    // (u64のstate_sig)に「実際にどの型のプール列挙に依存したか」という
-    // u8ビットマスク(entity_type_bit参照)を紐付けて保存する――
-    // Distinct/Order/両方束縛済みのチェックだけで確定した失敗はマスクが
-    // 0になり、新規エンティティがいくつ生まれようと型を問わず永続的に
-    // 再利用できる。再開時の判定はdfs_match呼び出し直前で行う(値を
-    // エントリごとに選別してから渡す)。
-    // 新規タスク(schedule_full_sweep/schedule_matcher_task由来)は生成時点の
-    // スナップショットを持って空のcached_failed_pathsから始まる(比較して
-    // 一致しても中身が空なので実質的な違いはない)。
-    pub cached_failed_paths: rustc_hash::FxHashMap<u64, u8>,
-    pub failed_paths_type_gens: [u64; 4],
+    // 🌟 failed_pathsは、以前はここ(MatchTask)にタスク単位の寿命で
+    // 持たせていたが、docs/atlas.html §04-#3「タスクをまたいだグローバル
+    // 化」への対応でProverEngine::global_failed_paths(theorem_idxで引く
+    // 永続マップ)に昇格した。UCB1がschedule_full_sweepのたびに同じ定理を
+    // 新しいtask/新しいbindで何度も試す(診断計測で判明した再訪問の主因)
+    // ケースも、こちらならタスクをまたいで共有キャッシュとして機能する。
+    // MatchTask自身はもうfailed_pathsを一切保持しない。
 }
 
 impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
@@ -437,6 +410,23 @@ pub struct ProverEngine {
     // base_importance>0.0のフィルタをかけているのに対し、この分岐は
     // フィルタなしで全代表元を返す(既存の挙動を変えないための別キャッシュ)。
     pub defined_by_full_scan_cache: FxHashMap<crate::mmp_core::EntityType, (Rc<Vec<ClassId>>, u64)>,
+    // 🌟 ユーザー提案(「探索木のメモ化」の続き、docs/atlas.html §04-#3
+    // 参照)への対応: 以前はMatchTask::cached_failed_pathsという
+    // タスク単位の寿命でfailed_pathsを持ち越していたため、UCB1が同じ
+    // 定理をschedule_full_sweepのたびに新しいtask/新しいbindで何度も
+    // 試す(診断計測で判明した「dfs_matchの再訪問の38%がタスクをまたぐ」
+    // 主因)ケースを一切捕捉できなかった。state_sig(dfs_match参照)は
+    // 元々「このタスクのbind内容+flip状態」だけで決まる内容ベースの
+    // ハッシュで、特定のMatchTaskインスタンスとは無関係だったため、
+    // これをtheorem_idxごとの永続マップに昇格させるだけで、同じ定理への
+    // 異なるタスクからの再訪問もそのまま共有キャッシュとして機能する。
+    // 無効化はもうタスク単位の一括判定ではなく、エントリ自身が持つ
+    // (mask, 挿入時の型generationスナップショット)を参照時に個別検証する
+    // 方式(u8依存マスクの細分化と同じ発想をタスクをまたいで適用しただけ)。
+    // 値の(u8, [u64;4])は(依存マスク, その時点でのALL_ENTITY_TYPES順の
+    // type_generationスナップショット)――マスクが立っている型だけを
+    // 比較すればよい。
+    pub global_failed_paths: Vec<rustc_hash::FxHashMap<u64, (u8, [u64; 4])>>,
     // 🌟 ユーザー提案(「schedule_full_sweepの改善を続ける」)への対応: 2度の
     // 撤回(DefinedBy遅延構築・スケジューラ精密化)がいずれも「schedule_
     // full_sweepが重いはず」という推測から出発し、実測せずに手を入れて
@@ -491,7 +481,17 @@ impl ProverEngine {
             identical_self_bind_angle_cache: None,
             identical_self_bind_plain_scalar_cache: None,
             defined_by_full_scan_cache: FxHashMap::default(),
+            global_failed_paths: Vec::new(),
             profile: ProfileStats::default(),
+        }
+    }
+
+    /// 🌟 global_failed_pathsのドキュメント参照。theorem_stats/theorem_
+    /// required_typesと同じ「theoremsが確定してから初めて呼ばれた時点で
+    /// theorems.len()に合わせて遅延リサイズする」パターン。
+    fn ensure_global_failed_paths(&mut self) {
+        if self.global_failed_paths.len() != self.theorems.len() {
+            self.global_failed_paths.resize_with(self.theorems.len(), rustc_hash::FxHashMap::default);
         }
     }
 
@@ -807,7 +807,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -837,12 +837,23 @@ impl ProverEngine {
             hasher.finish()
         };
 
-        // 🌟 キャッシュヒット時も、そのエントリが実際に依存していた型
-        // マスクを呼び出し元へ伝播する(呼び出し元がさらに失敗して
-        // キャッシュされる場合に、この部分木の依存を正しく引き継ぐため)。
-        if let Some(&cached_mask) = failed_paths.get(&state_sig) {
-            *dep_mask |= cached_mask;
-            return;
+        // 🌟 global_failed_pathsのドキュメント参照(ProverEngine)。エントリは
+        // (依存マスク, 挿入時点でのALL_ENTITY_TYPES順type_generation
+        // スナップショット)。タスクをまたいで永続化されるようになった今、
+        // 「取り出した時点でまだ有効か」をエントリごとに都度検証する必要が
+        // ある――マスクが立っている型についてだけ、挿入時のスナップショット
+        // と現在値を比較する(マスク0のエントリは何と比較するまでもなく
+        // 常に有効)。無効なら通常のキャッシュミスとして扱い、探索し直す
+        // (再度失敗すれば新しいスナップショット付きで上書きされる)。
+        if let Some(&(cached_mask, cached_gens)) = failed_paths.get(&state_sig) {
+            let still_valid = (0..4).all(|i| {
+                (cached_mask & (1 << i)) == 0
+                    || self.egraph.type_generation.get(&ALL_ENTITY_TYPES[i]).copied().unwrap_or(0) == cached_gens[i]
+            });
+            if still_valid {
+                *dep_mask |= cached_mask;
+                return;
+            }
         }
 
         if remaining.is_empty() {
@@ -935,11 +946,14 @@ impl ProverEngine {
         }
 
         // 🌟 どこにも進めなかった場合、この状態を失敗として記録する
-        // (実際に依存した型マスクmy_maskを添えて――Distinct/Order/両方
-        // 束縛済みのチェックだけで確定した失敗はmy_mask=0のままなので、
-        // 型がいくつ変化しても永続的に有効なエントリとして残る)。
+        // (実際に依存した型マスクmy_maskと、その時点でのtype_generation
+        // スナップショットを添えて――Distinct/Order/両方束縛済みのチェック
+        // だけで確定した失敗はmy_mask=0のままなので、型がいくつ変化しても
+        // 永続的に有効なエントリとして残る。global_failed_pathsに昇格した
+        // 今、このスナップショットが「取り出し側での有効性の再検証」の
+        // 基準になる)。
         if !matched_any {
-            failed_paths.insert(state_sig, my_mask);
+            failed_paths.insert(state_sig, (my_mask, snapshot_type_generations(&self.egraph)));
         }
         // 🌟 成功・失敗を問わず、この部分木が触れた型を呼び出し元(親)へ
         // 伝播する。親が(この呼び出しとは別の枝の失敗を含めて)最終的に
@@ -957,7 +971,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -978,7 +992,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -1195,7 +1209,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -1455,7 +1469,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -1900,7 +1914,7 @@ impl ProverEngine {
         remaining: Rc<Vec<Pattern>>,
         bind: &Bind,
         flip_states: FlipStates,
-        failed_paths: &mut rustc_hash::FxHashMap<u64, u8>,
+        failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
         dep_mask: &mut u8,
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
@@ -2351,8 +2365,6 @@ impl BlackboardEngine {
                 flip_states: FlipStates::default(),
                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
-                cached_failed_paths: rustc_hash::FxHashMap::default(),
-                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph),
             });
             self.prover.profile.sfs_tasks_created += 1;
         }
@@ -2397,8 +2409,6 @@ impl BlackboardEngine {
                                 flip_states: FlipStates::default(),
                                 remaining_patterns: Rc::new(theorem.patterns.clone()),
                                 is_seeded: true,
-                                cached_failed_paths: rustc_hash::FxHashMap::default(),
-                                failed_paths_type_gens: snapshot_type_generations(&self.prover.egraph),
                             });
                         }
                     }
@@ -2453,40 +2463,24 @@ impl BlackboardEngine {
                 // かえって遅くなった(0.69s→1.15s)ため撤回した。
                 // 上限自体は104行目のフィールド定義の通り常に100,000のまま。
                 //
-                // 🌟 HAGeo-409ベンチマークで判明した問題への対応: 上記の撤回理由は
-                // 「dfs_cap到達で再キューされるたびにfailed_pathsが空に戻り、
-                // 同じ行き止まりを何度も再訪して探索し直す」という無駄そのもの
-                // だった。これを解消するため、このタスクがdfs_cap到達で再キュー
-                // されたものであり、かつ再キュー時点から今この瞬間まで、この定理が
-                // 使う型のどれについても(他のタスクの成功も含め)e-graphで変化が
-                // 起きていなければ(型ごとのtype_generationが全て一致していれば)、
-                // 前回のfailed_pathsをそのまま引き継いで再開する。1つでも変わって
-                // いれば(union-findの代表元が動く、あるいは候補集合そのものが
-                // 変わり、古いハッシュが別の状態を指し得るため)安全側に倒して
-                // 空から作り直す。
-                //
                 // 🌟 ユーザー提案(「新規作図でfailed pathが破棄されるのは
                 // ある程度どうしようもないが、接続の弱いfailed pathは型に
-                // 関わらず保持できるはず」)への対応: 以前は定理単位の粗い
-                // 判定(この定理が使う型のどれか1つでも変わったら
-                // cached_failed_paths全体を空にする)だったが、それだと
-                // 新規作図のたびに学習が丸ごと消えるのがほぼ避けられなかった。
-                // 今は個々のキャッシュ済み失敗状態ごとに保存されたu8依存
-                // マスク(entity_type_bit参照、Distinct/Order/両方束縛済みの
-                // チェックだけで確定した失敗はマスク0=永続的に有効)を見て、
-                // 「そのエントリが実際に依存した型」だけが変化したかどうかで
-                // 個別に選別する――全滅させず、無関係な型の変化なら生き残る。
-                let cur_gens = snapshot_type_generations(&self.prover.egraph);
-                let old_gens = task.failed_paths_type_gens;
-                let mut failed_paths: rustc_hash::FxHashMap<u64, u8> = std::mem::take(&mut task.cached_failed_paths)
-                    .into_iter()
-                    .filter(|&(_, mask)| {
-                        // 🌟 entity_type_bitはALL_ENTITY_TYPESと同じ並び(Point=bit0,
-                        // Line=bit1, Scalar=bit2, Conic=bit3)で単調に割り当てている
-                        // ので、ビット位置iはそのままsnapshot配列の添字iに対応する。
-                        (0..4).all(|i| (mask & (1 << i)) == 0 || old_gens[i] == cur_gens[i])
-                    })
-                    .collect();
+                // 関わらず保持できるはず」→続けて「タスクをまたいだグローバル
+                // 化」)への対応。以前はfailed_pathsをMatchTask単位の寿命
+                // (dfs_cap到達での再キュー間でしか持ち越せない)で持たせて
+                // いたが、診断計測で判明した「dfs_matchの再訪問の38%はタスク
+                // をまたいだもの」(UCB1がschedule_full_sweepのたびに同じ
+                // 定理を新しいtask/新しいbindで何度も試す)を一切捕捉できて
+                // いなかった。state_sigは元々bind内容だけで決まる(特定の
+                // タスクインスタンスとは無関係な)ハッシュなので、
+                // ProverEngine::global_failed_paths(theorem_idxごとの永続
+                // マップ)へ昇格させ、このタスクの実行中だけ借用する
+                // (std::mem::takeで一時的に取り出し、使い終わったら必ず
+                // 書き戻す――dfs_matchが&mut selfを要求するため、self自身の
+                // フィールドを借用しながら再帰呼び出しできない、という
+                // 借用チェッカ上の制約を回避する常套手段)。
+                self.prover.ensure_global_failed_paths();
+                let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
 
                 let mut dep_mask: u8 = 0;
                 self.prover.dfs_match(
@@ -2500,6 +2494,13 @@ impl BlackboardEngine {
                         new_binds.push((bind.clone(), flips.clone()));
                     }
                 );
+                // 🌟 借用したグローバルキャッシュを書き戻す。dfs_cap到達で
+                // 再キューされるかどうかに関わらず、この定理への次のどの
+                // タスク(全く別のbindでも)からも再利用できるよう常に戻す
+                // (以前のタスク単位保存は再キュー時にしか書き戻さなかった
+                // ため、cap到達に至らず自然にタスクが完了したケースでは
+                // せっかく積んだfailed_pathsがそのまま捨てられていた)。
+                self.prover.global_failed_paths[task.theorem_idx] = failed_paths;
                 // 🌟 コスト考慮型バンディット報酬のために、このタスク1回が
                 // 実際に消費したdfs_call数を控えておく(次のタスクの
                 // self.prover.dfs_calls = 0 まではこの値のまま変わらない)。
@@ -2525,12 +2526,11 @@ impl BlackboardEngine {
                     if !self.task_queue.is_empty() {
                         task.priority -= 5;
                         if task.priority >= -20 { // 諦める閾値
-                            // 🌟 再開時に引き継げるよう、このタスク専用の
-                            // failed_pathsとその時点の型ごとのtype_generation
-                            // スナップショットを保存する(再開条件のチェックは
-                            // このブロックの直前を参照)。
-                            task.cached_failed_paths = failed_paths;
-                            task.failed_paths_type_gens = snapshot_type_generations(&self.prover.egraph);
+                            // 🌟 failed_pathsは既にglobal_failed_pathsへ書き戻し
+                            // 済み(このタスク固有の状態としてではなく、この
+                            // 定理全体で共有される状態として)なので、ここでは
+                            // タスク自体(bind/remaining_patterns)を再キューする
+                            // だけでよい。
                             self.task_queue.push(task);
                         }
                     }
