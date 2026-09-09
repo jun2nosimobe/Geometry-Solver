@@ -196,11 +196,23 @@ impl EGraph {
                     None
                 }
             }
+            // 🌟 ユーザー提案(射影幾何への移植: circle型を完全にconic型にする):
+            // 円は古典的に「円周点(circular points at infinity) I,J を通る
+            // 二次曲線」として特徴づけられる。この事実をそのまま実装にし、
+            // 外接円の作図をcalc_circumcircle(円専用の3点公式)ではなく
+            // 「3点+I+Jを通る二次曲線」(calc_conic_through_5_points、
+            // シュタイナーの定理の接線版と全く同じ計算)として行う。
+            // これにより外接円もEntityType::Conic(6係数[A,B,C,D,E,F])として
+            // 一様に扱えるようになり(apply_trivial_relationsでI,Jへの
+            // incidenceを張ることで「I,Jを通る=円である」ことを構造的にも
+            // 表現する)、円専用のEntityType::Conicという型タグが不要になる。
             Definition::Circumcircle(p1, p2, p3) => {
                 let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
                 let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
                 let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_circumcircle(&v1, &v2, &v3))
+                let vi = self.evaluate_node_inner(self.circ_i, vars, cache, in_progress)?;
+                let vj = self.evaluate_node_inner(self.circ_j, vars, cache, in_progress)?;
+                Self::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, vi, vj]))
             }
             Definition::TangentLine(c, p) => {
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
@@ -633,7 +645,7 @@ impl EGraph {
         };
         comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic))
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
             .any(|curve| !self.is_natural_incidence(rep, curve))
     }
 
@@ -648,7 +660,7 @@ impl EGraph {
         let comp = self.entities[rep.0].components.first()?;
         comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic)
+            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic)
                 && !self.is_natural_incidence(rep, s))
     }
 
@@ -691,68 +703,34 @@ impl EGraph {
         Self::sample_point_on_line_coeffs(coeffs[0], coeffs[1], coeffs[2])
     }
 
-    /// 🌟 Circumcircleの定義から、その円に(定義上)乗っていることが保証されている
-    /// 点を1つ返す(3つの生成元のうち最初のもの)。
-    fn circle_definition_known_point(&self, circle: ClassId) -> Option<ClassId> {
-        let rep = self.get_rep(circle);
-        let comp = self.entities[rep.0].components.first()?;
-        comp.definitions.iter().find_map(|def| {
-            if let Definition::Circumcircle(p1, _, _) = def { Some(*p1) } else { None }
-        })
-    }
-
-    /// 🌟 円circleの上にあるランダムな点を1つサンプリングする。
-    /// 円の方程式 A(x²+y²)+Dx+Ey+F=0 に対し、円自身の定義から既に乗っていると
-    /// 分かっている点(known_point)を通るランダムな直線を引き、その直線と
-    /// 円のもう一方の交点を求める。known_pointに対応する解(t=0)が既知なので、
-    /// Vietaの公式から残りの解が線形に求まり、平方剰余(sqrt)を一切必要としない
-    /// (このプロジェクトの法 998244353 は p≡1 (mod 4) でTonelli-Shanksが
-    /// 面倒になる法なので、これは実装上都合が良い)。
-    /// 🐛 注意: calc_circumcircle/calc_tangent_lineのコメントは係数の並びを
-    /// [D,E,F,A]と書いているが、実際にcalc_circumcircleがこの順で返す値を
-    /// 検証したところ [A,D,E,F] (0番目がx²+y²の係数)だった(コメント自体が
-    /// 誤りだが、calc_tangent_line側は数値評価経路でしか使われず既存12問題の
-    /// 症状として顕在化していなかったので、ここではそちらには触れず、
-    /// 実際に検証した正しい並びだけをこの関数で使う)。
-    fn sample_point_on_circle(&self, circle: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
-        if !self.free_point_ancestors_ready(circle, vars) { return None; }
-        let coeffs = self.evaluate_node(circle, vars, cache)?;
-        if coeffs.len() < 4 { return None; }
-        let (a_coef, d, e, f) = (coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
-
-        if a_coef.0 == 0 {
-            // 退化(3生成点が同一直線上など): 実質的に直線 Dx+Ey+F=0 として扱う
-            return Self::sample_point_on_line_coeffs(d, e, f);
-        }
-
-        let known_point = self.circle_definition_known_point(circle)?;
-        // known_pointはcircleの生成元自身なので、free_point_ancestors_ready(circle, ..)が
-        // 真であれば必ずその祖先もvarsに揃っている(部分集合関係)。
-        let kp = self.evaluate_node(known_point, vars, cache)?;
-        if kp.len() < 3 || kp[2].0 == 0 { return None; }
-        let (x1, y1) = (kp[0] / kp[2], kp[1] / kp[2]);
-
-        let two = ModInt::new(2);
-        for _ in 0..8 {
-            let dx = ModInt::new(rand::random::<i64>());
-            let dy = ModInt::new(rand::random::<i64>());
-            let a1 = a_coef * (dx * dx + dy * dy);
-            if a1.0 == 0 { continue; } // 縮退方向(理論上ごく低確率)。引き直す
-            let b1 = a_coef * two * (x1 * dx + y1 * dy) + d * dx + e * dy;
-            let t = -(b1 / a1);
-            return Some((x1 + t * dx, y1 + t * dy));
-        }
-        None
-    }
-
-    /// 🌟 ConicThrough5Pointsの定義から、その二次曲線に(定義上)乗っている
-    /// ことが保証されている点を1つ返す(5つの生成元のうち最初のもの)。
-    /// circle_definition_known_pointの二次曲線版。
+    /// 🌟 EntityType::Circle撤廃(円もConic)により、以前ここにあった
+    /// circle_definition_known_point/sample_point_on_circle(4係数専用、
+    /// Vietaの公式)は不要になり削除した。円もConicThrough5Pointsと全く同じ
+    /// 経路(conic_definition_known_point/sample_point_on_conic、6係数)で
+    /// サンプリングされる――円は実質的に「実点3つ+I+Jという5点」なので、
+    /// 同じVietaの理屈がそのまま平方根なしに使える(削除の前提となった
+    /// 旧コメントが指摘していたcalc_circumcircleの係数並び順の食い違いも、
+    /// Circumcircleの評価自体をcalc_conic_through_5_points経由に統一した
+    /// ことで解消済み)。
+    ///
+    /// 🌟 Circumcircle/ConicThrough5Pointsの定義から、その二次曲線に
+    /// (定義上)乗っていることが保証されている点を1つ返す。Circumcircleの
+    /// 3生成元はどれも本物の(L∞上ではない)点なので先頭でよいが、
+    /// ConicThrough5Pointsの5生成元は(将来的にI,Jを直接生成元に含む
+    /// 二次曲線が構築される可能性に備えて)L∞上の点(=無限遠点、z=0で
+    /// Vietaのサンプリングに使えない)を避けて最初の"普通の"点を選ぶ。
     fn conic_definition_known_point(&self, conic: ClassId) -> Option<ClassId> {
         let rep = self.get_rep(conic);
         let comp = self.entities[rep.0].components.first()?;
         comp.definitions.iter().find_map(|def| {
-            if let Definition::ConicThrough5Points(p1, _, _, _, _) = def { Some(*p1) } else { None }
+            match def {
+                Definition::Circumcircle(p1, _, _) => Some(*p1),
+                Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
+                    [*p1, *p2, *p3, *p4, *p5].into_iter()
+                        .find(|&p| !self.is_connected(p, self.line_infinity))
+                }
+                _ => None,
+            }
         })
     }
 
@@ -823,7 +801,9 @@ impl EGraph {
         let curve = self.find_incidence_constraint(rep)?;
         match self.entities[curve.0].entity_type {
             EntityType::Line => self.sample_point_on_line(curve, vars, cache),
-            EntityType::Circle => self.sample_point_on_circle(curve, vars, cache),
+            // 🌟 EntityType::Circle撤廃(円もConic)により、sample_point_on_circle
+            // (4係数専用)への分岐は不要になった。全てsample_point_on_conic
+            // (6係数、円は3実点+I+Jの5点として自動的に含まれる)に一本化する。
             EntityType::Conic => self.sample_point_on_conic(curve, vars, cache),
             _ => None,
         }
@@ -841,7 +821,7 @@ impl EGraph {
         };
         comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Circle | EntityType::Conic)
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic)
                 && !self.is_natural_incidence(rep, s))
             .collect()
     }

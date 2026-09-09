@@ -17,7 +17,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let c = egraph.create_entity("C".to_string(), Definition::FreePoint, EntityType::Point);
     let d = egraph.create_entity("D".to_string(), Definition::FreePoint, EntityType::Point);
 
-    let circ = egraph.create_entity("Circ".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ = egraph.create_entity("Circ".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     egraph.link_logical_incidence(d, circ); // Dも同じ円に乗せる
 
     let line_ab = egraph.create_entity("LineAB".to_string(), Definition::new_line(a, b), EntityType::Line);

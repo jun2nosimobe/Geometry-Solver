@@ -11,7 +11,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let line_ca = egraph.create_entity("LineCA".to_string(), Definition::new_line(c, a), EntityType::Line);
     let line_ab = egraph.create_entity("LineAB".to_string(), Definition::new_line(a, b), EntityType::Line);
     
-    let circ_abc = egraph.create_entity("Circum_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ_abc = egraph.create_entity("Circum_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     let p = egraph.create_entity("P".to_string(), Definition::FreePoint, EntityType::Point);
     egraph.link_logical_incidence(p, circ_abc);
     // 🌟 「円周角の定理」はConnected(点,円)の4連続で共円を判定するようになったので、

@@ -43,14 +43,22 @@ pub struct ClassId(pub usize);
 // 起こりようがなくなった(action_space.rs::entities_of_typeがPointの
 // 候補プールからL∞に繋がる点を明示的に除外しているのは、この設計の
 // 一部として「有限点だけを候補にしたい」既存の意図を保つため)。
+// 🌟 EntityType::Circle撤廃の経緯: 円は古典的に「円周点(circular points at
+// infinity) I=(1,i,0), J=(1,-i,0) を通る二次曲線」として特徴づけられる
+// (実際、外接円Circumcircle(A,B,C)は今やConicThrough5Points(A,B,C,I,J)と
+// 全く同じ計算で作られる――eval.rs参照)。EntityType::Directionの撤廃と
+// 全く同じ理由で、「円かどうか」を独立した型タグで持つのではなく、
+// I,Jへのincidence(is_connected)という構造的事実だけで表現することにした
+// (apply_trivial_relationsがCircumcircle生成時にI,Jへのlink_logical_incidenceを
+// 張る)。これによりpropagate_circle_uniqueness(円は3点で一意という特別扱い)も
+// propagate_conic_uniqueness(二次曲線は5点で一意)へ統合できた――円どうしが
+// 実点3点を共有していれば、構造的に共有しているI,Jの2点と合わせて常に5点
+// 共有になるので、特別扱いなしに同じ規則から「円は3点で決まる」が導かれる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
-    Point, Line, Circle, Angle, Scalar,
-    // 🌟 5点を通る一般二次曲線(Definition::ConicThrough5Points)専用の型。
-    // Circleとは別型にしておくことで、既存のCircle前提のコード
-    // (sample_point_on_circle等)を誤って二次曲線に適用してしまう事故を防ぐ
-    // (このバージョンでは接線・直線との交点は未実装で、点の接続(Connected)
-    // 判定の土台だけを提供する)。
+    Point, Line, Angle, Scalar,
+    // 🌟 5点を通る一般二次曲線(Definition::ConicThrough5Points)。円も
+    // (I,Jを通るという特殊な場合として)この型に含まれる。
     Conic,
 }
 
@@ -194,7 +202,7 @@ impl Definition {
             Definition::Intersection(_, _) => EntityType::Point,
             Definition::Midpoint(_, _) => EntityType::Point,
             Definition::HarmonicConjugateOf(_, _, _) => EntityType::Point,
-            Definition::Circumcircle(_, _, _) => EntityType::Circle,
+            Definition::Circumcircle(_, _, _) => EntityType::Conic,
             Definition::DirectionOf(_) => EntityType::Point,
             Definition::PerpDirectionOf(_) => EntityType::Point,
             Definition::AnglePair(_, _) => EntityType::Angle,
@@ -292,7 +300,7 @@ pub struct EGraph {
     // 4.5秒→17.5秒への劣化の主因)。マージが1件も起きていない間は再チェック
     // しても結果が変わりようがないので、merge_generationが前回の却下時点から
     // 変わっていなければ即座にスキップする。
-    pub rejected_circle_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
+    pub rejected_conic_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
     // 🌟 ユーザー提案(定理マッチングの最適化)への対応その1: EntityTypeごとの
     // 生成済みエンティティID一覧のインデックス。create_entity内で追記するだけの
     // 単調増加リストで、union-findのマージでは更新しない(吸収された側の
@@ -380,7 +388,7 @@ pub enum Justification {
     /// と全く同じ発想)。HAGeo-409ベンチマークの調査で、同じ4点が乗っている
     /// はずのCircumcircle(A,B,C)とCircumcircle(A,B,D)が別実体のまま統合されず、
     /// エンティティ数の肥大化と証明の断絶を引き起こしていたことが分かったため追加。
-    CircleUniqueness { shared_points: Vec<ClassId> },
+    ConicUniqueness { shared_points: Vec<ClassId> },
     /// apply_trivial_relations由来の構造的な結合(垂線→Ang90、
     /// PerpDirectionOf/HarmonicConjugateOfの対合性など、定義から機械的に従うもの)
     Trivial { reason: String },
@@ -409,7 +417,7 @@ impl EGraph {
             incidence_provenance: rustc_hash::FxHashMap::default(),
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
-            rejected_circle_pairs: rustc_hash::FxHashMap::default(),
+            rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
         };
@@ -843,6 +851,16 @@ impl EGraph {
                 self.link_logical_incidence_justified(*p1, new_id, Justification::Trivial { reason: reason.clone() });
                 self.link_logical_incidence_justified(*p2, new_id, Justification::Trivial { reason: reason.clone() });
                 self.link_logical_incidence_justified(*p3, new_id, Justification::Trivial { reason });
+                // 🌟 EntityType::Circle撤廃(円周点I,Jを通るという条件で
+                // 「円かどうか」を判定する、mmp_core/mod.rs::EntityTypeの
+                // ドキュメント参照): 外接円は今やConicThrough5Points(p1,p2,p3,I,J)
+                // と全く同じ計算(eval.rs::Definition::Circumcircle参照)で
+                // 作られているので、その事実を構造的にも表現しておく。これにより
+                // propagate_conic_uniquenessが「実点3つ共有」を自動的に
+                // 「5点共有(実点3つ+I+J)」として扱え、円専用の特別扱いが
+                // 不要になる。
+                self.link_logical_incidence(new_id, self.circ_i);
+                self.link_logical_incidence(new_id, self.circ_j);
             },
             Definition::AnglePair(d1, d2) => {
                 self.link_logical_incidence(*d1, new_id);

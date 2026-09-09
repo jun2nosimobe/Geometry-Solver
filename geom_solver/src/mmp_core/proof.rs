@@ -81,12 +81,16 @@ impl EGraph {
     }
 
     /// 🌟 pointsの全てが乗っている共通の円を(あれば)1つ返す。
+    /// 🌟 query.rs::points_share_a_circleと同じ理由(EntityType::Circle撤廃
+    /// により、円は今やI,Jへのincidenceでしか区別できない)で、単なる
+    /// Conic型ではなくI,Jの両方に接続していることも確認する。
     pub fn find_shared_circle(&self, points: &[ClassId]) -> Option<ClassId> {
         if points.is_empty() { return None; }
         for i in 0..self.entities.len() {
             let cand = ClassId(i);
             if self.get_rep(cand) != cand { continue; }
-            if self.entities[i].entity_type != super::EntityType::Circle { continue; }
+            if self.entities[i].entity_type != super::EntityType::Conic { continue; }
+            if !self.is_connected(cand, self.circ_i) || !self.is_connected(cand, self.circ_j) { continue; }
             if points.iter().all(|&p| self.is_connected(p, cand)) {
                 return Some(cand);
             }
@@ -117,7 +121,7 @@ impl EGraph {
     pub fn proof_uses_numeric_shortcut(edges: &[ProofEdge]) -> bool {
         edges.iter().any(|e| matches!(
             e.justification,
-            Justification::LineUniqueness { .. } | Justification::PointUniqueness { .. } | Justification::CircleUniqueness { .. }
+            Justification::LineUniqueness { .. } | Justification::PointUniqueness { .. } | Justification::ConicUniqueness { .. }
         ))
     }
 
@@ -153,7 +157,7 @@ impl EGraph {
                 "直線 {} と直線 {} の交点として一意に定まる",
                 name(via_lines.0), name(via_lines.1)
             ),
-            Justification::CircleUniqueness { shared_points } => format!(
+            Justification::ConicUniqueness { shared_points } => format!(
                 "2円が{}点を共有({})しているため同一円",
                 shared_points.len(),
                 shared_points.iter().map(|&p| name(p)).collect::<Vec<_>>().join(", ")

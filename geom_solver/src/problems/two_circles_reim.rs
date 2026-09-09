@@ -23,12 +23,12 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     // Γ1 = Circumcircle(A,B,C) (Cはこの定義そのものでΓ1上にある)。Eも
     // 別ルートでΓ1上にあることを与える(Bを通る直線がΓ1と交わる点)。
-    let gamma1 = egraph.create_entity("Gamma1".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let gamma1 = egraph.create_entity("Gamma1".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     egraph.link_logical_incidence(e, gamma1);
 
     // Γ2 = Circumcircle(A,B,D) (Dはこの定義そのものでΓ2上にある)。Fも
     // 別ルートでΓ2上にあることを与える(Bを通る直線がΓ2と交わる点)。
-    let gamma2 = egraph.create_entity("Gamma2".to_string(), Definition::Circumcircle(a, b, d), EntityType::Circle);
+    let gamma2 = egraph.create_entity("Gamma2".to_string(), Definition::Circumcircle(a, b, d), EntityType::Conic);
     egraph.link_logical_incidence(f, gamma2);
 
     // C, A, D はこの順に一直線上 (Aを通る1本の直線)

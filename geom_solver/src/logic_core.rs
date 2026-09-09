@@ -1017,14 +1017,33 @@ impl ProverEngine {
         let expected_p_type = theorem.entities.get(parent_var).copied();
         let wants_child_direction = def.sub_type.as_deref() == Some("Direction");
         let wants_parent_direction = def.target_type.as_deref() == Some("Direction");
+        // 🌟 EntityType::Circle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント
+        // 参照)により、"Circle"マーカーもここに追加する: target_type/sub_type
+        // =="Circle"ならこのPoint型変数(Conicの間違いではなく、こちらは
+        // Connectedのchild/parentそれぞれの"宣言型"のことなので、ここでの
+        // Circleは実際にはConic型変数に対して使う)が実際にI,Jを両方通る
+        // (=本物の円である)ものだけを受理し、無い場合は逆にI,Jを通らない
+        // (=一般の非円二次曲線)ものだけを受理する――Direction/Pointの
+        // 場合と全く同じ「マーカー無し=旧来の狭い方の型」という既定にする。
+        let wants_child_circle = def.sub_type.as_deref() == Some("Circle");
+        let wants_parent_circle = def.target_type.as_deref() == Some("Circle");
         // 🌟 候補id(宣言型et)がこのパターン変数として受理できるかを判定する。
-        // et が Point 以外なら型一致だけで従来通り。et が Point なら、
-        // 「L∞上にあるか」がwants_direction(このパターン変数が方向を
-        // 欲しがっているか)と一致する場合だけ受理する。
-        let accept_point = |egraph: &crate::mmp_core::EGraph, id: ClassId, et: EntityType, wants_direction: bool| -> bool {
+        // et が Point/Conic 以外なら型一致だけで従来通り。
+        // et が Point なら、「L∞上にあるか」がwants_direction(このパターン
+        // 変数が方向を欲しがっているか)と一致する場合だけ受理する。
+        // et が Conic なら、「I,Jを両方通るか(=円か)」がwants_circleと
+        // 一致する場合だけ受理する(旧EntityType::Circle/Conicの分離を
+        // incidenceで再現する)。
+        let accept_point = |egraph: &crate::mmp_core::EGraph, id: ClassId, et: EntityType, wants_direction: bool, wants_circle: bool| -> bool {
             if egraph.entities[id.0].entity_type != et { return false; }
-            if et != EntityType::Point { return true; }
-            egraph.is_connected(id, egraph.line_infinity) == wants_direction
+            match et {
+                EntityType::Point => egraph.is_connected(id, egraph.line_infinity) == wants_direction,
+                EntityType::Conic => {
+                    let is_circle = egraph.is_connected(id, egraph.circ_i) && egraph.is_connected(id, egraph.circ_j);
+                    is_circle == wants_circle
+                }
+                _ => true,
+            }
         };
 
         match (bind.get(child_var).copied(), bind.get(parent_var).copied()) {
@@ -1053,7 +1072,7 @@ impl ProverEngine {
                         let p_rep = self.egraph.get_rep(sub);
                         if p_rep == c_rep || !self.egraph.entities[p_rep.0].is_active() { continue; }
                         if let Some(et) = expected_p_type {
-                            if !accept_point(&self.egraph, p_rep, et, wants_parent_direction) { continue; }
+                            if !accept_point(&self.egraph, p_rep, et, wants_parent_direction, wants_parent_circle) { continue; }
                         }
                         candidates.insert(p_rep);
                     }
@@ -1081,7 +1100,7 @@ impl ProverEngine {
                     }
                 }
                 child_candidates.retain(|&c_rep| {
-                    expected_c_type.map_or(true, |et| accept_point(&self.egraph, c_rep, et, wants_child_direction))
+                    expected_c_type.map_or(true, |et| accept_point(&self.egraph, c_rep, et, wants_child_direction, wants_child_circle))
                 });
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
@@ -1106,13 +1125,18 @@ impl ProverEngine {
                 if let (Some(ct), Some(pt)) = (expected_c_type, expected_p_type) {
                     let raw_pairs = self.connected_pairs_for_types(ct, pt);
                     // 🌟 connected_pairs_for_typesは(child_type, parent_type)の
-                    // 組み合わせだけで結果を共有キャッシュするため、L∞上の点を
-                    // 含めるか除外するかはここで結果を受け取った後にふるいに
-                    // かける(キャッシュ自体は複数の定理・向きで安全に共有され続ける)。
-                    let pairs: Rc<Vec<(ClassId, ClassId)>> = if ct == EntityType::Point || pt == EntityType::Point {
+                    // 組み合わせだけで結果を共有キャッシュするため、L∞上の点/
+                    // I,Jを通る円かどうかを含めるか除外するかはここで結果を
+                    // 受け取った後にふるいにかける(キャッシュ自体は複数の
+                    // 定理・向きで安全に共有され続ける)。
+                    let needs_filter = ct == EntityType::Point || pt == EntityType::Point
+                        || ct == EntityType::Conic || pt == EntityType::Conic;
+                    let pairs: Rc<Vec<(ClassId, ClassId)>> = if needs_filter {
                         Rc::new(raw_pairs.iter().copied().filter(|&(c, p)| {
                             (ct != EntityType::Point || self.egraph.is_connected(c, self.egraph.line_infinity) == wants_child_direction)
                                 && (pt != EntityType::Point || self.egraph.is_connected(p, self.egraph.line_infinity) == wants_parent_direction)
+                                && (ct != EntityType::Conic || (self.egraph.is_connected(c, self.egraph.circ_i) && self.egraph.is_connected(c, self.egraph.circ_j)) == wants_child_circle)
+                                && (pt != EntityType::Conic || (self.egraph.is_connected(p, self.egraph.circ_i) && self.egraph.is_connected(p, self.egraph.circ_j)) == wants_parent_circle)
                         }).collect())
                     } else {
                         raw_pairs
@@ -1159,7 +1183,7 @@ impl ProverEngine {
                     if let Some(et) = expected_p_type {
                         for p_rep in self.egraph.iter_reps_of_type(et) {
                             if self.egraph.entities[p_rep.0].is_active()
-                                && accept_point(&self.egraph, p_rep, et, wants_parent_direction) {
+                                && accept_point(&self.egraph, p_rep, et, wants_parent_direction, wants_parent_circle) {
                                 parent_candidates.push(p_rep);
                             }
                         }
@@ -1179,7 +1203,7 @@ impl ProverEngine {
                                 .filter(|&id| {
                                     if !self.egraph.entities[id.0].is_active() { return false; }
                                     match expected_c_type {
-                                        Some(et) => accept_point(&self.egraph, id, et, wants_child_direction),
+                                        Some(et) => accept_point(&self.egraph, id, et, wants_child_direction, wants_child_circle),
                                         None => true,
                                     }
                                 })
@@ -1725,7 +1749,7 @@ impl ProverEngine {
                 let entity_type = match constr.target_type.as_str() {
                     "Line" => EntityType::Line,
                     "Angle" => EntityType::Angle,
-                    "Circle" => EntityType::Circle,
+                    "Circle" => EntityType::Conic,
                     "Scalar" => EntityType::Scalar, // 🌟 スカラー型の追加
                     "Conic" => EntityType::Conic,
                     // 🌟 EntityType::Direction撤廃(方向はL∞に接続された

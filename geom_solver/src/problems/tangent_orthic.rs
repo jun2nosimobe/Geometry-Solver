@@ -11,7 +11,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let l_bc = egraph.create_entity("Line_BC".to_string(), Definition::new_line(b, c), EntityType::Line);
     let l_ca = egraph.create_entity("Line_CA".to_string(), Definition::new_line(c, a), EntityType::Line);
 
-    let circ = egraph.create_entity("Circ_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ = egraph.create_entity("Circ_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     let tan_a = egraph.create_entity("Tan_A".to_string(), Definition::TangentLine(circ, a), EntityType::Line);
 
     let perp_b = egraph.create_entity("Perp_B".to_string(), Definition::PerpendicularLine(l_ca, b), EntityType::Line);

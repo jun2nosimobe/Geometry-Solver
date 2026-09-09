@@ -15,7 +15,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let o = circumcenter(egraph, a, b, c, "O");
     let m = egraph.create_entity("M".to_string(), Definition::Midpoint(b, c), EntityType::Point);
 
-    let circ_amo = egraph.create_entity("Circ_AMO".to_string(), Definition::Circumcircle(a, m, o), EntityType::Circle);
+    let circ_amo = egraph.create_entity("Circ_AMO".to_string(), Definition::Circumcircle(a, m, o), EntityType::Conic);
 
     let ab = egraph.create_entity("AB".to_string(), Definition::new_line(a, b), EntityType::Line);
     let d = egraph.create_entity("D".to_string(), Definition::FreePoint, EntityType::Point);

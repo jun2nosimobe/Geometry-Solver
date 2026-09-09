@@ -11,7 +11,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let d = egraph.create_entity("D".to_string(), Definition::FreePoint, EntityType::Point);
 
     // 円を作図し、点A,B,C,Dが同一円周上にあるとする
-    let circ = egraph.create_entity("Circ".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ = egraph.create_entity("Circ".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     egraph.link_logical_incidence(d, circ); // Dも同じ円に乗せる
     // 🌟 「円周角の定理」はConnected(点,円)の4連続で共円を判定するので、
     // A,B,C(Circumcircleの定義から自動リンク)とD(ここでリンク)が

@@ -204,7 +204,7 @@ impl MCTSSearchEngine {
             }
 
             match e.entity_type {
-                EntityType::Line | EntityType::Circle => {
+                EntityType::Line | EntityType::Conic => {
                     // 🌟 EntityType::Direction撤廃(方向はL∞に繋がったPointに
                     // 統一)により、「点」はもう単純にEntityType::Pointだけを
                     // 見ればよい。
@@ -215,7 +215,7 @@ impl MCTSSearchEngine {
                 }
                 EntityType::Point => {
                     let lc = comp.subobjects.iter()
-                        .filter(|&&s| matches!(egraph.entities[egraph.get_rep(s).0].entity_type, EntityType::Line | EntityType::Circle))
+                        .filter(|&&s| matches!(egraph.entities[egraph.get_rep(s).0].entity_type, EntityType::Line | EntityType::Conic))
                         .count();
                     if lc >= 2 { bonus += lc as f64 * 2.0; }
                 }

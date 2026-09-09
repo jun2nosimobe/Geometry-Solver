@@ -421,18 +421,23 @@ impl PrettyNamer {
             // 🌟 EntityType::Direction撤廃により、「無限遠直線L∞上の点か」は
             // 型ではなくincidence(is_connected)で判定する。ユーザー提案
             // 「directionを検索するときもL∞上の点を探せばよい」をそのまま
-            // 表示ラベルの判定にも適用した形。
+            // 表示ラベルの判定にも適用した形。EntityType::Circle撤廃も同じ
+            // 発想: 「円周点I,Jを両方通るか」で二次曲線が円かどうかを判定し、
+            // 表示上は円らしく"Cir"、そうでなければ一般の二次曲線として"Q"を使う
+            // (内部的にはどちらも同じEntityType::Conic)。
             let prefix: &'static str = if e.entity_type == EntityType::Point
                 && egraph.is_connected(rep, egraph.line_infinity) {
                 "D"
+            } else if e.entity_type == EntityType::Conic
+                && egraph.is_connected(rep, egraph.circ_i) && egraph.is_connected(rep, egraph.circ_j) {
+                "Cir"
             } else {
                 match e.entity_type {
                     EntityType::Point => "P",
                     EntityType::Line => "L",
-                    EntityType::Circle => "Cir",
+                    EntityType::Conic => "Q",
                     EntityType::Angle => "Ang",
                     EntityType::Scalar => "S",
-                    EntityType::Conic => "Q",
                 }
             };
             let n = self.counters.entry(prefix).or_insert(0);

@@ -19,8 +19,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     egraph.link_logical_incidence(e, line_ca);
     egraph.link_logical_incidence(f, line_ab);
     
-    let circ_aef = egraph.create_entity("CircAEF".to_string(), Definition::Circumcircle(a, e, f), EntityType::Circle);
-    let circ_bfd = egraph.create_entity("CircBFD".to_string(), Definition::Circumcircle(b, f, d), EntityType::Circle);
+    let circ_aef = egraph.create_entity("CircAEF".to_string(), Definition::Circumcircle(a, e, f), EntityType::Conic);
+    let circ_bfd = egraph.create_entity("CircBFD".to_string(), Definition::Circumcircle(b, f, d), EntityType::Conic);
     
     let m = egraph.create_entity("M".to_string(), Definition::Intersection(circ_aef, circ_bfd), EntityType::Point);
     egraph.link_logical_incidence(m, circ_aef);

@@ -4,6 +4,46 @@ use crate::mmp_calculators;
 use rustc_hash::FxHashMap;
 
 #[test]
+fn test_conic_merge_by_five_shared_points_reproduces_old_circle_rule() {
+    // 🌟 EntityType::Circle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント参照)
+    // により、旧propagate_circle_uniqueness(円は3点で一意という特別扱い、
+    // しきい値3)はpropagate_conic_uniqueness(二次曲線は5点で一意、しきい値5)
+    // に統合された。円は構造的にI,Jへも常にincidenceで繋がっている
+    // (apply_trivial_relationsのCircumcircle分岐)ため、「実点を3つ共有する
+    // 2つの円」は自動的に「5点(実点3つ+I+J)を共有する2つの二次曲線」になり、
+    // 特別扱い抜きに同じ規則から旧来の「円は3点で決まる」が再現されるはず
+    // ――これを検証する(HAGeo-409ベンチマークの調査で判明した、
+    // Circumcircle(A,B,C)とCircumcircle(A,B,D)がどちらも4点A,B,C,Dが
+    // 乗っていると構造的に分かっている場合に統合されるべき、という
+    // シナリオそのもの)。
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+
+    let circ_abc = egraph.create_entity("Circ_ABC".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+    let circ_abd = egraph.create_entity("Circ_ABD".into(), Definition::Circumcircle(a, b, d), EntityType::Conic);
+
+    // 🌟 「DもCirc_ABC上にある」という構造的な前提を直接与える
+    // (simson.rs/cyclic_quad.rs等、他のテストと同じ手法)。これにより
+    // Circ_ABCの接続点は{A,B,C,D,I,J}、Circ_ABDの接続点は{A,B,D,I,J}となり、
+    // 共有点はA,B,D,I,Jの5点になる。numeric_plausibility_checkは
+    // sample_point_on_constraint経由でDの座標をCirc_ABC上に実際に乗るよう
+    // サンプリングするので、数値的にも矛盾なく検証できる。
+    egraph.link_logical_incidence(d, circ_abc);
+
+    egraph.apply_congruence_closure();
+
+    assert_eq!(egraph.get_rep(circ_abc), egraph.get_rep(circ_abd),
+        "実点3つ(A,B,D)+円周点I,Jの計5点を共有する2つの外接円はマージされるべき");
+    // 🌟 マージ後の代表元も引き続きI,Jへのincidenceを保つ(=円のまま)ことを
+    // 確認する。
+    assert!(egraph.is_connected(egraph.get_rep(circ_abc), egraph.circ_i));
+    assert!(egraph.is_connected(egraph.get_rep(circ_abc), egraph.circ_j));
+}
+
+#[test]
 fn test_line_merge_by_two_points() {
     let mut egraph = EGraph::new();
     let p_a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
@@ -270,7 +310,7 @@ fn test_tangent_line_to_circle_is_numerically_correct() {
     let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
     let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
     let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
-    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     let tan = egraph.create_entity("Tan".into(), Definition::TangentLine(circ, b), EntityType::Line);
 
     let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
@@ -401,7 +441,7 @@ fn test_numeric_check_samples_consistent_point_on_circle() {
     let p1 = egraph.create_entity("P1".into(), Definition::FreePoint, EntityType::Point);
     let p2 = egraph.create_entity("P2".into(), Definition::FreePoint, EntityType::Point);
     let p3 = egraph.create_entity("P3".into(), Definition::FreePoint, EntityType::Point);
-    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(p1, p2, p3), EntityType::Circle);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(p1, p2, p3), EntityType::Conic);
 
     // QはFreePointのまま(定義上はCircと無関係)だが、「Circ上にある」という
     // 前提だけをlink_logical_incidenceで直接与える(simson.rs/cyclic_quad.rs等と同じ)。
@@ -410,7 +450,7 @@ fn test_numeric_check_samples_consistent_point_on_circle() {
 
     // P1,P2,Qを通る外接円は、Qが本当にCirc上にあるなら幾何学的に必ずCircそのものになる
     // (円は同一直線上にない3点で一意に決まるため)。
-    let circ2 = egraph.create_entity("Circ2".into(), Definition::Circumcircle(p1, p2, q), EntityType::Circle);
+    let circ2 = egraph.create_entity("Circ2".into(), Definition::Circumcircle(p1, p2, q), EntityType::Conic);
 
     assert_eq!(
         egraph.numeric_plausibility_check(circ, circ2, 5),
@@ -420,7 +460,7 @@ fn test_numeric_check_samples_consistent_point_on_circle() {
 
     // 対照実験: 何の前提も無い自由点Rでは、P1,P2,Rを通る外接円は一般にCircとは別の円になる。
     let r = egraph.create_entity("R".into(), Definition::FreePoint, EntityType::Point);
-    let circ3 = egraph.create_entity("Circ3".into(), Definition::Circumcircle(p1, p2, r), EntityType::Circle);
+    let circ3 = egraph.create_entity("Circ3".into(), Definition::Circumcircle(p1, p2, r), EntityType::Conic);
     assert_eq!(
         egraph.numeric_plausibility_check(circ, circ3, 5),
         Some(false),

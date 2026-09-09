@@ -40,8 +40,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let p34 = egraph.create_entity("P34".to_string(), Definition::Intersection(l3, l4), EntityType::Point);
 
     // 4本のうち3本を選んでできる4つの三角形の外接円のうち、まず2つを作図する
-    let circ_123 = egraph.create_entity("Circ_123".to_string(), Definition::Circumcircle(p12, p13, p23), EntityType::Circle);
-    let circ_124 = egraph.create_entity("Circ_124".to_string(), Definition::Circumcircle(p12, p14, p24), EntityType::Circle);
+    let circ_123 = egraph.create_entity("Circ_123".to_string(), Definition::Circumcircle(p12, p13, p23), EntityType::Conic);
+    let circ_124 = egraph.create_entity("Circ_124".to_string(), Definition::Circumcircle(p12, p14, p24), EntityType::Conic);
 
     // ミケル点: 上記2円の交点として作図する(miquel.rsと同じ手法)
     let m = egraph.create_entity("M".to_string(), Definition::Intersection(circ_123, circ_124), EntityType::Point);

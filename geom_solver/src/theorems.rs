@@ -26,6 +26,9 @@ fn fact(f_type: &str, args: &[&str]) -> Pattern {
 /// incidenceで判定するしかないため。以前は"Line"上の点を探すfact_ext呼び出しが
 /// 別に"Direction"上の点を探すfact_ext呼び出しと型で自然に区別されていたが、
 /// 今は両方ともEntityType::Pointなので、このマーカーで明示的に伝える必要がある)。
+/// 全く同じ理由でtarget_type/sub_type=="Circle"も使う: この場合はConic型の
+/// child/parentを「I,Jを両方通る(=本物の円)」に限定し、それ以外(既定)は
+/// 逆に「I,Jを通らない一般の二次曲線」に限定する(EntityType::Circle撤廃)。
 fn fact_ext(f_type: &str, args: &[&str], t_type: Option<&str>, s_type: Option<&str>, flip: bool, group: Option<&str>) -> Pattern {
     Pattern::Fact(FactPatternDef {
         fact_type: f_type.to_string(),
@@ -72,7 +75,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             entities: entities(&[
                 ("Apex1", EntityType::Point), ("Apex2", EntityType::Point),
                 ("Base1", EntityType::Point), ("Base2", EntityType::Point),
-                ("Circ", EntityType::Circle),
+                ("Circ", EntityType::Conic),
                 ("L_A1_B1", EntityType::Line), ("L_A1_B2", EntityType::Line),
                 ("L_A2_B1", EntityType::Line), ("L_A2_B2", EntityType::Line),
                 ("Dir_A1_B1", EntityType::Point), ("Dir_A1_B2", EntityType::Point),
@@ -83,10 +86,15 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 🌟 Concyclicという専用Factをやめ、「4点が同じ円Circに乗っている」を
                 // Connectedの4連続で表す。link_logical_incidenceによる構造的な接続
                 // だけで十分になり、専用Factの登録忘れバグが起きなくなる。
-                fact_ext("Connected", &["Apex1", "Circ"], None, None, false, None),
-                fact_ext("Connected", &["Apex2", "Circ"], None, None, false, None),
-                fact_ext("Connected", &["Base1", "Circ"], None, None, false, None),
-                fact_ext("Connected", &["Base2", "Circ"], None, None, false, None),
+                // 🌟 EntityType::Circle撤廃(mmp_core/mod.rs::EntityTypeの
+                // ドキュメント参照)により、Circは今やEntityType::Conic(一般の
+                // 二次曲線と同じ型)なので、target_type="Circle"マーカーで
+                // 「I,Jを両方通る=本物の円」だけに絞る(マーカー無しだと
+                // シュタイナーの定理用の非円な二次曲線まで候補に混ざってしまう)。
+                fact_ext("Connected", &["Apex1", "Circ"], Some("Circle"), None, false, None),
+                fact_ext("Connected", &["Apex2", "Circ"], Some("Circle"), None, false, None),
+                fact_ext("Connected", &["Base1", "Circ"], Some("Circle"), None, false, None),
+                fact_ext("Connected", &["Base2", "Circ"], Some("Circle"), None, false, None),
                 distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
                 
                 // 🌟 FIX: Connected から DefinedBy に変更し、作図需要(Demand)を発生させる
@@ -518,7 +526,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             name: "接弦定理".to_string(),
             entities: entities(&[
                 ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
-                ("Circ", EntityType::Circle), ("TanA", EntityType::Line),
+                ("Circ", EntityType::Conic), ("TanA", EntityType::Line),
                 ("LineAB", EntityType::Line), ("LineAC", EntityType::Line), ("LineBC", EntityType::Line),
                 ("DirTan", EntityType::Point), ("DirAB", EntityType::Point), ("DirAC", EntityType::Point), ("DirBC", EntityType::Point),
                 ("AngTan", EntityType::Angle), ("AngBCA", EntityType::Angle),
@@ -557,7 +565,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
                 ("P_Apex1", EntityType::Point), ("P_Apex2", EntityType::Point),
                 ("P_Base1", EntityType::Point), ("P_Base2", EntityType::Point),
-                ("Circ_New", EntityType::Circle),
+                ("Circ_New", EntityType::Conic),
             ]),
             patterns: vec![
                 fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),

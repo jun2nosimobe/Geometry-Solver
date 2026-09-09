@@ -19,14 +19,14 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
 
     let ac = egraph.create_entity("AC".to_string(), Definition::new_line(a, c), EntityType::Line);
     let l1 = egraph.create_entity("l1".to_string(), Definition::ParallelLine(ac, q), EntityType::Line);
-    let circ_abp = egraph.create_entity("Circ_ABP".to_string(), Definition::Circumcircle(a, b, p), EntityType::Circle);
+    let circ_abp = egraph.create_entity("Circ_ABP".to_string(), Definition::Circumcircle(a, b, p), EntityType::Conic);
     let c1 = egraph.create_entity("C1".to_string(), Definition::FreePoint, EntityType::Point);
     egraph.link_logical_incidence(c1, circ_abp);
     egraph.link_logical_incidence(c1, l1);
 
     let ab = egraph.create_entity("AB".to_string(), Definition::new_line(a, b), EntityType::Line);
     let l2 = egraph.create_entity("l2".to_string(), Definition::ParallelLine(ab, q), EntityType::Line);
-    let circ_acp = egraph.create_entity("Circ_ACP".to_string(), Definition::Circumcircle(a, c, p), EntityType::Circle);
+    let circ_acp = egraph.create_entity("Circ_ACP".to_string(), Definition::Circumcircle(a, c, p), EntityType::Conic);
     let b1 = egraph.create_entity("B1".to_string(), Definition::FreePoint, EntityType::Point);
     egraph.link_logical_incidence(b1, circ_acp);
     egraph.link_logical_incidence(b1, l2);

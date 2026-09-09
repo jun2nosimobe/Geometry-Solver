@@ -60,8 +60,8 @@ fn encode_justification(j: &Justification) -> (&'static str, String) {
             "PointUniqueness",
             format!("{},{}", via_lines.0.0, via_lines.1.0),
         ),
-        Justification::CircleUniqueness { shared_points } => (
-            "CircleUniqueness",
+        Justification::ConicUniqueness { shared_points } => (
+            "ConicUniqueness",
             shared_points.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(","),
         ),
         Justification::Trivial { reason } => ("Trivial", reason.clone()),
@@ -367,9 +367,9 @@ impl RawProof {
                 }
                 DeepStep { headline, reason: format!("定理「{}」", name), children, is_gap: false, gap_reason: None, is_shortcut: false }
             }
-            "LineUniqueness" | "CircleUniqueness" | "PointUniqueness" => {
+            "LineUniqueness" | "ConicUniqueness" | "PointUniqueness" => {
                 let ids: Vec<usize> = edge.payload.split(',').filter_map(|s| s.parse().ok()).collect();
-                // 🌟 CircleUniquenessはLineUniquenessと全く同じ構造(N点の共有→
+                // 🌟 ConicUniquenessはLineUniquenessと全く同じ構造(N点の共有→
                 // 同一の図形)なので、対象を表す語("直線"/"円")だけ差し替えて
                 // 同じロジックを共有する。
                 let (reason, related_lines): (String, Vec<usize>) = if edge.kind == "PointUniqueness" {
@@ -381,7 +381,7 @@ impl RawProof {
                      vec![from, edge.to])
                 };
                 // 🌟 「共有している」という前提の由来を子ノードとして展開する。
-                // LineUniqueness/CircleUniquenessならids=共有点、related_lines=2つの図形。
+                // LineUniqueness/ConicUniquenessならids=共有点、related_lines=2つの図形。
                 // PointUniquenessならids=2直線(via_lines)、related_lines=同じ2直線
                 // (この場合はfrom/edge.toの側=2点それぞれの接続を調べる)。
                 // 🌟 今まさに検証している辺(from, edge.to)自身を除外する

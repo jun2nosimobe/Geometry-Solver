@@ -336,7 +336,7 @@ mod tests {
         let ab = egraph.create_entity("AB".into(), Definition::new_line(a, b), EntityType::Line);
         let ac = egraph.create_entity("AC".into(), Definition::new_line(a, c), EntityType::Line);
         let m = egraph.create_entity("M".into(), Definition::Midpoint(b, c), EntityType::Point);
-        let o = egraph.create_entity("O".into(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+        let o = egraph.create_entity("O".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
         let inter = egraph.create_entity("Inter".into(), Definition::Intersection(ab, ac), EntityType::Point);
 
         let mut ev = RealEvaluator::new(&egraph, 42);
@@ -374,7 +374,7 @@ mod tests {
         let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
         let ab = egraph.create_entity("AB".into(), Definition::new_line(a, b), EntityType::Line);
         let ac = egraph.create_entity("AC".into(), Definition::new_line(a, c), EntityType::Line);
-        let o = egraph.create_entity("O".into(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+        let o = egraph.create_entity("O".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
         let mut labels = FxHashMap::default();
         for (id, name) in [(a, "A"), (b, "B"), (c, "C"), (ab, "AB"), (ac, "AC"), (o, "O")] {
             labels.insert(id, name.to_string());

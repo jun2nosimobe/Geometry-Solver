@@ -27,12 +27,20 @@ impl EGraph {
     /// 🌟 points に含まれる全ての点が乗っている共通の円が存在するかを判定する。
     /// Concyclicを専用Factで持たなくなったので、目標判定などでこれを使う。
     /// 円の数は通常ごく少数なので、全円を舐めても軽い。
+    /// 🌟 EntityType::Circle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント
+    /// 参照)により、円は今やEntityType::Conicの特殊な場合(I,Jを通る)として
+    /// しか区別できない。この関数は「共円(Concyclic)」という円に固有の
+    /// 目標を判定するためのものなので、単にConic型であるだけでなく、
+    /// I,Jの両方に接続している(=本物の円である)ことも確認する――そうしないと
+    /// 円ではない一般の二次曲線(ConicThrough5Points)まで「共円」と誤判定
+    /// してしまう。
     pub fn points_share_a_circle(&self, points: &[ClassId]) -> bool {
         if points.is_empty() { return false; }
         for i in 0..self.entities.len() {
             let cand = ClassId(i);
             if self.get_rep(cand) != cand { continue; }
-            if self.entities[i].entity_type != EntityType::Circle { continue; }
+            if self.entities[i].entity_type != EntityType::Conic { continue; }
+            if !self.is_connected(cand, self.circ_i) || !self.is_connected(cand, self.circ_j) { continue; }
             if points.iter().all(|&p| self.is_connected(p, cand)) {
                 return true;
             }

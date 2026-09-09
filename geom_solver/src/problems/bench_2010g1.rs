@@ -19,7 +19,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let f = foot(egraph, c, ab, "F");
 
     let ef = egraph.create_entity("EF".to_string(), Definition::new_line(e, f), EntityType::Line);
-    let circ_abc = egraph.create_entity("Circ_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Circle);
+    let circ_abc = egraph.create_entity("Circ_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
     let p = egraph.create_entity("P".to_string(), Definition::FreePoint, EntityType::Point);
     egraph.link_logical_incidence(p, ef);
     egraph.link_logical_incidence(p, circ_abc);
