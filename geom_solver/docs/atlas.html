@@ -227,19 +227,60 @@
     <h1 class="title">証明探索パイプライン全体図</h1>
     <p class="subtitle">e-graph上の合同閉包 + 定理マッチングによる幾何定理自動証明エンジンの、現在の構造と最適化の来歴。次に何へ着手するかを判断するための一枚。</p>
     <div class="meta-row">
-      <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/main.rs</span>
-      <span><b>ベンチ</b> 既存21問 + HAGeo-409由来8問 + 単体検証</span>
-      <span><b>最新コミット</b> 515d58c</span>
+      <span><b>対象</b> src/mmp_core・src/logic_core.rs・src/action_space.rs・src/main.rs</span>
+      <span><b>ベンチ</b> 既存24問 + HAGeo-409由来8問 + 単体検証</span>
+      <span><b>最新コミット</b> 762972d</span>
     </div>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="n">21</div><div class="l">登録済み定理</div></div>
-    <div class="stat"><div class="n">4/8</div><div class="l">HAGeo-409ベンチ solved</div></div>
-    <div class="stat"><div class="n">11</div><div class="l">出荷済み最適化</div></div>
-    <div class="stat"><div class="n">6</div><div class="l">検証の末に撤回</div></div>
-    <div class="stat"><div class="n">99%</div><div class="l">時間はdfs_match本体が占有(実測)</div></div>
+    <div class="stat"><div class="n">22</div><div class="l">登録済み定理(射影5定理はopt-in)</div></div>
+    <div class="stat"><div class="n">2/8</div><div class="l">HAGeo-409ベンチ 既定設定でsolved</div></div>
+    <div class="stat"><div class="n">76/96</div><div class="l">32問題×3回集計のベストスコア</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">並行して走っている方針トラック(§00)</div></div>
   </div>
+
+  <section id="tracks">
+    <div class="section-head"><span class="section-num">00</span><h2>今、並行して走っている4つの方針</h2></div>
+    <p class="section-note">ユーザー指示「マッチングの高速化と射影幾何への移行のタスクをきちんと分けないと両方中途半端になってしまいそう」を受けて新設した節。それぞれ独立にscopeし、混ぜて着手しないための一覧。詳細な来歴は§03、個別の未着手項目は§04を参照。</p>
+
+    <div class="ledger">
+
+      <div class="entry">
+        <div class="when">方針A<span class="sha">射影幾何</span></div>
+        <div>
+          <div class="headline"><h3>特殊ケースを型タグでなくincidenceで表現する統一</h3><span class="pill shipped">主要3種は完了</span></div>
+          <div class="desc">原則(メモリ済み): 「本質的には普通のオブジェクトの特殊ケース」は専用<code>EntityType</code>を作らず、標準の型+基準点へのincidenceで表す。<code>Direction→Point</code>(<code>line_infinity</code>との接続)、<code>Circle→Conic</code>(円周点I,Jとの接続)、<code>Angle→Scalar</code>(AnglePairは元々複比として実装済みだった)の3種を撤廃済み。次点はユーザー明示の優先順位: <b>方冪 → 直角三角形 → 二等辺三角形</b>関連定理の射影形移植(トロメイの定理は汎用性が低いため明示的に後回し)。<b>未着手。</b></div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">方針B<span class="sha">マッチング高速化</span></div>
+        <div>
+          <div class="headline"><h3>型統合が暗黙にキャッシュ粒度も粗くする問題への対処</h3><span class="pill shipped">教訓を確立</span></div>
+          <div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">方針C<span class="sha">MCTS/補助構成</span></div>
+        <div>
+          <div class="headline"><h3>個別定理の追加より、汎用の補助構成ヒューリスティックを優先</h3><span class="pill open">実験継続中</span></div>
+          <div class="desc">ユーザー指示「無闇に定理を追加してもノイズが増えるだけ、ondemand作図やmctsの補助点作図を改善すべき」に基づく路線。<code>SecondIntersectionOfLineAndConic</code>(直線と二次曲線のもう一方の交点)を汎用プリミティブとして追加したが、A/B検証の結果これ自体が決め手だった例はまだ無い。より大きな発見: <b>既定実行は<code>--mcts</code>を無効にしており、需要駆動の補助構成が尽きると探索を完全に打ち切る</b>(main.rsのリカバリーフェーズ)。<code>bench_2018silkroadp1</code>/<code>bench_2005ctstp1</code>は<code>--mcts --time=30</code>なら解けることを確認済み――既定の5秒予算では時間が足りないだけで、定理不足ではない。MCTSを既定で有効化する実験は既定5秒予算のままだと75/96とほぼ横ばい(nine_point_full/orthocenterの安定性とのトレードオフ)で、時間予算を上げる/MCTSの健全性チェックを強化するところまで踏み込まないと純増にならない。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">方針D<span class="sha">定理追加</span></div>
+        <div>
+          <div class="headline"><h3>個別問題向けの専用定理は最小限に</h3><span class="pill backlog">具体案は§04に温存</span></div>
+          <div class="desc">ユーザー方針: 定理を無闇に増やすとノイズ(UCB1バンディットの試行対象が増え、無関係な問題まで「一度は試す」コストを払う§04-#5)が増えるだけなので、本当に汎用性のある定理・作図プリミティブでなければ追加しない。ただし旧atlas診断(§04-#6, #7)で「新定理が必要」と特定済みの具体的なギャップ(bench_2011balkanmop1が要求する2直線版スパイラル相似、bench_2012egmop1/2018chnwesternmop5/2005usamop3固有の中間補題)は、方針Cで届かなければ最終手段として温存する。</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
 
   <section id="pipeline">
     <div class="section-head"><span class="section-num">01</span><h2>パイプライン全体</h2></div>
@@ -419,6 +460,59 @@ flowchart TD
         </div>
       </div>
 
+      <div class="entry">
+        <div class="when">出荷<span class="sha">7057848〜8994098</span></div>
+        <div>
+          <div class="headline"><h3>(別トラック)自由作図によるdiscoverモードの新設</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">証明目標を持たない自由探索+MCTSで「綺麗な幾何の定理」を自動発見するモード(<code>src/discover.rs</code>)を新設。美しさスコア・退化排除・仮説駆動プロービング(conjectureだけで定理を発火させる)・SVG描画などを追加。この過程でMCTSの調和共役点アクションの重複代表元バグ、平行2直線のintersectionによるPoint/Direction型混同バグを発見・修正した(後者は§00方針Aの布石)。本atlasの主対象(証明探索パイプライン)とは別トラックなので詳細は割愛。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">ad9a154</span></div>
+        <div>
+          <div class="headline"><h3>EntityType::Direction撤廃(§00方針Aの第1弾)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">「方向」は常に「無限遠直線L∞上の点」だったが独立した<code>EntityType::Direction</code>として存在しており、平行な2直線をIntersectionすると(常にPoint型で作られるため)本物のDirection型と型をまたいで統合を試みてしまう実バグの温床だった(discoverモードの自由探索で実際に発見)。型タグ自体を撤廃し、「無限遠点かどうか」を<code>is_connected(id, line_infinity)</code>という構造的事実だけで表現するようにした。</div>
+          <div class="evidence"><b>教訓化:</b> この移植で確立した「特殊ケースを型タグでなくincidenceで表す」原則をメモリに記録し、以降のCircle・Angleの移植でも踏襲した。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">bcdbdc4 / b12c1ec / 1e10d9a</span></div>
+        <div>
+          <div class="headline"><h3>EntityType::Circle撤廃、円をI,Jを通るConicに統一(§00方針A第2弾)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">円は古典的に「円周点(circular points at infinity) I=(1,i,0), J=(1,-i,0) を通る二次曲線」。<code>Circumcircle(a,b,c)</code>の数値評価を<code>ConicThrough5Points(a,b,c,I,J)</code>と同じ計算に統一し、「円かどうか」を<code>is_connected</code>によるI,Jへの接続で判定するようにした。準備として一般二次曲線の接線公式<code>calc_tangent_to_conic</code>を追加し、射影版の接弦定理(シュタイナーの定理・接線版)も新設。</div>
+          <div class="evidence"><b>副産物のバグ修正:</b> <code>calc_tangent_line</code>が円の係数を<code>[D,E,F,A]</code>の順で読んでいた(正しくは<code>[A,D,E,F]</code>)並び順バグを、対称すぎるテストケースでは検出できず非対称な配置に変えて初めて発見・修正した(教訓: 座標テストは対称配置を避ける)。<b>検証:</b> cargo test全パス、31問題スイートで正誤完全一致を確認。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">9902ad5</span></div>
+        <div>
+          <div class="headline"><h3>EntityType::Angle撤廃、有向角をCrossRatio型Scalarに統一(§00方針A第3弾)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">有向角<code>AnglePair(D1,D2)</code>の数値評価は既に<code>calc_cross_ratio(I,J,D1,D2)</code>として実装済みだったため、撤廃自体は型タグの削除のみ。ただし2つの副次バグを誘発した: (1) 方向点(旧Direction、今はPoint)は常にline_infinityに接続されているため、「2直線の交点で有向角を自動生成する」処理が退化角を大量生成――line_infinityを除外して修正。(2) 角度連鎖定理の自己束縛候補プールが長さ・積・複比まで無差別に含むようになり、無関係な値に候補cap(40)を食われる――<code>is_angle_value</code>による絞り込みで修正。</div>
+          <div class="evidence"><b>真因は性能回帰だった:</b> 上記2つを直しても32問題×3回集計が69/96→57/96のまま改善しなかった。原因は<code>type_generation</code>(型ごとのキャッシュ無効化カウンタ)がScalar全体で共有され、長さ・積・複比のどれか1つの新規生成でも角度連鎖定理の自己束縛キャッシュが無効化され続けていたこと。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタ+専用キャッシュに分離して解消(§00方針B)。同じ理由で「シュタイナーの定理の逆」のCrossRatioOfLines自己束縛も汚染されていたため、同じマーカー機構で対処。<b>検証:</b> cargo test 40件全パス、32問題×3回集計で73/96(旧69/96を上回る)。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">a80f6af</span></div>
+        <div>
+          <div class="headline"><h3>射影定理5種を全問題共通のデフォルトから外しopt-in化</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">ユーザー指示「射影幾何のタスクを一旦無視して最適化したらどうなるか」への対応。複比の透視射影不変性(点→線束/線束→点)+シュタイナーの定理(順方向・接線版・逆)の5定理は<code>main.rs</code>で全問題共通のデフォルト集合に混ぜたままだったが、実測するとこれらを全く必要としない問題(bench_2011armog10p6, bench_2010g1, nine_point_full, orthocenter, orthocenter_alt, miquel_quadrilateral)まで探索予算を奪われて不安定化していたと判明。問題名でopt-in(元々の設計方針)に戻した。</div>
+          <div class="evidence"><b>結果:</b> 上記6問題が3回集計で一度も落ちなくなり安定化。32問題×3回集計で76/96(25,25,26)——このatlas時点でのベストスコア。</div>
+        </div>
+      </div>
+
+      <div class="entry">
+        <div class="when">出荷<span class="sha">762972d</span></div>
+        <div>
+          <div class="headline"><h3>補助構成プリミティブ「直線と二次曲線のもう一方の交点」(§00方針C第1弾)</h3><span class="pill shipped">shipped</span></div>
+          <div class="desc">ユーザー指示「無闇に定理を追加してもノイズが増えるだけ、ondemand作図やmctsの補助点作図を改善すべき」への対応。オリンピック幾何で頻出する「直線を延長して既存の円と再び交わる点」を、個別定理ではなく汎用作図プリミティブ<code>Definition::SecondIntersectionOfLineAndConic</code>として追加(直線をP+tRとパラメータ化し、既知の根Pから2次方程式のもう一方の根を割り算無しで求める)。MCTSの<code>get_possible_actions</code>とオンデマンド作図(<code>defined_by_valid_nodes</code>/<code>execute_constructions</code>)の両方に配線。</div>
+          <div class="evidence"><b>検証:</b> 非対称な配置で座標の並び順バグを検出できる新規ユニットテスト込みcargo test 40件全パス。32問題×3回集計は75〜76/96で既知のflaky枠の範囲内(デフォルト実行では発火しない安全な追加)。<b>A/B検証で判明した誤帰属:</b> この機能を追加した直後にbench_2018silkroadp1/bench_2005ctstp1が<code>--mcts --time=30</code>で解けることを発見したが、機能を無効化しても同じ設定で解けたため、この2問の可解性はこの新機能とは無関係だった(→§00方針C・§04参照)。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -486,7 +580,7 @@ flowchart TD
         <div class="b-rank">6</div>
         <div>
           <h3>bench_2011balkanmop1(スパイラル相似)未解決の根本原因: 定理の距離配置が合わない</h3>
-          <div class="desc">「スパイラル相似の中点対応」定理を実測診断した結果、以前の「前提がStallで確立されない」という推測は不正確だったと判明。本問題ではE=AC∩BD(円に内接する四角形ABCDの対角線の交点)で、実際にログ上でも方冪の定理相当の積の等式(EA・EC=EB・ED)は正しく確立されている――問題は前提の未確立ではなく、<b>定理の構造そのものがこの配置に噛み合わない</b>こと。定理は<code>LineEA,LineEB,LineED,LineEC</code>という4本の"Eを通る互いに異なる直線"を要求する(distinct制約)。これは一般の(円で結ばれていない)スパイラル相似中心のような「4方向に開いた頂点」を想定した設計だが、bench_2011balkanmop1のE=AC∩BDでは、Eを通る直線は実際にはAC・BDの2本しかなく(A,E,Cが共線、B,E,Dが共線)、4本のdistinct制約を原理的に満たせない。必要なのは4直線版ではなく、「共点二弦の相似」と同じ2直線配置(LineAB,LineCDがPを通り、LineAD,LineCBは通らない、という非対称な4直線)に相当する、"2直線が交わる点における中点対応"専用の新しい定理――既存定理の使い回しでは届かず、新規のTheoremDef設計(角度対応の一般化+中点という特定の対応点への相似の遺伝)が必要。</div>
+          <div class="desc">「スパイラル相似の中点対応」定理を実測診断した結果、以前の「前提がStallで確立されない」という推測は不正確だったと判明。本問題ではE=AC∩BD(円に内接する四角形ABCDの対角線の交点)で、実際にログ上でも方冪の定理相当の積の等式(EA・EC=EB・ED)は正しく確立されている――問題は前提の未確立ではなく、<b>定理の構造そのものがこの配置に噛み合わない</b>こと。定理は<code>LineEA,LineEB,LineED,LineEC</code>という4本の"Eを通る互いに異なる直線"を要求する(distinct制約)。これは一般の(円で結ばれていない)スパイラル相似中心のような「4方向に開いた頂点」を想定した設計だが、bench_2011balkanmop1のE=AC∩BDでは、Eを通る直線は実際にはAC・BDの2本しかなく(A,E,Cが共線、B,E,Dが共線)、4本のdistinct制約を原理的に満たせない。必要なのは4直線版ではなく、「共点二弦の相似」と同じ2直線配置(LineAB,LineCDがPを通り、LineAD,LineCBは通らない、という非対称な4直線)に相当する、"2直線が交わる点における中点対応"専用の新しい定理――既存定理の使い回しでは届かず、新規のTheoremDef設計(角度対応の一般化+中点という特定の対応点への相似の遺伝)が必要。<b>方針D(§00)が「最終手段として温存」する具体案の1つ。</b></div>
           <div class="b-tags"><span class="tag">精密診断済み</span><span class="tag">要・新定理設計</span></div>
         </div>
       </div>
@@ -494,9 +588,27 @@ flowchart TD
       <div class="b-item">
         <div class="b-rank">7</div>
         <div>
-          <h3>残り4/8のHAGeo-409ベンチ: 探索チューニングでは届かない、要新定理</h3>
-          <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ--time=45秒 + <code>--mcts</code>(無方向な補助構成探索を有効化)でも証明に届かないことを確認した(bench_2005usamop3は需要が尽きて自ら探索を打ち切るが、他の2つは時間いっぱい補助構成を作り続けて終わる)。これはdfs_capやヒューリスティックの調整で届く範囲ではなく、各問題が要求する古典的な補題(2012 EGMO P1は「AEDFの共円性」のような中間結論、2018 China Western MO P5・2005 USAMO P3も同様に固有の中間補題)が、現状の21定理のどの組み合わせでも再現できないことを示す。bench_2011balkanmop1(#6参照)は原因を1つ具体的に特定できたが、残り3問は「どの補題が足りないか」の特定自体がまだ済んでいない――各問題の模範解答を読み、必要な中間結論を既存定理群の言葉(AnglePair/LengthSq/Product等)に翻訳できるかを1問ずつ検討するところから始める必要がある。</div>
+          <h3>残り4問(2012egmop1/2018chnwesternmop5/2005usamop3/2011balkanmop1): 探索チューニングでは届かない、要新定理</h3>
+          <div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ--time=45秒 + <code>--mcts</code>(無方向な補助構成探索を有効化)でも証明に届かないことを確認した(bench_2005usamop3は需要が尽きて自ら探索を打ち切るが、他の2つは時間いっぱい補助構成を作り続けて終わる)。これはdfs_capやヒューリスティックの調整で届く範囲ではなく、各問題が要求する古典的な補題(2012 EGMO P1は「AEDFの共円性」のような中間結論、2018 China Western MO P5・2005 USAMO P3も同様に固有の中間補題)が、現状の定理群のどの組み合わせでも再現できないことを示す。bench_2011balkanmop1(#6参照)は原因を1つ具体的に特定できたが、残り3問は「どの補題が足りないか」の特定自体がまだ済んでいない――各問題の模範解答を読み、必要な中間結論を既存定理群の言葉(AnglePair/LengthSq/Product等)に翻訳できるかを1問ずつ検討するところから始める必要がある。<b>注記(このatlas更新時点):</b> 当初この4問と一緒に「探索チューニングでは届かない」とされていたbench_2018silkroadp1/bench_2005ctstp1は、この4問とは性質が違うと判明したため#8へ切り出した――この4問だけが本当に新定理・新補題を要求するグループ。</div>
           <div class="b-tags"><span class="tag">MCTS込みで確認済み・探索側の問題ではない</span><span class="tag">要・新定理設計×3</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">8</div>
+        <div>
+          <h3>bench_2018silkroadp1/bench_2005ctstp1は新定理不要、既定のMCTS無効+5秒予算が原因</h3>
+          <div class="desc">§00方針Cで発見。<code>--mcts --time=30</code>を付けると<code>bench_2018silkroadp1</code>は3/3回とも一貫して9.1秒で、<code>bench_2005ctstp1</code>も2/3回(18〜33秒)で証明に到達する。A/Bテストで、新設した<code>SecondIntersectionOfLineAndConic</code>を無効化しても同じ結果だったため、<b>既存のMCTSアクションだけで解けている</b>ことを確認済み。<code>main.rs</code>のリカバリーフェーズは<code>--mcts</code>が付いていないと需要駆動の補助構成が尽きた時点で探索を完全に打ち切る実装になっており(§01のパイプライン図の<code>J -->|"いいえ"| L["探索打ち切り"]</code>がまさにこれ)、既定の5秒という時間予算はMCTSがこれらを解くのに要する時間(9〜30秒超)より短い。つまりこの2問は「詰んでいる」のではなく「既定設定でMCTSを試す機会も時間も与えられていない」だけ――#7の4問とは根本的に別カテゴリなので、新定理設計の対象からは除外してよい。</div>
+          <div class="b-tags"><span class="tag">A/B検証済み</span><span class="tag">新定理は不要・設定の問題</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">9</div>
+        <div>
+          <h3>MCTSを既定で有効化するには、時間予算と健全性チェックの両方に手を入れる必要がある</h3>
+          <div class="desc">#8を踏まえ、既定の5秒予算のまま<code>--mcts</code>だけ有効化する32問題×3回の実測を行った。結果は75/96で現状(76/96、opt-in版)とほぼ横ばい――ある回では<code>bench_2011balkanmop1</code>が新たに通る一方、別の回では<code>nine_point_full</code>/<code>orthocenter</code>が同時に不安定化した(<code>main.rs</code>に残る「MCTSの無方向な探索は健全性チェックの死角をゼロにはできない」という既知の慎重さが実際に顔を出した形)。純増にするには(a) 既定の時間予算を5秒から引き上げる(#8のケースが要する9〜30秒をカバーできる水準)、(b) MCTSが誤った局所伝播ショートカット(propagate_line/point/conic_uniqueness)を踏み抜く残存経路を塞ぐ、の両方が必要と見られ、どちらもこのatlas更新時点では未着手。<b>この2つは互いに独立な作業なので、一緒くたに検証せず個別にA/Bを取ること</b>(§00方針Cのスコープを保つため)。</div>
+          <div class="b-tags"><span class="tag">実測: 現状ほぼ横ばい</span><span class="tag">要・時間予算+健全性チェックの両方</span></div>
         </div>
       </div>
 
