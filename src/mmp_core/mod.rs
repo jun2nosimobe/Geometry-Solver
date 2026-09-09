@@ -393,6 +393,10 @@ pub struct EGraph {
     // で計算した結果をここへ差し込むと、bump_heat_bonusが同じグループの
     // 他のメンバーにも(小さい)ボーナスを伝播するようになる。
     pub degeneration_groups: Option<crate::padic_eval::DegenerationRelations>,
+    // 🌟 bump_heat_bonusが退化グループの他のメンバーに伝播するボーナスの
+    // 割合(0.5=元の半分)。main.rsの--degen-heat-factor=Xでチューニング
+    // 実験できるようにCLIから調整可能にしてある。
+    pub degeneration_heat_factor: f64,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -480,6 +484,7 @@ impl EGraph {
             angle_generation: 0,
             plain_scalar_generation: 0,
             degeneration_groups: None,
+            degeneration_heat_factor: 0.5,
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Scalar);
@@ -518,7 +523,6 @@ impl EGraph {
     // 伝播機構を使わない既存の全ての呼び出し元・全ての問題に一切の副作用が
     // 無い。
     pub fn bump_heat_bonus(&mut self, id: ClassId, amount: f64) {
-        const GROUP_PROPAGATION_FACTOR: f64 = 0.5;
         let rep = self.get_rep(id);
         self.entities[rep.0].heat_bonus += amount;
         // members_of は &self のみ(直接観測された辺を返すだけで推移閉包を
@@ -528,10 +532,11 @@ impl EGraph {
             Some(rel) => rel.members_of(rep),
             None => return,
         };
+        let factor = self.degeneration_heat_factor;
         for m in members {
             let m_rep = self.get_rep(m);
             if m_rep != rep {
-                self.entities[m_rep.0].heat_bonus += amount * GROUP_PROPAGATION_FACTOR;
+                self.entities[m_rep.0].heat_bonus += amount * factor;
             }
         }
     }

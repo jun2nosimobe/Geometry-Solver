@@ -230,6 +230,18 @@ fn main() {
         .find_map(|a| a.strip_prefix("--degen-heat-seed="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(12345);
+    let degen_heat_min_hits: u32 = args.iter()
+        .find_map(|a| a.strip_prefix("--degen-heat-min-hits="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    // 🌟 EGraph::bump_heat_bonusが退化グループへ伝播するボーナスの割合。
+    // 既定0.5では32問題スイートで効果が統計誤差に埋もれたため
+    // (baseline 68/96 vs 0.5で69/96)、再コンパイルせずに値を振れるように
+    // CLIから調整可能にした。
+    let degen_heat_factor: f64 = args.iter()
+        .find_map(|a| a.strip_prefix("--degen-heat-factor="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.5);
 
     println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {}, heat-cap: {}/{})",
         problem_name, time_budget_secs,
@@ -245,9 +257,10 @@ fn main() {
 
     if use_degen_heat {
         let start = std::time::Instant::now();
-        let groups = padic_eval::compute_degeneration_groups(&egraph, degen_heat_seed, 2);
-        println!("  🧊 [退化発見] 自由点の退化ペアを走査して関連グループを計算しました ({:.2?})。以後、熱の伝播ボーナスに使います。", start.elapsed());
+        let groups = padic_eval::compute_degeneration_groups(&egraph, degen_heat_seed, degen_heat_min_hits);
+        println!("  🧊 [退化発見] 自由点の退化ペアを走査して関連グループを計算しました ({:.2?}, factor={})。以後、熱の伝播ボーナスに使います。", start.elapsed(), degen_heat_factor);
         egraph.degeneration_groups = Some(groups);
+        egraph.degeneration_heat_factor = degen_heat_factor;
     }
 
     let mut prover = ProverEngine::new(egraph);
