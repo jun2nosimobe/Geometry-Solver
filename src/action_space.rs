@@ -176,7 +176,17 @@ impl ActionGenerator {
 
         // 6. 調和共役点: 既に共線であることが構造的にわかっている3点があれば、
         // その第4調和点を作る完全四辺形作図を候補にする(円錐曲線は使わない)。
-        for &l in &lines {
+        // 🐛 FIX(自由探索モードの実測で判明): ここは1〜5と違って
+        // weighted_pickによるサンプリングをせず「全ての直線」に対して
+        // 毎回1件ずつ候補を積んでいた。調和共役の作図(construction.rs)は
+        // それ自体がP,Q,R,Sという補助点と複数の補助直線を生むため、
+        // 「調和共役を作る→直線が増える→次のラウンドで調和共役候補が
+        // さらに増える」という正のフィードバックが成立し、実測では
+        // 60秒48ステップの探索で生成された予想候補のほぼ全てが
+        // Harm(Harm(Harm(...)))という入れ子の足場だけを指す状態になって
+        // いた(古典的な構図に一切到達できない)。他の候補生成と同じく
+        // 重み付きサンプリングで少数の直線に絞る。
+        for &l in self.weighted_pick(&lines, egraph, (num_samples / 4).max(1), target).iter() {
             let l = egraph.get_rep(l);
             // 🐛 FIX: comp.subobjectsは同じ代表元を指す異なる(マージ前の)ClassIdを
             // 重複して持ちうる(get_rep後の値が同じでも別々のスロットとして
@@ -188,6 +198,15 @@ impl ActionGenerator {
             let mut pts_on_l: Vec<ClassId> = egraph.entities[l.0].components.first()
                 .map(|c| c.subobjects.iter().map(|&s| egraph.get_rep(s))
                     .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
+                    // 🐛 FIX: Action::HarmonicConjugateはtry_push_defを経由せず
+                    // actions.pushで直接積まれるため、Constructの候補生成が
+                    // entities_of_typeで課しているmcts_depthのハード上限を
+                    // 唯一すり抜けていた。その結果、調和共役だけが3段・4段と
+                    // 無制限に入れ子になれる(実測でHarm(Harm(Harm(...)))を確認)。
+                    // 入力点にも同じ上限・同じ除外(無限遠点/内部定数)を課す。
+                    .filter(|&s| egraph.entities[s.0].mcts_depth <= Self::MAX_MCTS_CHAIN_DEPTH)
+                    .filter(|&s| !Self::is_special_constant(egraph, s))
+                    .filter(|&s| !egraph.is_connected(s, egraph.line_infinity))
                     .collect())
                 .unwrap_or_default();
             pts_on_l.sort_unstable_by_key(|id| id.0);

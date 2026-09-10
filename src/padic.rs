@@ -55,15 +55,24 @@ impl PInt {
     pub fn one() -> Self { let mut d = [0; PREC]; d[0] = 1; Self { digits: d } }
     fn two() -> Self { let mut d = [0; PREC]; d[0] = 2; Self { digits: d } }
 
-    /// 通常のi64をmod Pへ落としてから、0桁目だけに置いた値として作る
-    /// (小さな整数定数――座標のオフセット等――をP進数へ持ち込むためのもの。
-    /// より高い桁を持つ値が欲しい場合はscaled_by_pと組み合わせる)。
+    /// 通常のi64を、Z/P^PRECZ の元として正しく持ち込む(基数Pで桁分解する)。
+    ///
+    /// 🐛 FIX: 以前は「vをmod Pへ落として0桁目に置くだけ」の実装だったが、
+    /// これは負の数に対して誤った元を返していた: 例えば-1は
+    /// P^4-1 = (P-1) + (P-1)P + (P-1)P² + (P-1)P³ (全桁がP-1)であって、
+    /// 0桁目だけがP-1の元(=整数P-1)とは別物である。実際にdet4の符号を
+    /// 検証する単体テストがこれで偽陽性の失敗をした。i64は必ずP^4未満
+    /// なので、絶対値を基数Pで桁分解し、負なら0から引く形で符号を付ける。
     pub fn from_i64_mod_p(v: i64) -> Self {
-        let mut r = v % P;
-        if r < 0 { r += P; }
-        let mut d = [0; PREC];
-        d[0] = r;
-        Self { digits: d }
+        let neg = v < 0;
+        let mut mag = v.unsigned_abs();
+        let mut d = [0i64; PREC];
+        for slot in d.iter_mut() {
+            *slot = (mag % P as u64) as i64;
+            mag /= P as u64;
+        }
+        let out = Self { digits: d };
+        if neg { Self::zero().sub(&out) } else { out }
     }
 
     /// 0桁目が非ゼロ(=P進付値0、単数)な乱数元。自由点の"一般的な"座標

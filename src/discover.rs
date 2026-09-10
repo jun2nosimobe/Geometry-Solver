@@ -156,6 +156,19 @@ pub fn run(args: &[String]) {
     // 問題のtarget_fact(証明目標)はこのモードでは使わない(自由探索は
     // そもそも目標を持たない)ため読み捨て、initial_factsだけを
     // main.rsの通常経路と同じ形で適用する。
+    // 🌟 総当たり検出(report_sweep_discoveries)の候補数上限。既定を大きめに
+    // 取るのは、自由探索が進むほど「問題・定理由来の本物の実体」も増えて
+    // いくため、上限が小さいと肝心の古典的な点(外心・垂心・重心など)が
+    // 候補枠から押し出されてしまうため(実測: 上限22だと45秒探索後の
+    // triangle_centersでオイラー線が候補集合に入らず検出できなかった)。
+    let sweep_pts: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--sweep-points="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(48);
+    let sweep_lines: usize = args.iter()
+        .find_map(|a| a.strip_prefix("--sweep-lines="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(36);
     let preset: Option<&str> = args.iter()
         .find_map(|a| a.strip_prefix("--preset="));
     let seed_names: Vec<String> = match preset {
@@ -178,7 +191,7 @@ pub fn run(args: &[String]) {
         }
         egraph.apply_congruence_closure();
         let label = format!("自由点{}個", seed_points);
-        let sections = run_one_seed(&label, egraph, max_steps, sims_per_step, time_budget_secs,
+        let sections = run_one_seed(&label, egraph, sweep_pts, sweep_lines, max_steps, sims_per_step, time_budget_secs,
             use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
         all_sections.extend(sections);
     } else {
@@ -202,7 +215,7 @@ pub fn run(args: &[String]) {
                 }
             }
             egraph.apply_congruence_closure();
-            let sections = run_one_seed(name, egraph, max_steps, sims_per_step, time_budget_secs,
+            let sections = run_one_seed(name, egraph, sweep_pts, sweep_lines, max_steps, sims_per_step, time_budget_secs,
                 use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
             all_sections.extend(sections);
         }
@@ -218,6 +231,8 @@ pub fn run(args: &[String]) {
 fn run_one_seed(
     seed_label: &str,
     mut egraph: EGraph,
+    sweep_pts: usize,
+    sweep_lines: usize,
     max_steps: usize,
     sims_per_step: usize,
     time_budget_secs: u64,
@@ -261,6 +276,11 @@ fn run_one_seed(
     if use_probe {
         probe_and_expand_conjectures(&mut engine, probe_dfs_budget, probe_rounds);
     }
+
+    // 🌟 新設: 全対比較による一致・共線性の総当たり検出(report_sweep_discoveries
+    // のドキュメント参照)。従来のreport_conjecturesは「作図が退化した時」しか
+    // 拾えなかったため、実測で報告0件が続いていた。
+    report_sweep_discoveries(&mut engine.prover.egraph, top_n, sweep_pts, sweep_lines);
 
     let sections = report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_time_secs);
     report_heat_ranking(&engine.prover.egraph, 10);
@@ -787,4 +807,259 @@ fn report_heat_ranking(egraph: &EGraph, top_n: usize) {
             e.uses.len() as f64 * 0.5, e.name, e.entity_type);
     }
     println!("=============================\n");
+}
+
+/// 🌟 ユーザー要望:「mctsとon demand construction, heatなどを用いて
+/// 非自明な定理を発見する部分を改善して、実際に見つけた定理を報告して
+/// ほしい」への対応。
+///
+/// 従来の予想検出(eval.rs::log_conjecture_candidate)は「作図が0/0に退化
+/// した時」しか発火せず、実測ではその全てが調和共役の内部足場の退化で、
+/// 報告に値するものが0件だった。ここでは代わりに、自由探索で組み上がった
+/// e-graph全体を独立な乱数座標で複数回評価し、
+///   (a) 同型の全ペアのうち射影的に一致するもの(=独立に作った2つの図形が
+///       実は同一。3直線の共点性はIntersection同士の一致として現れる)
+///   (b) 熱量上位の点の3つ組のうち共線なもの(オイラー線型の発見)
+/// を総当たりで検出する。いずれも「まだ記号的には統合されていない」
+/// 「構造的にはまだ共線と分かっていない」ものだけに絞るので、報告される
+/// のは現在の定理群では導けていない関係だけになる。
+fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize, sweep_lines: usize) -> usize {
+    const SEEDS: [u64; 3] = [0xC0FFEE, 0xBEEF77, 0x1234ABCD];
+    let mut namer = PrettyNamer::new();
+
+    // 🌟 崩壊検出(実測で必要と判明): 自由探索は稀に誤ったマージを連鎖させ、
+    // e-graph全体を退化した配置(多数の点が1直線に乗る等)へ潰してしまう。
+    // その状態の数値評価から出てくる「一致」「共円」は全て崩壊の言い換えで
+    // あって発見ではない(実際に「28点が共円」という報告が出た)。図の土台で
+    // ある自由点が一般の位置にあるか(2点が一致していないか、3点が共線に
+    // なっていないか)を先に確かめ、崩れていれば報告自体を打ち切る。
+    let free_pts: Vec<ClassId> = (0..egraph.entities.len()).map(ClassId)
+        .filter(|&id| egraph.get_rep(id) == id
+            && egraph.entities[id.0].entity_type == EntityType::Point
+            && matches!(egraph.entities[id.0].original_definition, Definition::FreePoint))
+        .collect();
+    for i in 0..free_pts.len() {
+        for j in (i + 1)..free_pts.len() {
+            for k in (j + 1)..free_pts.len() {
+                let trip = [free_pts[i], free_pts[j], free_pts[k]];
+                if crate::padic_eval::verify_property(egraph, &SEEDS, &trip, crate::padic_eval::PropertyKind::Collinear) {
+                    println!("\n⚠️  [崩壊検出] 自由点 {} , {} , {} が数値的に共線になっています。自由探索中の誤ったマージでe-graphが退化した可能性が高いため、この種配置の発見報告は信頼できないものとして打ち切ります。",
+                        namer.label(egraph, trip[0]), namer.label(egraph, trip[1]), namer.label(egraph, trip[2]));
+                    return 0;
+                }
+            }
+        }
+    }
+
+    let pairs = crate::padic_eval::find_generic_coincidences(egraph, &SEEDS);
+    let mut kept: Vec<(ClassId, ClassId, usize)> = Vec::new();
+    let mut degenerate_skipped = 0usize;
+    for (a, b) in pairs {
+        if has_degenerate_ancestor(egraph, a, b) { degenerate_skipped += 1; continue; }
+        let steps = describe_construction(egraph, a, b).2.len();
+        kept.push((a, b, steps));
+    }
+    // 構成手順が短い(=命題として提示しやすい)ものを上位にする。
+    kept.sort_by_key(|&(_, _, steps)| steps);
+
+    println!("\n=== 🔬 全対比較による一致の検出 (独立な乱数{}回すべてで一致、退化した構成として除外{}件) ===", SEEDS.len(), degenerate_skipped);
+    if kept.is_empty() {
+        println!("  (まだ記号的に統合されていない一致は見つかりませんでした)");
+    }
+    for (rank, &(a, b, steps)) in kept.iter().take(top_n).enumerate() {
+        let na = namer.label(egraph, a);
+        let nb = namer.label(egraph, b);
+        let ty = egraph.entities[egraph.get_rep(a).0].entity_type;
+        println!("\n{}. [{:?}] {} ≡ {}  (構成手順{}段)", rank + 1, ty, na, nb, steps);
+        let (_, _, lines, _, _) = describe_construction(egraph, a, b);
+        for line in lines.iter().take(14) { println!("     {}", line); }
+    }
+
+    // 共線性(3点)の検出。構造的に既に共線と分かっている組は「既知」なので除外する。
+    let triples = crate::padic_eval::find_generic_collinear_triples(egraph, &SEEDS, sweep_pts);
+    let mut fresh: Vec<(ClassId, ClassId, ClassId)> = Vec::new();
+    let raw_triples = triples.len();
+    let (mut rej_known, mut rej_degen) = (0usize, 0usize);
+    for (a, b, c) in triples {
+        let reps = [egraph.get_rep(a), egraph.get_rep(b), egraph.get_rep(c)];
+        if egraph.find_common_line(&reps).is_some() { rej_known += 1; continue; } // 構造的に既知
+        if has_degenerate_ancestor(egraph, a, b) || has_degenerate_ancestor(egraph, a, c) { rej_degen += 1; continue; }
+        fresh.push((a, b, c));
+    }
+    if std::env::var("SWEEP_DEBUG").is_ok() {
+        eprintln!("  [sweep-debug] 共線: 生検出{}件 -> 既知として除外{}件 / 退化として除外{}件 / 報告{}件",
+            raw_triples, rej_known, rej_degen, fresh.len());
+    }
+    println!("\n=== 📐 未知の共線性の検出 (独立な乱数{}回すべてで共線) ===", SEEDS.len());
+    if fresh.is_empty() {
+        println!("  (構造的にまだ知られていない共線性は見つかりませんでした)");
+    }
+    for (rank, set) in maximal_verified_sets(egraph, &SEEDS, fresh.iter().map(|&(a, b, c)| vec![a, b, c]).collect(), crate::padic_eval::PropertyKind::Collinear).into_iter().take(top_n).enumerate() {
+        let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
+        println!("  {}. {} は共線", rank + 1, labels.join(" , "));
+        for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
+    }
+
+    // 🌟 3直線の共点性。交点が実体として作られていなくても検出できる
+    // (「3本の高さは1点で交わる」型の結論はまさにこの形)。既に構造的に
+    // 共有点が分かっている3本組は「既知」として除外する。
+    let conc = crate::padic_eval::find_generic_concurrent_lines(egraph, &SEEDS, sweep_lines);
+    let mut fresh_conc: Vec<(ClassId, ClassId, ClassId)> = Vec::new();
+    for (a, b, c) in conc {
+        if shares_known_point(egraph, a, b, c) { continue; }
+        // 🌟 定義上の自明性の除外: 3直線がどれも「同じ点Pを通るように作られた」
+        // 直線(LineThrough(P,_) / Perpendicular(_ ⟂ P) / Parallel(_ ∥ P) など)
+        // なら、Pで交わるのは作図の言い換えでしかない。実測でも「AB、ABの
+        // 垂直二等分線、…が Mid(A,B) で交わる」のような組が上位に並んでいた。
+        if definitional_common_point(egraph, &[a, b, c]) { continue; }
+        fresh_conc.push((a, b, c));
+    }
+    println!("\n=== ✳️  未知の共点性の検出 (3直線が1点で交わる) ===");
+    if fresh_conc.is_empty() { println!("  (構造的にまだ知られていない共点性は見つかりませんでした)"); }
+    for (rank, set) in maximal_verified_sets(egraph, &SEEDS, fresh_conc.iter().map(|&(a, b, c)| vec![a, b, c]).collect(), crate::padic_eval::PropertyKind::Concurrent).into_iter().take(top_n).enumerate() {
+        let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
+        println!("  {}. {} は1点で交わる", rank + 1, labels.join(" , "));
+        for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
+    }
+
+    // 🌟 4点の共円性(九点円のような「由来の異なる点が実は同じ円に乗る」発見)。
+    let quads = crate::padic_eval::find_generic_concyclic_quadruples(egraph, &SEEDS, sweep_pts);
+    let mut fresh_quads: Vec<[ClassId; 4]> = Vec::new();
+    for q in quads {
+        if shares_known_conic(egraph, &q) { continue; }
+        // 4点のうち3点が既に共線なら、共円は「退化した円=直線」の言い換えに過ぎない。
+        let mut degenerate = false;
+        for i in 0..4 { for j in (i+1)..4 { for k in (j+1)..4 {
+            if egraph.find_common_line(&[egraph.get_rep(q[i]), egraph.get_rep(q[j]), egraph.get_rep(q[k])]).is_some() { degenerate = true; }
+        }}}
+        if degenerate { continue; }
+        fresh_quads.push(q);
+    }
+    println!("\n=== ⭕ 未知の共円性の検出 (4点が同一円周上) ===");
+    if fresh_quads.is_empty() { println!("  (構造的にまだ知られていない共円性は見つかりませんでした)"); }
+    for (rank, set) in maximal_verified_sets(egraph, &SEEDS, fresh_quads.iter().map(|q| q.to_vec()).collect(), crate::padic_eval::PropertyKind::Concyclic).into_iter().take(top_n).enumerate() {
+        let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
+        println!("  {}. {}点 {} は共円", rank + 1, set.len(), labels.join(" , "));
+        for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
+    }
+
+    kept.len() + fresh.len() + fresh_conc.len() + fresh_quads.len()
+}
+
+/// 3直線が「構造的に既に共有点を持つと分かっている」か(=共点性が既知か)。
+fn shares_known_point(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId) -> bool {
+    let ra = egraph.get_rep(a);
+    let pts: Vec<ClassId> = egraph.entities[ra.0].components.first()
+        .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
+            .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
+            .collect())
+        .unwrap_or_default();
+    pts.iter().any(|&p| egraph.is_connected(p, b) && egraph.is_connected(p, c))
+}
+
+/// 4点が「構造的に既に同じ二次曲線に乗ると分かっている」か(=共円性が既知か)。
+fn shares_known_conic(egraph: &EGraph, q: &[ClassId; 4]) -> bool {
+    let r0 = egraph.get_rep(q[0]);
+    let conics: Vec<ClassId> = egraph.entities[r0.0].components.first()
+        .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
+            .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Conic)
+            .collect())
+        .unwrap_or_default();
+    conics.iter().any(|&c| q[1..].iter().all(|&p| egraph.is_connected(p, c)))
+}
+
+
+/// 🌟 報告の可読性のための集約(検証つき)。
+///
+/// 検出結果は「3点組」「4点組」という部分集合の形で大量に出るため、素朴に
+/// 並べると同じ円・同じ交点を指すだけの組が何十件も並んで読めない。かと
+/// いって「共有要素が多い集合どうしを無条件に併合する」と偽の大集合が
+/// できてしまう(実測: 垂線の族のような平行な直線の集まりが連鎖的に
+/// 併合され、35本が1つの"共点"グループになった)。
+///
+/// そこで、検出された各組を種にして、他の組に現れた要素を1つずつ足しては
+/// 「その集合全体で本当に性質が成り立つか」をverify_propertyで数値的に
+/// 確かめ、成り立つ場合だけ採用する(貪欲な極大化)。こうして報告する集合は
+/// 常に、主張が集合全体で検証済みであることが保証される。
+fn maximal_verified_sets(
+    egraph: &EGraph,
+    seeds: &[u64],
+    detected: Vec<Vec<ClassId>>,
+    kind: crate::padic_eval::PropertyKind,
+) -> Vec<Vec<ClassId>> {
+    // 成長候補のプール: 検出結果に登場した全要素。
+    let mut pool: Vec<ClassId> = Vec::new();
+    for set in &detected {
+        for &x in set { if !pool.contains(&x) { pool.push(x); } }
+    }
+
+    let mut out: Vec<Vec<ClassId>> = Vec::new();
+    let mut seen: Vec<Vec<usize>> = Vec::new();
+    for base in detected {
+        // 既に採用済みの極大集合に完全に含まれている種は飛ばす。
+        if out.iter().any(|g| base.iter().all(|x| g.contains(x))) { continue; }
+        let mut set = base;
+        for &c in &pool {
+            if set.contains(&c) { continue; }
+            let mut trial = set.clone();
+            trial.push(c);
+            if crate::padic_eval::verify_property(egraph, seeds, &trial, kind) { set = trial; }
+        }
+        let mut key: Vec<usize> = set.iter().map(|x| x.0).collect();
+        key.sort_unstable();
+        if seen.contains(&key) { continue; }
+        seen.push(key);
+        out.push(set);
+    }
+    out.sort_by_key(|g| std::cmp::Reverse(g.len()));
+    out
+}
+
+/// 報告に出てくるラベルが実際に何なのか(どう作図された図形か)を
+/// 1段だけ展開して示す。PrettyNamerのラベルは短くて読みやすい代わりに
+/// それ自体では中身が分からないため。
+fn explain_entities(egraph: &EGraph, namer: &mut PrettyNamer, ids: &[ClassId]) -> Vec<String> {
+    let mut out = Vec::new();
+    for &id in ids {
+        let rep = egraph.get_rep(id);
+        let def = egraph.entities[rep.0].original_definition.clone();
+        let me = namer.label(egraph, id);
+        let mut parent_labels: rustc_hash::FxHashMap<ClassId, String> = rustc_hash::FxHashMap::default();
+        for pid in def.get_parents() {
+            let l = namer.label(egraph, pid);
+            parent_labels.insert(egraph.get_rep(pid), l);
+        }
+        let body = egraph.format_definition_with(&def, |q| {
+            parent_labels.get(&egraph.get_rep(q)).cloned()
+                .unwrap_or_else(|| egraph.entities[egraph.get_rep(q).0].name.chars().take(18).collect())
+        });
+        out.push(format!("{} = {}", me, body));
+    }
+    out
+}
+
+/// 3直線(以上)が「定義からして同じ点を通る」か。LineThrough(P,Q)ならP,Qが、
+/// Perpendicular(l ⟂ P)/Parallel(l ∥ P)/TangentLine(c, P)ならPが、その直線の
+/// 上にあることは作図の定義から自明なので、この意味での共有点があれば
+/// 共点性は新しい発見ではない。
+fn definitional_common_point(egraph: &EGraph, lines: &[ClassId]) -> bool {
+    let pts_on = |l: ClassId| -> Vec<ClassId> {
+        let rep = egraph.get_rep(l);
+        let mut acc: Vec<ClassId> = Vec::new();
+        let defs: Vec<crate::mmp_core::Definition> = egraph.entities[rep.0].components.first()
+            .map(|c| c.definitions.clone()).unwrap_or_default();
+        for def in defs.iter().chain(std::iter::once(&egraph.entities[rep.0].original_definition)) {
+            match def {
+                Definition::LineThroughPoints(a, b) => { acc.push(egraph.get_rep(*a)); acc.push(egraph.get_rep(*b)); }
+                Definition::PerpendicularLine(_, p)
+                | Definition::ParallelLine(_, p)
+                | Definition::TangentLine(_, p) => acc.push(egraph.get_rep(*p)),
+                _ => {}
+            }
+        }
+        acc
+    };
+    let Some((first, rest)) = lines.split_first() else { return false };
+    let base = pts_on(*first);
+    base.iter().any(|&p| rest.iter().all(|&l| pts_on(l).contains(&p)))
 }

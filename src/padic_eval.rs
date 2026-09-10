@@ -18,6 +18,7 @@
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use crate::padic::{
+    cross3,
     self, affine_point, intersection, line_through_points, midpoint, parallel_line,
     perpendicular_line, projectively_equal_mod_p, DivOutcome, PInt, Triple,
 };
@@ -78,6 +79,9 @@ pub struct DegenEvaluator<'a> {
     egraph: &'a EGraph,
     cache: FxHashMap<ClassId, Option<DegenShape>>,
     free_coords: FxHashMap<ClassId, (PInt, PInt)>,
+    /// 評価中のClassId(自己参照的な定義への再突入検出用。本体の評価器の
+    /// in_progressと同じ役割)。
+    in_progress: rustc_hash::FxHashSet<ClassId>,
     rng: StdRng,
 }
 
@@ -101,16 +105,42 @@ impl<'a> DegenEvaluator<'a> {
                 free_coords.insert(a_rep, (bx.add(&dx.scaled_by_p()), by.add(&dy.scaled_by_p())));
             }
         }
-        Self { egraph, cache: FxHashMap::default(), free_coords, rng }
+        Self { egraph, cache: FxHashMap::default(), free_coords, in_progress: rustc_hash::FxHashSet::default(), rng }
     }
 
+    /// 🐛 FIX(実測で判明): 以前は「代表元のoriginal_definitionだけを見る」
+    /// 「循環防止にキャッシュへNoneを先置きする」という2点で、本体の評価器
+    /// (mmp_core/eval.rs::evaluate_node_inner)と挙動が食い違っていた。
+    /// マージが進んだe-graphでは1つの同値類に複数の定義が同居し、しかも
+    /// それらが互いを参照し合う(A = Intersection(Line(A,B), Line(A,C)) の
+    /// ように、証明された等式の結果として自己参照的な定義が正しく同居する)
+    /// のが普通なので、original_definition決め打ちだと循環に当たった瞬間に
+    /// 評価不能になる。実測では45秒の自由探索後、triangle_centersの候補点
+    /// 13件のうち12件(A・BのようなただのFreePointを含む)が評価不能になり、
+    /// 探索前なら検出できていたオイラー線が一切検出できなくなっていた。
+    /// 本体の評価器と同じく「コンポーネント内の全定義を、計算可能なものが
+    /// 見つかるまで順に試す」「再突入はin_progressで検出し、成功した結果
+    /// だけをキャッシュする」方式に揃える。
     pub fn eval(&mut self, id: ClassId) -> Option<DegenShape> {
         let rep = self.egraph.get_rep(id);
         if let Some(v) = self.cache.get(&rep) { return *v; }
-        self.cache.insert(rep, None); // 循環防止のプレースホルダ
-        let def = self.egraph.entities[rep.0].original_definition.clone();
-        let result = self.eval_def(rep, &def);
-        self.cache.insert(rep, result);
+        if !self.in_progress.insert(rep) { return None; }
+
+        let defs: Vec<Definition> = self.egraph.entities[rep.0].components.first()
+            .map(|c| c.definitions.clone())
+            .unwrap_or_default();
+        let mut result = None;
+        for def in &defs {
+            if let Some(v) = self.eval_def(rep, def) { result = Some(v); break; }
+        }
+        if result.is_none() {
+            // componentsが空(定数ノード等)の場合の保険。
+            let od = self.egraph.entities[rep.0].original_definition.clone();
+            result = self.eval_def(rep, &od);
+        }
+
+        self.in_progress.remove(&rep);
+        if result.is_some() { self.cache.insert(rep, result); }
         result
     }
 
@@ -336,6 +366,73 @@ pub fn compute_degeneration_groups(egraph: &EGraph, seed: u64, min_hits: u32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::padic::PInt as TPInt;
+
+    fn pi(v: i64) -> TPInt { TPInt::from_i64_mod_p(v) }
+
+    /// 🌟 det4(4x4行列式の余因子展開)の符号と大きさを、手計算できる
+    /// 行列で検証する。共円判定の土台なので、符号を1つ間違えるだけで
+    /// 「偽の発見」を静かに量産してしまう。
+    #[test]
+    fn det4_matches_hand_computed_values() {
+        let diag = [
+            [pi(1), pi(0), pi(0), pi(0)],
+            [pi(0), pi(2), pi(0), pi(0)],
+            [pi(0), pi(0), pi(3), pi(0)],
+            [pi(0), pi(0), pi(0), pi(4)],
+        ];
+        assert_eq!(det4(&diag), pi(24), "対角行列の行列式は積(24)であるべき");
+
+        // 1行目と2行目を入れ替えた単位行列 -> 行列式は -1
+        let swap = [
+            [pi(0), pi(1), pi(0), pi(0)],
+            [pi(1), pi(0), pi(0), pi(0)],
+            [pi(0), pi(0), pi(1), pi(0)],
+            [pi(0), pi(0), pi(0), pi(1)],
+        ];
+        assert_eq!(det4(&swap), pi(-1), "1回の行入替で符号が反転するべき");
+
+        // 同じ行が2つあれば行列式は0
+        let dup = [
+            [pi(3), pi(1), pi(4), pi(1)],
+            [pi(5), pi(9), pi(2), pi(6)],
+            [pi(3), pi(1), pi(4), pi(1)],
+            [pi(2), pi(7), pi(1), pi(8)],
+        ];
+        assert_eq!(det4(&dup), pi(0), "重複行があれば行列式は0であるべき");
+    }
+
+    /// 🌟 共円判定そのものの検証。円の有理パラメータ表示
+    /// (cx + r(1-t²)/(1+t²), cy + 2rt/(1+t²)) を使って厳密に円上の4点を作り、
+    /// 判定式が0になること・円から外した5点目では0にならないことを確認する。
+    #[test]
+    fn concyclic_determinant_vanishes_exactly_on_a_circle() {
+        let (cx, cy, r) = (pi(11), pi(7), pi(5));
+        let on_circle = |t: i64| -> [TPInt; 4] {
+            let t = pi(t);
+            let one = TPInt::one();
+            let denom = one.add(&t.mul(&t));           // 1+t²
+            let inv = denom.unit_inverse();
+            let x = cx.add(&r.mul(&one.sub(&t.mul(&t))).mul(&inv));
+            let y = cy.add(&r.mul(&pi(2)).mul(&t).mul(&inv));
+            let z = TPInt::one();
+            [x.mul(&x).add(&y.mul(&y)), x.mul(&z), y.mul(&z), z.mul(&z)]
+        };
+        let rows = [on_circle(1), on_circle(2), on_circle(3), on_circle(4)];
+        assert_eq!(det4(&rows), pi(0), "厳密に同一円周上の4点では判定式が消えるべき");
+
+        // 5点目を円から外す(半径をずらす)と消えないはず。
+        let off = {
+            let x = cx.add(&r.add(&TPInt::one()));  // 中心から r+1 離れた点
+            let y = cy;
+            let z = TPInt::one();
+            [x.mul(&x).add(&y.mul(&y)), x.mul(&z), y.mul(&z), z.mul(&z)]
+        };
+        let rows_off = [on_circle(1), on_circle(2), on_circle(3), off];
+        assert_ne!(det4(&rows_off), pi(0), "円から外れた点を混ぜれば判定式は0でないべき");
+    }
+
+    use super::*;
     use crate::mmp_core::EGraph;
 
     /// 🌟 三角形A,B,C+外心O+垂心Hという配置で、B,Cを退化させたときに
@@ -370,5 +467,323 @@ mod tests {
         for (x, y) in &specific {
             println!("  {} ≡ {}", egraph.entities[x.0].name, egraph.entities[y.0].name);
         }
+    }
+}
+
+// ============================================================
+// 🌟 ユーザー要望:「mctsとon demand construction, heatなどを用いて
+// 非自明な定理を発見する部分を改善」への対応。
+//
+// discover.rsが従来使っていた予想検出(eval.rs::log_conjecture_candidate)は
+// 「作図そのものが0/0に退化した時」――LineThroughPoints(P,Q)のP,Qが数値的に
+// 同一点だった、Intersection(l1,l2)のl1,l2が数値的に同一直線だった――に
+// しか発火しない。つまり「独立に作った2つの図形がたまたま一致した」という
+// 本命の発見(3直線の共点性、点の共線性、2つの円の一致など)は、その2つを
+// 引数に取る退化した作図をMCTSがたまたま試さない限り検出されなかった。
+// 実測(triangle_centers、60秒48ステップ)でも、検出された予想候補は全て
+// 調和共役の内部足場が退化したケースで、報告に値するものは0件だった。
+//
+// ここでは代わりに、e-graph上の全ての実体を独立な乱数座標で評価し、
+// 同じ型の全ペアを総当たりで比較する。Schwartz-Zippelにより、独立な
+// 乱数で一致すれば偶然の確率は約1/998244353なので、複数のseedで
+// 再現すれば実在する関係とみなせる。
+// ============================================================
+
+/// 複数の独立な乱数drawの全てで射影的に一致した、まだ記号的には統合されて
+/// いない同型の実体ペアを返す(退化(全成分ゼロ)は除外済み)。
+pub fn find_generic_coincidences(egraph: &EGraph, seeds: &[u64]) -> Vec<(ClassId, ClassId)> {
+    if seeds.is_empty() { return Vec::new(); }
+    let mut counts: FxHashMap<(ClassId, ClassId), u32> = FxHashMap::default();
+    for &s in seeds {
+        for pair in find_coincidences(egraph, s, None) {
+            *counts.entry(pair).or_insert(0) += 1;
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<(ClassId, ClassId)> = counts.into_iter()
+        .filter(|&(_, c)| c == need)
+        .map(|(p, _)| p)
+        .filter(|&(a, b)| egraph.get_rep(a) != egraph.get_rep(b))
+        .collect();
+    out.sort_by_key(|&(a, b)| (a.0, b.0));
+    out
+}
+
+/// 3点が(複数の独立な乱数drawで)共線であることを検出する。共点性
+/// (3直線が1点で交わる)は上のfind_generic_coincidencesが
+/// Intersection同士の一致として自然に拾うが、共線性は「その3点を通る
+/// 直線」が実体として作られていないと拾えないため、点の三つ組を直接
+/// 判定する専用の検査を用意する(オイラー線のような古典的な発見は
+/// まさにこの形をしている)。
+///
+/// 候補が組み合わせ爆発しないよう、対象は「熱量(heat_with_degree)が
+/// 高い上位max_points個の有限点」に絞る。
+pub fn find_generic_collinear_triples(egraph: &EGraph, seeds: &[u64], max_points: usize) -> Vec<(ClassId, ClassId, ClassId)> {
+    if seeds.is_empty() { return Vec::new(); }
+    // 有限点(無限遠点=方向は共線判定の対象にしない)を集める。
+    let ids = hot_reps_of_type(egraph, EntityType::Point, max_points, true);
+
+    let mut counts: FxHashMap<(ClassId, ClassId, ClassId), u32> = FxHashMap::default();
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let coords: Vec<Option<Triple>> = ids.iter()
+            .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None })
+            .collect();
+        if std::env::var("SWEEP_DEBUG").is_ok() {
+            let ok = coords.iter().filter(|c| c.is_some()).count();
+            let bad: Vec<String> = ids.iter().zip(coords.iter()).filter(|(_, c)| c.is_none())
+                .map(|(&id, _)| egraph.entities[id.0].name.chars().take(24).collect()).collect();
+            eprintln!("  [sweep-debug] 共線判定: 評価成功{}/{} 失敗: {:?}", ok, ids.len(), bad);
+        }
+        for i in 0..ids.len() {
+            let Some(pi) = coords[i] else { continue };
+            for j in (i + 1)..ids.len() {
+                let Some(pj) = coords[j] else { continue };
+                for k in (j + 1)..ids.len() {
+                    let Some(pk) = coords[k] else { continue };
+                    // 3点が共線 <=> 行列式(=同次座標の三重積)が0。
+                    let line_ij = cross3(&pi, &pj);
+                    let dot = line_ij[0].mul(&pk[0]).add(&line_ij[1].mul(&pk[1])).add(&line_ij[2].mul(&pk[2]));
+                    if dot.valuation().is_none() {
+                        // 退化(2点が一致してline_ijが定義不能)は除外する。
+                        if line_ij.iter().all(|x| x.valuation().is_none()) { continue; }
+                        *counts.entry((ids[i], ids[j], ids[k])).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<(ClassId, ClassId, ClassId)> = counts.into_iter()
+        .filter(|&(_, c)| c == need)
+        .map(|(t, _)| t)
+        .collect();
+    out.sort_by_key(|&(a, b, c)| (a.0, b.0, c.0));
+    out
+}
+
+/// 検査対象のmax_items個の実体(tyで指定した型)を集める共通処理。
+///
+/// 🐛 FIX(実測で判明): 当初は純粋に熱量(heat_with_degree)の降順で
+/// 上位N件を採っていたが、これは致命的に的を外していた。45秒の自由探索
+/// 後のtriangle_centersで熱量上位10件を確認したところ、外心O・垂心H・
+/// 重心G・九点円中心Nが1つも入っておらず、代わりにMCTSが作った足場
+/// (ParallelLine_Alt_B_Harm_...のような名前のもの)が占拠していた――
+/// MCTS由来の実体はapply_action時にheat_bonus(+4.0)を受け取るのに対し、
+/// 問題が最初から持っている古典的な点は熱ボーナスが0のまま次数だけで
+/// 評価されるためである。実際、同じ配置でもMCTSを2秒しか回さなければ
+/// オイラー線(H, O, Gの共線)が検出できるのに、45秒回すと候補集合から
+/// 押し出されて検出できなくなっていた。
+///
+/// そこで「問題・定理由来の本物の実体(base_importance>=1.0)」を常に
+/// 優先し、余った枠だけをMCTS由来の実体で熱量順に埋める。
+fn hot_reps_of_type(egraph: &EGraph, ty: EntityType, max_items: usize, finite_points_only: bool) -> Vec<ClassId> {
+    let mut v: Vec<(ClassId, bool, f64)> = (0..egraph.entities.len())
+        .map(ClassId)
+        .filter(|&id| egraph.get_rep(id) == id
+            && egraph.entities[id.0].entity_type == ty
+            && egraph.entities[id.0].is_active()
+            && id != egraph.line_infinity
+            && !(finite_points_only && egraph.is_connected(id, egraph.line_infinity)))
+        .map(|id| (id, egraph.entities[id.0].base_importance >= 1.0, egraph.entities[id.0].heat_with_degree()))
+        .collect();
+    // 本物の実体(true)が先、その中では熱量の降順。
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)));
+    v.truncate(max_items);
+    let out: Vec<ClassId> = v.into_iter().map(|(id, _, _)| id).collect();
+    if std::env::var("SWEEP_DEBUG").is_ok() {
+        let names: Vec<String> = out.iter().map(|&id| egraph.entities[id.0].name.chars().take(28).collect()).collect();
+        eprintln!("  [sweep-debug] {:?} 候補{}件: {:?}", ty, names.len(), names);
+    }
+    out
+}
+
+/// 3直線が1点で交わる(共点)ことの検出。3点の共線性と完全に双対で、
+/// 同次座標の三重積(=3x3行列式)が消えるかどうかで判定できる
+/// (「3本の高さは1点で交わる」のような古典的な結論がまさにこの形)。
+/// 交点が実体として作られていなくても検出できるのが利点。
+pub fn find_generic_concurrent_lines(egraph: &EGraph, seeds: &[u64], max_lines: usize) -> Vec<(ClassId, ClassId, ClassId)> {
+    if seeds.is_empty() { return Vec::new(); }
+    let ids = hot_reps_of_type(egraph, EntityType::Line, max_lines, false);
+    let mut counts: FxHashMap<(ClassId, ClassId, ClassId), u32> = FxHashMap::default();
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let coords: Vec<Option<Triple>> = ids.iter()
+            .map(|&id| match ev.eval(id) { Some(DegenShape::Line(t)) => Some(t), _ => None })
+            .collect();
+        for i in 0..ids.len() {
+            let Some(li) = coords[i] else { continue };
+            for j in (i + 1)..ids.len() {
+                let Some(lj) = coords[j] else { continue };
+                let meet = cross3(&li, &lj);
+                // 2直線が数値的に同一(交点が定義不能)なら共点性を問う意味がない。
+                if meet.iter().all(|x| x.valuation().is_none()) { continue; }
+                // 🐛 FIX: 交点が無限遠(z成分が0)、つまり3直線が単に平行な場合も
+                // 行列式は0になる。これを「共点」として報告すると、垂線の族の
+                // ような平行な集まりが大量に混ざって報告が読めなくなる(実測で
+                // 35本が1つの共点グループに誤って併合された)。平行性は別の
+                // 概念として既に扱われているので、有限の共有点だけを対象にする。
+                if meet[2].valuation().is_none() { continue; }
+                for k in (j + 1)..ids.len() {
+                    let Some(lk) = coords[k] else { continue };
+                    let dot = meet[0].mul(&lk[0]).add(&meet[1].mul(&lk[1])).add(&meet[2].mul(&lk[2]));
+                    if dot.valuation().is_none() {
+                        *counts.entry((ids[i], ids[j], ids[k])).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<_> = counts.into_iter().filter(|&(_, c)| c == need).map(|(t, _)| t).collect();
+    out.sort_by_key(|&(a, b, c)| (a.0, b.0, c.0));
+    out
+}
+
+/// 4x4行列式(余因子展開、除算不要なのでPIntのままで計算できる)。
+fn det4(m: &[[PInt; 4]; 4]) -> PInt {
+    // 下2行の2x2小行列式(Laplace展開、いわゆるプリュッカー座標)を先に作る。
+    let minor = |r1: usize, r2: usize, c1: usize, c2: usize| -> PInt {
+        m[r1][c1].mul(&m[r2][c2]).sub(&m[r1][c2].mul(&m[r2][c1]))
+    };
+    let cols = [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+    // det = Σ ± (上2行の小行列式) * (下2行の補となる小行列式)
+    let mut acc = PInt::zero();
+    for (idx, &(c1, c2)) in cols.iter().enumerate() {
+        let top = minor(0, 1, c1, c2);
+        let rest: Vec<usize> = (0..4).filter(|c| *c != c1 && *c != c2).collect();
+        let bot = minor(2, 3, rest[0], rest[1]);
+        let term = top.mul(&bot);
+        // 符号: (c1,c2)の組の並び (01,23)+ (02,13)- (03,12)+ (12,03)+ (13,02)- (23,01)+
+        let plus = matches!(idx, 0 | 2 | 3 | 5);
+        acc = if plus { acc.add(&term) } else { acc.sub(&term) };
+    }
+    acc
+}
+
+/// 4点が同一円周上にある(共円)ことの検出。同次座標(x,y,z)に対する
+/// 古典的な行列式 |x²+y², xz, yz, z²| = 0 で判定する。九点円のような
+/// 「複数の由来が異なる点が実は1つの円に乗る」という発見はこの形をしている。
+pub fn find_generic_concyclic_quadruples(egraph: &EGraph, seeds: &[u64], max_points: usize) -> Vec<[ClassId; 4]> {
+    if seeds.is_empty() { return Vec::new(); }
+    let ids = hot_reps_of_type(egraph, EntityType::Point, max_points, true);
+    let mut counts: FxHashMap<[ClassId; 4], u32> = FxHashMap::default();
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let pts_xyz: Vec<Triple> = ids.iter().map(|&id| match ev.eval(id) {
+            Some(DegenShape::Point(t)) => t,
+            _ => [PInt::zero(); 3],
+        }).collect();
+        let rows: Vec<Option<[PInt; 4]>> = ids.iter().map(|&id| {
+            match ev.eval(id) {
+                Some(DegenShape::Point(t)) => {
+                    let (x, y, z) = (t[0], t[1], t[2]);
+                    // z=0(無限遠点)はhot_reps_of_typeで除外済みだが念のため。
+                    if z.valuation().is_none() { return None; }
+                    Some([x.mul(&x).add(&y.mul(&y)), x.mul(&z), y.mul(&z), z.mul(&z)])
+                }
+                _ => None,
+            }
+        }).collect();
+        for i in 0..ids.len() {
+            let Some(ri) = rows[i] else { continue };
+            for j in (i + 1)..ids.len() {
+                let Some(rj) = rows[j] else { continue };
+                for k in (j + 1)..ids.len() {
+                    let Some(rk) = rows[k] else { continue };
+                    for l in (k + 1)..ids.len() {
+                        let Some(rl) = rows[l] else { continue };
+                        let d = det4(&[ri, rj, rk, rl]);
+                        if d.valuation().is_none() {
+                            // 直線は退化した円なので、共線な4点組は除外する
+                            // (verify_propertyのFIXコメント参照)。
+                            let (pi2, pj2, pk2) = (pts_xyz[i], pts_xyz[j], pts_xyz[k]);
+                            let line_ij2 = cross3(&pi2, &pj2);
+                            let collinear_ijk = !line_ij2.iter().all(|x| x.valuation().is_none())
+                                && line_ij2[0].mul(&pk2[0]).add(&line_ij2[1].mul(&pk2[1])).add(&line_ij2[2].mul(&pk2[2])).valuation().is_none();
+                            if collinear_ijk { continue; }
+                            *counts.entry([ids[i], ids[j], ids[k], ids[l]]).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<_> = counts.into_iter().filter(|&(_, c)| c == need).map(|(t, _)| t).collect();
+    out.sort_by_key(|q| (q[0].0, q[1].0, q[2].0, q[3].0));
+    out
+}
+
+
+/// 与えられた集合が実際に(全てのseedで)共線/共点/共円かを検証する。
+/// 報告をクラスタで大きくまとめる際、その集合全体で本当に主張が成り立って
+/// いるかを確かめるために使う(部分集合ごとの検出結果を素朴に併合すると、
+/// 平行な族の混入などで偽の大集合が出来てしまうため)。
+pub fn verify_property(egraph: &EGraph, seeds: &[u64], ids: &[ClassId], kind: PropertyKind) -> bool {
+    if ids.len() < kind.min_size() { return false; }
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let shapes: Vec<Option<DegenShape>> = ids.iter().map(|&id| ev.eval(id)).collect();
+        if shapes.iter().any(|x| x.is_none()) { return false; }
+        match kind {
+            PropertyKind::Collinear | PropertyKind::Concurrent => {
+                // 共線(点)も共点(直線)も「同次座標の三重積が全て0」で判定できる(双対)。
+                let vecs: Vec<Triple> = shapes.iter().map(|sh| match sh {
+                    Some(DegenShape::Point(t)) | Some(DegenShape::Line(t)) => *t,
+                    _ => [PInt::zero(); 3],
+                }).collect();
+                let base = cross3(&vecs[0], &vecs[1]);
+                if base.iter().all(|x| x.valuation().is_none()) { return false; }
+                if kind == PropertyKind::Concurrent && base[2].valuation().is_none() { return false; }
+                for v in &vecs[2..] {
+                    let dot = base[0].mul(&v[0]).add(&base[1].mul(&v[1])).add(&base[2].mul(&v[2]));
+                    if dot.valuation().is_some() { return false; }
+                }
+            }
+            PropertyKind::Concyclic => {
+                let pts: Vec<Triple> = shapes.iter().map(|sh| match sh {
+                    Some(DegenShape::Point(t)) => *t,
+                    _ => [PInt::zero(); 3],
+                }).collect();
+                // 🐛 FIX(実測で判明): 判定式 |x²+y², xz, yz, z²| = 0 は
+                // 「4点が同一円周上」だけでなく「4点が同一直線上」でも成り立つ
+                // (a(x²+y²)+bx+cy+d=0 は a=0 のとき直線を表す=直線は退化した円)。
+                // そのため自由探索が誤マージでe-graphを崩壊させ多数の点が
+                // 一直線に乗った状態になると、「28点が共円」のような無意味な
+                // 報告が出る(実際に観測)。本物の円であることを保証するため、
+                // 集合の中に共線でない3点が存在することを要求する。
+                let mut has_non_collinear_triple = false;
+                'outer: for i in 0..pts.len() {
+                    for j in (i + 1)..pts.len() {
+                        let l = cross3(&pts[i], &pts[j]);
+                        if l.iter().all(|x| x.valuation().is_none()) { continue; }
+                        for k in (j + 1)..pts.len() {
+                            let dot = l[0].mul(&pts[k][0]).add(&l[1].mul(&pts[k][1])).add(&l[2].mul(&pts[k][2]));
+                            if dot.valuation().is_some() { has_non_collinear_triple = true; break 'outer; }
+                        }
+                    }
+                }
+                if !has_non_collinear_triple { return false; }
+
+                let rows: Vec<[PInt; 4]> = pts.iter().map(|t| {
+                    let (x, y, z) = (t[0], t[1], t[2]);
+                    [x.mul(&x).add(&y.mul(&y)), x.mul(&z), y.mul(&z), z.mul(&z)]
+                }).collect();
+                for i in 3..rows.len() {
+                    if det4(&[rows[0], rows[1], rows[2], rows[i]]).valuation().is_some() { return false; }
+                }
+            }
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PropertyKind { Collinear, Concurrent, Concyclic }
+
+impl PropertyKind {
+    fn min_size(self) -> usize {
+        match self { PropertyKind::Concyclic => 4, _ => 3 }
     }
 }
