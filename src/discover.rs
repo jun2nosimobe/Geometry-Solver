@@ -827,28 +827,17 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
     const SEEDS: [u64; 3] = [0xC0FFEE, 0xBEEF77, 0x1234ABCD];
     let mut namer = PrettyNamer::new();
 
-    // 🌟 崩壊検出(実測で必要と判明): 自由探索は稀に誤ったマージを連鎖させ、
-    // e-graph全体を退化した配置(多数の点が1直線に乗る等)へ潰してしまう。
-    // その状態の数値評価から出てくる「一致」「共円」は全て崩壊の言い換えで
-    // あって発見ではない(実際に「28点が共円」という報告が出た)。図の土台で
-    // ある自由点が一般の位置にあるか(2点が一致していないか、3点が共線に
-    // なっていないか)を先に確かめ、崩れていれば報告自体を打ち切る。
-    let free_pts: Vec<ClassId> = (0..egraph.entities.len()).map(ClassId)
-        .filter(|&id| egraph.get_rep(id) == id
-            && egraph.entities[id.0].entity_type == EntityType::Point
-            && matches!(egraph.entities[id.0].original_definition, Definition::FreePoint))
-        .collect();
-    for i in 0..free_pts.len() {
-        for j in (i + 1)..free_pts.len() {
-            for k in (j + 1)..free_pts.len() {
-                let trip = [free_pts[i], free_pts[j], free_pts[k]];
-                if crate::padic_eval::verify_property(egraph, &SEEDS, &trip, crate::padic_eval::PropertyKind::Collinear) {
-                    println!("\n⚠️  [崩壊検出] 自由点 {} , {} , {} が数値的に共線になっています。自由探索中の誤ったマージでe-graphが退化した可能性が高いため、この種配置の発見報告は信頼できないものとして打ち切ります。",
-                        namer.label(egraph, trip[0]), namer.label(egraph, trip[1]), namer.label(egraph, trip[2]));
-                    return 0;
-                }
-            }
-        }
+    // 🌟 崩壊検出: 自由探索は稀に誤ったマージを連鎖させ、e-graphを実際の
+    // 幾何と矛盾した状態へ潰してしまう。その状態の数値評価から出てくる
+    // 「一致」「共円」は全て崩壊の言い換えであって発見ではない(実測で
+    // 「28点が共円」「15点が共円(うち多くは同一直線上で、円には2点しか
+    // 乗れないはず)」という報告が実際に出た)。e-graph自身が構造的に
+    // 主張している接続(点Pは直線L上にある)が数値評価と整合しているかを
+    // 確かめ、1件でも矛盾があればこの種配置の報告を打ち切る。
+    if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, SEEDS[0]) {
+        println!("\n⚠️  [崩壊検出] e-graphは「{} は {} 上にある」と主張していますが、数値評価では成り立ちません。自由探索中の誤ったマージでe-graphが実際の幾何と矛盾した状態に陥っているため、この種配置の発見報告は信頼できないものとして打ち切ります。",
+            namer.label(egraph, bad_p), namer.label(egraph, bad_l));
+        return 0;
     }
 
     let pairs = crate::padic_eval::find_generic_coincidences(egraph, &SEEDS);
@@ -911,7 +900,7 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         // 直線(LineThrough(P,_) / Perpendicular(_ ⟂ P) / Parallel(_ ∥ P) など)
         // なら、Pで交わるのは作図の言い換えでしかない。実測でも「AB、ABの
         // 垂直二等分線、…が Mid(A,B) で交わる」のような組が上位に並んでいた。
-        if definitional_common_point(egraph, &[a, b, c]) { continue; }
+        if is_trivial_pencil(egraph, &[a, b, c]) { continue; }
         fresh_conc.push((a, b, c));
     }
     println!("\n=== ✳️  未知の共点性の検出 (3直線が1点で交わる) ===");
@@ -1003,6 +992,9 @@ fn maximal_verified_sets(
             if set.contains(&c) { continue; }
             let mut trial = set.clone();
             trial.push(c);
+            // 共点性は「定義上その点を通る直線」を足しても情報が増えない
+            // (is_trivial_pencil参照)ので、自明な束に育てない。
+            if kind == crate::padic_eval::PropertyKind::Concurrent && is_trivial_pencil(egraph, &trial) { continue; }
             if crate::padic_eval::verify_property(egraph, seeds, &trial, kind) { set = trial; }
         }
         let mut key: Vec<usize> = set.iter().map(|x| x.0).collect();
@@ -1038,11 +1030,16 @@ fn explain_entities(egraph: &EGraph, namer: &mut PrettyNamer, ids: &[ClassId]) -
     out
 }
 
-/// 3直線(以上)が「定義からして同じ点を通る」か。LineThrough(P,Q)ならP,Qが、
-/// Perpendicular(l ⟂ P)/Parallel(l ∥ P)/TangentLine(c, P)ならPが、その直線の
-/// 上にあることは作図の定義から自明なので、この意味での共有点があれば
-/// 共点性は新しい発見ではない。
-fn definitional_common_point(egraph: &EGraph, lines: &[ClassId]) -> bool {
+/// 共点性の「自明さ」判定。
+///
+/// LineThrough(P,Q)ならP,Qが、Perpendicular(l ⟂ P)/Parallel(l ∥ P)/
+/// TangentLine(c,P)ならPが、その直線上にあることは作図の定義から自明。
+/// ある点Pについて「定義上Pを通る」直線が3本以上あれば、それらがPで
+/// 交わるのは作figureの言い換えでしかない(2直線なら必ずどこかで交わるので、
+/// 内容があるのは3本目以降)。実測でも、自由探索が作った「P6を通る直線」の
+/// 束が6本まとめて"共点"として報告され、本物の発見(3本の高さの共点性)が
+/// 埋もれていた。
+fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
     let pts_on = |l: ClassId| -> Vec<ClassId> {
         let rep = egraph.get_rep(l);
         let mut acc: Vec<ClassId> = Vec::new();
@@ -1057,9 +1054,13 @@ fn definitional_common_point(egraph: &EGraph, lines: &[ClassId]) -> bool {
                 _ => {}
             }
         }
+        acc.sort_unstable_by_key(|x| x.0);
+        acc.dedup();
         acc
     };
-    let Some((first, rest)) = lines.split_first() else { return false };
-    let base = pts_on(*first);
-    base.iter().any(|&p| rest.iter().all(|&l| pts_on(l).contains(&p)))
+    let per_line: Vec<Vec<ClassId>> = lines.iter().map(|&l| pts_on(l)).collect();
+    let mut all: Vec<ClassId> = per_line.concat();
+    all.sort_unstable_by_key(|x| x.0);
+    all.dedup();
+    all.iter().any(|&p| per_line.iter().filter(|v| v.contains(&p)).count() >= 3)
 }

@@ -699,9 +699,18 @@ pub fn find_generic_concyclic_quadruples(egraph: &EGraph, seeds: &[u64], max_poi
                             // (verify_propertyのFIXコメント参照)。
                             let (pi2, pj2, pk2) = (pts_xyz[i], pts_xyz[j], pts_xyz[k]);
                             let line_ij2 = cross3(&pi2, &pj2);
+                            // 2点が数値的に同一だと行列に同じ行が並び、
+                            // 4点目に関係なく行列式が0になる(verify_propertyの
+                            // FIXコメント参照)。共線・重複はどちらも除外する。
+                            let pl2 = pts_xyz[l];
+                            let quad = [pi2, pj2, pk2, pl2];
+                            let mut degenerate = line_ij2.iter().all(|x| x.valuation().is_none());
+                            for a in 0..4 { for b in (a + 1)..4 {
+                                if cross3(&quad[a], &quad[b]).iter().all(|x| x.valuation().is_none()) { degenerate = true; }
+                            }}
                             let collinear_ijk = !line_ij2.iter().all(|x| x.valuation().is_none())
                                 && line_ij2[0].mul(&pk2[0]).add(&line_ij2[1].mul(&pk2[1])).add(&line_ij2[2].mul(&pk2[2])).valuation().is_none();
-                            if collinear_ijk { continue; }
+                            if degenerate || collinear_ijk { continue; }
                             *counts.entry([ids[i], ids[j], ids[k], ids[l]]).or_insert(0) += 1;
                         }
                     }
@@ -733,6 +742,13 @@ pub fn verify_property(egraph: &EGraph, seeds: &[u64], ids: &[ClassId], kind: Pr
                     Some(DegenShape::Point(t)) | Some(DegenShape::Line(t)) => *t,
                     _ => [PInt::zero(); 3],
                 }).collect();
+                // 集合内に重複(同じ点/同じ直線)があると主張が意味を成さない
+                // ――そちらは「2つの図形が一致した」として別枠で検出される。
+                for i in 0..vecs.len() {
+                    for j in (i + 1)..vecs.len() {
+                        if cross3(&vecs[i], &vecs[j]).iter().all(|x| x.valuation().is_none()) { return false; }
+                    }
+                }
                 let base = cross3(&vecs[0], &vecs[1]);
                 if base.iter().all(|x| x.valuation().is_none()) { return false; }
                 if kind == PropertyKind::Concurrent && base[2].valuation().is_none() { return false; }
@@ -753,25 +769,44 @@ pub fn verify_property(egraph: &EGraph, seeds: &[u64], ids: &[ClassId], kind: Pr
                 // 一直線に乗った状態になると、「28点が共円」のような無意味な
                 // 報告が出る(実際に観測)。本物の円であることを保証するため、
                 // 集合の中に共線でない3点が存在することを要求する。
-                let mut has_non_collinear_triple = false;
-                'outer: for i in 0..pts.len() {
+                // 🐛 FIX(実測で判明): 判定の基準にする3点が退化していると、
+                // 4x4行列式は4点目が何であれ恒等的に0になってしまう。
+                //   - 同じ点が2つ含まれる => 行列に同じ行が2つ => 常に0
+                //   - 3点が共線 => 「円」が直線に退化し、直線上の点なら通る
+                // orthocenterの実測では、H_AltA_AltB(=Alt_A∩Alt_B)と
+                // H_AltB_AltC(=Alt_C∩Alt_B)が垂心として数値的に同一点だった
+                // ため、この2つを基準行に選んだ瞬間に「17点が共円」という
+                // 無意味な報告が通ってしまっていた。基準には「互いに相異なり
+                // かつ共線でない3点」を明示的に選び、無ければ検証失敗とする。
+                let same_point = |a: &Triple, b: &Triple| cross3(a, b).iter().all(|x| x.valuation().is_none());
+                let mut base: Option<(usize, usize, usize)> = None;
+                'base: for i in 0..pts.len() {
                     for j in (i + 1)..pts.len() {
+                        if same_point(&pts[i], &pts[j]) { continue; }
                         let l = cross3(&pts[i], &pts[j]);
-                        if l.iter().all(|x| x.valuation().is_none()) { continue; }
                         for k in (j + 1)..pts.len() {
+                            if same_point(&pts[i], &pts[k]) || same_point(&pts[j], &pts[k]) { continue; }
                             let dot = l[0].mul(&pts[k][0]).add(&l[1].mul(&pts[k][1])).add(&l[2].mul(&pts[k][2]));
-                            if dot.valuation().is_some() { has_non_collinear_triple = true; break 'outer; }
+                            if dot.valuation().is_some() { base = Some((i, j, k)); break 'base; }
                         }
                     }
                 }
-                if !has_non_collinear_triple { return false; }
+                let Some((bi, bj, bk)) = base else { return false };
+                // 集合内に重複した点があれば、その組は「共円」の主張として
+                // 意味を成さない(円上の相異なる点の集まりを報告したい)。
+                for i in 0..pts.len() {
+                    for j in (i + 1)..pts.len() {
+                        if same_point(&pts[i], &pts[j]) { return false; }
+                    }
+                }
 
                 let rows: Vec<[PInt; 4]> = pts.iter().map(|t| {
                     let (x, y, z) = (t[0], t[1], t[2]);
                     [x.mul(&x).add(&y.mul(&y)), x.mul(&z), y.mul(&z), z.mul(&z)]
                 }).collect();
-                for i in 3..rows.len() {
-                    if det4(&[rows[0], rows[1], rows[2], rows[i]]).valuation().is_some() { return false; }
+                for i in 0..rows.len() {
+                    if i == bi || i == bj || i == bk { continue; }
+                    if det4(&[rows[bi], rows[bj], rows[bk], rows[i]]).valuation().is_some() { return false; }
                 }
             }
         }
@@ -786,4 +821,42 @@ impl PropertyKind {
     fn min_size(self) -> usize {
         match self { PropertyKind::Concyclic => 4, _ => 3 }
     }
+}
+
+/// 🌟 崩壊検出(本質版): e-graphが「点Pは直線L上にある」と構造的に主張して
+/// いる全ての接続について、数値評価でも本当にP∈Lになっているかを確かめる。
+///
+/// 自由探索は稀に誤ったマージを連鎖させ、e-graphを実際の幾何と矛盾した
+/// 状態へ潰してしまう。その状態で数値評価をすると、構造上の主張と数値が
+/// 食い違い、「15点が同一円周上」のような(実際には多くが同一直線上に
+/// あって円には2点しか乗れないはずの)無意味な報告が出る。自由点が一般の
+/// 位置にあるかを見るだけでは、土台の三角形が無事なまま中間の実体だけが
+/// 壊れているケースを取り逃がすため、接続関係そのものを検証する。
+///
+/// 矛盾が1件でも見つかれば、その(点, 直線)を返す。
+pub fn find_incidence_inconsistency(egraph: &EGraph, seed: u64) -> Option<(ClassId, ClassId)> {
+    let mut ev = DegenEvaluator::new(egraph, seed, None);
+    let lines: Vec<ClassId> = (0..egraph.entities.len()).map(ClassId)
+        .filter(|&id| egraph.get_rep(id) == id
+            && egraph.entities[id.0].entity_type == EntityType::Line
+            && id != egraph.line_infinity)
+        .collect();
+    for l in lines {
+        let Some(DegenShape::Line(lv)) = ev.eval(l) else { continue };
+        if lv.iter().all(|x| x.valuation().is_none()) { continue; }
+        let pts: Vec<ClassId> = egraph.entities[l.0].components.first()
+            .map(|c| c.subobjects.iter().map(|&s| egraph.get_rep(s))
+                .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
+                .collect())
+            .unwrap_or_default();
+        for p in pts {
+            let Some(DegenShape::Point(pv)) = ev.eval(p) else { continue };
+            if pv.iter().all(|x| x.valuation().is_none()) { continue; }
+            let dot = lv[0].mul(&pv[0]).add(&lv[1].mul(&pv[1])).add(&lv[2].mul(&pv[2]));
+            if dot.valuation().is_some() {
+                return Some((p, l));
+            }
+        }
+    }
+    None
 }
