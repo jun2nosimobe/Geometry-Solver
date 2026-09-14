@@ -1,0 +1,138 @@
+:root {
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  --ink: #23201c;
+  --muted: #6d675f;
+  --line: #ddd8d0;
+  --accent: #2f6f4f;
+  --accent-soft: #e4efe8;
+  --warn: #9a4b2f;
+  --draw: #3c3a36;
+  --draw-soft: #9b968e;
+  --sel: #c8632f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171614;
+    --panel: #201e1b;
+    --ink: #eceae6;
+    --muted: #9d968c;
+    --line: #35322d;
+    --accent: #7ec39b;
+    --accent-soft: #24332b;
+    --warn: #e0906f;
+    --draw: #d8d4cd;
+    --draw-soft: #6f6a63;
+    --sel: #e8925c;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.6 "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 172px 1fr 340px;
+  height: 100vh;
+}
+
+/* ---- 左: 道具箱 ---- */
+#tools {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 14px 12px;
+  overflow-y: auto;
+}
+#tools h1 {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 10px; font-weight: 600;
+}
+.group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+#toolbar button {
+  text-align: left;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+#toolbar button:hover { background: var(--accent-soft); }
+#toolbar button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.util {
+  padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer;
+}
+button.util:hover { color: var(--ink); border-color: var(--muted); }
+.hint {
+  font-size: 12px; color: var(--muted); border-top: 1px solid var(--line);
+  padding-top: 10px; margin: 0;
+}
+
+/* ---- 中央: 画板 ---- */
+#stage { position: relative; overflow: hidden; }
+#canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+#canvas.dragging { cursor: grabbing; }
+#statusbar {
+  position: absolute; left: 10px; bottom: 8px;
+  font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ---- 右: 結果 ---- */
+#side {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  padding: 14px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 18px;
+}
+#side section { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#side h2 {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin: 0; font-weight: 600;
+}
+#discover {
+  padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--accent); color: var(--panel); font: inherit; font-weight: 600; cursor: pointer;
+}
+#discover:disabled { opacity: .55; cursor: progress; }
+.note { font-size: 12px; color: var(--muted); margin: 0; }
+#findings { display: flex; flex-direction: column; gap: 6px; }
+#findings.empty { color: var(--muted); font-size: 13px; }
+.finding {
+  border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 6px; padding: 7px 9px; cursor: default; background: transparent;
+}
+.finding:hover { background: var(--accent-soft); }
+.finding .kind {
+  display: inline-block; font-size: 10px; letter-spacing: .08em;
+  color: var(--muted); margin-bottom: 2px;
+}
+.finding .text { font-size: 13px; word-break: break-word; }
+.err { color: var(--warn); font-size: 13px; white-space: pre-wrap; }
+#script {
+  margin: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--muted);
+  font: 11px/1.55 ui-monospace, "Consolas", monospace;
+  max-height: 240px; overflow: auto; white-space: pre;
+}
+
+@media (max-width: 900px) {
+  #app { grid-template-columns: 1fr; grid-template-rows: auto 60vh auto; height: auto; }
+  #tools { border-right: none; border-bottom: 1px solid var(--line); }
+  #toolbar { flex-direction: row; flex-wrap: wrap; }
+  #side { border-left: none; border-top: 1px solid var(--line); }
+}

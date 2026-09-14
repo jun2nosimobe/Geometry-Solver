@@ -9,6 +9,7 @@ mod mcts;
 mod problems;
 mod cli;
 mod discover;
+mod serve;
 mod sweep;
 mod discover_viz;
 mod padic;
@@ -154,6 +155,10 @@ fn main() {
 
     if args[1] == "sweep" {
         sweep::run(&args);
+        return;
+    }
+    if args[1] == "serve" {
+        serve::run(&args);
         return;
     }
     if args.len() > 1 && args[1] == "extract-proof" {

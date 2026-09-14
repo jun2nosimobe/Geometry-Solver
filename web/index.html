@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>作図と定理発見</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <aside id="tools">
+    <h1>作図</h1>
+    <div class="group" id="toolbar"></div>
+    <div class="group">
+      <button class="util" data-act="undo" title="Ctrl+Z">元に戻す</button>
+      <button class="util" data-act="clear">全部消す</button>
+    </div>
+    <p class="hint" id="hint">点ツールで自由点を置いてください。</p>
+  </aside>
+
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="statusbar"><span id="coords"></span></div>
+  </main>
+
+  <aside id="side">
+    <section>
+      <div class="sechead">
+        <h2>定理発見</h2>
+        <button id="discover">この図で調べる</button>
+      </div>
+      <p class="note">描いた位置ではなく<strong>作図の手順そのもの</strong>から、常に成り立つ関係だけを探します。自由点をどこへ動かしても成り立つものだけが出ます。</p>
+      <div id="findings" class="empty">まだ調べていません。</div>
+    </section>
+    <section>
+      <div class="sechead"><h2>作図手順</h2><button id="copy" class="util">コピー</button></div>
+      <pre id="script"></pre>
+    </section>
+  </aside>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

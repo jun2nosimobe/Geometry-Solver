@@ -701,7 +701,7 @@ fn write_discover_report_html(sections: &[String]) {
 /// 同じClassIdになり得ないため誤検出しない)。
 /// 作図の祖先に「同じ実体を2回引数に取る」定義があるか(円の第2交点のような
 /// 正しい対合性による閉路は退化とみなさない版。has_degenerate_ancestor参照)。
-fn has_duplicated_parent(egraph: &EGraph, id: ClassId) -> bool {
+pub(crate) fn has_duplicated_parent(egraph: &EGraph, id: ClassId) -> bool {
     let mut seen: rustc_hash::FxHashSet<ClassId> = rustc_hash::FxHashSet::default();
     let mut stack = vec![egraph.get_rep(id)];
     while let Some(rep) = stack.pop() {
@@ -718,7 +718,7 @@ fn has_duplicated_parent(egraph: &EGraph, id: ClassId) -> bool {
     false
 }
 
-fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -> bool {
+pub(crate) fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -> bool {
     fn is_degenerate_def(egraph: &EGraph, def: &Definition) -> bool {
         let parents = def.get_parents();
         for i in 0..parents.len() {
@@ -1081,7 +1081,7 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
 
 /// 2直線が構造的に共有すると分かっている点(あれば1つ)。
 /// 無限遠点(平行性)は「共点」の根拠にしないので除く。
-fn pairwise_shared_point(egraph: &EGraph, a: ClassId, b: ClassId) -> Option<ClassId> {
+pub(crate) fn pairwise_shared_point(egraph: &EGraph, a: ClassId, b: ClassId) -> Option<ClassId> {
     let ra = egraph.get_rep(a);
     let pts: Vec<ClassId> = egraph.entities[ra.0].components.first()
         .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
@@ -1093,7 +1093,7 @@ fn pairwise_shared_point(egraph: &EGraph, a: ClassId, b: ClassId) -> Option<Clas
 }
 
 /// 3直線が「構造的に既に共有点を持つと分かっている」か(=共点性が既知か)。
-fn shares_known_point(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId) -> bool {
+pub(crate) fn shares_known_point(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId) -> bool {
     let ra = egraph.get_rep(a);
     let pts: Vec<ClassId> = egraph.entities[ra.0].components.first()
         .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
@@ -1108,7 +1108,7 @@ fn shares_known_point(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId) -> bo
 /// 覆うものと、その円にまだ載ると分かっていない残りの点を返す。
 /// 共円の報告を「N点が共円」ではなく「この点はこの円の上にある」という、
 /// 情報量がそのまま見える形に言い換えるために使う。
-fn known_circle_through_most(egraph: &EGraph, set: &[ClassId]) -> Option<(ClassId, Vec<ClassId>)> {
+pub(crate) fn known_circle_through_most(egraph: &EGraph, set: &[ClassId]) -> Option<(ClassId, Vec<ClassId>)> {
     let mut best: Option<(ClassId, usize)> = None;
     let mut candidates: Vec<ClassId> = Vec::new();
     for &p in set {
@@ -1131,7 +1131,7 @@ fn known_circle_through_most(egraph: &EGraph, set: &[ClassId]) -> Option<(ClassI
     Some((c, extra))
 }
 
-fn shares_known_conic(egraph: &EGraph, q: &[ClassId]) -> bool {
+pub(crate) fn shares_known_conic(egraph: &EGraph, q: &[ClassId]) -> bool {
     if q.is_empty() { return false; }
     let r0 = egraph.get_rep(q[0]);
     let conics: Vec<ClassId> = egraph.entities[r0.0].components.first()
@@ -1155,7 +1155,7 @@ fn shares_known_conic(egraph: &EGraph, q: &[ClassId]) -> bool {
 /// 「その集合全体で本当に性質が成り立つか」をverify_propertyで数値的に
 /// 確かめ、成り立つ場合だけ採用する(貪欲な極大化)。こうして報告する集合は
 /// 常に、主張が集合全体で検証済みであることが保証される。
-fn maximal_verified_sets(
+pub(crate) fn maximal_verified_sets(
     egraph: &EGraph,
     seeds: &[u64],
     detected: Vec<Vec<ClassId>>,
@@ -1283,7 +1283,7 @@ fn explain_entities(egraph: &EGraph, namer: &mut PrettyNamer, ids: &[ClassId]) -
 /// 内容があるのは3本目以降)。実測でも、自由探索が作った「P6を通る直線」の
 /// 束が6本まとめて"共点"として報告され、本物の発見(3本の高さの共点性)が
 /// 埋もれていた。
-fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
+pub(crate) fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
     let pts_on = |l: ClassId| -> Vec<ClassId> {
         let rep = egraph.get_rep(l);
         let mut acc: Vec<ClassId> = Vec::new();

@@ -48,6 +48,8 @@ pub enum Mode {
     Degenerate,
     /// パラメータ掃引 (`geom_solver sweep`)
     Sweep,
+    /// 作図インターフェース (`geom_solver serve`)
+    Serve,
 }
 
 impl Mode {
@@ -57,12 +59,13 @@ impl Mode {
             Mode::Discover => "自由探索で定理を発見する: geom_solver discover [オプション]",
             Mode::Degenerate => "退化させて関連を調べる: geom_solver discover-degenerate <問題名> [オプション]",
             Mode::Sweep => "パラメータを振って比べる: geom_solver sweep [オプション]",
+            Mode::Serve => "ブラウザで作図する: geom_solver serve [オプション]",
         }
     }
 }
 
 use Arg::{None as Switch, Value};
-use Mode::{Degenerate, Discover, Solve, Sweep};
+use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
 
 pub const OPTIONS: &[Opt] = &[
     // ---- 問題を解くモード ----
@@ -142,6 +145,10 @@ pub const OPTIONS: &[Opt] = &[
           help: "1問あたりの打ち切り時間" },
     Opt { name: "--repeat", arg: Value("回"), default: "1", mode: Sweep,
           help: "同じ組み合わせを何回走らせて合算するか(ゆらぎを均すため)" },
+
+    // ---- 作図インターフェース ----
+    Opt { name: "--port", arg: Value("番号"), default: "8080", mode: Serve,
+          help: "待ち受けるポート。塞がっていたら別の番号にする" },
 ];
 
 /// 環境変数でも指定できるもの(後方互換)。フラグ -> 環境変数名。
@@ -155,6 +162,7 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[
     ("<問題名>", "その問題の証明を試みる(名前は list で確認できます)"),
     ("discover", "自由作図で未知の関係を探す"),
     ("discover-degenerate", "図形を退化させて関連の深い図形の組を探す"),
+    ("serve", "ブラウザで作図して定理を発見する(GeoGebra風の画面)"),
     ("sweep", "オプションを振って解けた数と時間を比べる"),
     ("list", "問題名・プリセット名の一覧を出す"),
     ("extract-proof", "raw_proofファイルから2実体が等しい理由を抜き出す"),
@@ -191,7 +199,7 @@ pub fn print_help() {
     for (name, help) in SUBCOMMANDS {
         println!("  {} {}", pad(name, 22), help);
     }
-    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep] {
+    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep, Mode::Serve] {
         println!("\n{}", mode.title());
         for o in OPTIONS.iter().filter(|o| o.mode == mode) {
             let shown = match o.arg {
@@ -206,6 +214,8 @@ pub fn print_help() {
         println!("  {} = {}", pad(env, 22), flag);
     }
     println!("\nよく使う例:");
+    println!("  # ブラウザで作図しながら定理を探す");
+    println!("  geom_solver serve");
     println!("  # 1問だけ、時間を伸ばして解かせる");
     println!("  geom_solver simson --time=30 --mcts");
     println!("  # 全問まとめて回して、いま何問解けるかを見る(回帰確認)");
