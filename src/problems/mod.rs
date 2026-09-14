@@ -39,6 +39,45 @@ pub struct ProblemSetup {
     pub initial_facts: Vec<Fact>, // 🌟 追加
 }
 
+/// 🌟 load_problemが受け付ける問題名の一覧。`geom_solver list` の表示と、
+/// `geom_solver sweep --problems=all` の対象、およびCLIの入力検証に使う。
+/// load_problemのmatch腕と手で同期させる必要があるため、全部が実際に
+/// 読み込めることをテスト(tests::all_listed_problems_load)で担保する。
+pub const ALL_PROBLEMS: &[&str] = &[
+    "cyclic_quad",
+    "varignon",
+    "tangent_orthic",
+    "miquel",
+    "nine_point",
+    "nine_point_full",
+    "miquel_quadrilateral",
+    "simson",
+    "test_parallel",
+    "test_right_midpoint",
+    "orthocenter",
+    "orthocenter_alt",
+    "circumcenter",
+    "thales",
+    "two_circles_reim",
+    "orthic_incenter",
+    "test_cross_ratio",
+    "test_steiner",
+    "test_steiner_tangent",
+    "test_involution",
+    "test_isosceles_converse",
+    "test_power_of_point",
+    "test_steiner_converse",
+    "bench_2012egmop1",
+    "bench_2018silkroadp1",
+    "bench_2011armog10p6",
+    "bench_2010g1",
+    "bench_2018chnwesternmop5",
+    "bench_2005ctstp1",
+    "bench_2005usamop3",
+    "bench_2011balkanmop1",
+    "test_spiral_similarity",
+];
+
 pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
     match name {
         "cyclic_quad" => cyclic_quad::setup(egraph),
@@ -74,5 +113,19 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "bench_2011balkanmop1" => bench_2011balkanmop1::setup(egraph),
         "test_spiral_similarity" => test_spiral_similarity::setup(egraph),
         _ => panic!("未知の問題名です: {}", name),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ALL_PROBLEMSに載っている名前が全部 load_problem で読み込めること
+    /// (load_problemは未知の名前でpanicするので、載せ間違いはここで落ちる)。
+    #[test]
+    fn all_listed_problems_load() {
+        for name in ALL_PROBLEMS {
+            let mut egraph = EGraph::new();
+            let _ = load_problem(name, &mut egraph);
+        }
     }
 }

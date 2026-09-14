@@ -59,7 +59,7 @@ use std::time::{Duration, Instant};
 /// 偏りがある)を除いた"名前付きの"古典的で豊かな配置に、新設の
 /// triangle_centers(三角形+外心+垂心+重心+九点円中心)を加えたもの。
 /// --preset=allでこれを全て順番に走らせる。
-const CLASSIC_PRESETS: &[&str] = &[
+pub const CLASSIC_PRESETS: &[&str] = &[
     "triangle_centers", "cyclic_quad", "varignon", "tangent_orthic", "miquel",
     "nine_point", "nine_point_full", "miquel_quadrilateral", "simson",
     "orthocenter", "orthocenter_alt", "circumcenter", "thales",
@@ -260,10 +260,10 @@ fn run_one_seed(
     // 整合しているか」を確かめ、最初に壊れた瞬間のステップ番号・該当する
     // 接続・その接続の根拠・その2つの同値類に流れ込んだ全マージの理由を
     // まとめて出力する。
-    let audit = std::env::var("DISCOVER_AUDIT").is_ok();
+    let audit = crate::cli::audit();
     // 🌟 --systematic: MCTSの代わりに決定的な幅優先の作図閉包を使う
     // (systematic_closureのドキュメント参照)。
-    if let Ok(spec) = std::env::var("DISCOVER_SYSTEMATIC") {
+    if let Some(spec) = crate::cli::systematic() {
         let mut it = spec.split(',').filter_map(|v| v.trim().parse::<usize>().ok());
         let rounds = it.next().unwrap_or(2);
         let cap = it.next().unwrap_or(220);
@@ -271,7 +271,7 @@ fn run_one_seed(
         systematic_closure(&mut egraph, rounds, cap, per_kind);
         steps_done = rounds;
     }
-    while !std::env::var("DISCOVER_SYSTEMATIC").is_ok()
+    while crate::cli::systematic().is_none()
         && start.elapsed() < Duration::from_secs(time_budget_secs) && steps_done < max_steps {
         let found = mcts.run_step(&mut egraph, &None, sims_per_step);
         steps_done += 1;
@@ -940,7 +940,7 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         if has_degenerate_ancestor(egraph, a, b) || has_degenerate_ancestor(egraph, a, c) { rej_degen += 1; continue; }
         fresh.push((a, b, c));
     }
-    if std::env::var("SWEEP_DEBUG").is_ok() {
+    if crate::cli::sweep_debug() {
         eprintln!("  [sweep-debug] 共線: 生検出{}件 -> 既知として除外{}件 / 退化として除外{}件 / 報告{}件",
             raw_triples, rej_known, rej_degen, fresh.len());
     }
@@ -1023,11 +1023,11 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         if has_duplicated_parent(egraph, p) || has_duplicated_parent(egraph, c) { rej_deg += 1; continue; }
         fresh_inc.push((p, c));
     }
-    if std::env::var("SWEEP_DEBUG").is_ok() {
+    if crate::cli::sweep_debug() {
         eprintln!("  [sweep-debug] 接続: 生検出{}件 -> 自然な接続として除外{}件 / 退化として除外{}件",
             raw_inc, rej_nat, rej_deg);
     }
-    if std::env::var("SWEEP_DEBUG").is_ok() {
+    if crate::cli::sweep_debug() {
         eprintln!("  [sweep-debug] 接続: 報告{}件", fresh_inc.len());
     }
     println!("
@@ -1478,7 +1478,7 @@ fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: 
         // 🌟 系統的作図でも、ラウンドごとに「構造的な主張と数値評価の整合性」を
         // 監査できるようにする(DISCOVER_AUDIT=1)。崩壊が"激減"として現れない
         // タイプ(少数の誤マージ)は同値類数では捕まらないため。
-        if std::env::var("DISCOVER_AUDIT").is_ok() {
+        if crate::cli::audit() {
             if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, 0xC0FFEE) {
                 println!("  🔬 [監査] ラウンド{}終了時点で矛盾: 「{} は {} 上にある」が数値的に成り立ちません。",
                     round + 1,

@@ -7,7 +7,9 @@ mod theorems;
 mod action_space;
 mod mcts;
 mod problems;
+mod cli;
 mod discover;
+mod sweep;
 mod discover_viz;
 mod padic;
 mod padic_eval;
@@ -123,6 +125,37 @@ fn run_extract_proof(args: &[String]) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    // 🌟 ユーザー要望「手元でいろんなオプションやパラメーターを調整して
+    // 回せるようにしたい」への対応(cli.rsのドキュメント参照)。
+    // ヘルプ・一覧・掃引の入口をここに集め、さらに「綴り間違いを黙って
+    // 無視して既定値のまま走る」という一番たちの悪い失敗の仕方を止める。
+    if args.len() <= 1 || args[1] == "help" || args[1] == "--help" || args[1] == "-h" {
+        cli::print_help();
+        return;
+    }
+    if args[1] == "list" {
+        cli::print_catalog();
+        return;
+    }
+    let bad = cli::unknown_flags(&args);
+    if !bad.is_empty() {
+        for b in &bad {
+            match cli::nearest_flag(b) {
+                Some(near) => println!("⚠️ 知らないオプションです: {}  (もしかして {} ?)", b, near),
+                None => println!("⚠️ 知らないオプションです: {}", b),
+            }
+        }
+        println!("   `geom_solver help` で指定できるオプションの一覧が出ます。");
+        println!("   (黙って無視すると、パラメータを変えたつもりで既定値のまま走ってしまうので止めます)");
+        return;
+    }
+    cli::init(&args);
+
+    if args[1] == "sweep" {
+        sweep::run(&args);
+        return;
+    }
     if args.len() > 1 && args[1] == "extract-proof" {
         run_extract_proof(&args);
         return;
@@ -144,11 +177,9 @@ fn main() {
         discover_degenerate::run(&args);
         return;
     }
-    let problem_name = if args.len() > 1 {
-        &args[1]
-    } else {
-        "cyclic_quad" // 引数がない場合のデフォルト
-    };
+    // 引数なしの場合は上でヘルプを表示して return しているので、ここに
+    // 来る時点で args[1] は必ず存在する(問題名として扱う)。
+    let problem_name: &str = &args[1];
     // 🌟 MCTSはデフォルトでは無効(--mctsで明示的に有効化)。
     // 経緯: MCTSの実験中、propagate_line_uniqueness/propagate_point_uniqueness
     // (「2直線が2点を共有していれば同一とみなす」等の局所ショートカット)が、

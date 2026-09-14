@@ -775,7 +775,7 @@ pub fn find_generic_collinear_triples(egraph: &EGraph, seeds: &[u64], max_points
         let coords: Vec<Option<Triple>> = ids.iter()
             .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None })
             .collect();
-        if std::env::var("SWEEP_DEBUG").is_ok() {
+        if crate::cli::sweep_debug() {
             let ok = coords.iter().filter(|c| c.is_some()).count();
             let bad: Vec<String> = ids.iter().zip(coords.iter()).filter(|(_, c)| c.is_none())
                 .map(|(&id, _)| egraph.entities[id.0].name.chars().take(24).collect()).collect();
@@ -840,7 +840,7 @@ fn hot_reps_of_type(egraph: &EGraph, ty: EntityType, max_items: usize, finite_po
     v.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)));
     v.truncate(max_items);
     let out: Vec<ClassId> = v.into_iter().map(|(id, _, _)| id).collect();
-    if std::env::var("SWEEP_DEBUG").is_ok() {
+    if crate::cli::sweep_debug() {
         let names: Vec<String> = out.iter().map(|&id| egraph.entities[id.0].name.chars().take(28).collect()).collect();
         eprintln!("  [sweep-debug] {:?} 候補{}件: {:?}", ty, names.len(), names);
     }
@@ -1343,7 +1343,7 @@ pub fn find_incidence_inconsistency(egraph: &EGraph, seed: u64) -> Option<(Class
             if pv.iter().all(|x| x.valuation().is_none()) { continue; }
             let dot = lv[0].mul(&pv[0]).add(&lv[1].mul(&pv[1])).add(&lv[2].mul(&pv[2]));
             if dot.valuation().is_some() {
-                if std::env::var("SWEEP_DEBUG").is_ok() {
+                if crate::cli::sweep_debug() {
                     let defs = egraph.entities[l.0].components.first()
                         .map(|c| c.definitions.iter().map(|d| egraph.format_definition(d)).collect::<Vec<_>>())
                         .unwrap_or_default();
