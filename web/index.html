@@ -23,6 +23,9 @@
     <div id="statusbar"><span id="coords"></span></div>
   </main>
 
+  <div id="splitter" role="separator" aria-orientation="vertical"
+       title="ドラッグして幅を変える（ダブルクリックで既定に戻す）"></div>
+
   <aside id="side">
     <section>
       <div class="sechead">
@@ -54,12 +57,16 @@
         <button id="adopt" class="util">図に取り込む</button>
         <button id="dropaux" class="util">消す</button>
       </div>
+      <div class="sechead" id="resulthead" hidden>
+        <h2>見つかった性質 <span id="count"></span></h2>
+        <label class="filterbox"><input id="onlymine" type="checkbox">自分の図に関わるものだけ</label>
+      </div>
       <div id="findings" class="empty">まだ調べていません。</div>
     </section>
-    <section>
-      <div class="sechead"><h2>作図手順</h2><button id="copy" class="util">コピー</button></div>
+    <details id="scriptbox">
+      <summary>作図手順<button id="copy" class="util">コピー</button></summary>
       <pre id="script"></pre>
-    </section>
+    </details>
   </aside>
 </div>
 <script src="app.js"></script>

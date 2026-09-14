@@ -491,6 +491,8 @@ function invalidateFindings() {
   const el = document.getElementById('findings');
   if (el.dataset.fresh === '1') {
     el.dataset.fresh = '0';
+    lastFindings = [];
+    document.getElementById('resulthead').hidden = true;
     el.className = 'empty';
     el.textContent = '作図が変わりました。もう一度調べてください。';
   }
@@ -546,6 +548,8 @@ function renderFindings(text) {
   const lines = text.split('\n').filter(Boolean);
   const err = lines.find(l => l.startsWith('error|'));
   if (err) {
+    document.getElementById('resulthead').hidden = true;
+    lastFindings = [];
     el.className = '';
     const p = document.createElement('p');
     p.className = 'err';
@@ -569,15 +573,40 @@ function renderFindings(text) {
     const [, kind, textPart, idsPart] = l.split('|');
     return { kind, text: textPart, ids: (idsPart || '').split(',').filter(Boolean) };
   });
+  lastFindings = findings;
   if (!findings.length) {
+    document.getElementById('resulthead').hidden = true;
     el.className = 'empty';
     el.textContent = 'この作図から、まだ知られていない関係は見つかりませんでした。';
     return;
   }
+  paintFindings();
+}
+
+/// 件数が多いと枠からあふれるので、一覧だけをスクロールさせ、
+/// 「自分の図に関わるものだけ」で絞れるようにしてある。
+let lastFindings = [];
+
+function paintFindings() {
+  const el = document.getElementById('findings');
+  const onlyMine = document.getElementById('onlymine').checked;
+  const mineNames = new Set(objects.map(o => o.name));
+  const isMine = (f) => f.ids.some(n => mineNames.has(n));
+  const shown = onlyMine ? lastFindings.filter(isMine) : lastFindings;
+  document.getElementById('resulthead').hidden = false;
+  document.getElementById('count').textContent =
+    shown.length === lastFindings.length ? `${lastFindings.length}件`
+                                         : `${shown.length} / ${lastFindings.length}件`;
+  el.innerHTML = '';
+  if (!shown.length) {
+    el.className = 'empty';
+    el.textContent = '自分の図に関わるものはありませんでした。チェックを外すと全部出ます。';
+    return;
+  }
   el.className = '';
-  for (const f of findings) {
+  for (const f of shown) {
     const div = document.createElement('div');
-    div.className = 'finding';
+    div.className = isMine(f) ? 'finding mine' : 'finding';
     const k = document.createElement('div');
     k.className = 'kind';
     k.textContent = KIND_LABEL[f.kind] || f.kind;
@@ -589,11 +618,38 @@ function renderFindings(text) {
     div.addEventListener('mouseleave', () => { highlight.clear(); draw(); });
     el.appendChild(div);
   }
+  el.scrollTop = 0;
 }
 
 // ============================================================
 // 起動
 // ============================================================
+/// 右の枠の幅をドラッグで変える。作図式がそのまま名前になるので、
+/// 配置によっては既定の幅では読みにくい。
+function setupSplitter() {
+  const sp = document.getElementById('splitter');
+  const root = document.documentElement;
+  const apply = (px) => {
+    const w = Math.min(window.innerWidth - 320, Math.max(260, px));
+    root.style.setProperty('--side-w', w + 'px');
+    resize();
+  };
+  let dragging = false;
+  sp.addEventListener('pointerdown', (e) => {
+    dragging = true; sp.classList.add('active'); sp.setPointerCapture(e.pointerId);
+  });
+  sp.addEventListener('pointermove', (e) => {
+    if (dragging) apply(window.innerWidth - e.clientX);
+  });
+  const stop = (e) => {
+    dragging = false; sp.classList.remove('active');
+    try { sp.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  sp.addEventListener('pointerup', stop);
+  sp.addEventListener('pointercancel', stop);
+  sp.addEventListener('dblclick', () => apply(360));
+}
+
 /// 補助作図を捨てる。作図を編集したら、それは古い図に対する提案なので残さない。
 function dropAux() {
   if (!aux.length) return;
@@ -632,9 +688,13 @@ function init() {
     bar.appendChild(b);
   }
   document.getElementById('discover').addEventListener('click', discover);
+  document.getElementById('onlymine').addEventListener('change', paintFindings);
+  setupSplitter();
   document.getElementById('adopt').addEventListener('click', adoptAux);
   document.getElementById('dropaux').addEventListener('click', () => { dropAux(); draw(); });
-  document.getElementById('copy').addEventListener('click', () => {
+  document.getElementById('copy').addEventListener('click', (e) => {
+    // summaryの中にあるので、そのままだと折りたたみが開閉してしまう。
+    e.preventDefault(); e.stopPropagation();
     navigator.clipboard.writeText(serialize()).catch(() => {});
   });
   document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
