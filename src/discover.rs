@@ -261,7 +261,18 @@ fn run_one_seed(
     // 接続・その接続の根拠・その2つの同値類に流れ込んだ全マージの理由を
     // まとめて出力する。
     let audit = std::env::var("DISCOVER_AUDIT").is_ok();
-    while start.elapsed() < Duration::from_secs(time_budget_secs) && steps_done < max_steps {
+    // 🌟 --systematic: MCTSの代わりに決定的な幅優先の作図閉包を使う
+    // (systematic_closureのドキュメント参照)。
+    if let Ok(spec) = std::env::var("DISCOVER_SYSTEMATIC") {
+        let mut it = spec.split(',').filter_map(|v| v.trim().parse::<usize>().ok());
+        let rounds = it.next().unwrap_or(2);
+        let cap = it.next().unwrap_or(220);
+        let per_kind = it.next().unwrap_or(9);
+        systematic_closure(&mut egraph, rounds, cap, per_kind);
+        steps_done = rounds;
+    }
+    while !std::env::var("DISCOVER_SYSTEMATIC").is_ok()
+        && start.elapsed() < Duration::from_secs(time_budget_secs) && steps_done < max_steps {
         let found = mcts.run_step(&mut egraph, &None, sims_per_step);
         steps_done += 1;
         if audit {
@@ -1038,8 +1049,34 @@ fn maximal_verified_sets(
         seen.push(key);
         out.push(set);
     }
-    out.sort_by_key(|g| std::cmp::Reverse(g.len()));
+    // 🌟 新規性による並べ替え(ユーザー要望「さらに有名でない結果を発見
+    // できるよう工夫したい」への対応)。中線の共点性・垂心・外心のような
+    // 有名な定理は、構成要素が全て同じ"形"で頂点を巡回させただけ
+    // (3本とも Perpendicular(対辺 ⟂ 頂点) など)という強い対称性を持つ。
+    // 逆に「Aからの垂線と、2つの中点からの垂線が共点」のような教科書に
+    // 載りにくい結果は、構成の形が混ざっている。そこで各要素の
+    // 「定義の形の署名」(定義の種類 + 各引数の定義の種類)を取り、
+    // 異なる署名の個数が多い集合を上位に出す。
+    out.sort_by_key(|g| (std::cmp::Reverse(shape_diversity(egraph, g)), std::cmp::Reverse(g.len())));
     out
+}
+
+/// 集合に含まれる実体の「作図の形」が何種類あるか。同じ形ばかりなら
+/// (頂点を入れ替えただけの)対称的で有名な構図である可能性が高い。
+fn shape_diversity(egraph: &EGraph, ids: &[ClassId]) -> usize {
+    let kind_of = |id: ClassId| -> String {
+        let rep = egraph.get_rep(id);
+        egraph.entities[rep.0].original_definition.get_type_name().to_string()
+    };
+    let mut sigs: Vec<String> = ids.iter().map(|&id| {
+        let rep = egraph.get_rep(id);
+        let def = &egraph.entities[rep.0].original_definition;
+        let args: Vec<String> = def.get_parents().iter().map(|&p| kind_of(p)).collect();
+        format!("{}({})", def.get_type_name(), args.join(","))
+    }).collect();
+    sigs.sort();
+    sigs.dedup();
+    sigs.len()
 }
 
 /// 報告に出てくるラベルが実際に何なのか(どう作図された図形か)を
@@ -1098,4 +1135,87 @@ fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
     all.sort_unstable_by_key(|x| x.0);
     all.dedup();
     all.iter().any(|&p| per_line.iter().filter(|v| v.contains(&p)).count() >= 3)
+}
+/// 🌟 ユーザー要望「さらに有名ではない結果を発見できるよう、探索の工夫を
+/// したい」への対応。
+///
+/// MCTSによる自由探索は1手ずつ確率的に伸ばすため、実測では「一般の4自由点」
+/// のような構造の薄い種配置だと何の一致にも到達できなかった(古典的な定理が
+/// 現れるのは、中点・垂線・外接円のような"意味のある"作図が噛み合った時だけ
+/// なので、ランダムな1手の連鎖では到達しにくい)。そこで、既存の点・直線から
+/// 機械的に作れる作図を幅優先で閉包していく決定的なモードを用意する。
+/// 名前の付いた古典的配置(プリセット)に依存しないので、出てくる関係も
+/// 「その配置のために用意された有名な定理」に偏りにくい。
+///
+/// 各ラウンドで作るもの:
+///   点×点 -> 直線・中点 / 直線×直線 -> 交点 /
+///   点×直線 -> 垂線 / 点×点×点 -> 外接円
+/// 実体数がcapを超えたところで打ち切る(組合せ爆発の抑制)。候補は熱量
+/// (heat_with_degree、次数が効くので図の"要"になっている実体が上位に来る)
+/// の降順に絞る。
+fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: usize) {
+    for round in 0..rounds {
+        let hot = |eg: &EGraph, ty: EntityType, n: usize| -> Vec<ClassId> {
+            let mut v: Vec<(ClassId, f64)> = (0..eg.entities.len()).map(ClassId)
+                .filter(|&id| eg.get_rep(id) == id
+                    && eg.entities[id.0].entity_type == ty
+                    && eg.entities[id.0].is_active()
+                    && id != eg.line_infinity
+                    && !(ty == EntityType::Point && eg.is_connected(id, eg.line_infinity)))
+                .map(|id| (id, eg.entities[id.0].heat_with_degree()))
+                .collect();
+            v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            v.truncate(n);
+            v.into_iter().map(|(id, _)| id).collect()
+        };
+        let pts = hot(egraph, EntityType::Point, per_kind);
+        let lines = hot(egraph, EntityType::Line, per_kind);
+
+        let mut new_defs: Vec<(Definition, EntityType)> = Vec::new();
+        for i in 0..pts.len() {
+            for j in (i + 1)..pts.len() {
+                new_defs.push((Definition::new_line(pts[i], pts[j]), EntityType::Line));
+                new_defs.push((Definition::Midpoint(pts[i], pts[j]), EntityType::Point));
+            }
+        }
+        for i in 0..lines.len() {
+            for j in (i + 1)..lines.len() {
+                new_defs.push((Definition::Intersection(lines[i], lines[j]), EntityType::Point));
+            }
+        }
+        for &p in &pts {
+            for &l in &lines {
+                new_defs.push((Definition::PerpendicularLine(l, p), EntityType::Line));
+            }
+        }
+        // 外接円は数が多くなりすぎるので、最初のラウンドだけ全三つ組を作る。
+        if round == 0 {
+            for i in 0..pts.len() {
+                for j in (i + 1)..pts.len() {
+                    for k in (j + 1)..pts.len() {
+                        new_defs.push((Definition::Circumcircle(pts[i], pts[j], pts[k]), EntityType::Conic));
+                    }
+                }
+            }
+        }
+
+        let mut added = 0usize;
+        for (def, ty) in new_defs {
+            if egraph.count_active_classes() >= cap { break; }
+            let norm = egraph.normalize_definition(&def);
+            if egraph.memo.contains_key(&norm) { continue; }
+            // 作図そのものを名前にする(Sys3_17のような通し番号だと報告が
+            // 読めないため)。親の名前が長くなりすぎたら切り詰める。
+            let raw = egraph.format_definition_with(&norm, |id| {
+                let n = egraph.entities[egraph.get_rep(id).0].name.clone();
+                if n.chars().count() > 22 { n.chars().take(22).collect() } else { n }
+            });
+            egraph.create_entity(raw, norm, ty);
+            added += 1;
+        }
+        egraph.apply_congruence_closure();
+        println!("  🏗️  [系統的作図] ラウンド{}: {}件を追加、アクティブな同値類数 {}",
+            round + 1, added, egraph.count_active_classes());
+        if egraph.count_active_classes() >= cap { break; }
+    }
 }

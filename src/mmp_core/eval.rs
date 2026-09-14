@@ -597,7 +597,7 @@ impl EGraph {
     /// 「DはこのCircle上にある」のような直接のlink_logical_incidence)は、
     /// Dがその定義の親に含まれないので「自然ではない」(座標的な裏付けがない、
     /// 構造だけの前提)。
-    fn is_natural_incidence(&self, point: ClassId, curve: ClassId) -> bool {
+    pub(crate) fn is_natural_incidence(&self, point: ClassId, curve: ClassId) -> bool {
         let point_rep = self.get_rep(point);
         let curve_rep = self.get_rep(curve);
         let curve_defs = match self.entities[curve_rep.0].components.first() {

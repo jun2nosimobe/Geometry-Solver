@@ -165,6 +165,12 @@ impl<'a> DegenEvaluator<'a> {
             .map(|c| c.subobjects.iter().map(|&s| self.egraph.get_rep(s))
                 .filter(|&s| matches!(self.egraph.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
                 .filter(|&s| s != self.egraph.line_infinity)
+                // 🐛 FIX: 「その点自身から作られた曲線」への接続(Aと直線ABなど)は
+                // 制約ではなく作図の結果なので除く。これを制約と誤認すると、
+                // 曲線の評価がその点自身を要求して循環し、評価不能になる
+                // (実測: 系統的作図の後は全ての点がこれで評価失敗していた)。
+                // 判定は本体の評価器と同じis_natural_incidenceを使う。
+                .filter(|&s| !self.egraph.is_natural_incidence(rep, s))
                 .collect())
             .unwrap_or_default()
     }
