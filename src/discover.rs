@@ -1325,8 +1325,24 @@ pub(crate) fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
 /// 実体数がcapを超えたところで打ち切る(組合せ爆発の抑制)。候補は熱量
 /// (heat_with_degree、次数が効くので図の"要"になっている実体が上位に来る)
 /// の降順に絞る。
-fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: usize) {
+pub(crate) fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: usize) {
+    systematic_closure_until(egraph, rounds, cap, per_kind, None)
+}
+
+/// 🌟 時間の上限つき。ブラウザから探索を起動する場合(serve.rs)、ラウンド数と
+/// 実体数の上限だけでは「どれくらい待たされるか」が読めないので、
+/// 壁時計の締切も渡せるようにした。締切を過ぎたら、そのラウンドの作図を
+/// 打ち切って(合同閉包だけは必ず走らせて整合を保ってから)終わる。
+pub(crate) fn systematic_closure_until(
+    egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: usize,
+    deadline: Option<std::time::Instant>,
+) {
+    let expired = |d: Option<std::time::Instant>| d.is_some_and(|t| std::time::Instant::now() >= t);
     for round in 0..rounds {
+        if expired(deadline) {
+            println!("  ⏱️  [系統的作図] 時間の上限に達したのでラウンド{}の手前で打ち切ります。", round + 1);
+            break;
+        }
         let hot = |eg: &EGraph, ty: EntityType, n: usize| -> Vec<ClassId> {
             let mut v: Vec<(ClassId, f64)> = (0..eg.entities.len()).map(ClassId)
                 .filter(|&id| eg.get_rep(id) == id
@@ -1451,6 +1467,7 @@ fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: 
         let mut added = 0usize;
         for (def, ty) in new_defs {
             if egraph.count_active_classes() >= cap { break; }
+            if added % 16 == 0 && expired(deadline) { break; }
             let norm = egraph.normalize_definition(&def);
             if egraph.memo.contains_key(&norm) { continue; }
             // 作図そのものを名前にする(Sys3_17のような通し番号だと報告が

@@ -27,9 +27,33 @@
     <section>
       <div class="sechead">
         <h2>定理発見</h2>
-        <button id="discover">この図で調べる</button>
+        <button id="discover">調べる</button>
       </div>
       <p class="note">描いた位置ではなく<strong>作図の手順そのもの</strong>から、常に成り立つ関係だけを探します。自由点をどこへ動かしても成り立つものだけが出ます。</p>
+      <label class="field">
+        <span>探し方</span>
+        <select id="rounds">
+          <option value="0">描いた図のまま調べる</option>
+          <option value="1">自由作図 1段</option>
+          <option value="2">自由作図 2段</option>
+          <option value="3" selected>自由作図 3段</option>
+          <option value="4">自由作図 4段</option>
+        </select>
+      </label>
+      <details id="advanced">
+        <summary>細かい設定</summary>
+        <label class="field"><span>時間の上限 (秒)</span><input id="seconds" type="number" min="1" max="600" value="20"></label>
+        <label class="field"><span>作図の実体数の上限</span><input id="cap" type="number" min="20" max="4000" step="20" value="400"></label>
+        <label class="field"><span>1段あたりの材料数</span><input id="per_kind" type="number" min="3" max="20" value="8"></label>
+        <label class="field"><span>調べる図形の数</span><input id="sweep" type="number" min="8" max="200" value="64"></label>
+        <label class="field"><span>報告する件数</span><input id="top" type="number" min="1" max="200" value="30"></label>
+        <p class="note">自由作図の段数・実体数・調べる図形の数を上げるほど深い関係に届きますが、時間は急に増えます。時間の上限に達したところで打ち切ります。</p>
+      </details>
+      <div id="auxbar" hidden>
+        <span id="auxcount"></span>
+        <button id="adopt" class="util">図に取り込む</button>
+        <button id="dropaux" class="util">消す</button>
+      </div>
       <div id="findings" class="empty">まだ調べていません。</div>
     </section>
     <section>

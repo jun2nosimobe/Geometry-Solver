@@ -14,6 +14,11 @@
 //   on  は曲線上の点が乗っている曲線名
 let objects = [];
 let history = [];
+// エンジンが自由作図で足してきた補助的な図形。ユーザーの作図とは分けて
+// 持ち、薄い破線で描く。掴めないし、エンジンへ送り返しもしない
+// (送り返すと補助作図の上にさらに補助作図が積まれて発散するため)。
+// 「図に取り込む」を押したときだけ objects へ移す。
+let aux = [];
 
 const POINT_NAMES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 function freshName(kind) {
@@ -131,7 +136,7 @@ function projectOnCircle(k, p) {
 function evaluate() {
   const V = new Map();
   const g = (n) => V.get(n) || null;
-  for (const o of objects) {
+  for (const o of objects.concat(aux)) {
     let v = null;
     switch (o.op) {
       case 'free': v = { x: o.x, y: o.y }; break;
@@ -242,14 +247,17 @@ function draw() {
   const colDraw = css('--draw'), colSoft = css('--draw-soft'),
         colSel = css('--sel'), colAcc = css('--accent');
 
-  // 直線と円
-  for (const o of objects) {
+  // 直線と円(補助作図は後ろに薄く)
+  for (const o of aux.concat(objects)) {
     const v = V.get(o.name);
     if (!v) continue;
     const hot = highlight.has(o.name);
     const chosen = pending.includes(o.name);
+    const isAux = o.auxiliary === true;
     ctx.strokeStyle = hot ? colAcc : (chosen ? colSel : colSoft);
     ctx.lineWidth = hot || chosen ? 2.2 : 1.2;
+    ctx.globalAlpha = (isAux && !hot) ? 0.42 : 1;
+    ctx.setLineDash(isAux ? [5, 4] : []);
     if (o.kind === 'line') {
       const seg = clipLine(v, r);
       if (!seg) continue;
@@ -262,9 +270,12 @@ function draw() {
       labelAt({ x: c.x + rr * 0.71, y: c.y - rr * 0.71 }, o.name, hot ? colAcc : colSoft, 4, -4);
     }
   }
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
   // 点は最前面
-  for (const o of objects) {
+  for (const o of aux.concat(objects)) {
     if (o.kind !== 'point') continue;
+    ctx.globalAlpha = (o.auxiliary && !highlight.has(o.name)) ? 0.5 : 1;
     const v = V.get(o.name);
     if (!v) continue;
     const s = toScreen(v);
@@ -276,6 +287,7 @@ function draw() {
     if (movable) { ctx.strokeStyle = css('--panel'); ctx.lineWidth = 1.5; ctx.stroke(); }
     labelAt(s, o.name, hot ? colAcc : colDraw, 8, -8);
   }
+  ctx.globalAlpha = 1;
   document.getElementById('script').textContent = serialize() || '(まだ何もありません)';
 }
 
@@ -306,6 +318,7 @@ function clipLine(l, r) {
 function hit(sx, sy, kind) {
   const V = evaluate();
   let best = null, bestD = Infinity;
+  // 補助作図は掴めない(取り込んでから使う)。
   for (const o of objects) {
     if (kind && o.kind !== kind) continue;
     const v = V.get(o.name);
@@ -474,6 +487,7 @@ function serialize() {
 }
 
 function invalidateFindings() {
+  dropAux();
   const el = document.getElementById('findings');
   if (el.dataset.fresh === '1') {
     el.dataset.fresh = '0';
@@ -483,16 +497,33 @@ function invalidateFindings() {
   highlight.clear();
 }
 
+/// 画面の設定を、サーバが読む `config <キー> <値>` の行に直す。
+function configLines() {
+  const v = (id) => document.getElementById(id).value;
+  return [
+    `config rounds ${v('rounds')}`,
+    `config seconds ${v('seconds')}`,
+    `config cap ${v('cap')}`,
+    `config per_kind ${v('per_kind')}`,
+    `config sweep ${v('sweep')}`,
+    `config top ${v('top')}`,
+  ].join('\n');
+}
+
 async function discover() {
   const btn = document.getElementById('discover');
   const el = document.getElementById('findings');
   const script = serialize();
   if (!script) { el.className = 'empty'; el.textContent = 'まず何か描いてください。'; return; }
+  dropAux();
   btn.disabled = true;
   el.className = 'empty';
-  el.textContent = '調べています…';
+  const rounds = Number(document.getElementById('rounds').value);
+  el.textContent = rounds > 0
+    ? `自由作図(${rounds}段)をしてから調べています… 最大 ${document.getElementById('seconds').value} 秒`
+    : '調べています…';
   try {
-    const res = await fetch('/discover', { method: 'POST', body: script });
+    const res = await fetch('/discover', { method: 'POST', body: configLines() + '\n' + script });
     const text = await res.text();
     renderFindings(text);
   } catch (err) {
@@ -522,6 +553,18 @@ function renderFindings(text) {
     el.appendChild(p);
     return;
   }
+  // 自由作図でエンジンが足した図形。ユーザーの作図と名前が衝突しない
+  // ように来る(x1, x2, …)ので、そのまま評価器に載せられる。
+  aux = [];
+  for (const l of lines.filter(l => l.startsWith('aux|'))) {
+    const t = l.slice(4).trim().split(/\s+/);
+    if (t.length < 3) continue;
+    const [kind, name, op, ...args] = t;
+    const o = { name, kind, op, args, auxiliary: true };
+    if (op === 'free') { o.x = 0; o.y = 0; }
+    aux.push(o);
+  }
+  updateAuxBar();
   const findings = lines.filter(l => l.startsWith('finding|')).map(l => {
     const [, kind, textPart, idsPart] = l.split('|');
     return { kind, text: textPart, ids: (idsPart || '').split(',').filter(Boolean) };
@@ -551,6 +594,32 @@ function renderFindings(text) {
 // ============================================================
 // 起動
 // ============================================================
+/// 補助作図を捨てる。作図を編集したら、それは古い図に対する提案なので残さない。
+function dropAux() {
+  if (!aux.length) return;
+  aux = [];
+  updateAuxBar();
+}
+
+/// 補助作図をユーザーの作図として取り込む。以後は掴めるし、次に調べるとき
+/// エンジンにも送られる。
+function adoptAux() {
+  if (!aux.length) return;
+  snapshot();
+  for (const o of aux) { delete o.auxiliary; objects.push(o); }
+  aux = [];
+  updateAuxBar();
+  refresh();
+}
+
+function updateAuxBar() {
+  const bar = document.getElementById('auxbar');
+  bar.hidden = aux.length === 0;
+  document.getElementById('auxcount').textContent =
+    aux.length ? `補助作図 ${aux.length} 個(破線)` : '';
+  draw();
+}
+
 function refresh() { updateHint(); draw(); }
 
 function init() {
@@ -563,6 +632,8 @@ function init() {
     bar.appendChild(b);
   }
   document.getElementById('discover').addEventListener('click', discover);
+  document.getElementById('adopt').addEventListener('click', adoptAux);
+  document.getElementById('dropaux').addEventListener('click', () => { dropAux(); draw(); });
   document.getElementById('copy').addEventListener('click', () => {
     navigator.clipboard.writeText(serialize()).catch(() => {});
   });

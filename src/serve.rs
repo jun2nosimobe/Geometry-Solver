@@ -99,6 +99,62 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String, String)> {
 }
 
 // ============================================================
+// ブラウザから渡される設定
+// ============================================================
+
+/// 🌟 ユーザー要望「探索時間やパラメーターなどのコンフィグもブラウザから
+/// 変更できるようにしたい」への対応。本文の先頭に
+/// `config <キー> <値>` の行として混ぜて送られてくる。
+/// 知らないキーは黙って無視する(古いUIと新しいサーバを繋いでも動くように)。
+struct Config {
+    /// 自由作図のラウンド数。0なら「描いた図のまま」調べる。
+    rounds: usize,
+    /// 自由作図で作ってよい実体数の上限。
+    cap: usize,
+    /// 1ラウンドで各種類から拾う「熱い」実体の数。
+    per_kind: usize,
+    /// 自由作図に使ってよい時間(秒)。
+    seconds: u64,
+    /// 総当たり検出で見る点・直線/円の数。
+    sweep: usize,
+    /// 返す発見の最大件数。
+    top: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config { rounds: 0, cap: 400, per_kind: 8, seconds: 20, sweep: 64, top: 30 }
+    }
+}
+
+/// 本文を (設定, 作図手順) に分ける。
+fn split_config(body: &str) -> (Config, String) {
+    let mut cfg = Config::default();
+    let mut script = String::new();
+    for raw in body.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("config ") {
+            let mut it = rest.split_whitespace();
+            let (Some(key), Some(val)) = (it.next(), it.next()) else { continue };
+            let n: usize = val.parse().unwrap_or(0);
+            match key {
+                "rounds" => cfg.rounds = n.min(8),
+                "cap" => cfg.cap = n.clamp(20, 4000),
+                "per_kind" => cfg.per_kind = n.clamp(3, 20),
+                "seconds" => cfg.seconds = (n as u64).clamp(1, 600),
+                "sweep" => cfg.sweep = n.clamp(8, 200),
+                "top" => cfg.top = n.clamp(1, 200),
+                _ => {}
+            }
+            continue;
+        }
+        script.push_str(raw);
+        script.push('\n');
+    }
+    (cfg, script)
+}
+
+// ============================================================
 // 作図手順のテキスト表現
 // ============================================================
 
@@ -210,14 +266,21 @@ fn build_egraph(script: &str) -> Result<(EGraph, Vec<(String, ClassId)>), String
 // ============================================================
 
 /// 1件の発見。UI側はこれを行として受け取り、idsに挙がった図形を強調表示する。
+///
+/// refs は ids と同じ並びの実体ID。自由作図モードでは、発見に出てきた
+/// 補助的な図形を作図手順として書き戻す必要があり、そのとき名前では
+/// 引けない(自動生成の名前は作図式そのもので、EGraphの検索キーではない)
+/// ため、IDをそのまま持ち回る。
 struct Finding {
     kind: &'static str,
     text: String,
     ids: Vec<String>,
+    refs: Vec<ClassId>,
 }
 
-fn discover_response(script: &str) -> String {
-    let (mut egraph, order) = match build_egraph(script) {
+fn discover_response(body: &str) -> String {
+    let (cfg, script) = split_config(body);
+    let (mut egraph, order) = match build_egraph(&script) {
         Ok(v) => v,
         Err(e) => return format!("error|{}\n", e),
     };
@@ -232,19 +295,160 @@ fn discover_response(script: &str) -> String {
             .unwrap_or_else(|| eg.entities[eg.get_rep(id).0].name.clone())
     };
 
-    let findings = collect_findings(&mut egraph, &name_of);
+    // 🌟 自由作図モード: 与えられた図から機械的に作図を伸ばしてから探す。
+    if cfg.rounds > 0 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(cfg.seconds);
+        crate::discover::systematic_closure_until(
+            &mut egraph, cfg.rounds, cfg.cap, cfg.per_kind, Some(deadline));
+    }
+
+    let mut findings = collect_findings(&mut egraph, &name_of, cfg.sweep);
+
+    // ユーザーが描いた図形に多く触れている発見を先に出す。自由作図は補助的な
+    // 図形どうしだけで閉じた関係もたくさん作るが、まず見たいのは「自分の図に
+    // ついて何が言えるか」なので。
+    let is_user = |n: &String| order.iter().any(|(name, _)| name == n);
+    findings.sort_by_key(|f| {
+        let touched = f.ids.iter().filter(|n| is_user(n)).count();
+        (std::cmp::Reverse(touched), f.ids.len())
+    });
+    findings.truncate(cfg.top);
+
+    // 発見に出てくる補助的な図形を、ブラウザが描けるように作図手順として
+    // 書き出す。これが無いと「x3 と x7 が共点」と言われても何のことか
+    // 分からない。必要なものだけを、依存関係の順に返す。
+    let mut emitter = AuxEmitter::new(&egraph, &order);
+    let mut aux_lines: Vec<String> = Vec::new();
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    for f in &findings {
+        for (n, id) in f.ids.iter().zip(f.refs.iter()) {
+            if is_user(n) || renamed.contains_key(n) { continue; }
+            if let Some(short) = emitter.emit_id(&egraph, *id, &mut aux_lines) {
+                renamed.insert(n.clone(), short);
+            }
+        }
+    }
+
     let mut out = format!("ok|{}\n", findings.len());
-    for f in findings {
-        out.push_str(&format!("finding|{}|{}|{}\n", f.kind, f.text, f.ids.join(",")));
+    for line in &aux_lines { out.push_str(&format!("aux|{}\n", line)); }
+    for f in &findings {
+        let ids: Vec<String> = f.ids.iter()
+            .map(|n| renamed.get(n).cloned().unwrap_or_else(|| n.clone())).collect();
+        // 表示用の文も、長い作図式のままだと読めないので短い名前に差し替える。
+        let mut text = f.text.clone();
+        let mut subs: Vec<(&String, &String)> = renamed.iter().collect();
+        subs.sort_by_key(|(long, _)| std::cmp::Reverse(long.len()));
+        for (long, short) in subs {
+            if long != short { text = text.replace(long.as_str(), short.as_str()); }
+        }
+        out.push_str(&format!("finding|{}|{}|{}\n", f.kind, text, ids.join(",")));
     }
     out
 }
 
-fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> String) -> Vec<Finding> {
+// ============================================================
+// 自由作図で増えた図形を、ブラウザが描ける作図手順に書き戻す
+// ============================================================
+
+/// 自由作図が作った実体は「LineThrough(A, Midpoint(B, C))」のような作図式
+/// そのものが名前になっていて、そのままでは画面に出せないし、ブラウザ側も
+/// どう描けばよいか分からない。発見に出てきたものだけを x1, x2, … という
+/// 短い名前に付け替え、依存する図形を先に並べた作図手順として返す。
+struct AuxEmitter {
+    /// 代表元 -> 既に決まっている名前(ユーザーの図形か、割り当て済みの補助図形)
+    names: HashMap<usize, String>,
+    counter: usize,
+    in_progress: std::collections::HashSet<usize>,
+    /// 既に使われている名前。補助作図を「図に取り込む」と x1, x2, … が
+    /// ユーザーの作図の一部になるので、次に調べたときに同じ名前を振ると
+    /// 画面上で別物が同じ名前になってしまう。それを避けるために持つ。
+    used: std::collections::HashSet<String>,
+}
+
+impl AuxEmitter {
+    fn new(egraph: &EGraph, order: &[(String, ClassId)]) -> Self {
+        let mut names = HashMap::new();
+        let mut used = std::collections::HashSet::new();
+        for (n, id) in order {
+            names.entry(egraph.get_rep(*id).0).or_insert_with(|| n.clone());
+            used.insert(n.clone());
+        }
+        AuxEmitter { names, counter: 0, in_progress: std::collections::HashSet::new(), used }
+    }
+
+    fn emit_id(&mut self, egraph: &EGraph, id: ClassId, out: &mut Vec<String>) -> Option<String> {
+        let rep = egraph.get_rep(id);
+        if let Some(n) = self.names.get(&rep.0) { return Some(n.clone()); }
+        // 無限遠の点(方向)と無限遠直線はアフィン平面に描けない。
+        if rep == egraph.line_infinity { return None; }
+        let ty = egraph.entities[rep.0].entity_type;
+        if !matches!(ty, EntityType::Point | EntityType::Line | EntityType::Conic) { return None; }
+        if ty == EntityType::Point && egraph.is_connected(rep, egraph.line_infinity) { return None; }
+        if !self.in_progress.insert(rep.0) { return None; }   // 循環
+
+        let defs: Vec<Definition> = egraph.entities[rep.0].components.first()
+            .map(|c| c.definitions.clone()).unwrap_or_default();
+        let mut produced: Option<String> = None;
+        for def in &defs {
+            // 親を全部書き出せる定義を1つ選ぶ。
+            let mut arg_names = Vec::new();
+            let mut ok = true;
+            for p in def.get_parents() {
+                match self.emit_id(egraph, p, out) {
+                    Some(n) => arg_names.push(n),
+                    None => { ok = false; break; }
+                }
+            }
+            if !ok { continue; }
+            if let Some(tail) = script_tail(def, &arg_names) { produced = Some(tail); break; }
+        }
+        self.in_progress.remove(&rep.0);
+        let tail = produced?;
+        let short = loop {
+            self.counter += 1;
+            let cand = format!("x{}", self.counter);
+            if !self.used.contains(&cand) { break cand; }
+        };
+        self.used.insert(short.clone());
+        let kind = match ty {
+            EntityType::Point => "point",
+            EntityType::Line => "line",
+            _ => "circle",
+        };
+        out.push(format!("{} {} {}", kind, short, tail));
+        self.names.insert(rep.0, short.clone());
+        Some(short)
+    }
+}
+
+/// Definition を作図手順の「opと引数」に戻す(build_egraph の逆)。
+/// 書き戻せない定義(角度・複比など画面に描けないもの)は None。
+fn script_tail(def: &Definition, args: &[String]) -> Option<String> {
+    let joined = |op: &str| Some(format!("{} {}", op, args.join(" ")));
+    match def {
+        Definition::FreePoint | Definition::GivenPoint => Some("free".to_string()),
+        Definition::LineThroughPoints(_, _) => joined("through"),
+        Definition::Circumcircle(_, _, _) => joined("through"),
+        Definition::Intersection(_, _) => joined("inter"),
+        Definition::Midpoint(_, _) => joined("mid"),
+        Definition::PerpendicularLine(_, _) => joined("perp"),
+        Definition::ParallelLine(_, _) => joined("para"),
+        Definition::TangentLine(_, _) => joined("tangent"),
+        Definition::RadicalAxis(_, _) => joined("radical"),
+        Definition::SecondIntersectionOfLineAndConic(_, _, _) => joined("second_lc"),
+        Definition::SecondIntersectionOfCircles(_, _, _) => joined("second_cc"),
+        _ => None,
+    }
+}
+
+fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> String, cap: usize)
+    -> Vec<Finding>
+{
     use crate::padic_eval as pe;
     const SEEDS: [u64; 3] = [0xC0FFEE, 0xBEEF77, 0x1234ABCD];
-    // 手で描く図はせいぜい数十個なので、総当たりの上限は緩くてよい。
-    const CAP: usize = 64;
+    // 総当たりの上限。手で描いた図だけなら数十個で足りるが、自由作図を
+    // 回した後は実体が数百になるので、ブラウザから調整できるようにしてある。
+    let cap = cap.max(8);
     let mut out: Vec<Finding> = Vec::new();
 
     // 1. 独立に作った2つの図形が常に一致する
@@ -254,11 +458,12 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
             kind: "coincide",
             text: format!("{} と {} は常に同じ", name_of(egraph, a), name_of(egraph, b)),
             ids: vec![name_of(egraph, a), name_of(egraph, b)],
+            refs: vec![a, b],
         });
     }
 
     // 2. 3点以上が共線
-    let triples = pe::find_generic_collinear_triples(egraph, &SEEDS, CAP);
+    let triples = pe::find_generic_collinear_triples(egraph, &SEEDS, cap);
     let mut fresh: Vec<Vec<ClassId>> = Vec::new();
     for (a, b, c) in triples {
         let reps = [egraph.get_rep(a), egraph.get_rep(b), egraph.get_rep(c)];
@@ -268,11 +473,12 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
     }
     for set in crate::discover::maximal_verified_sets(egraph, &SEEDS, fresh, pe::PropertyKind::Collinear) {
         let names: Vec<String> = set.iter().map(|&id| name_of(egraph, id)).collect();
-        out.push(Finding { kind: "collinear", text: format!("{} は同一直線上にある", names.join(" , ")), ids: names });
+        out.push(Finding { kind: "collinear", text: format!("{} は同一直線上にある", names.join(" , ")),
+                           ids: names, refs: set.clone() });
     }
 
     // 3. 3直線以上が1点で交わる
-    let conc = pe::find_generic_concurrent_lines(egraph, &SEEDS, CAP);
+    let conc = pe::find_generic_concurrent_lines(egraph, &SEEDS, cap);
     let mut fresh_conc: Vec<Vec<ClassId>> = Vec::new();
     for (a, b, c) in conc {
         if crate::discover::shares_known_point(egraph, a, b, c) { continue; }
@@ -284,14 +490,16 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
     }
     for set in crate::discover::maximal_verified_sets(egraph, &SEEDS, fresh_conc, pe::PropertyKind::Concurrent) {
         let names: Vec<String> = set.iter().map(|&id| name_of(egraph, id)).collect();
-        out.push(Finding { kind: "concurrent", text: format!("{} は1点で交わる", names.join(" , ")), ids: names });
+        out.push(Finding { kind: "concurrent", text: format!("{} は1点で交わる", names.join(" , ")),
+                           ids: names, refs: set.clone() });
     }
 
     // 4. 3円が1点を共有する(ミケル点・根心型)
-    for (a, b, c) in pe::find_generic_concurrent_circles(egraph, &SEEDS, CAP) {
+    for (a, b, c) in pe::find_generic_concurrent_circles(egraph, &SEEDS, cap) {
         if crate::discover::shares_known_point(egraph, a, b, c) { continue; }
         let names: Vec<String> = [a, b, c].iter().map(|&id| name_of(egraph, id)).collect();
-        out.push(Finding { kind: "circles", text: format!("円 {} は1点を共有する", names.join(" , ")), ids: names });
+        out.push(Finding { kind: "circles", text: format!("円 {} は1点を共有する", names.join(" , ")),
+                           ids: names, refs: vec![a, b, c] });
     }
 
     // 5. 点が直線・円の上にある
@@ -301,15 +509,17 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
     // 接続検出から、最後は共円検出の言い換えから来る)。読む側にとっては
     // 「この円の上に、まだそうと分かっていなかった点がこれだけ乗る」という
     // 1つの事実なので、曲線ごとに集約する。
-    let mut incidences: std::collections::BTreeMap<String, (String, Vec<String>)> =
+    struct Incidence { kind_word: String, curve: ClassId, points: Vec<(String, ClassId)> }
+    let mut incidences: std::collections::BTreeMap<String, Incidence> =
         std::collections::BTreeMap::new();
     let mut note_incidence = |egraph: &EGraph, p: ClassId, c: ClassId| {
         let kind_word = if egraph.entities[egraph.get_rep(c).0].entity_type == EntityType::Conic { "円" } else { "直線" };
         let (pn, cn) = (name_of(egraph, p), name_of(egraph, c));
-        let e = incidences.entry(cn).or_insert_with(|| (kind_word.to_string(), Vec::new()));
-        if !e.1.contains(&pn) { e.1.push(pn); }
+        let e = incidences.entry(cn).or_insert_with(|| Incidence {
+            kind_word: kind_word.to_string(), curve: c, points: Vec::new() });
+        if !e.points.iter().any(|(n, _)| n == &pn) { e.points.push((pn, p)); }
     };
-    for (p, c) in pe::find_generic_point_on_curve(egraph, &SEEDS, CAP, CAP) {
+    for (p, c) in pe::find_generic_point_on_curve(egraph, &SEEDS, cap, cap) {
         if egraph.is_natural_incidence(egraph.get_rep(p), egraph.get_rep(c)) { continue; }
         if crate::discover::has_duplicated_parent(egraph, p)
             || crate::discover::has_duplicated_parent(egraph, c) { continue; }
@@ -317,7 +527,7 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
     }
 
     // 6. 4点以上が同一円周上
-    let quads = pe::find_generic_concyclic_quadruples(egraph, &SEEDS, CAP);
+    let quads = pe::find_generic_concyclic_quadruples(egraph, &SEEDS, cap);
     let mut fresh_quads: Vec<Vec<ClassId>> = Vec::new();
     for q in quads {
         if crate::discover::shares_known_conic(egraph, &q) { continue; }
@@ -344,16 +554,21 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
             kind: "concyclic",
             text: format!("{}点 {} は同一円周上にある", names.len(), names.join(" , ")),
             ids: names,
+            refs: set.clone(),
         });
     }
 
-    for (curve, (kind_word, points)) in incidences {
-        let mut ids = points.clone();
-        ids.push(curve.clone());
+    for (curve_name, inc) in incidences {
+        let point_names: Vec<String> = inc.points.iter().map(|(n, _)| n.clone()).collect();
+        let mut ids = point_names.clone();
+        ids.push(curve_name.clone());
+        let mut refs: Vec<ClassId> = inc.points.iter().map(|(_, id)| *id).collect();
+        refs.push(inc.curve);
         out.push(Finding {
             kind: "incident",
-            text: format!("点 {} は{} {} の上にある", points.join(" , "), kind_word, curve),
+            text: format!("点 {} は{} {} の上にある", point_names.join(" , "), inc.kind_word, curve_name),
             ids,
+            refs,
         });
     }
     out
@@ -434,6 +649,39 @@ mod tests {
                 && l.contains("altA") && l.contains("altB") && l.contains("altC")
         });
         assert!(found_concurrency, "3本の高さの共点性を見つけられるべき:\n{}", body);
+    }
+
+    /// 🌟 自由作図モードの要: エンジンが図を勝手に伸ばして見つけた関係は、
+    /// そこで使った補助的な図形も一緒に返さないと「x3とx7が共点」と言われた
+    /// ところで何のことか分からない。返した補助作図が本当にその図形を指して
+    /// いるかを、「補助作図を元の図に足して、自由作図なしでもう一度調べると
+    /// 同じ関係が出る」ことで確かめる。
+    #[test]
+    fn exploration_returns_auxiliary_constructions_that_reproduce_the_findings() {
+        let triangle = "point A free\npoint B free\npoint C free\nline AB through A B\nline BC through B C\nline CA through C A";
+        let out = discover_response(&format!(
+            "config rounds 2{n}config seconds 60{n}config cap 220{n}config sweep 34{n}config top 4{n}{}",
+            triangle, n = "\n"));
+        assert!(out.starts_with("ok|"), "自由作図が走らなかった: {}", out);
+        let aux: Vec<&str> = out.lines().filter(|l| l.starts_with("aux|")).map(|l| &l[4..]).collect();
+        let found: Vec<&str> = out.lines().filter(|l| l.starts_with("finding|")).collect();
+        assert!(!found.is_empty(), "裸の三角形から自由作図すれば何か見つかるはず:{n}{}", out, n = "\n");
+        assert!(!aux.is_empty(), "発見に使われた補助作図が返るべき:{n}{}", out, n = "\n");
+
+        // 補助作図を足して、今度は自由作図なしで調べ直す。
+        let mut replay = format!("config rounds 0{n}config sweep 34{n}config top 60{n}{}{n}",
+            triangle, n = "\n");
+        for l in &aux { replay.push_str(l); replay.push('\n'); }
+        let out2 = discover_response(&replay);
+        assert!(out2.starts_with("ok|"), "書き戻した作図が読めなかった: {}", out2);
+
+        let texts2: Vec<&str> = out2.lines().filter(|l| l.starts_with("finding|"))
+            .filter_map(|l| l.splitn(4, '|').nth(2)).collect();
+        let reproduced = found.iter().filter_map(|l| l.splitn(4, '|').nth(2))
+            .filter(|t| texts2.contains(t)).count();
+        assert!(reproduced > 0,
+            "補助作図を足し直しても同じ関係が1件も再現しなかった(書き戻しが図形を取り違えている)。{n}1回目:{n}{}{n}2回目:{n}{}",
+            out, out2, n = "\n");
     }
 
     #[test]
