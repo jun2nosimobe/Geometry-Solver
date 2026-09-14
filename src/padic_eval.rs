@@ -30,7 +30,11 @@ use rustc_hash::FxHashMap;
 pub enum DegenShape {
     Point(Triple),
     Line(Triple),
-    Circle { center: Triple, r_sq: PInt },
+    /// known: この円周上にあると分かっている点(Circumcircle(a,b,c)ならa)。
+    /// 円周上の点を平方根なしに厳密サンプリングするために使う
+    /// (既知点Qから任意方向dへ引いた直線の"もう一方の交点"は、Qが既に根で
+    /// あることを使うと1次方程式で解ける)。
+    Circle { center: Triple, r_sq: PInt, known: Triple },
 }
 
 /// アフィン座標(x,y)を得るため、同次座標をzで割る。zの方が退化して
@@ -151,20 +155,105 @@ impl<'a> DegenEvaluator<'a> {
         match self.eval(id)? { DegenShape::Line(t) => Some(t), _ => None }
     }
     fn circle_of(&mut self, id: ClassId) -> Option<(Triple, PInt)> {
-        match self.eval(id)? { DegenShape::Circle { center, r_sq } => Some((center, r_sq)), _ => None }
+        match self.eval(id)? { DegenShape::Circle { center, r_sq, .. } => Some((center, r_sq)), _ => None }
+    }
+
+    /// この点が構造的に接続されている曲線(直線・二次曲線)。自由点にとっては
+    /// 「その上にある」という問題の仮定そのものなので制約として扱う。
+    fn incidence_constraints(&self, rep: ClassId) -> Vec<ClassId> {
+        self.egraph.entities[rep.0].components.first()
+            .map(|c| c.subobjects.iter().map(|&s| self.egraph.get_rep(s))
+                .filter(|&s| matches!(self.egraph.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
+                .filter(|&s| s != self.egraph.line_infinity)
+                .collect())
+            .unwrap_or_default()
+    }
+
+    fn circle_parts(&mut self, id: ClassId) -> Option<(Triple, PInt, Triple)> {
+        match self.eval(id)? { DegenShape::Circle { center, r_sq, known } => Some((center, r_sq, known)), _ => None }
+    }
+
+    /// 直線l上の点を1つ無作為に取る。lと2本の補助直線とのクロス積で
+    /// l上の相異なる2点を作り、その射影的な線形結合を返す(除算不要)。
+    fn sample_on_line(&mut self, l: &Triple) -> Option<Triple> {
+        let aux1: Triple = [PInt::one(), PInt::zero(), PInt::zero()];
+        let aux2: Triple = [PInt::zero(), PInt::one(), PInt::zero()];
+        let p1 = cross3(l, &aux1);
+        let p2 = cross3(l, &aux2);
+        let ok = |t: &Triple| !t.iter().all(|x| x.valuation().is_none());
+        if !ok(&p1) || !ok(&p2) { return None; }
+        let s = PInt::random_unit(&mut self.rng);
+        let t = PInt::random_unit(&mut self.rng);
+        Some([
+            p1[0].mul(&s).add(&p2[0].mul(&t)),
+            p1[1].mul(&s).add(&p2[1].mul(&t)),
+            p1[2].mul(&s).add(&p2[2].mul(&t)),
+        ])
+    }
+
+    /// 中心centerの円周上の点を1つ無作為に取る。円周上の既知点Qから任意方向d
+    /// へ引いた直線ともう一度交わる点は、Qが既に根であることを使って
+    /// t = -2 d·(Q-center) / |d|² と1次で解ける(平方根が不要)。
+    fn sample_on_circle(&mut self, center: &Triple, known: &Triple) -> Option<Triple> {
+        let (qx, qy) = affine_xy(known)?;
+        let (cx, cy) = affine_xy(center)?;
+        let dx = PInt::random_unit(&mut self.rng);
+        let dy = PInt::random_unit(&mut self.rng);
+        let ux = qx.sub(&cx);
+        let uy = qy.sub(&cy);
+        let num = dx.mul(&ux).add(&dy.mul(&uy));
+        let two_num = num.add(&num);
+        let den = dx.mul(&dx).add(&dy.mul(&dy));
+        let t = match two_num.checked_div(&den) { DivOutcome::Finite(v) => v.neg(), _ => return None };
+        Some(affine_point(qx.add(&t.mul(&dx)), qy.add(&t.mul(&dy))))
     }
 
     fn eval_def(&mut self, rep: ClassId, def: &Definition) -> Option<DegenShape> {
         match def {
             Definition::FreePoint | Definition::GivenPoint => {
-                if self.egraph.entities[rep.0].entity_type == EntityType::Point {
-                    if let Some(&c) = self.free_coords.get(&rep) { return Some(DegenShape::Point(affine_point(c.0, c.1))); }
-                    let c = (PInt::random_unit(&mut self.rng), PInt::random_unit(&mut self.rng));
-                    self.free_coords.insert(rep, c);
-                    Some(DegenShape::Point(affine_point(c.0, c.1)))
-                } else {
-                    None // Line_infinity等
+                if self.egraph.entities[rep.0].entity_type != EntityType::Point {
+                    return None; // Line_infinity等
                 }
+                if let Some(&c) = self.free_coords.get(&rep) { return Some(DegenShape::Point(affine_point(c.0, c.1))); }
+                // 🐛 FIX(誤マージ調査で判明): 自由点でも「辺BC上の点D」のように
+                // 問題の仮定として曲線への接続を持つことがある(miquelのD,E,F、
+                // two_circles_reimのD等)。以前は無条件にランダム座標を与えて
+                // いたため、その配置は問題の仮定を満たさない別の図になり、
+                // e-graphが構造的に主張する接続と数値が食い違っていた
+                // (崩壊検出が誤って発火し、実際にmiquel/two_circles_reimの
+                // 発見報告が丸ごと捨てられていた――マージは1件も起きていない
+                // ステップ1の時点で既に矛盾していたことで発覚)。
+                // 本体の評価器(eval.rs::sample_point_on_constraint)と同じく、
+                // 接続を制約とみなして曲線上からサンプリングする。
+                let constraints = self.incidence_constraints(rep);
+                let lines: Vec<ClassId> = constraints.iter().copied()
+                    .filter(|&c| self.egraph.entities[c.0].entity_type == EntityType::Line).collect();
+                let conics: Vec<ClassId> = constraints.iter().copied()
+                    .filter(|&c| self.egraph.entities[c.0].entity_type == EntityType::Conic).collect();
+
+                let sampled: Option<Triple> = if lines.len() >= 2 {
+                    // 2直線に同時に乗る自由点は、その交点として一意に決まる。
+                    let l1 = self.line_of(lines[0])?;
+                    let l2 = self.line_of(lines[1])?;
+                    Some(intersection(&l1, &l2))
+                } else if lines.len() == 1 && conics.is_empty() {
+                    let l = self.line_of(lines[0])?;
+                    self.sample_on_line(&l)
+                } else if lines.is_empty() && conics.len() == 1 {
+                    let (center, _r, known) = self.circle_parts(conics[0])?;
+                    self.sample_on_circle(&center, &known)
+                } else if lines.is_empty() && conics.is_empty() {
+                    let c = (PInt::random_unit(&mut self.rng), PInt::random_unit(&mut self.rng));
+                    Some(affine_point(c.0, c.1))
+                } else {
+                    // 直線と円の両方に乗る等、厳密に満たすには平方根が要る組み合わせ。
+                    // 仮定を破った配置を作るよりは評価不能として捨てる方が安全。
+                    None
+                };
+                let t = sampled?;
+                let (x, y) = affine_xy(&t)?;
+                self.free_coords.insert(rep, (x, y));
+                Some(DegenShape::Point(affine_point(x, y)))
             }
             Definition::Intersection(l1, l2) => {
                 let a = self.line_of(*l1)?;
@@ -203,7 +292,7 @@ impl<'a> DegenEvaluator<'a> {
                 let pb_ac = perpendicular_line(&l_ac, &mid_ac);
                 let center = intersection(&pb_ab, &pb_ac);
                 let r_sq = squared_distance(&center, &pa)?;
-                Some(DegenShape::Circle { center, r_sq })
+                Some(DegenShape::Circle { center, r_sq, known: pa })
             }
             Definition::TangentLine(circ, p) => {
                 // pは既に円上にある接点だという前提(このプロジェクト全体の

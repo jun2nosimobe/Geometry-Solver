@@ -254,9 +254,44 @@ fn run_one_seed(
     let mut steps_done = 0usize;
     let mut consecutive_failures = 0usize;
     const MAX_CONSECUTIVE_FAILURES: usize = 5;
+    // 🌟 誤マージの原因調査用(--audit)。自由探索は稀にe-graphを実際の幾何と
+    // 矛盾した状態へ壊す(実測でmiquel/two_circles_reimの2配置で発生)。
+    // 毎ステップ後に「e-graphが構造的に主張している接続が数値評価と
+    // 整合しているか」を確かめ、最初に壊れた瞬間のステップ番号・該当する
+    // 接続・その接続の根拠・その2つの同値類に流れ込んだ全マージの理由を
+    // まとめて出力する。
+    let audit = std::env::var("DISCOVER_AUDIT").is_ok();
     while start.elapsed() < Duration::from_secs(time_budget_secs) && steps_done < max_steps {
         let found = mcts.run_step(&mut egraph, &None, sims_per_step);
         steps_done += 1;
+        if audit {
+            if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(&egraph, 0xC0FFEE) {
+                let mut namer = PrettyNamer::new();
+                println!("\n🔬 [監査] ステップ{}でe-graphが幾何と矛盾しました: 「{} は {} 上にある」が数値的に成り立ちません。",
+                    steps_done, namer.label(&egraph, bad_p), namer.label(&egraph, bad_l));
+                if let Some((op, ol, just)) = egraph.find_incidence_justification(bad_p, bad_l) {
+                    println!("   接続の根拠: {} ∈ {} は {:?}", 
+                        egraph.entities[op.0].original_name, egraph.entities[ol.0].original_name, just);
+                } else {
+                    println!("   接続の根拠: (incidence_provenanceに記録なし=作図由来の構造的リンク)");
+                }
+                for (label, target) in [("点", bad_p), ("直線", bad_l)] {
+                    let rep = egraph.get_rep(target);
+                    println!("   {}側の同値類に流れ込んだマージ:", label);
+                    let mut n = 0;
+                    for (&slot, edge) in &egraph.proof_edges {
+                        if egraph.get_rep(ClassId(slot)) != rep { continue; }
+                        println!("     {} ≡ {} (理由: {:?})",
+                            egraph.entities[edge.from.0].original_name,
+                            egraph.entities[edge.to.0].original_name, edge.justification);
+                        n += 1;
+                        if n >= 12 { println!("     ..."); break; }
+                    }
+                    if n == 0 { println!("     (なし)"); }
+                }
+                break;
+            }
+        }
         if found {
             consecutive_failures = 0;
         } else {
