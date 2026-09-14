@@ -239,6 +239,19 @@ impl EGraph {
                 let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
                 Self::to_option(mmp_calculators::calc_second_intersection_of_line_and_conic(&vp, &vl, &vc))
             }
+            // 🌟 2円の根軸。mmp_core/mod.rs::Definition::RadicalAxis のドキュメント参照。
+            Definition::RadicalAxis(c1, c2) => {
+                let v1 = self.evaluate_node_inner(*c1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*c2, vars, cache, in_progress)?;
+                Self::to_option(mmp_calculators::calc_radical_axis(&v1, &v2))
+            }
+            // 🌟 一方の交点が既知のときの2円のもう一方の交点(根軸経由)。
+            Definition::SecondIntersectionOfCircles(p, c1, c2) => {
+                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
+                let v1 = self.evaluate_node_inner(*c1, vars, cache, in_progress)?;
+                let v2 = self.evaluate_node_inner(*c2, vars, cache, in_progress)?;
+                Self::to_option(mmp_calculators::calc_second_intersection_of_circles(&vp, &v1, &v2))
+            }
             Definition::HarmonicConjugateOf(a, b, c) => {
                 let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
                 let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
@@ -637,21 +650,13 @@ impl EGraph {
         // sample_point_on_constraintに満たさせようとする必要はない――
         // そもそもcurve自身の評価がpointの値に依存するため、制約として
         // 扱うと必ず循環依存になり、assign_free_point_coordsが解決不能
-        // (false)に陥って以後のnumeric_plausibility_checkを全滅させる
-        // (実測: orthocenterで、三角形の頂点Aが「円周角の定理の逆」に
-        // よって後から円に接続され、その円自体がAから作られていたため、
-        // 以後ずっと数値健全性チェックがNone=判定不能になり、本来
-        // 数値的に却下すべき誤った二次曲線の結合を素通りさせていた)。
+        // (false)に陥って以後のnumeric_plausibility_checkを全滅させる。
         let mut visited = HashSet::new();
         self.point_is_ancestor_of_curve(point_rep, curve_rep, &mut visited)
     }
 
     /// 🌟 is_natural_incidenceのドキュメント参照。point_repがcurve(の
     /// canonicalな定義)を根から辿った祖先に含まれるかどうかを判定する。
-    /// canonical_shape_definitionが無い(2引数以上の定義を持たない)
-    /// 場合だけ、安全側に倒して持っている定義全てを辿る――そのような
-    /// 定義は複数の生成経路が合流して曖昧になる心配自体が無いため
-    /// (is_natural_incidenceの「いずれか」判定バグとは別種)。
     fn point_is_ancestor_of_curve(&self, point_rep: ClassId, of: ClassId, visited: &mut HashSet<usize>) -> bool {
         let of_rep = self.get_rep(of);
         if of_rep == point_rep { return true; }
@@ -667,16 +672,58 @@ impl EGraph {
         parents.iter().any(|&p| self.point_is_ancestor_of_curve(point_rep, p, visited))
     }
 
-    /// 🌟 is_natural_incidenceのための決定論的な選択: 複数のdefinitionsが
-    /// 合流して溜まっている場合でも、常に同じ1つ(親のClassId列が辞書順
-    /// 最小のもの)を選ぶことで、「この直線/円の真の自由な生成点は誰か」を
-    /// 一意に固定する(選び方が実行のたびにブレると、is_natural_incidenceの
-    /// 判定結果ひいては数値サンプリングの安定性がブレてしまうため)。
-    /// DirectionOf等の1引数のdefinitionは対象外(生成点のペア/組ではないため)。
+    /// 🌟 is_natural_incidenceのための決定論的な選択(親のClassId列が辞書順
+    /// 最小の定義を「真の生成点の定義」とみなす)。
     fn canonical_shape_definition(defs: &[Definition]) -> Option<&Definition> {
         defs.iter()
             .filter(|d| d.get_parents().len() >= 2)
             .min_by_key(|d| d.get_parents().iter().map(|p| p.0).collect::<Vec<_>>())
+    }
+
+    /// 🌟 nodeを数値評価するのに point_rep の座標が不可欠かどうか。
+    ///
+    /// 経緯: is_natural_incidence(「pointのcurveへの接続は、curve自身の定義
+    /// から自然に従うものか」)の判定を、ClassIdの小ささを代理指標にする
+    /// canonical_shape_definition方式からこの直接判定に差し替えたところ、
+    /// 発見モード側の誤サンプリングは直った一方で、32問の回帰が
+    /// 27/32 → 24/32 に落ちた(nine_point_full, bench_2018silkroadp1 が新たに
+    /// 失敗)。証明エンジン側は「祖先なら自然」という緩い判定を前提に
+    /// チューニングされているため、本体のis_natural_incidenceは元のままに
+    /// 戻し、この厳密版は数値評価の忠実さが最優先となる発見モードの
+    /// p進評価器(padic_eval::DegenEvaluator::incidence_constraints)だけで
+    /// 使う。
+    ///
+    /// 定義: nodeがpoint自身なら不可欠。そうでなければ「nodeの持つ全ての
+    /// 定義が、その親のどれかを通じてpointを必要とする」ときに限り不可欠
+    /// ――言い換えると、pointを含まない評価経路が1本でもあれば不可欠ではない。
+    /// FreePoint/GivenPointのような親を持たない定義は「pointなしで評価できる
+    /// 経路」そのものなので、そこで不可欠性は崩れる。
+    /// 循環(定義が互いを参照する。証明が進んだe-graphでは普通に起きる)に
+    /// 出会ったら「不可欠」側に倒す ―― 制約付きサンプリングが循環すると
+    /// 座標割り当てそのものが解けなくなるため、そちらの方が安全。
+    /// 🌟 メモ化必須: 定義グラフはDAG(同じ部分構成が何度も参照される)なので、
+    /// 素朴な再帰だと同じ節点を指数回訪れる。実測では、系統的作図後の
+    /// e-graphでこの判定が事実上終わらなくなった。循環に当たって
+    /// 「必要」と倒した結果はその経路に依存するのでメモ化しない。
+    pub(crate) fn evaluation_requires_point(&self, point_rep: ClassId, node: ClassId,
+        stack: &mut HashSet<usize>, memo: &mut rustc_hash::FxHashMap<usize, bool>) -> bool
+    {
+        let rep = self.get_rep(node);
+        if rep == point_rep { return true; }
+        if let Some(&v) = memo.get(&rep.0) { return v; }
+        if !stack.insert(rep.0) { return true; }
+        let defs = match self.entities[rep.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => { stack.remove(&rep.0); memo.insert(rep.0, false); return false; }
+        };
+        let requires = !defs.is_empty() && defs.iter().all(|d| {
+            let parents = d.get_parents();
+            !parents.is_empty()
+                && parents.iter().any(|&p| self.evaluation_requires_point(point_rep, p, stack, memo))
+        });
+        stack.remove(&rep.0);
+        memo.insert(rep.0, requires);
+        requires
     }
 
     /// 🌟 このFreePointが、自身の座標では裏付けられない接続(incidence)を

@@ -24,7 +24,7 @@ use crate::padic::{
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DegenShape {
@@ -52,6 +52,54 @@ fn squared_distance(p: &Triple, q: &Triple) -> Option<PInt> {
     let dx = px.sub(&qx);
     let dy = py.sub(&qy);
     Some(dx.mul(&dx).add(&dy.mul(&dy)))
+}
+
+/// 円(中心center)上の既知点knownから方向(dx,dy)へ引いた直線が、その円と
+/// もう一度交わる点。knownが既に根であることを使うと
+/// t = -2 d·(known-center) / |d|² と1次で解けるので平方根が要らない
+/// ――これが「一方の交点が既知なら円との第2交点は有理的に作図できる」の
+/// 実体で、sample_on_circle(方向を乱数で取る)と
+/// SecondIntersectionOfLineAndConic(方向を与えられた直線から取る)の
+/// 両方がこの1つの式を共有する。
+fn second_on_circle(center: &Triple, known: &Triple, dx: PInt, dy: PInt) -> Option<Triple> {
+    let (qx, qy) = affine_xy(known)?;
+    let (cx, cy) = affine_xy(center)?;
+    let ux = qx.sub(&cx);
+    let uy = qy.sub(&cy);
+    let num = dx.mul(&ux).add(&dy.mul(&uy));
+    let two_num = num.add(&num);
+    let den = dx.mul(&dx).add(&dy.mul(&dy));
+    let t = match two_num.checked_div(&den) { DivOutcome::Finite(v) => v.neg(), _ => return None };
+    Some(affine_point(qx.add(&t.mul(&dx)), qy.add(&t.mul(&dy))))
+}
+
+/// 2つの同次3元ベクトル(点でも直線でもよい)が射影的に同一か。
+/// 外積が完全に消えることと同値。
+///
+/// 🐛 FIX(実測で判明): 共線性・共点性の判定は行列式が0になることで
+/// 行うが、「3つのうち2つが同一のものだった」場合も行列式は恒等的に0に
+/// なる。これは発見ではなく単なる退化であり、実際に
+/// 「直線BC、AでABに立てた垂線、Aで中点連結線に立てた垂線が共点」
+/// (後ろ2つはABと中点連結線が平行なので同一の直線)のような報告が
+/// 上位を占めていた。従来は「先に選んだ2つ」の退化しか見ていなかった
+/// (cross3が消えるかのチェックが i,j のペアにしか無かった)ため、
+/// 3つ目が重複しているケースが素通りしていた。
+fn projectively_same(a: &Triple, b: &Triple) -> bool {
+    cross3(a, b).iter().all(|x| x.valuation().is_none())
+}
+
+/// 2円の根軸(方冪が等しい点の軌跡)。円i: x²+y²-2x_i x-2y_i y+(x_i²+y_i²-r_i²)=0
+/// の差を取るだけで二次の項が消えて1次式が残る。
+/// mmp_calculators::calc_radical_axis の PInt 版。
+fn radical_axis(c1: (&Triple, PInt), c2: (&Triple, PInt)) -> Option<Triple> {
+    let (x1, y1) = affine_xy(c1.0)?;
+    let (x2, y2) = affine_xy(c2.0)?;
+    let two = PInt::from_i64_mod_p(2);
+    let a = two.mul(&x2.sub(&x1));
+    let b = two.mul(&y2.sub(&y1));
+    let pow1 = x1.mul(&x1).add(&y1.mul(&y1)).sub(&c1.1);
+    let pow2 = x2.mul(&x2).add(&y2.mul(&y2)).sub(&c2.1);
+    Some([a, b, pow1.sub(&pow2)])
 }
 
 /// mmp_calculators::calc_harmonic_conjugateと同じ式(除算不要)をPInt化
@@ -83,6 +131,11 @@ pub struct DegenEvaluator<'a> {
     egraph: &'a EGraph,
     cache: FxHashMap<ClassId, Option<DegenShape>>,
     free_coords: FxHashMap<ClassId, (PInt, PInt)>,
+    /// 🌟 incidence_constraintsは定義グラフ全体を歩く判定
+    /// (evaluation_requires_point)を接続先ごとに行うため高価で、しかも
+    /// 評価失敗はキャッシュされないので同じ自由点について何度も呼ばれる。
+    /// e-graphはこの評価器の生存中は変化しないので、点ごとに1度だけ計算する。
+    constraints_cache: FxHashMap<ClassId, Vec<ClassId>>,
     /// 評価中のClassId(自己参照的な定義への再突入検出用。本体の評価器の
     /// in_progressと同じ役割)。
     in_progress: rustc_hash::FxHashSet<ClassId>,
@@ -109,7 +162,8 @@ impl<'a> DegenEvaluator<'a> {
                 free_coords.insert(a_rep, (bx.add(&dx.scaled_by_p()), by.add(&dy.scaled_by_p())));
             }
         }
-        Self { egraph, cache: FxHashMap::default(), free_coords, in_progress: rustc_hash::FxHashSet::default(), rng }
+        Self { egraph, cache: FxHashMap::default(), free_coords, constraints_cache: FxHashMap::default(),
+               in_progress: rustc_hash::FxHashSet::default(), rng }
     }
 
     /// 🐛 FIX(実測で判明): 以前は「代表元のoriginal_definitionだけを見る」
@@ -160,7 +214,18 @@ impl<'a> DegenEvaluator<'a> {
 
     /// この点が構造的に接続されている曲線(直線・二次曲線)。自由点にとっては
     /// 「その上にある」という問題の仮定そのものなので制約として扱う。
-    fn incidence_constraints(&self, rep: ClassId) -> Vec<ClassId> {
+    fn incidence_constraints(&mut self, rep: ClassId) -> Vec<ClassId> {
+        if let Some(v) = self.constraints_cache.get(&rep) { return v.clone(); }
+        let out = self.compute_incidence_constraints(rep);
+        self.constraints_cache.insert(rep, out.clone());
+        out
+    }
+
+    fn compute_incidence_constraints(&self, rep: ClassId) -> Vec<ClassId> {
+        // 依存判定のメモはこの点に対して共通なので、接続先ごとに作り直さず
+        // 1つを使い回す(作り直すとメモが効かず、実測で作図閉包が2.7秒から
+        // 125秒に悪化した)。
+        let mut memo: FxHashMap<usize, bool> = FxHashMap::default();
         self.egraph.entities[rep.0].components.first()
             .map(|c| c.subobjects.iter().map(|&s| self.egraph.get_rep(s))
                 .filter(|&s| matches!(self.egraph.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
@@ -170,7 +235,23 @@ impl<'a> DegenEvaluator<'a> {
                 // 曲線の評価がその点自身を要求して循環し、評価不能になる
                 // (実測: 系統的作図の後は全ての点がこれで評価失敗していた)。
                 // 判定は本体の評価器と同じis_natural_incidenceを使う。
-                .filter(|&s| !self.egraph.is_natural_incidence(rep, s))
+                // 🐛 FIX(miquelの監査で判明): 以前は本体と同じ
+                // is_natural_incidence を使っていたが、その判定は
+                // 「親のClassIdが最小の定義」を真の生成定義とみなす代理指標に
+                // 依っており、union-findの代表元が入れ替わると壊れる。実測では
+                // LineBCの定義が [LineThrough(C,B), LineThrough(D,C)] になった
+                // 状態で LineThrough(D,C) が選ばれてしまい、「Dは辺BC上にある」
+                // という miquel の仮定が"自然な接続"と誤判定されて、Dが直線と
+                // 無関係な乱数座標に置かれていた(その結果、崩壊検出が誤発火し
+                // miquel配置の発見報告が丸ごと捨てられていた)。
+                // 発見モードでは「問題の仮定を絶対に破らない」ことが最優先
+                // なので、代理指標ではなく厳密な依存判定を使う
+                // (mmp_core/eval.rs::evaluation_requires_point のドキュメント参照。
+                // 証明エンジン側は回帰のため元の緩い判定のままにしてある)。
+                .filter(|&s| {
+                    let mut stack: std::collections::HashSet<usize> = std::collections::HashSet::new();
+                    !self.egraph.evaluation_requires_point(rep, s, &mut stack, &mut memo)
+                })
                 .collect())
             .unwrap_or_default()
     }
@@ -201,17 +282,9 @@ impl<'a> DegenEvaluator<'a> {
     /// へ引いた直線ともう一度交わる点は、Qが既に根であることを使って
     /// t = -2 d·(Q-center) / |d|² と1次で解ける(平方根が不要)。
     fn sample_on_circle(&mut self, center: &Triple, known: &Triple) -> Option<Triple> {
-        let (qx, qy) = affine_xy(known)?;
-        let (cx, cy) = affine_xy(center)?;
         let dx = PInt::random_unit(&mut self.rng);
         let dy = PInt::random_unit(&mut self.rng);
-        let ux = qx.sub(&cx);
-        let uy = qy.sub(&cy);
-        let num = dx.mul(&ux).add(&dy.mul(&uy));
-        let two_num = num.add(&num);
-        let den = dx.mul(&dx).add(&dy.mul(&dy));
-        let t = match two_num.checked_div(&den) { DivOutcome::Finite(v) => v.neg(), _ => return None };
-        Some(affine_point(qx.add(&t.mul(&dx)), qy.add(&t.mul(&dy))))
+        second_on_circle(center, known, dx, dy)
     }
 
     fn eval_def(&mut self, rep: ClassId, def: &Definition) -> Option<DegenShape> {
@@ -314,6 +387,29 @@ impl<'a> DegenEvaluator<'a> {
                 let pb = self.point_of(*b)?;
                 let pc = self.point_of(*c)?;
                 Some(DegenShape::Point(harmonic_conjugate(&pa, &pb, &pc)))
+            }
+            // 🌟 円と直線の第2交点(一方の交点pが既知)。直線[a,b,c]の方向は
+            // (b,-a)なので、あとはsecond_on_circleの1次の式で解ける。
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
+                let pp = self.point_of(*p)?;
+                let ll = self.line_of(*l)?;
+                let (center, _r_sq) = self.circle_of(*c)?;
+                second_on_circle(&center, &pp, ll[1], ll[0].neg()).map(DegenShape::Point)
+            }
+            // 🌟 2円の根軸。
+            Definition::RadicalAxis(c1, c2) => {
+                let (o1, r1) = self.circle_of(*c1)?;
+                let (o2, r2) = self.circle_of(*c2)?;
+                radical_axis((&o1, r1), (&o2, r2)).map(DegenShape::Line)
+            }
+            // 🌟 2円の第2交点。2交点はどちらも根軸上にあるので、根軸と円c1の
+            // 第2交点として求まる(平方根不要)。
+            Definition::SecondIntersectionOfCircles(p, c1, c2) => {
+                let pp = self.point_of(*p)?;
+                let (o1, r1) = self.circle_of(*c1)?;
+                let (o2, r2) = self.circle_of(*c2)?;
+                let axis = radical_axis((&o1, r1), (&o2, r2))?;
+                second_on_circle(&o1, &pp, axis[1], axis[0].neg()).map(DegenShape::Point)
             }
             // Scalar/Conic(一般二次曲線)/CrossRatio系はまだ未対応
             // (Point/Line/Circleのみが第一段の対象、discover_viz.rs::
@@ -563,6 +659,61 @@ mod tests {
             println!("  {} ≡ {}", egraph.entities[x.0].name, egraph.entities[y.0].name);
         }
     }
+
+    /// 🌟 接続検出器(find_generic_point_on_curve)が実際に働くことの検証。
+    /// 垂心H = Alt_A ∩ Alt_B は、3本目の高さAlt_C(=ABへのCからの垂線)の
+    /// 上にもある。Alt_CはPerpendicularLineなので「2点で定義された直線」
+    /// ではなく、共線性検出では表現できない ―― まさにこの検出器の担当。
+    #[test]
+    fn point_on_curve_detector_finds_the_third_altitude() {
+        let mut egraph = EGraph::new();
+        let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        let bc = egraph.create_entity("BC".into(), Definition::new_line(b, c), EntityType::Line);
+        let ca = egraph.create_entity("CA".into(), Definition::new_line(c, a), EntityType::Line);
+        let ab = egraph.create_entity("AB".into(), Definition::new_line(a, b), EntityType::Line);
+        let alt_a = egraph.create_entity("Alt_A".into(), Definition::PerpendicularLine(bc, a), EntityType::Line);
+        let alt_b = egraph.create_entity("Alt_B".into(), Definition::PerpendicularLine(ca, b), EntityType::Line);
+        let alt_c = egraph.create_entity("Alt_C".into(), Definition::PerpendicularLine(ab, c), EntityType::Line);
+        let h = egraph.create_entity("H".into(), Definition::Intersection(alt_a, alt_b), EntityType::Point);
+        let (h, alt_c) = (egraph.get_rep(h), egraph.get_rep(alt_c));
+
+        let seeds = [0xC0FFEE_u64, 0xBEEF77, 0x1234ABCD];
+        let found = find_generic_point_on_curve(&egraph, &seeds, 40, 40);
+        assert!(found.iter().any(|&(p, l)| p == h && l == alt_c),
+            "垂心が3本目の高さの上にあることを検出できるべき: {:?}", found);
+    }
+
+    /// 🌟 円関連の作図(根軸・2円の第2交点・円と直線の第2交点)がp進評価器
+    /// 側でも正しく計算できることの検証。検出パイプライン(find_coincidences)
+    /// はこちらの評価器を使うので、mmp_core側だけ正しくてもここが間違って
+    /// いると発見報告が丸ごと嘘になる。
+    ///
+    /// 共通点A,Bを持つ2円について、
+    ///   根軸 ≡ 直線AB、  2円の第2交点(既知=A) ≡ B
+    /// が任意の(一般の)座標で成り立つはずなので、一般乱数の一致検出に
+    /// この2件がそのまま現れることを確認する。
+    #[test]
+    fn circle_constructions_are_consistent_under_padic_evaluation() {
+        let mut egraph = EGraph::new();
+        let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+        let circ1 = egraph.create_entity("Circ1".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+        let circ2 = egraph.create_entity("Circ2".into(), Definition::Circumcircle(a, b, d), EntityType::Conic);
+        let axis = egraph.create_entity("Axis".into(), Definition::RadicalAxis(circ1, circ2), EntityType::Line);
+        let second = egraph.create_entity("Second".into(),
+            Definition::SecondIntersectionOfCircles(a, circ1, circ2), EntityType::Point);
+        let line_ab = egraph.create_entity("LineAB".into(), Definition::new_line(a, b), EntityType::Line);
+
+        let (axis, second, line_ab, b) = (egraph.get_rep(axis), egraph.get_rep(second), egraph.get_rep(line_ab), egraph.get_rep(b));
+        let found = find_coincidences(&egraph, 0xC17C1E ^ 0x5EED, None);
+        let has = |x: ClassId, y: ClassId| found.iter().any(|&(p, q)| (p == x && q == y) || (p == y && q == x));
+        assert!(has(axis, line_ab), "2点A,Bを共有する2円の根軸は直線ABと一致するべき: {:?}", found);
+        assert!(has(second, b), "Aを既知の交点とした2円の第2交点はBと一致するべき: {:?}", found);
+    }
 }
 
 // ============================================================
@@ -634,14 +785,17 @@ pub fn find_generic_collinear_triples(egraph: &EGraph, seeds: &[u64], max_points
             let Some(pi) = coords[i] else { continue };
             for j in (i + 1)..ids.len() {
                 let Some(pj) = coords[j] else { continue };
+                // 退化(2点が一致)は除外する。
+                let line_ij = cross3(&pi, &pj);
+                if line_ij.iter().all(|x| x.valuation().is_none()) { continue; }
                 for k in (j + 1)..ids.len() {
                     let Some(pk) = coords[k] else { continue };
+                    // 3つ目が先の2点のどちらかと同一なら、共線は自明に成り立つ
+                    // だけで内容が無い(projectively_sameのドキュメント参照)。
+                    if projectively_same(&pk, &pi) || projectively_same(&pk, &pj) { continue; }
                     // 3点が共線 <=> 行列式(=同次座標の三重積)が0。
-                    let line_ij = cross3(&pi, &pj);
                     let dot = line_ij[0].mul(&pk[0]).add(&line_ij[1].mul(&pk[1])).add(&line_ij[2].mul(&pk[2]));
                     if dot.valuation().is_none() {
-                        // 退化(2点が一致してline_ijが定義不能)は除外する。
-                        if line_ij.iter().all(|x| x.valuation().is_none()) { continue; }
                         *counts.entry((ids[i], ids[j], ids[k])).or_insert(0) += 1;
                     }
                 }
@@ -721,6 +875,10 @@ pub fn find_generic_concurrent_lines(egraph: &EGraph, seeds: &[u64], max_lines: 
                 if meet[2].valuation().is_none() { continue; }
                 for k in (j + 1)..ids.len() {
                     let Some(lk) = coords[k] else { continue };
+                    // 3本目が先の2本のどちらかと同一の直線なら、共点は自明。
+                    // (i,jが同一のケースはmeetが消えることで既に弾かれているが、
+                    // kが重複するケースはここまで素通りしていた。)
+                    if projectively_same(&lk, &li) || projectively_same(&lk, &lj) { continue; }
                     let dot = meet[0].mul(&lk[0]).add(&meet[1].mul(&lk[1])).add(&meet[2].mul(&lk[2]));
                     if dot.valuation().is_none() {
                         *counts.entry((ids[i], ids[j], ids[k])).or_insert(0) += 1;
@@ -732,6 +890,208 @@ pub fn find_generic_concurrent_lines(egraph: &EGraph, seeds: &[u64], max_lines: 
     let need = seeds.len() as u32;
     let mut out: Vec<_> = counts.into_iter().filter(|&(_, c)| c == need).map(|(t, _)| t).collect();
     out.sort_by_key(|&(a, b, c)| (a.0, b.0, c.0));
+    out
+}
+
+/// 🌟 ユーザー指示(「円関連の作図の方がよりいろんな結果を作れる」
+/// 「すぐに示すことができないぐらいの結果を安定して見つけたい」)への対応。
+///
+/// 「点Pが直線L上にある」「点Pが円C上にある」という接続そのものを総当たりで
+/// 探す検出器。既存の検出器では拾えない形の結論を拾うために必要:
+///   - 共線性検出は「3点」の形でしか見ないので、垂線・接線・根軸のような
+///     "2点で定義されていない直線"への接続を表現できない。
+///   - 共円性検出は「名前の付いていない円に4点が乗る」形なので、
+///     「外接円という既に意味のある円の上に、由来の全く違う点が乗る」
+///     (例: 垂心のBCに関する対称点は外接円上にある)という、まさに
+///     すぐには示せない類の結果を、その一番自然な形で言い表せない。
+///
+/// 構造的に既知の接続(is_connected)は除外する。直線がLineThroughPoints
+/// で定義されている場合は「3点が共線」として共線性検出が正準な形で報告
+/// するので、ここでは扱わない(同じ事実の二重報告を避ける)。
+pub fn find_generic_point_on_curve(egraph: &EGraph, seeds: &[u64], max_points: usize, max_curves: usize)
+    -> Vec<(ClassId, ClassId)>
+{
+    if seeds.is_empty() { return Vec::new(); }
+    let pts = hot_reps_of_type(egraph, EntityType::Point, max_points, true);
+    let mut curves = hot_reps_of_type(egraph, EntityType::Line, max_curves, false);
+    curves.retain(|&l| !matches!(egraph.entities[l.0].original_definition, Definition::LineThroughPoints(_, _)));
+    curves.extend(hot_reps_of_type(egraph, EntityType::Conic, max_curves, false));
+
+    let mut counts: FxHashMap<(ClassId, ClassId), u32> = FxHashMap::default();
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let pcoords: Vec<Option<Triple>> = pts.iter()
+            .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None }).collect();
+        let ccoords: Vec<Option<DegenShape>> = curves.iter().map(|&id| ev.eval(id)).collect();
+        for (ci, &c) in curves.iter().enumerate() {
+            let Some(shape) = &ccoords[ci] else { continue };
+            for (pi, &p) in pts.iter().enumerate() {
+                if egraph.is_connected(p, c) { continue; }
+                let Some(pt) = pcoords[pi] else { continue };
+                // 🐛 FIX(実測): 無限遠点(z=0)は「平行な直線はすべてその点を通る」
+                // ので、どの直線に対しても接続が成り立ってしまい、中身は
+                // 平行性の言い換えにしかならない。hot_reps_of_typeは
+                // 「構造的にL∞に接続された点」しか除けないため、まだそれが
+                // 証明されていない無限遠点(例: ABと中点連結線の交点)が
+                // 残る。数値のz成分で判定して落とす。
+                if pt[2].valuation().is_none() { continue; }
+                let on = match shape {
+                    DegenShape::Line(l) => {
+                        // 直線が退化(全成分0)していれば判定に意味が無い。
+                        if l.iter().all(|x| x.valuation().is_none()) { continue; }
+                        l[0].mul(&pt[0]).add(&l[1].mul(&pt[1])).add(&l[2].mul(&pt[2])).valuation().is_none()
+                    }
+                    DegenShape::Circle { center, r_sq, .. } => {
+                        match squared_distance(center, &pt) {
+                            Some(d) => d.sub(r_sq).valuation().is_none(),
+                            None => continue,
+                        }
+                    }
+                    DegenShape::Point(_) => continue,
+                };
+                if !on { continue; }
+                // 🐛 FIX(実測で判明): 「点Pが直線L上にある」の中身が、実は
+                // 「Pが構造的に乗っている別の直線L'とLが同じ直線だった」だけ、
+                // という報告が上位を埋めた(中点連結線はABに平行なので、
+                // AでABに立てた垂線と Aで中点連結線に立てた垂線は同一の直線)。
+                // それは2つの図形の一致として別枠で検出されるべきもので、
+                // 新しい接続ではない。Pが既に乗っていると分かっている曲線の
+                // どれかとLが数値的に同一なら、この組は報告しない。
+                let explained_by_coincidence = curves.iter().enumerate().any(|(oi, &other)| {
+                    if other == c || !egraph.is_connected(p, other) { return false; }
+                    match (&ccoords[oi], shape) {
+                        (Some(DegenShape::Line(a)), DegenShape::Line(b)) => projectively_same(a, b),
+                        (Some(DegenShape::Circle { center: o1, r_sq: r1, .. }),
+                         DegenShape::Circle { center: o2, r_sq: r2, .. }) => {
+                            projectively_same(o1, o2) && r1.sub(r2).valuation().is_none()
+                        }
+                        _ => false,
+                    }
+                });
+                if explained_by_coincidence { continue; }
+                *counts.entry((p, c)).or_insert(0) += 1;
+            }
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<(ClassId, ClassId)> = counts.into_iter().filter(|&(_, c)| c == need).map(|(k, _)| k).collect();
+    out.sort_by_key(|&(a, b)| (a.0, b.0));
+    out
+}
+
+/// 🌟 3つの円が1点を共有するか(ミケル点・根心型の結論)の検出。
+///
+/// ユーザー指示「すぐに示すことができないぐらいの結果を安定して見つけたい」
+/// への対応。「3円共点」はオリンピック幾何で最も"すぐには示せない"結論の
+/// 典型(ミケルの定理、3円の根心が3円上に乗る配置など)だが、既存の検出器
+/// では表現できなかった ―― 共円性検出は「名前の無い円に4点が乗る」形で
+/// あって、「名前のある3つの円が1点で会う」形ではない。
+///
+/// 判定は根心を使う: 2つの根軸の交点R(=根心、3円のどれに対しても方冪が
+/// 等しい点)を求め、そこでの方冪が0なら、Rは3円すべての上にある。
+/// 既に構造的に共有点が分かっている三つ組は既知として除く。
+pub fn find_generic_concurrent_circles(egraph: &EGraph, seeds: &[u64], max_circles: usize)
+    -> Vec<(ClassId, ClassId, ClassId)>
+{
+    if seeds.is_empty() { return Vec::new(); }
+    let ids = hot_reps_of_type(egraph, EntityType::Conic, max_circles, false);
+    let mut counts: FxHashMap<(ClassId, ClassId, ClassId), u32> = FxHashMap::default();
+    for &s in seeds {
+        let mut ev = DegenEvaluator::new(egraph, s, None);
+        let circles: Vec<Option<(Triple, PInt)>> = ids.iter()
+            .map(|&id| match ev.eval(id) {
+                Some(DegenShape::Circle { center, r_sq, .. }) => Some((center, r_sq)),
+                _ => None,
+            }).collect();
+        for i in 0..ids.len() {
+            let Some((o1, r1)) = circles[i] else { continue };
+            for j in (i + 1)..ids.len() {
+                let Some((o2, r2)) = circles[j] else { continue };
+                let Some(ax12) = radical_axis((&o1, r1), (&o2, r2)) else { continue };
+                if ax12.iter().all(|x| x.valuation().is_none()) { continue; }
+                for k in (j + 1)..ids.len() {
+                    let Some((o3, r3)) = circles[k] else { continue };
+                    let Some(ax13) = radical_axis((&o1, r1), (&o3, r3)) else { continue };
+                    let center = cross3(&ax12, &ax13);
+                    // 根軸が平行(=3円の中心が共線)なら根心は無限遠、共点ではない。
+                    if center[2].valuation().is_none() { continue; }
+                    let Some(d) = squared_distance(&o1, &center) else { continue };
+                    if d.sub(&r1).valuation().is_none() {
+                        *counts.entry((ids[i], ids[j], ids[k])).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    let need = seeds.len() as u32;
+    let mut out: Vec<_> = counts.into_iter().filter(|&(_, c)| c == need).map(|(t, _)| t).collect();
+    out.sort_by_key(|&(a, b, c)| (a.0, b.0, c.0));
+    out
+}
+
+/// 🌟 系統的作図のための「退化した組み合わせ」のふるい。
+///
+/// 🐛 これが必要になった理由(実測): 系統的作図は定理適用の前に走るので、
+/// e-graphにはまだ「数値的には同じ点なのに記号的には別の同値類」が普通に
+/// 存在する(orthocenterの配置では、Alt_A∩Alt_B と Alt_B∩Alt_C はどちらも
+/// 垂心だが、証明が進むまで別クラスのまま)。そこから
+/// Circumcircle(A, H₁, H₂) のような「実質2点しか指定していない円」を作ると、
+/// 円が一意に定まらず数値評価も無意味な値になり、その円の根軸や接線を
+/// 通じて誤ったマージが連鎖してe-graph全体が潰れた(356個の同値類が15個に
+/// なる崩壊を実測)。構造的な共線判定(find_common_line)では、まだ証明されて
+/// いないこの種の退化は捕まえられないので、数値側でふるいにかける。
+pub struct NumericSieve {
+    coincident: FxHashSet<(ClassId, ClassId)>,
+    collinear: FxHashSet<(ClassId, ClassId, ClassId)>,
+    unevaluable: FxHashSet<ClassId>,
+}
+
+impl NumericSieve {
+    fn key2(a: ClassId, b: ClassId) -> (ClassId, ClassId) { if a.0 <= b.0 { (a, b) } else { (b, a) } }
+    fn key3(a: ClassId, b: ClassId, c: ClassId) -> (ClassId, ClassId, ClassId) {
+        let mut v = [a, b, c]; v.sort_unstable_by_key(|x| x.0); (v[0], v[1], v[2])
+    }
+    /// 2点が数値的に同一(またはどちらかが評価不能)か。
+    pub fn same_point(&self, a: ClassId, b: ClassId) -> bool {
+        a == b || self.unevaluable.contains(&a) || self.unevaluable.contains(&b)
+            || self.coincident.contains(&Self::key2(a, b))
+    }
+    /// 3点が円を定めない(=一致する2点があるか、共線)か。
+    pub fn degenerate_triple(&self, a: ClassId, b: ClassId, c: ClassId) -> bool {
+        self.same_point(a, b) || self.same_point(b, c) || self.same_point(a, c)
+            || self.collinear.contains(&Self::key3(a, b, c))
+    }
+}
+
+/// idsに挙げた点を1つの乱数座標で評価し、一致するペアと共線な三つ組を集める。
+pub fn numeric_sieve(egraph: &EGraph, seed: u64, ids: &[ClassId]) -> NumericSieve {
+    let mut ev = DegenEvaluator::new(egraph, seed, None);
+    let coords: Vec<Option<Triple>> = ids.iter()
+        .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None }).collect();
+    let mut out = NumericSieve {
+        coincident: FxHashSet::default(), collinear: FxHashSet::default(), unevaluable: FxHashSet::default(),
+    };
+    for (i, &id) in ids.iter().enumerate() {
+        if coords[i].is_none() { out.unevaluable.insert(id); }
+    }
+    for i in 0..ids.len() {
+        let Some(pi) = coords[i] else { continue };
+        for j in (i + 1)..ids.len() {
+            let Some(pj) = coords[j] else { continue };
+            let line = cross3(&pi, &pj);
+            if line.iter().all(|x| x.valuation().is_none()) {
+                out.coincident.insert(NumericSieve::key2(ids[i], ids[j]));
+                continue;
+            }
+            for k in (j + 1)..ids.len() {
+                let Some(pk) = coords[k] else { continue };
+                let dot = line[0].mul(&pk[0]).add(&line[1].mul(&pk[1])).add(&line[2].mul(&pk[2]));
+                if dot.valuation().is_none() {
+                    out.collinear.insert(NumericSieve::key3(ids[i], ids[j], ids[k]));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -761,7 +1121,12 @@ fn det4(m: &[[PInt; 4]; 4]) -> PInt {
 /// 「複数の由来が異なる点が実は1つの円に乗る」という発見はこの形をしている。
 pub fn find_generic_concyclic_quadruples(egraph: &EGraph, seeds: &[u64], max_points: usize) -> Vec<[ClassId; 4]> {
     if seeds.is_empty() { return Vec::new(); }
-    let ids = hot_reps_of_type(egraph, EntityType::Point, max_points, true);
+    // 🌟 4点の総当たりはO(n⁴)で、他の検出器(O(n³))より1桁重い。系統的作図で
+    // 図が大きくなると(実測: 点80個で1seedあたり158万組)ここだけで10分以上
+    // かかり、探索が「安定して回る」状態でなくなる。共円は熱量上位の点に
+    // 絞っても十分拾えるので、この検出器だけ独自の上限を掛ける。
+    const CONCYCLIC_CAP: usize = 46;
+    let ids = hot_reps_of_type(egraph, EntityType::Point, max_points.min(CONCYCLIC_CAP), true);
     let mut counts: FxHashMap<[ClassId; 4], u32> = FxHashMap::default();
     for &s in seeds {
         let mut ev = DegenEvaluator::new(egraph, s, None);
@@ -825,10 +1190,39 @@ pub fn find_generic_concyclic_quadruples(egraph: &EGraph, seeds: &[u64], max_poi
 /// いるかを確かめるために使う(部分集合ごとの検出結果を素朴に併合すると、
 /// 平行な族の混入などで偽の大集合が出来てしまうため)。
 pub fn verify_property(egraph: &EGraph, seeds: &[u64], ids: &[ClassId], kind: PropertyKind) -> bool {
-    if ids.len() < kind.min_size() { return false; }
-    for &s in seeds {
+    let tables = precompute_shapes(egraph, seeds, ids);
+    verify_property_cached(&tables, ids, kind)
+}
+
+/// 🌟 verify_propertyを何千回も呼ぶ側(maximal_verified_sets)のための前計算。
+///
+/// 🐛 これが必要な理由(実測): verify_propertyは呼ばれるたびに
+/// DegenEvaluatorを作り直し、そのたびに図形を根から評価し直していた。
+/// 極大集合の成長は「種の数 × プールの大きさ × seed数」回の検証を行うので、
+/// 系統的作図で実体が300個規模になると、この再評価だけで探索が何分も
+/// 止まってしまう(miquel配置で実測)。同じe-graph・同じseedなら評価結果は
+/// 不変なので、候補に出てくる実体の座標を seedごとに1度だけ計算しておく。
+pub fn precompute_shapes(egraph: &EGraph, seeds: &[u64], ids: &[ClassId])
+    -> Vec<FxHashMap<ClassId, Option<DegenShape>>>
+{
+    seeds.iter().map(|&s| {
         let mut ev = DegenEvaluator::new(egraph, s, None);
-        let shapes: Vec<Option<DegenShape>> = ids.iter().map(|&id| ev.eval(id)).collect();
+        ids.iter().map(|&id| (id, ev.eval(id))).collect()
+    }).collect()
+}
+
+/// precompute_shapesの結果を使う版。tablesに載っていない実体があれば
+/// 検証失敗として扱う(呼び出し側が前計算に入れ忘れた場合の安全側)。
+pub fn verify_property_cached(
+    tables: &[FxHashMap<ClassId, Option<DegenShape>>],
+    ids: &[ClassId],
+    kind: PropertyKind,
+) -> bool {
+    if ids.len() < kind.min_size() { return false; }
+    if tables.is_empty() { return false; }
+    for table in tables {
+        let shapes: Vec<Option<DegenShape>> = ids.iter()
+            .map(|id| table.get(id).cloned().unwrap_or(None)).collect();
         if shapes.iter().any(|x| x.is_none()) { return false; }
         match kind {
             PropertyKind::Collinear | PropertyKind::Concurrent => {
@@ -949,6 +1343,45 @@ pub fn find_incidence_inconsistency(egraph: &EGraph, seed: u64) -> Option<(Class
             if pv.iter().all(|x| x.valuation().is_none()) { continue; }
             let dot = lv[0].mul(&pv[0]).add(&lv[1].mul(&pv[1])).add(&lv[2].mul(&pv[2]));
             if dot.valuation().is_some() {
+                if std::env::var("SWEEP_DEBUG").is_ok() {
+                    let defs = egraph.entities[l.0].components.first()
+                        .map(|c| c.definitions.iter().map(|d| egraph.format_definition(d)).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    eprintln!("  [incidence-debug] 点{} が 直線{} 上に無い。直線の同値類が持つ定義: {:?}",
+                        egraph.entities[p.0].name.chars().take(40).collect::<String>(),
+                        egraph.entities[l.0].name.chars().take(40).collect::<String>(),
+                        defs.iter().map(|d| d.chars().take(50).collect::<String>()).collect::<Vec<_>>());
+                    let pdefs = egraph.entities[p.0].components.first()
+                        .map(|c| c.definitions.iter().map(|d| egraph.format_definition(d)).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    eprintln!("  [incidence-debug] 点の同値類が持つ定義: {:?}",
+                        pdefs.iter().map(|d| d.chars().take(50).collect::<String>()).collect::<Vec<_>>());
+                    let cons: Vec<String> = ev.incidence_constraints(p).iter()
+                        .map(|&cc| egraph.entities[cc.0].name.chars().take(40).collect::<String>()).collect();
+                    eprintln!("  [incidence-debug] 点が制約として使う曲線: {:?}", cons);
+                    // 直線の各定義の親(点)について、その点が本当にこの直線上に
+                    // 乗っているか・どんな制約で決まったかを出す。
+                    let parents: Vec<ClassId> = egraph.entities[l.0].components.first()
+                        .map(|c| c.definitions.iter().flat_map(|d| d.get_parents()).map(|q| egraph.get_rep(q)).collect())
+                        .unwrap_or_default();
+                    for q in parents {
+                        if egraph.entities[q.0].entity_type != EntityType::Point { continue; }
+                        let qc: Vec<String> = ev.incidence_constraints(q).iter()
+                            .map(|&cc| egraph.entities[cc.0].name.chars().take(30).collect::<String>()).collect();
+                        let on = match ev.eval(q) {
+                            Some(DegenShape::Point(qv)) => {
+                                let d2 = lv[0].mul(&qv[0]).add(&lv[1].mul(&qv[1])).add(&lv[2].mul(&qv[2]));
+                                if d2.valuation().is_none() { "乗っている" } else { "乗っていない" }
+                            }
+                            _ => "評価不能",
+                        };
+                        eprintln!("      親点 {:<22} は直線に{} / 制約={:?} / 定義={:?}",
+                            egraph.entities[q.0].name.chars().take(22).collect::<String>(), on, qc,
+                            egraph.entities[q.0].components.first()
+                                .map(|c| c.definitions.iter().map(|d| egraph.format_definition(d).chars().take(40).collect::<String>()).collect::<Vec<_>>())
+                                .unwrap_or_default());
+                    }
+                }
                 return Some((p, l));
             }
         }

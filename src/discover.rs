@@ -699,6 +699,25 @@ fn write_discover_report_html(sections: &[String]) {
 /// Circumcircle/AnglePair等、異なる親を要求する定義全般に汎用的に効く
 /// (PerpendicularLine(line, point)のように型が異なる2引数は、そもそも
 /// 同じClassIdになり得ないため誤検出しない)。
+/// 作図の祖先に「同じ実体を2回引数に取る」定義があるか(円の第2交点のような
+/// 正しい対合性による閉路は退化とみなさない版。has_degenerate_ancestor参照)。
+fn has_duplicated_parent(egraph: &EGraph, id: ClassId) -> bool {
+    let mut seen: rustc_hash::FxHashSet<ClassId> = rustc_hash::FxHashSet::default();
+    let mut stack = vec![egraph.get_rep(id)];
+    while let Some(rep) = stack.pop() {
+        if !seen.insert(rep) { continue; }
+        let def = egraph.entities[rep.0].original_definition.clone();
+        let parents = def.get_parents();
+        for i in 0..parents.len() {
+            for j in (i + 1)..parents.len() {
+                if egraph.get_rep(parents[i]) == egraph.get_rep(parents[j]) { return true; }
+            }
+        }
+        for p in parents { stack.push(egraph.get_rep(p)); }
+    }
+    false
+}
+
 fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -> bool {
     fn is_degenerate_def(egraph: &EGraph, def: &Definition) -> bool {
         let parents = def.get_parents();
@@ -947,6 +966,16 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         // なら、Pで交わるのは作図の言い換えでしかない。実測でも「AB、ABの
         // 垂直二等分線、…が Mid(A,B) で交わる」のような組が上位に並んでいた。
         if is_trivial_pencil(egraph, &[a, b, c]) { continue; }
+        // 🌟 3本のうち2本が既に構造的な共有点Pを持っているなら、この"共点性"の
+        // 中身は「Pが3本目の直線の上にある」という1本の接続に過ぎない。実測でも
+        // 「直線AC、Mid(A,C)を通る垂線、ABに平行でMid(B,C)を通る直線が共点」
+        // (=中点連結線がMid(A,C)を通る、という1つの事実)が、3本目を取り替えた
+        // だけの10件として上位を占領していた。この形は新設の接続検出
+        // (find_generic_point_on_curve)が「点Pは直線L上にある」という正準な
+        // 形で1件だけ報告するので、共点性のセクションからは外す。
+        if pairwise_shared_point(egraph, a, b).is_some()
+            || pairwise_shared_point(egraph, b, c).is_some()
+            || pairwise_shared_point(egraph, a, c).is_some() { continue; }
         fresh_conc.push((a, b, c));
     }
     println!("\n=== ✳️  未知の共点性の検出 (3直線が1点で交わる) ===");
@@ -955,6 +984,59 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
         println!("  {}. {} は1点で交わる", rank + 1, labels.join(" , "));
         for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
+    }
+
+    // 🌟 3円が1点を共有する(ミケル点・根心型)の検出。
+    let cc = crate::padic_eval::find_generic_concurrent_circles(egraph, &SEEDS, sweep_lines);
+    let mut fresh_cc: Vec<(ClassId, ClassId, ClassId)> = Vec::new();
+    for (a, b, c) in cc {
+        // 3円が既に構造的に共有点を持つなら既知。
+        if shares_known_point(egraph, a, b, c) { continue; }
+        if has_degenerate_ancestor(egraph, a, b) || has_degenerate_ancestor(egraph, a, c) { continue; }
+        fresh_cc.push((a, b, c));
+    }
+    println!("
+=== 🔵 未知の3円共点の検出 (3つの円が1点を共有する) ===");
+    if fresh_cc.is_empty() { println!("  (構造的にまだ知られていない3円共点は見つかりませんでした)"); }
+    for (rank, &(a, b, c)) in fresh_cc.iter().take(top_n).enumerate() {
+        println!("  {}. 円 {} , {} , {} は1点を共有する",
+            rank + 1, namer.label(egraph, a), namer.label(egraph, b), namer.label(egraph, c));
+        for line in explain_entities(egraph, &mut namer, &[a, b, c]) { println!("       {}", line); }
+    }
+
+    // 🌟 点が直線・円の上にあるという接続そのものの検出。
+    // 「垂心のBCに関する対称点が外接円上にある」のように、意味のある名前を
+    // 持つ曲線の上に由来の違う点が乗る、という形の結論はここでしか拾えない。
+    let inc = crate::padic_eval::find_generic_point_on_curve(egraph, &SEEDS, sweep_pts, sweep_lines);
+    let mut fresh_inc: Vec<(ClassId, ClassId)> = Vec::new();
+    let raw_inc = inc.len();
+    let (mut rej_nat, mut rej_deg) = (0usize, 0usize);
+    for (p, c) in inc {
+        // 「その点自身から作られた曲線」への接続は作図の言い換えなので除く。
+        if egraph.is_natural_incidence(egraph.get_rep(p), egraph.get_rep(c)) { rej_nat += 1; continue; }
+        // 🐛 has_degenerate_ancestor はここでは使えない: あれは
+        // 「post-merge視点で依存関係に閉路がある」ものも退化として弾くが、
+        // 第2交点は「2回取ると元に戻る」という正しい対合性を持つため、
+        // 円がらみの作図では必ず閉路が現れる(実測で生検出30件のうち29件が
+        // これで捨てられ、このセクションが常に空だった)。本当に意味が無いのは
+        // 「同じ実体を2回引数に取る」退化した作図の方なので、そちらだけを弾く。
+        if has_duplicated_parent(egraph, p) || has_duplicated_parent(egraph, c) { rej_deg += 1; continue; }
+        fresh_inc.push((p, c));
+    }
+    if std::env::var("SWEEP_DEBUG").is_ok() {
+        eprintln!("  [sweep-debug] 接続: 生検出{}件 -> 自然な接続として除外{}件 / 退化として除外{}件",
+            raw_inc, rej_nat, rej_deg);
+    }
+    if std::env::var("SWEEP_DEBUG").is_ok() {
+        eprintln!("  [sweep-debug] 接続: 報告{}件", fresh_inc.len());
+    }
+    println!("
+=== 🎯 未知の接続の検出 (点が直線・円の上にある) ===");
+    if fresh_inc.is_empty() { println!("  (構造的にまだ知られていない接続は見つかりませんでした)"); }
+    for (rank, &(p, c)) in fresh_inc.iter().take(top_n).enumerate() {
+        let kind = if egraph.entities[egraph.get_rep(c).0].entity_type == EntityType::Conic { "円" } else { "直線" };
+        println!("  {}. 点 {} は{} {} の上にある", rank + 1, namer.label(egraph, p), kind, namer.label(egraph, c));
+        for line in explain_entities(egraph, &mut namer, &[p, c]) { println!("       {}", line); }
     }
 
     // 🌟 4点の共円性(九点円のような「由来の異なる点が実は同じ円に乗る」発見)。
@@ -973,12 +1055,41 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
     println!("\n=== ⭕ 未知の共円性の検出 (4点が同一円周上) ===");
     if fresh_quads.is_empty() { println!("  (構造的にまだ知られていない共円性は見つかりませんでした)"); }
     for (rank, set) in maximal_verified_sets(egraph, &SEEDS, fresh_quads.iter().map(|q| q.to_vec()).collect(), crate::padic_eval::PropertyKind::Concyclic).into_iter().take(top_n).enumerate() {
+        // 🐛 FIX(実測で判明): 系統的作図が円の上の点(接点・第2交点)を大量に
+        // 作るようになった結果、「8点が共円」と report されたものの中身が
+        // 「そのうち7点は定義からして同じ円の上にあり、本当に新しいのは
+        // 残り1点がその円に乗ること」でしかない、という報告が上位を占めた。
+        // 既知の円が集合の3点以上を含むなら、主張の中身はその円の上に
+        // 「まだ載ると分かっていない点」が載ることなので、そう言い換える。
+        if let Some((circle, extra)) = known_circle_through_most(egraph, &set) {
+            if !extra.is_empty() {
+                let ex: Vec<String> = extra.iter().map(|&id| namer.label(egraph, id)).collect();
+                println!("  {}. 点 {} は 円 {} の上にある", rank + 1, ex.join(" , "), namer.label(egraph, circle));
+                let mut show = extra.clone();
+                show.push(circle);
+                for line in explain_entities(egraph, &mut namer, &show) { println!("       {}", line); }
+                continue;
+            }
+        }
         let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
         println!("  {}. {}点 {} は共円", rank + 1, set.len(), labels.join(" , "));
         for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
     }
 
-    kept.len() + fresh.len() + fresh_conc.len() + fresh_quads.len()
+    kept.len() + fresh.len() + fresh_conc.len() + fresh_cc.len() + fresh_inc.len() + fresh_quads.len()
+}
+
+/// 2直線が構造的に共有すると分かっている点(あれば1つ)。
+/// 無限遠点(平行性)は「共点」の根拠にしないので除く。
+fn pairwise_shared_point(egraph: &EGraph, a: ClassId, b: ClassId) -> Option<ClassId> {
+    let ra = egraph.get_rep(a);
+    let pts: Vec<ClassId> = egraph.entities[ra.0].components.first()
+        .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
+            .filter(|&s| egraph.entities[s.0].entity_type == EntityType::Point)
+            .filter(|&s| !egraph.is_connected(s, egraph.line_infinity))
+            .collect())
+        .unwrap_or_default();
+    pts.into_iter().find(|&p| egraph.is_connected(p, b))
 }
 
 /// 3直線が「構造的に既に共有点を持つと分かっている」か(=共点性が既知か)。
@@ -993,7 +1104,35 @@ fn shares_known_point(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId) -> bo
 }
 
 /// 4点が「構造的に既に同じ二次曲線に乗ると分かっている」か(=共円性が既知か)。
-fn shares_known_conic(egraph: &EGraph, q: &[ClassId; 4]) -> bool {
+/// 集合の3点以上を「構造的に既に通ると分かっている」円のうち、最も多くの点を
+/// 覆うものと、その円にまだ載ると分かっていない残りの点を返す。
+/// 共円の報告を「N点が共円」ではなく「この点はこの円の上にある」という、
+/// 情報量がそのまま見える形に言い換えるために使う。
+fn known_circle_through_most(egraph: &EGraph, set: &[ClassId]) -> Option<(ClassId, Vec<ClassId>)> {
+    let mut best: Option<(ClassId, usize)> = None;
+    let mut candidates: Vec<ClassId> = Vec::new();
+    for &p in set {
+        let rep = egraph.get_rep(p);
+        if let Some(comp) = egraph.entities[rep.0].components.first() {
+            for &sub in &comp.subobjects {
+                let c = egraph.get_rep(sub);
+                if egraph.entities[c.0].entity_type == EntityType::Conic && !candidates.contains(&c) {
+                    candidates.push(c);
+                }
+            }
+        }
+    }
+    for c in candidates {
+        let n = set.iter().filter(|&&p| egraph.is_connected(p, c)).count();
+        if n >= 3 && best.map_or(true, |(_, m)| n > m) { best = Some((c, n)); }
+    }
+    let (c, _) = best?;
+    let extra: Vec<ClassId> = set.iter().copied().filter(|&p| !egraph.is_connected(p, c)).collect();
+    Some((c, extra))
+}
+
+fn shares_known_conic(egraph: &EGraph, q: &[ClassId]) -> bool {
+    if q.is_empty() { return false; }
     let r0 = egraph.get_rep(q[0]);
     let conics: Vec<ClassId> = egraph.entities[r0.0].components.first()
         .map(|comp| comp.subobjects.iter().map(|&s| egraph.get_rep(s))
@@ -1024,13 +1163,30 @@ fn maximal_verified_sets(
 ) -> Vec<Vec<ClassId>> {
     // 成長候補のプール: 検出結果に登場した全要素。
     let mut pool: Vec<ClassId> = Vec::new();
-    for set in &detected {
+    for set in detected.iter().take(MAX_SEEDS_TO_GROW) {
         for &x in set { if !pool.contains(&x) { pool.push(x); } }
     }
 
+    // 🌟 成長の1試行ごとにverify_property(=毎回まっさらな評価器でグラフを
+    // 評価し直す)を呼ぶので、コストは 種の数 × プールの大きさ × seed数 に
+    // 比例する。検出がまとめて数千件出ると探索が実質止まってしまうため、
+    // 種とプールの両方に上限を掛ける(検出結果は既に熱量順に近い並びなので、
+    // 先頭を採るだけで実用上は足りる)。
+    const MAX_SEEDS_TO_GROW: usize = 120;
+    const MAX_POOL: usize = 60;
+    pool.truncate(MAX_POOL);
+
+    // 🌟 検証は同じ実体を何度も評価するので、座標をseedごとに一度だけ
+    // 前計算しておく(padic_eval::precompute_shapesのドキュメント参照)。
+    let mut all_ids: Vec<ClassId> = pool.clone();
+    for set in detected.iter().take(MAX_SEEDS_TO_GROW) {
+        for &x in set { if !all_ids.contains(&x) { all_ids.push(x); } }
+    }
+    let tables = crate::padic_eval::precompute_shapes(egraph, seeds, &all_ids);
+
     let mut out: Vec<Vec<ClassId>> = Vec::new();
     let mut seen: Vec<Vec<usize>> = Vec::new();
-    for base in detected {
+    for base in detected.into_iter().take(MAX_SEEDS_TO_GROW) {
         // 既に採用済みの極大集合に完全に含まれている種は飛ばす。
         if out.iter().any(|g| base.iter().all(|x| g.contains(x))) { continue; }
         let mut set = base;
@@ -1041,7 +1197,20 @@ fn maximal_verified_sets(
             // 共点性は「定義上その点を通る直線」を足しても情報が増えない
             // (is_trivial_pencil参照)ので、自明な束に育てない。
             if kind == crate::padic_eval::PropertyKind::Concurrent && is_trivial_pencil(egraph, &trial) { continue; }
-            if crate::padic_eval::verify_property(egraph, seeds, &trial, kind) { set = trial; }
+            // 🐛 FIX(実測で判明): 種の三つ組には「2本が既に構造的な共有点を
+            // 持つ組は除く」フィルタを掛けているのに、成長のときは掛けて
+            // いなかった。そのため orthocenter の配置で、Mid(B,C)を通る直線が
+            // 5本まとめて「共点」として報告される(中点連結線・中線・BCが
+            // すべてMid(B,C)を通るだけ)という、内容の無い束が上位を占めた。
+            if kind == crate::padic_eval::PropertyKind::Concurrent
+                && set.iter().any(|&x| pairwise_shared_point(egraph, x, c).is_some()) { continue; }
+            // 共円も同様に、既に同じ円に乗ると分かっている点を足しても
+            // 新しい主張にはならない。
+            if kind == crate::padic_eval::PropertyKind::Concyclic {
+                let mut probe = set.clone(); probe.push(c);
+                if shares_known_conic(egraph, &probe) { continue; }
+            }
+            if crate::padic_eval::verify_property_cached(&tables, &trial, kind) { set = trial; }
         }
         let mut key: Vec<usize> = set.iter().map(|x| x.0).collect();
         key.sort_unstable();
@@ -1095,8 +1264,11 @@ fn explain_entities(egraph: &EGraph, namer: &mut PrettyNamer, ids: &[ClassId]) -
         }
         let body = egraph.format_definition_with(&def, |q| {
             parent_labels.get(&egraph.get_rep(q)).cloned()
-                .unwrap_or_else(|| egraph.entities[egraph.get_rep(q).0].name.chars().take(18).collect())
+                .unwrap_or_else(|| egraph.entities[egraph.get_rep(q).0].name.chars().take(60).collect())
         });
+        // 🌟 系統的作図の実体は作図そのものが名前なので、多くの場合この行は
+        // 「X = X」にしかならない。その場合は出しても情報が無いので省く。
+        if body == me { continue; }
         out.push(format!("{} = {}", me, body));
     }
     out
@@ -1170,12 +1342,32 @@ fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: 
         };
         let pts = hot(egraph, EntityType::Point, per_kind);
         let lines = hot(egraph, EntityType::Line, per_kind);
+        // 🌟 「数値的には同じ点/共線なのに、まだ記号的に統合されていない」
+        // 組み合わせから退化した作図を作らないためのふるい
+        // (padic_eval::NumericSieveのドキュメント参照)。
+        let sieve = crate::padic_eval::numeric_sieve(egraph, 0xD1F7 + round as u64, &pts);
 
         let mut new_defs: Vec<(Definition, EntityType)> = Vec::new();
+        // 🐛 FIX(実測で判明): 中点の中点をどこまでも作ると、
+        // Midpoint(Midpoint(A, Midpoint(A,B)), B) のような「線分の1/8点」が
+        // 爆発的に増え、報告の上位がその類の共線・共円で埋まってしまった。
+        // 中点の反復はアフィンな細分にすぎず新しい構造を生まないので、
+        // 中点どうしの中点は作らない(中点を端点とする直線や、中点への垂線は
+        // 引き続き作るので、中点連結線・オイラー点のような結果は失われない)。
+        let is_midpoint = |eg: &EGraph, id: ClassId| -> bool {
+            let rep = eg.get_rep(id);
+            eg.entities[rep.0].components.first()
+                .map(|c| c.definitions.iter().any(|d| matches!(d, Definition::Midpoint(_, _))))
+                .unwrap_or(false)
+                || matches!(eg.entities[rep.0].original_definition, Definition::Midpoint(_, _))
+        };
         for i in 0..pts.len() {
             for j in (i + 1)..pts.len() {
+                if sieve.same_point(pts[i], pts[j]) { continue; }
                 new_defs.push((Definition::new_line(pts[i], pts[j]), EntityType::Line));
-                new_defs.push((Definition::Midpoint(pts[i], pts[j]), EntityType::Point));
+                if !is_midpoint(egraph, pts[i]) && !is_midpoint(egraph, pts[j]) {
+                    new_defs.push((Definition::Midpoint(pts[i], pts[j]), EntityType::Point));
+                }
             }
         }
         for i in 0..lines.len() {
@@ -1188,13 +1380,70 @@ fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: 
                 new_defs.push((Definition::PerpendicularLine(l, p), EntityType::Line));
             }
         }
-        // 外接円は数が多くなりすぎるので、最初のラウンドだけ全三つ組を作る。
-        if round == 0 {
-            for i in 0..pts.len() {
-                for j in (i + 1)..pts.len() {
-                    for k in (j + 1)..pts.len() {
-                        new_defs.push((Definition::Circumcircle(pts[i], pts[j], pts[k]), EntityType::Conic));
-                    }
+        // 🌟 外接円は三つ組なので数が増えやすく、以前は最初のラウンドだけ
+        // 作っていた。だがそれだと図の中に円が1つ(=種の3点の外接円)しか
+        // 存在せず、根軸も2円の第2交点も定義しようが無い ―― ユーザー指示
+        // 「円と円の交点を作図する方がよりいろんな結果を作れる」に応えるには、
+        // 探索の途中で生まれた点からも円を作れなければならない。毎ラウンド、
+        // 熱量上位の点だけに絞って全三つ組の外接円を作る。
+        let circle_pts = &pts[..pts.len().min(6)];
+        for i in 0..circle_pts.len() {
+            for j in (i + 1)..circle_pts.len() {
+                for k in (j + 1)..circle_pts.len() {
+                    let tri = [circle_pts[i], circle_pts[j], circle_pts[k]];
+                    // 🐛 FIX(実測で判明): 既に共線と分かっている3点の「外接円」は
+                    // 円ではなく退化した二次曲線になる。中点を作るようになると
+                    // (A, Midpoint(A,B), B)のような共線の三つ組がすぐ現れ、
+                    // この退化した"円"を通じて円の一意性伝播が暴走し、e-graph
+                    // 全体が潰れた(ラウンド4で229個の同値類が11個になる崩壊を実測)。
+                    if egraph.find_common_line(&tri).is_some() { continue; }
+                    if sieve.degenerate_triple(tri[0], tri[1], tri[2]) { continue; }
+                    new_defs.push((Definition::Circumcircle(tri[0], tri[1], tri[2]), EntityType::Conic));
+                }
+            }
+        }
+
+        // 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、
+        // もう一個の円と円、円と直線の交点を作図するなど)の方が、よりいろんな
+        // 結果を作れる」)への対応。直線と中点だけの閉包は、どうしても
+        // 「中線・垂線・その交点」という一次的な(=すぐ示せる)関係しか生まない。
+        // 円を経由する作図は方冪・共円・角度という別の層の関係を持ち込むので、
+        // 出てくる結果の"深さ"が変わる。
+        let conics = hot(egraph, EntityType::Conic, per_kind.min(6));
+        let on_curve = |eg: &EGraph, curve: ClassId| -> Vec<ClassId> {
+            eg.entities[eg.get_rep(curve).0].components.first()
+                .map(|comp| comp.subobjects.iter().map(|&s| eg.get_rep(s))
+                    .filter(|&s| eg.entities[s.0].entity_type == EntityType::Point)
+                    .filter(|&s| !eg.is_connected(s, eg.line_infinity))
+                    .collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        for (ci, &c) in conics.iter().enumerate() {
+            let on_c = on_curve(egraph, c);
+            // (1) 円周上の既知点での接線。
+            for &p in &on_c {
+                new_defs.push((Definition::TangentLine(c, p), EntityType::Line));
+            }
+            // (2) 円と直線の第2交点。「その直線と円の交点が1つ既に分かって
+            // いる」場合だけ有理的に作図できる(平方根が不要)ので、円周上の
+            // 点pを通る直線に限る。
+            for &p in &on_c {
+                for &l in &lines {
+                    if !egraph.is_connected(p, l) { continue; }
+                    new_defs.push((Definition::SecondIntersectionOfLineAndConic(p, l, c), EntityType::Point));
+                }
+            }
+            // (3) 2円の根軸(共有点が無くても定義できる)と、共有点が1つ
+            // 分かっている場合の第2交点。
+            for &c2 in conics.iter().skip(ci + 1) {
+                let shared: Vec<ClassId> = on_c.iter().copied().filter(|&p| egraph.is_connected(p, c2)).collect();
+                // 共有点が2つ以上既に分かっているなら、根軸はその2点を結ぶ
+                // 直線そのもので新しい対象ではなく、第2交点も既知。
+                // (3つ以上ならそもそも同じ円なので、根軸は定まらない。)
+                if shared.len() >= 2 { continue; }
+                new_defs.push((Definition::RadicalAxis(c, c2), EntityType::Line));
+                for &p in shared.iter() {
+                    new_defs.push((Definition::SecondIntersectionOfCircles(p, c, c2), EntityType::Point));
                 }
             }
         }
@@ -1206,16 +1455,74 @@ fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: 
             if egraph.memo.contains_key(&norm) { continue; }
             // 作図そのものを名前にする(Sys3_17のような通し番号だと報告が
             // 読めないため)。親の名前が長くなりすぎたら切り詰める。
+            // 🐛 FIX(実測で判明): 親の名前を22文字で切ると
+            // 「Perpendicular(Perpendicular(LineThro ⟂ Midpoint(B, C))」の
+            // ように括弧の途中で切れ、報告がまったく読めなくなっていた。
+            // ラウンド数は高々数回なので、親をそのまま埋め込んでも名前は
+            // せいぜい100文字程度に収まる。切るのは最後の保険としてだけ。
             let raw = egraph.format_definition_with(&norm, |id| {
                 let n = egraph.entities[egraph.get_rep(id).0].name.clone();
-                if n.chars().count() > 22 { n.chars().take(22).collect() } else { n }
+                if n.chars().count() > 90 { n.chars().take(90).collect::<String>() + "…" } else { n }
             });
             egraph.create_entity(raw, norm, ty);
             added += 1;
         }
+        let before_closure = egraph.count_active_classes();
         egraph.apply_congruence_closure();
+        let after = egraph.count_active_classes();
         println!("  🏗️  [系統的作図] ラウンド{}: {}件を追加、アクティブな同値類数 {}",
-            round + 1, added, egraph.count_active_classes());
+            round + 1, added, after);
+        // 🌟 崩壊の早期検出と原因の特定。系統的作図は決定的なので、
+        // 「合同閉包の前後で同値類が激減した」= 誤ったマージが連鎖した、
+        // という状況をその場で捕まえて、原因になったマージの根拠を出せる。
+        // 🌟 系統的作図でも、ラウンドごとに「構造的な主張と数値評価の整合性」を
+        // 監査できるようにする(DISCOVER_AUDIT=1)。崩壊が"激減"として現れない
+        // タイプ(少数の誤マージ)は同値類数では捕まらないため。
+        if std::env::var("DISCOVER_AUDIT").is_ok() {
+            if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, 0xC0FFEE) {
+                println!("  🔬 [監査] ラウンド{}終了時点で矛盾: 「{} は {} 上にある」が数値的に成り立ちません。",
+                    round + 1,
+                    egraph.entities[egraph.get_rep(bad_p).0].name.chars().take(70).collect::<String>(),
+                    egraph.entities[egraph.get_rep(bad_l).0].name.chars().take(70).collect::<String>());
+                let rep_p = egraph.get_rep(bad_p);
+                let rep_l = egraph.get_rep(bad_l);
+                for (label, target) in [("点", rep_p), ("直線", rep_l)] {
+                    println!("     {}側の同値類に流れ込んだマージ:", label);
+                    let mut n = 0;
+                    for (&slot, edge) in &egraph.proof_edges {
+                        if egraph.get_rep(ClassId(slot)) != target { continue; }
+                        println!("       {} ≡ {} (理由: {})",
+                            egraph.entities[edge.from.0].name.chars().take(55).collect::<String>(),
+                            egraph.entities[edge.to.0].name.chars().take(55).collect::<String>(),
+                            format!("{:?}", edge.justification).chars().take(100).collect::<String>());
+                        n += 1;
+                        if n >= 10 { println!("       ..."); break; }
+                    }
+                    if n == 0 { println!("       (なし)"); }
+                }
+                return;
+            }
+        }
+        if after * 3 < before_closure {
+            println!("  🚨 [崩壊] 合同閉包で同値類が{}→{}に激減しました。原因になったマージの根拠を表示します:", before_closure, after);
+            let mut reasons: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
+            let mut samples: Vec<String> = Vec::new();
+            for (&slot, edge) in &egraph.proof_edges {
+                let _ = slot;
+                let key = format!("{:?}", edge.justification);
+                let key = key.chars().take(90).collect::<String>();
+                *reasons.entry(key.clone()).or_insert(0) += 1;
+                if samples.len() < 8 {
+                    samples.push(format!("     {} ≡ {} (理由: {})",
+                        egraph.entities[edge.from.0].name.chars().take(60).collect::<String>(),
+                        egraph.entities[edge.to.0].name.chars().take(60).collect::<String>(), key));
+                }
+            }
+            let mut rv: Vec<(String, usize)> = reasons.into_iter().collect();
+            rv.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+            for (r, n) in rv.into_iter().take(6) { println!("     {}件: {}", n, r); }
+            for l in samples { println!("{}", l); }
+        }
         if egraph.count_active_classes() >= cap { break; }
     }
 }

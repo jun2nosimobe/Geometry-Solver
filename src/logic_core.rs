@@ -1705,6 +1705,9 @@ impl ProverEngine {
                 // もの)を探すだけに留める。
                 "SecondIntersectionOfLineAndConic" if parent_ids.len() == 3 =>
                     Definition::SecondIntersectionOfLineAndConic(parent_ids[0], parent_ids[1], parent_ids[2]),
+                "RadicalAxis" if parent_ids.len() == 2 => Definition::RadicalAxis(parent_ids[0], parent_ids[1]),
+                "SecondIntersectionOfCircles" if parent_ids.len() == 3 =>
+                    Definition::SecondIntersectionOfCircles(parent_ids[0], parent_ids[1], parent_ids[2]),
                 // 🌟 CrossRatioのV4正規化はここで手書きで複製せず、mod.rs側の
                 // normalize_definitionをそのまま呼ぶ(4元クライン群の畳み込みは
                 // 単純なソートより複雑なので、ロジックを1箇所に保つ)。
@@ -2016,6 +2019,9 @@ impl ProverEngine {
                 // (known_point, line, conic) → もう一方の交点、を作れるようにする。
                 "SecondIntersectionOfLineAndConic" if parent_ids.len() == 3 =>
                     Definition::SecondIntersectionOfLineAndConic(parent_ids[0], parent_ids[1], parent_ids[2]),
+                "RadicalAxis" if parent_ids.len() == 2 => Definition::RadicalAxis(parent_ids[0], parent_ids[1]),
+                "SecondIntersectionOfCircles" if parent_ids.len() == 3 =>
+                    Definition::SecondIntersectionOfCircles(parent_ids[0], parent_ids[1], parent_ids[2]),
                 // 🌟 FIX: 不足していた作図定義を追加（これがないと return false で沈黙する）
                 "LengthSq" => {
                     let (a, b) = if parent_ids[0].0 > parent_ids[1].0 { (parent_ids[1], parent_ids[0]) } else { (parent_ids[0], parent_ids[1]) };

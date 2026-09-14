@@ -110,6 +110,8 @@ impl EGraph {
             Definition::ConicThrough5Points(a, b, c, d, e) => format!("ConicThrough5Points({}, {}, {}, {}, {})", get_name(a), get_name(b), get_name(c), get_name(d), get_name(e)),
             Definition::Product(a, b) => format!("Product({}, {})", get_name(a), get_name(b)),
             Definition::SecondIntersectionOfLineAndConic(p, l, c) => format!("SecondIntersection({}; {}, {})", get_name(p), get_name(l), get_name(c)),
+            Definition::RadicalAxis(c1, c2) => format!("RadicalAxis({}, {})", get_name(c1), get_name(c2)),
+            Definition::SecondIntersectionOfCircles(p, c1, c2) => format!("SecondIntersectionOfCircles({}; {}, {})", get_name(p), get_name(c1), get_name(c2)),
         }
     }
 

@@ -303,3 +303,50 @@ pub fn calc_second_intersection_of_line_and_conic(known_point: &[ModInt], line: 
     if result.iter().all(|v| v.0 == 0) { return vec![]; }
     normalize(&result)
 }
+// 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、もう一個の
+// 円と円、円と直線の交点を作図するなど)の方が、よりいろんな結果を作れる」)への
+// 対応その1: 2円の根軸(radical axis)。
+//
+// 円は「x²とy²の係数が等しくxyの係数が0」という特殊な二次曲線なので、
+// 2つの円 c1, c2 を「二次の項が打ち消し合う」ように定数倍して引くと、
+// 二次の項が完全に消えて1次式(=直線)だけが残る。これが根軸であり、
+// 2円が交わる場合はその2交点を通る直線そのものになる。
+//
+// これを独立した作図プリミティブとして持つ意味は2つある:
+//   (a)「一方の交点Pが既知のとき、もう一方の交点」を
+//      SecondIntersectionOfLineAndConic(P, 根軸, c1) として、平方根を一切
+//      使わずに斉次座標のまま作図できる(2交点は根軸上にあるため)。
+//   (b) 根軸そのものが「3円の根軸は1点(根心)で交わる」のような、すぐには
+//      示しにくい結果の源になる。
+//
+// 入力は calc_conic_through_5_points と同じ6係数[A,B,C,D,E,F]
+// (Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0)。互換のため旧来の円4係数[A,D,E,F]も受ける。
+// 二次の項が実際には消えない(=少なくとも一方が円ではない)場合は、
+// 差が直線にならないので空ベクトルを返す。
+pub fn calc_radical_axis(c1: &[ModInt], c2: &[ModInt]) -> Vec<ModInt> {
+    let to6 = |v: &[ModInt]| -> Option<Vec<ModInt>> {
+        if v.len() >= 6 { Some(v[..6].to_vec()) }
+        else if v.len() == 4 { Some(vec![v[0], ModInt::new(0), v[0], v[1], v[2], v[3]]) }
+        else { None }
+    };
+    let (a, b) = match (to6(c1), to6(c2)) { (Some(a), Some(b)) => (a, b), _ => return vec![] };
+    // c1 を b[0] 倍、c2 を a[0] 倍して引けば、x²の係数は必ず打ち消し合う。
+    let (k1, k2) = (b[0], a[0]);
+    for i in 0..3 {
+        if (k1 * a[i] - k2 * b[i]).0 != 0 { return vec![]; }
+    }
+    let out = [k1 * a[3] - k2 * b[3], k1 * a[4] - k2 * b[4], k1 * a[5] - k2 * b[5]];
+    if out.iter().all(|v| v.0 == 0) { return vec![]; }
+    normalize(&out)
+}
+
+// 🌟 同上その2: 一方の交点が既知の場合の「2円のもう一方の交点」。
+// 根軸(calc_radical_axis)を経由して直線と円の第二交点に帰着させるだけ
+// (2交点はどちらも根軸上にあるので、根軸とc1の交点のうちknown_pointでない
+// 方がまさに求める点)。円と円の交点は一般には平方根を要するが、
+// 「一方が既知」という条件があれば有理的に(=この体の中で)作図できる。
+pub fn calc_second_intersection_of_circles(known_point: &[ModInt], c1: &[ModInt], c2: &[ModInt]) -> Vec<ModInt> {
+    let axis = calc_radical_axis(c1, c2);
+    if axis.len() < 3 { return vec![]; }
+    calc_second_intersection_of_line_and_conic(known_point, &axis, c1)
+}

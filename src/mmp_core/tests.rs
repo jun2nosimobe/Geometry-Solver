@@ -1016,3 +1016,47 @@ fn test_spiral_similarity_characterized_by_two_pencil_cross_ratios() {
     let v_i_dc_broken = egraph.evaluate_node(cr_i_dc, &vars, &mut cache2).expect("計算できるはず")[0];
     assert_ne!(v_i_ab, v_i_dc_broken, "比kが△EABと△EDCで食い違えば、距離を運ぶIからの線束の複比は一致しないはず(この不変量が非自明であることの確認)");
 }
+
+#[test]
+fn test_radical_axis_and_second_intersection_of_circles() {
+    // 🌟 円関連の作図(根軸・2円の第2交点)の数値的な検証。
+    //
+    // 2円が共通の2点A,Bを通るとき、根軸は定義から直線ABそのものになり、
+    // 「Aを既知の交点としたときのもう一方の交点」はBに一致するはずである。
+    // A=(0,0), B=(4,0) を共通点とし、
+    //   円1 = 外接円(A, B, C) with C=(0,3)   -> x²+y²-4x-3y=0
+    //   円2 = 外接円(A, B, D) with D=(1,-2)  -> 中心は別の位置になる
+    // という非対称な配置を選ぶ(対称な配置だと係数の取り違えが偶然
+    // 打ち消し合って検出できない――calc_tangent_lineの係数順バグの教訓)。
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+    let circ1 = egraph.create_entity("Circ1".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+    let circ2 = egraph.create_entity("Circ2".into(), Definition::Circumcircle(a, b, d), EntityType::Conic);
+    let axis = egraph.create_entity("Axis".into(), Definition::RadicalAxis(circ1, circ2), EntityType::Line);
+    let second = egraph.create_entity("Second".into(),
+        Definition::SecondIntersectionOfCircles(a, circ1, circ2), EntityType::Point);
+    let line_ab = egraph.create_entity("LineAB".into(), Definition::new_line(a, b), EntityType::Line);
+
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    for (k, v) in [("A_x", 0i64), ("A_y", 0), ("B_x", 4), ("B_y", 0), ("C_x", 0), ("C_y", 3), ("D_x", 1), ("D_y", -2)] {
+        vars.insert(k.into(), ModInt::new(v));
+    }
+    let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+
+    let vaxis = mmp_calculators::normalize(&egraph.evaluate_node(axis, &vars, &mut cache).expect("根軸は計算できるべき"));
+    let vab = mmp_calculators::normalize(&egraph.evaluate_node(line_ab, &vars, &mut cache).expect("直線ABは計算できるべき"));
+    assert_eq!(vaxis, vab, "2点A,Bを共有する2円の根軸は直線ABそのものであるべき");
+
+    let vsecond = mmp_calculators::normalize(&egraph.evaluate_node(second, &vars, &mut cache).expect("2円の第2交点は計算できるべき"));
+    let expected = mmp_calculators::normalize(&[ModInt::new(4), ModInt::new(0), ModInt::new(1)]);
+    assert_eq!(vsecond, expected, "Aを既知の交点としたときの2円のもう一方の交点はB=(4,0)であるべき");
+
+    // 同心でない2円が1点しか共有していない(=接している)場合と違い、ここでは
+    // 第2交点が既知点Aと異なることも確認しておく(「第2」を名乗る以上、
+    // 単にAを返してしまう実装バグは許されない)。
+    let va = mmp_calculators::normalize(&egraph.evaluate_node(a, &vars, &mut cache).unwrap());
+    assert_ne!(vsecond, va, "第2交点が既知の交点Aと同じになってはいけない");
+}

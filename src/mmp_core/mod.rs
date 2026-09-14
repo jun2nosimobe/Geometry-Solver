@@ -158,6 +158,22 @@ pub enum Definition {
     // line_and_conicのドキュメント参照(直線をP+tRとパラメータ化し、
     // Pが根であることを使ってもう一方の根を斉次座標のまま求める)。
     SecondIntersectionOfLineAndConic(ClassId, ClassId, ClassId),
+    // 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、
+    // もう一個の円と円、円と直線の交点を作図するなど)の方が、よりいろんな
+    // 結果を作れる」)への対応。2円の根軸(radical axis)。順不同。
+    // 2円が交わるならその2交点を通る直線であり、交わらなくても常に定義される
+    // (方冪が等しい点の軌跡)。計算は mmp_calculators::calc_radical_axis 参照。
+    // 「3円の根軸は1点(根心)で交わる」のように、根軸そのものが、すぐには
+    // 示しにくい結果を生む源になる。
+    RadicalAxis(ClassId, ClassId),
+    // 🌟 同上。一方の交点が既知のときの「2円のもう一方の交点」。
+    // (known_point, c1, c2) で、c1とc2は順不同。SecondIntersectionOfLineAnd
+    // Conicの円×円版で、実装上も根軸を経由して同じ計算に帰着する。
+    // 円と円の交点は一般には平方根を要する(=この有限体の中で作図できると
+    // は限らない)が、「一方の交点が既に分かっている」という条件を付ければ
+    // 有理的に作図できる ―― これはオリンピック幾何で「2円の第2交点」が
+    // 常にこの形(共通点が1つ与えられている)で現れることと一致する。
+    SecondIntersectionOfCircles(ClassId, ClassId, ClassId),
 }
 
 impl Definition {
@@ -188,6 +204,8 @@ impl Definition {
             Definition::ConicThrough5Points(_,_,_,_,_) => "ConicThrough5Points",
             Definition::Product(_,_) => "Product",
             Definition::SecondIntersectionOfLineAndConic(_,_,_) => "SecondIntersectionOfLineAndConic",
+            Definition::RadicalAxis(_,_) => "RadicalAxis",
+            Definition::SecondIntersectionOfCircles(_,_,_) => "SecondIntersectionOfCircles",
         }
     }
 
@@ -210,6 +228,8 @@ impl Definition {
             Definition::ConicThrough5Points(a, b, c, d, e) => vec![*a, *b, *c, *d, *e],
             Definition::Product(a, b) => vec![*a, *b],
             Definition::SecondIntersectionOfLineAndConic(p, l, c) => vec![*p, *l, *c],
+            Definition::RadicalAxis(c1, c2) => vec![*c1, *c2],
+            Definition::SecondIntersectionOfCircles(p, c1, c2) => vec![*p, *c1, *c2],
             _ => vec![],
         }
     }
@@ -245,6 +265,8 @@ impl Definition {
             Definition::ConicThrough5Points(_, _, _, _, _) => EntityType::Conic,
             Definition::Product(_, _) => EntityType::Scalar,
             Definition::SecondIntersectionOfLineAndConic(_, _, _) => EntityType::Point,
+            Definition::RadicalAxis(_, _) => EntityType::Line,
+            Definition::SecondIntersectionOfCircles(_, _, _) => EntityType::Point,
         }
     }
 }
@@ -947,6 +969,16 @@ impl EGraph {
             Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
                 Definition::SecondIntersectionOfLineAndConic(self.get_rep(*p), self.get_rep(*l), self.get_rep(*c))
             },
+            // 🌟 根軸は2円について完全に対称なのでClassId順にソートする。
+            Definition::RadicalAxis(c1, c2) => {
+                let (r1, r2) = (self.get_rep(*c1), self.get_rep(*c2));
+                if r1.0 > r2.0 { Definition::RadicalAxis(r2, r1) } else { Definition::RadicalAxis(r1, r2) }
+            },
+            // 🌟 known_pointは役割が違うので固定、2円だけをソートする。
+            Definition::SecondIntersectionOfCircles(p, c1, c2) => {
+                let (rp, r1, r2) = (self.get_rep(*p), self.get_rep(*c1), self.get_rep(*c2));
+                if r1.0 > r2.0 { Definition::SecondIntersectionOfCircles(rp, r2, r1) } else { Definition::SecondIntersectionOfCircles(rp, r1, r2) }
+            },
             _ => def.clone(),
         }
     }
@@ -1057,9 +1089,84 @@ impl EGraph {
             // おかないと、match_connected_factの「この直線/この曲線上の点」
             // 探索や、円の一意性局所伝播(propagate_conic_uniqueness)から
             // 見えなくなってしまう。
-            Definition::SecondIntersectionOfLineAndConic(_p, l, c) => {
+            Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
                 self.link_logical_incidence(new_id, *l);
                 self.link_logical_incidence(new_id, *c);
+                // 🌟 直線は二次曲線と高々2点でしか交わらない。したがって、
+                // その直線上に既知点pとは別の「この二次曲線上の点」qが既に
+                // あるなら、第2交点はqそのものである。この一意性を構造的に
+                // 登録しておかないと、SecondIntersection(A; 直線AB, ABCの
+                // 外接円)のような「実はBでしかないもの」が別実体として残り、
+                // 発見報告に重複した無内容な項目として現れる(実測)。
+                // 「2直線の交点の一意性」(PointUniqueness)の二次曲線版。
+                let rp = self.get_rep(*p);
+                let on_line: Vec<ClassId> = self.entities[self.get_rep(*l).0].components.first()
+                    .map(|comp| comp.subobjects.iter().map(|&s| self.get_rep(s))
+                        .filter(|&s| self.entities[s.0].entity_type == EntityType::Point)
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default();
+                for q in on_line {
+                    if q == rp || q == self.get_rep(new_id) { continue; }
+                    // 無限遠直線上の点(円周点I,Jなど)は全ての円に乗っているので、
+                    // 「もう一方の交点」の候補にしてはいけない。
+                    if self.is_connected(q, self.line_infinity) { continue; }
+                    if !self.is_connected(q, *c) { continue; }
+                    self.merge_entities_justified(new_id, q, Justification::Trivial {
+                        reason: "直線と二次曲線は高々2点で交わるので、既知の交点でない方の交点は、その直線上にある残りの交点に一致する".to_string() });
+                    break;
+                }
+            },
+            // 🌟 根軸: 2円の共有点として既に構造的に分かっている点があれば、
+            // その点は根軸上にある(方冪が両方0で等しい)。円と円の第2交点を
+            // SecondIntersectionOfLineAndConic経由で扱えるようにするために
+            // 必要な、根軸の一番基本的な性質。
+            Definition::RadicalAxis(c1, c2) => {
+                let mut shared: Vec<ClassId> = self.entities[self.get_rep(*c1).0].components.first()
+                    .map(|comp| comp.subobjects.iter().map(|&s| self.get_rep(s))
+                        .filter(|&s| self.entities[s.0].entity_type == EntityType::Point)
+                        .filter(|&s| !self.is_connected(s, self.line_infinity))
+                        .filter(|&s| self.is_connected(s, *c2))
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default();
+                shared.sort_unstable_by_key(|id| id.0);
+                shared.dedup();
+                // 🐛 FIX(実測で判明・崩壊の原因その2): 共有点が3つ以上あるなら、
+                // 2つの「円」は(まだ記号的に統合されていないだけで)同じ円であり、
+                // その根軸は 0=0 で全く定まらない。にもかかわらず、その定まらない
+                // 直線に3点以上を接続してしまうと、「2点を共有する直線は同一」の
+                // 局所伝播が次々に発火し、AB・BC・CAのような無関係な直線どうしが
+                // 芋づる式に併合されてe-graphが潰れる(数値的な裏付け検査も、
+                // この直線は評価不能=判定不能のため素通りしてしまう)。
+                // 円の同一性の方は円の一意性伝播が別途正しく処理するので、
+                // ここでは何も接続しないのが正しい。
+                if shared.len() >= 3 { return; }
+                for p in shared {
+                    // 🐛 FIX(実測で判明・崩壊の原因その1): 円周点I=(1,i,0), J=(1,-i,0)は
+                    // 「円である」ことの定義そのものなので、あらゆる円の上にある。
+                    // だがI,Jは根軸の上には無い ―― 2円の差 A2·c1 - A1·c2 は
+                    // 二次曲線としては z·(ax+by+cz)、つまり「無限遠直線 ∪ 根軸」に
+                    // 退化した二次曲線であり、I,Jはそのうち無限遠直線の方に
+                    // 乗っているだけだからである。ここでI,Jを根軸に接続すると、
+                    // 「無限遠直線と2点(I,J)を共有する直線」として直線の一意性が
+                    // 発火し、根軸が無限遠直線に併合されて、そこから
+                    // e-graph全体が潰れた(292個の同値類が9個になる崩壊を実測)。
+                    // (上のフィルタで既にI,Jは除いてある。)
+                    self.link_logical_incidence_justified(p, new_id, Justification::Trivial {
+                        reason: "2円の共有点は根軸上にある(方冪がどちらも0で等しい)".to_string() });
+                }
+            },
+            // 🌟 2円の第2交点は、定義からその2円の両方に乗っており、かつ
+            // (2交点はどちらも根軸上にあるので)根軸上にもある。根軸の実体も
+            // ここで生成しておくことで、「2交点を結ぶ直線=根軸」という構造が
+            // 探索側から見えるようになる。
+            Definition::SecondIntersectionOfCircles(_p, c1, c2) => {
+                self.link_logical_incidence(new_id, *c1);
+                self.link_logical_incidence(new_id, *c2);
+                let axis_def = self.normalize_definition(&Definition::RadicalAxis(*c1, *c2));
+                let axis_name = format!("RadAxis_{}_{}_(Auto)",
+                    self.entities[self.get_rep(*c1).0].name, self.entities[self.get_rep(*c2).0].name);
+                let axis_id = self.create_entity(axis_name, axis_def, EntityType::Line);
+                self.link_logical_incidence(new_id, axis_id);
             },
             Definition::Midpoint(a, b) => {
                 self.link_logical_incidence(*a, new_id);
