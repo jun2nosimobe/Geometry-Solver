@@ -9,14 +9,17 @@ use crate::padic_eval::find_degeneration_specific_coincidences;
 /// egraph内の全自由点(Definition::FreePoint かつ EntityType::Point)の
 /// ClassIdを、名前と一緒に列挙する。
 fn list_free_points(egraph: &EGraph) -> Vec<(ClassId, String)> {
+    // マージが進んだe-graphでは自由点が代表元でなくなる(同値類の代表が
+    // 別の実体に移る)ので、「代表元かどうか」で絞ると丸ごと取りこぼす。
+    // padic_eval::compute_degeneration_groupsで実際にそれが起きていた。
     let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<ClassId> = std::collections::HashSet::new();
     for i in 0..egraph.entities.len() {
-        let id = ClassId(i);
-        if egraph.get_rep(id) != id { continue; }
         let e = &egraph.entities[i];
-        if e.entity_type == EntityType::Point && matches!(e.original_definition, Definition::FreePoint) {
-            out.push((id, e.name.clone()));
-        }
+        if e.entity_type != EntityType::Point { continue; }
+        if !matches!(e.original_definition, Definition::FreePoint) { continue; }
+        let rep = egraph.get_rep(ClassId(i));
+        if seen.insert(rep) { out.push((rep, e.name.clone())); }
     }
     out
 }

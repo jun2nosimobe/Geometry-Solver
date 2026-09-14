@@ -514,57 +514,11 @@ function configLines(withProof) {
   ].join('\n');
 }
 
-/// 今の図(補助作図も取り込んだ状態とみなす)について、どれがすぐ証明できるかを
-/// 確かめ直す。自由作図はやり直さない(段数0で送る)ので速い。
-async function proveAll() {
-  const btn = document.getElementById('proveall');
-  const el = document.getElementById('findings');
-  const auxScript = aux.map(o =>
+/// 補助作図を、サーバへ送れる作図手順の行に直す。
+function auxScript() {
+  return aux.map(o =>
     o.op === 'on' ? `point ${o.name} on ${o.on}`
                   : `${o.kind} ${o.name} ${o.op} ${o.args.join(' ')}`).join('\n');
-  const script = [serialize(), auxScript].filter(Boolean).join('\n');
-  const cfg = configLines(true).replace(/config rounds \d+/, 'config rounds 0');
-  btn.disabled = true;
-  const note = document.getElementById('sortnote');
-  note.textContent = `証明を試しています… 1件あたり最大 ${document.getElementById('prove_seconds').value} 秒`;
-  try {
-    const res = await fetch('/discover', { method: 'POST', body: cfg + '\n' + script });
-    const text = await res.text();
-    // 補助作図は既に手元にあるので、返ってきたものでは置き換えない。
-    const keep = aux;
-    renderFindings(text);
-    aux = keep;              // 返ってきた aux(段数0なので空)では置き換えない
-    updateAuxBar();
-    paintFindings();         // 「取り込む」ボタンは aux を戻してから描き直す
-  } catch (err) {
-    note.textContent = 'エンジンに繋がりませんでした。';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function discover() {
-  const btn = document.getElementById('discover');
-  const el = document.getElementById('findings');
-  const script = serialize();
-  if (!script) { el.className = 'empty'; el.textContent = 'まず何か描いてください。'; return; }
-  dropAux();
-  btn.disabled = true;
-  el.className = 'empty';
-  const rounds = Number(document.getElementById('rounds').value);
-  el.textContent = rounds > 0
-    ? `自由作図(${rounds}段)をしてから調べています… 最大 ${document.getElementById('seconds').value} 秒`
-    : '調べています…';
-  try {
-    const res = await fetch('/discover', { method: 'POST', body: configLines(false) + '\n' + script });
-    const text = await res.text();
-    renderFindings(text);
-  } catch (err) {
-    el.className = '';
-    el.innerHTML = '<p class="err">エンジンに繋がりませんでした。geom_solver serve が動いているか確認してください。</p>';
-  } finally {
-    btn.disabled = false;
-  }
 }
 
 const KIND_LABEL = {
@@ -572,77 +526,215 @@ const KIND_LABEL = {
   circles: '3円共点', incident: '接続', concyclic: '共円',
 };
 
-function renderFindings(text) {
-  const el = document.getElementById('findings');
-  el.innerHTML = '';
-  el.dataset.fresh = '1';
-  const lines = text.split('\n').filter(Boolean);
-  const err = lines.find(l => l.startsWith('error|'));
-  if (err) {
-    document.getElementById('resulthead').hidden = true;
-    lastFindings = [];
-    el.className = '';
-    const p = document.createElement('p');
-    p.className = 'err';
-    p.textContent = '作図を読み取れませんでした\n' + err.slice(6);
-    el.appendChild(p);
-    return;
-  }
-  // 自由作図でエンジンが足した図形。ユーザーの作図と名前が衝突しない
-  // ように来る(x1, x2, …)ので、そのまま評価器に載せられる。
-  aux = [];
-  for (const l of lines.filter(l => l.startsWith('aux|'))) {
-    const t = l.slice(4).trim().split(/\s+/);
-    if (t.length < 3) continue;
-    const [kind, name, op, ...args] = t;
-    const o = { name, kind, op, args, auxiliary: true };
-    if (op === 'free') { o.x = 0; o.y = 0; }
-    aux.push(o);
-  }
-  updateAuxBar();
-  const findings = lines.filter(l => l.startsWith('finding|')).map(l => {
-    const [, kind, textPart, idsPart, status] = l.split('|');
-    return { kind, text: textPart, ids: (idsPart || '').split(',').filter(Boolean),
-             status: status || 'untried' };
-  });
-  lastFindings = findings;
-  if (!findings.length) {
-    document.getElementById('resulthead').hidden = true;
-    el.className = 'empty';
-    el.textContent = 'この作図から、まだ知られていない関係は見つかりませんでした。';
-    return;
-  }
-  paintFindings();
+const PROOF_BADGE = {
+  proved: { text: '証明できた', title: '今の定理集合から、制限時間内に定理の連鎖で導けました' },
+  trivial: { text: '作図から自明', title: '定理を使うまでもなく、作図の定義と接続関係だけで出ます' },
+  open: { text: '未証明', title: '制限時間内には導けませんでした(偽という意味ではありません)' },
+  unsupported: { text: '目標にできない', title: 'この形の主張は、まだ証明の目標として表現していません' },
+};
+
+let lastFindings = [];
+let running = null;          // 実行中のストリームの AbortController
+let paintQueued = false;
+let resetScroll = false;     // 次の描画で一覧を先頭に戻すか
+
+function setStage(msg) {
+  const el = document.getElementById('stagenote');
+  el.textContent = msg || '';
+  el.hidden = !msg;
 }
+
+function setBusy(on) {
+  document.getElementById('discover').disabled = on;
+  document.getElementById('proveall').disabled = on;
+  document.getElementById('stop').hidden = !on;
+}
+
+/// 1行届くたびに一覧を描き直すと、件数の2乗の仕事になる。
+/// 次の描画フレームまでまとめる。
+function schedulePaint() {
+  if (paintQueued) return;
+  paintQueued = true;
+  requestAnimationFrame(() => { paintQueued = false; paintFindings(); });
+}
+
+/// 🌟 ユーザー要望「結果を1件ずつ返す方がよい」への対応。
+///
+/// サーバは chunked 転送で1行ずつ流してくるので、全部届くのを待たずに、
+/// 届いた行から順に画面へ足す。自由作図に20秒・証明に1件あたり数秒
+/// かかっても、その間ずっと空の画面を見せなくて済む。「中止」を押すと
+/// 読むのをやめ、サーバ側も書き込みに失敗した時点で計算を打ち切る。
+async function runStream(body, opts) {
+  const el = document.getElementById('findings');
+  if (running) running.abort();
+  const ctl = new AbortController();
+  running = ctl;
+  setBusy(true);
+  const keptAux = opts.keepAux ? aux : null;
+  let sawOk = false;
+  let failed = false;
+
+  const onLine = (line) => {
+    const bar = line.indexOf('|');
+    const tag = bar < 0 ? line : line.slice(0, bar);
+    const rest = bar < 0 ? '' : line.slice(bar + 1);
+    if (tag === 'stage') { setStage(rest); return; }
+    if (tag === 'error') {
+      failed = true;
+      lastFindings = [];
+      document.getElementById('resulthead').hidden = true;
+      el.className = '';
+      el.innerHTML = '';
+      const p = document.createElement('p');
+      p.className = 'err';
+      p.textContent = '作図を読み取れませんでした\n' + rest;
+      el.appendChild(p);
+      return;
+    }
+    if (tag === 'ok') {
+      sawOk = true;
+      lastFindings = [];
+      if (!opts.keepAux) aux = [];
+      updateAuxBar();
+      el.dataset.fresh = '1';
+      resetScroll = true;
+      schedulePaint();
+      return;
+    }
+    if (tag === 'aux') {
+      if (opts.keepAux) return;      // 手元の補助作図をそのまま使う場面
+      const t = rest.trim().split(/\s+/);
+      if (t.length < 3) return;
+      const [kind, name, op, ...args] = t;
+      const o = { name, kind, op, args, auxiliary: true };
+      if (op === 'free') { o.x = 0; o.y = 0; }
+      aux.push(o);
+      updateAuxBar();
+      return;
+    }
+    if (tag === 'finding') {
+      const p = rest.split('|');
+      lastFindings[Number(p[0])] = {
+        kind: p[1], text: p[2],
+        ids: (p[3] || '').split(',').filter(Boolean),
+        degree: Number(p[4]) || 0, heat: Number(p[5]) || 0,
+        degen: Number(p[6]) || 0, score: Number(p[7]) || 0,
+        status: 'untried',
+      };
+      schedulePaint();
+      return;
+    }
+    if (tag === 'proof') {
+      const p = rest.split('|');
+      const f = lastFindings[Number(p[0])];
+      if (f) { f.status = p[1]; schedulePaint(); }
+      return;
+    }
+  };
+
+  try {
+    const res = await fetch('/discover', { method: 'POST', body, signal: ctl.signal });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line) onLine(line);
+      }
+    }
+    if (buf.trim()) onLine(buf.trim());
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      failed = true;
+      el.className = '';
+      el.innerHTML = '<p class="err">エンジンに繋がりませんでした。geom_solver serve が動いているか確認してください。</p>';
+      document.getElementById('resulthead').hidden = true;
+    }
+  } finally {
+    if (running === ctl) { running = null; setBusy(false); setStage(''); }
+    if (keptAux) { aux = keptAux; updateAuxBar(); }
+    if (!failed && sawOk) paintFindings();
+  }
+}
+
+async function discover() {
+  const el = document.getElementById('findings');
+  const script = serialize();
+  if (!script) { el.className = 'empty'; el.textContent = 'まず何か描いてください。'; return; }
+  dropAux();
+  el.className = 'empty';
+  el.textContent = '調べています…';
+  await runStream(configLines(false) + '\n' + script, { keepAux: false });
+}
+
+/// 今の図(補助作図も取り込んだものとみなす)について、どれがすぐ証明できるかを
+/// 確かめ直す。自由作図はやり直さない(段数0で送る)ので、待つのは証明のぶんだけ。
+async function proveAll() {
+  const script = [serialize(), auxScript()].filter(Boolean).join('\n');
+  if (!script) return;
+  const cfg = configLines(true).replace(/config rounds \d+/, 'config rounds 0');
+  await runStream(cfg + '\n' + script, { keepAux: true });
+}
+
+/// 🌟 ユーザー要望「面白さ(熱)や次数、退化したときの関係性の数などで
+/// 面白い順にソートしたい」への対応。既定はこの3つを合わせた点数で、
+/// 内訳ごとの並べ替えも選べる(どの指標が効いているか見比べられるように)。
+const SORTS = {
+  score: (a, b) => b.score - a.score,
+  degree: (a, b) => b.degree - a.degree || b.score - a.score,
+  heat: (a, b) => b.heat - a.heat || b.score - a.score,
+  degen: (a, b) => b.degen - a.degen || b.score - a.score,
+};
 
 /// 件数が多いと枠からあふれるので、一覧だけをスクロールさせ、
 /// 「自分の図に関わるものだけ」で絞れるようにしてある。
-let lastFindings = [];
-
 function paintFindings() {
   const el = document.getElementById('findings');
+  const all = lastFindings.filter(Boolean);
   const onlyMine = document.getElementById('onlymine').checked;
   const hideProved = document.getElementById('hideproved').checked;
+  const sortBy = document.getElementById('sortby').value;
   const mineNames = new Set(objects.map(o => o.name));
   const isMine = (f) => f.ids.some(n => mineNames.has(n));
-  let shown = lastFindings;
+  const settled = (f) => f.status === 'proved' || f.status === 'trivial';
+
+  let shown = all;
   if (onlyMine) shown = shown.filter(isMine);
-  if (hideProved) shown = shown.filter(f => f.status !== 'proved');
-  document.getElementById('resulthead').hidden = false;
+  if (hideProved) shown = shown.filter(f => !settled(f));
+  shown = shown.slice().sort(
+    sortBy === 'mine'
+      ? (a, b) => (isMine(b) ? 1 : 0) - (isMine(a) ? 1 : 0) || b.score - a.score
+      : SORTS[sortBy] || SORTS.score);
+
+  document.getElementById('resulthead').hidden = all.length === 0;
   document.getElementById('count').textContent =
-    shown.length === lastFindings.length ? `${lastFindings.length}件`
-                                         : `${shown.length} / ${lastFindings.length}件`;
-  const tried = lastFindings.filter(f => f.status === 'proved' || f.status === 'open');
-  const proved = lastFindings.filter(f => f.status === 'proved').length;
+    shown.length === all.length ? `${all.length}件` : `${shown.length} / ${all.length}件`;
+
+  const tried = all.filter(f => f.status !== 'untried');
+  const proved = all.filter(f => f.status === 'proved').length;
+  const trivial = all.filter(f => f.status === 'trivial').length;
   document.getElementById('sortnote').textContent = tried.length
-    ? `${tried.length}件を試して ${proved}件はすぐ証明できました。`
+    ? `${tried.length}件を試して、定理の連鎖で証明できたのが ${proved}件、`
+      + `作図から自明だったのが ${trivial}件、残り ${tried.length - proved - trivial}件は未証明です。`
       + '「未証明」は偽という意味ではなく、今の定理集合と制限時間では出なかった、というだけです。'
-    : '自分の図に関わるものから順に並んでいます(熱ではありません)。'
-      + '「証明を試す」で、どれが今の定理集合からすぐ出るか分かります。';
+    : '次数・熱・退化したときの関係の数を合わせた「面白さ」の順です。'
+      + '各値はこの回の中での相対値で、並べ替えると内訳ごとの順も見られます。';
+
+  // 1件ずつ流れてくる途中で「見つかりませんでした」と出すと嘘になるので、
+  // 走っている間は探索中だと言う。
+  const keepScroll = el.scrollTop;
   el.innerHTML = '';
   if (!shown.length) {
     el.className = 'empty';
-    el.textContent = '自分の図に関わるものはありませんでした。チェックを外すと全部出ます。';
+    el.textContent = all.length
+      ? '絞り込みに当てはまるものはありませんでした。チェックを外すと全部出ます。'
+      : (running ? '調べています…' : 'この作図から、まだ知られていない関係は見つかりませんでした。');
     return;
   }
   el.className = '';
@@ -658,13 +750,12 @@ function paintFindings() {
     t.className = 'text';
     t.textContent = f.text;
     row.appendChild(t);
-    if (f.status === 'proved' || f.status === 'open') {
+    const badge = PROOF_BADGE[f.status];
+    if (badge) {
       const b = document.createElement('span');
       b.className = 'badge ' + f.status;
-      b.textContent = f.status === 'proved' ? '証明できた' : '未証明';
-      b.title = f.status === 'proved'
-        ? '今の定理集合から制限時間内に導けました'
-        : '制限時間内には導けませんでした(偽という意味ではありません)';
+      b.textContent = badge.text;
+      b.title = badge.title;
       row.appendChild(b);
     }
     // この性質に必要な補助作図だけを取り込むボタン。
@@ -677,12 +768,18 @@ function paintFindings() {
       take.addEventListener('click', (e) => { e.stopPropagation(); adoptAux(needed); });
       row.appendChild(take);
     }
-    div.append(k, row);
+    // 面白さの内訳。どうしてこの順なのかが分かるように、そのまま出す。
+    const parts = document.createElement('div');
+    parts.className = 'parts';
+    parts.textContent = `面白さ ${f.score.toFixed(2)} ・ 次数 ${f.degree} ・ 熱 ${f.heat.toFixed(1)} ・ 退化 ${f.degen.toFixed(1)}`;
+    parts.title = '次数: 作図の代数的な次数の最大値 / 熱: 図の中でどれだけ多くのものがその上に建っているか / 退化: 図を潰したときに他の図形と一致する相手の数';
+    div.append(k, row, parts);
     div.addEventListener('mouseenter', () => { highlight = new Set(f.ids); draw(); });
     div.addEventListener('mouseleave', () => { highlight.clear(); draw(); });
     el.appendChild(div);
   }
-  el.scrollTop = 0;
+  el.scrollTop = resetScroll ? 0 : keepScroll;
+  resetScroll = false;
 }
 
 // ============================================================
@@ -781,7 +878,9 @@ function init() {
   document.getElementById('discover').addEventListener('click', discover);
   document.getElementById('onlymine').addEventListener('change', paintFindings);
   document.getElementById('hideproved').addEventListener('change', paintFindings);
+  document.getElementById('sortby').addEventListener('change', paintFindings);
   document.getElementById('proveall').addEventListener('click', proveAll);
+  document.getElementById('stop').addEventListener('click', () => { if (running) running.abort(); });
   setupSplitter();
   document.getElementById('adopt').addEventListener('click', () => adoptAux());
   document.getElementById('dropaux').addEventListener('click', () => { dropAux(); draw(); });

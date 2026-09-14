@@ -172,7 +172,21 @@ summary::-webkit-details-marker { display: none; }
   border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
 }
 .badge.proved { border-color: var(--accent); color: var(--accent); }
+.badge.trivial { border-color: var(--line); color: var(--muted); }
 .badge.open { border-color: var(--sel); color: var(--sel); }
+.badge.unsupported { border-color: var(--line); color: var(--muted); }
+/* 面白さの内訳。どうしてこの順なのかが行ごとに分かるように出す。 */
+.parts {
+  margin-top: 3px; font-size: 10px; color: var(--muted);
+  font-variant-numeric: tabular-nums; letter-spacing: .02em;
+}
+.headbtns { display: flex; align-items: center; gap: 6px; }
+/* 進捗。1行ずつ届く結果の、今どこを走っているか。 */
+#stagenote { font-size: 12px; color: var(--accent); }
+.filterbox select {
+  padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--ink); font: inherit; font-size: 11px;
+}
 .take {
   flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 9px;
   border: 1px solid var(--line); background: transparent; color: var(--muted);

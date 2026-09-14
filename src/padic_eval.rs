@@ -527,16 +527,22 @@ impl DegenerationRelations {
 /// runと同じロジックだが、CLI表示ではなくEGraphに直接取り込むための版。
 pub fn compute_degeneration_groups(egraph: &EGraph, seed: u64, min_hits: u32) -> DegenerationRelations {
     let trials = min_hits.max(2);
+    // 🐛 FIX: 以前は「代表元であって、かつoriginal_definitionがFreePointの
+    // ものだけ」を自由点として拾っていた。マージが進んだe-graphでは自由点が
+    // 代表元でなくなる(同値類の代表が別の実体に移る)のが普通で、実測では
+    // 三角形から2段の自由作図をした後、A・B・Cの3点すべてが拾われず
+    // 「自由点0個」=退化の走査が丸ごと空振り、という状態になっていた
+    // (DegenEvaluator::evalが同じ取り違えで修正済みなのと全く同じ話)。
+    // 全実体を見て、FreePointとして作られたものの代表元を集める。
     let mut free_points = Vec::new();
+    let mut seen: std::collections::HashSet<ClassId> = std::collections::HashSet::new();
     for i in 0..egraph.entities.len() {
-        let id = ClassId(i);
-        if egraph.get_rep(id) != id { continue; }
         let e = &egraph.entities[i];
-        if e.entity_type == EntityType::Point && matches!(e.original_definition, Definition::FreePoint) {
-            free_points.push(id);
-        }
+        if e.entity_type != EntityType::Point { continue; }
+        if !matches!(e.original_definition, Definition::FreePoint) { continue; }
+        let rep = egraph.get_rep(ClassId(i));
+        if seen.insert(rep) { free_points.push(rep); }
     }
-
     let mut relations = DegenerationRelations::new();
     for i in 0..free_points.len() {
         for j in (i + 1)..free_points.len() {

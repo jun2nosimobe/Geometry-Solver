@@ -30,7 +30,10 @@
     <section>
       <div class="sechead">
         <h2>定理発見</h2>
-        <button id="discover">調べる</button>
+        <span class="headbtns">
+          <button id="stop" class="util" hidden title="探索と証明を打ち切ります">中止</button>
+          <button id="discover">調べる</button>
+        </span>
       </div>
       <p class="note">描いた位置ではなく<strong>作図の手順そのもの</strong>から、常に成り立つ関係だけを探します。自由点をどこへ動かしても成り立つものだけが出ます。</p>
       <label class="field">
@@ -54,6 +57,8 @@
         <label class="field"><span>証明を試す件数</span><input id="prove_max" type="number" min="1" max="100" value="20"></label>
         <p class="note">自由作図の段数・実体数・調べる図形の数を上げるほど深い関係に届きますが、時間は急に増えます。時間の上限に達したところで打ち切ります。</p>
       </details>
+      <p class="note" id="stagenote" hidden></p>
+
       <div id="auxbar" hidden>
         <span id="auxcount"></span>
         <button id="adopt" class="util">図に取り込む</button>
@@ -67,6 +72,15 @@
         <div class="filters">
           <label class="filterbox"><input id="onlymine" type="checkbox">自分の図に関わるものだけ</label>
           <label class="filterbox"><input id="hideproved" type="checkbox">証明できたものを隠す</label>
+          <label class="filterbox">並べ替え
+            <select id="sortby" title="どの指標で面白い順にするか">
+              <option value="score">面白さ</option>
+              <option value="degree">次数</option>
+              <option value="heat">熱</option>
+              <option value="degen">退化の関係</option>
+              <option value="mine">自分の図</option>
+            </select>
+          </label>
         </div>
         <p class="note" id="sortnote"></p>
       </div>

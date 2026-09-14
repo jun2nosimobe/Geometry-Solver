@@ -59,11 +59,17 @@ fn handle(mut stream: TcpStream) {
         Some(r) => r,
         None => return,
     };
+    // 🌟 ユーザー要望「結果を1件ずつ返す方がよい」への対応。探索も証明も
+    // 数十秒かかるので、全部終わってからまとめて返すと画面が固まったように
+    // 見える。/discover だけは出来たものから1行ずつ流す。
+    if method == "POST" && path == "/discover" {
+        stream_discover(&mut stream, &body);
+        return;
+    }
     let (status, content_type, body) = match (method.as_str(), path.as_str()) {
         ("GET", "/") => ("200 OK", "text/html; charset=utf-8", INDEX_HTML.to_string()),
         ("GET", "/app.js") => ("200 OK", "text/javascript; charset=utf-8", APP_JS.to_string()),
         ("GET", "/app.css") => ("200 OK", "text/css; charset=utf-8", APP_CSS.to_string()),
-        ("POST", "/discover") => ("200 OK", "text/plain; charset=utf-8", discover_response(&body)),
         _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".to_string()),
     };
     let head = format!(
@@ -71,6 +77,29 @@ fn handle(mut stream: TcpStream) {
         status, content_type, body.as_bytes().len());
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(body.as_bytes());
+    let _ = stream.flush();
+}
+
+/// 探索の途中経過を、出来た行から順にブラウザへ流す。
+///
+/// 長さを先に書けないので chunked 転送を使う(ブラウザ側は fetch の
+/// ReadableStream で受けて、1行届くたびに画面へ足す)。ブラウザが途中で
+/// 読むのをやめた(「中止」を押した/タブを閉じた)場合は書き込みが失敗
+/// するので、そこで打ち切って無駄な計算を続けない。
+fn stream_discover(stream: &mut TcpStream, body: &str) {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\
+                Transfer-Encoding: chunked\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if stream.write_all(head.as_bytes()).is_err() { return; }
+    let mut alive = true;
+    discover_stream(body, &mut |line: &str| {
+        if !alive { return false; }
+        let chunk = format!("{:x}\r\n{}\r\n", line.as_bytes().len(), line);
+        if stream.write_all(chunk.as_bytes()).is_err() || stream.flush().is_err() {
+            alive = false;
+        }
+        alive
+    });
+    let _ = stream.write_all(b"0\r\n\r\n");
     let _ = stream.flush();
 }
 
@@ -290,6 +319,13 @@ struct Finding {
 enum Proof {
     /// 試していない
     Untried,
+    /// 作図を組み直した時点で既に成り立っていた。つまり定理を1つも使わず、
+    /// 作図の定義と接続関係の整理(合同閉包)だけで出る = 事実上「自明」。
+    /// 検出器の側では「まだ知られていない関係」に見えていても、実際には
+    /// 単に自由作図の途中でその接続が張られていなかっただけ、という場合が
+    /// これに落ちる。証明できた組の中でも別扱いにしないと、「エンジンが
+    /// どれだけ証明できたか」を過大評価してしまう。
+    Trivial,
     /// 名前付き定理の連鎖で導けた
     Proved,
     /// 制限時間内には導けなかった(偽という意味ではない)
@@ -302,6 +338,7 @@ impl Proof {
     fn tag(self) -> &'static str {
         match self {
             Proof::Untried => "untried",
+            Proof::Trivial => "trivial",
             Proof::Proved => "proved",
             Proof::Open => "open",
             Proof::Unsupported => "unsupported",
@@ -309,11 +346,104 @@ impl Proof {
     }
 }
 
-fn discover_response(body: &str) -> String {
+/// 🌟 発見の「面白さ」。
+///
+/// ユーザー要望「発見された性質は面白さ(熱)や次数、退化したときの
+/// 関係性の数などで面白い順にソートしたい」への対応。検出器が出す順は
+/// 単なる走査順なので、そのまま並べると「中点どうしを結んだ直線が平行」
+/// のような当たり前の話と、本当に非自明な話が混ざったまま出てくる。
+///
+/// 内訳の生の値は桁がまるで違う(次数は0〜6、退化の関係数は図の大きさに
+/// 比例して数十〜百を超える)ので、そのまま足すと退化の項だけで順位が
+/// 決まってしまう。この回の発見全体での最大値で割って 0〜1 に揃えてから
+/// 重みを掛ける。したがって点数は「この回の中での相対的な面白さ」であって、
+/// 別の図の点数と直接比べられる絶対値ではない。
+struct Score {
+    /// 主張に出てくる図形の、作図の代数的次数の最大値
+    /// (EGraph::cached_degree。自由点を直線上で動かしたときに、その図形の
+    /// 座標が何次の有理式で動くか)。中点や平行線は1次で、円と直線の交点や
+    /// 垂心のような「本当に効いている」構成ほど高くなる。
+    degree: usize,
+    /// 熱(GeoEntity::heat_with_degree)の最大値。図の中でどれだけ多くの
+    /// ものがその図形の上に建っているか = 図の要になっているか。
+    heat: f64,
+    /// 退化したときにその図形が他の図形と一致することが観測された相手の数
+    /// (padic_eval::compute_degeneration_groups)の、主張に出てくる図形での
+    /// 平均。多いほど、極限で他の話と繋がる「結び目」になっている。
+    degen: f64,
+    /// その種類の最小構成より何個多いか。5点共円は4点共円より強い主張。
+    extra: usize,
+    /// 主張に出てくる図形のうち、ユーザー自身が描いたものの割合。
+    mine: f64,
+    /// 上を 0〜1 に正規化して重み付けした合計(normalizeで埋める)。
+    total: f64,
+}
+
+impl Score {
+    /// その種類の主張が成立する最小の図形数。これを超えた分だけが
+    /// 「主張が強い」ことを意味する。
+    fn minimum_size(kind: &str) -> usize {
+        match kind {
+            "coincide" | "incident" => 2,
+            "concyclic" => 4,
+            _ => 3,
+        }
+    }
+
+    fn of(eg: &EGraph, f: &Finding, is_user: &dyn Fn(&String) -> bool,
+          groups: &crate::padic_eval::DegenerationRelations) -> Score {
+        let n = f.refs.len().max(1);
+        let degree = f.refs.iter().filter_map(|&r| eg.cached_degree(r, 6)).max().unwrap_or(0);
+        let heat = f.refs.iter()
+            .map(|&r| eg.entities[eg.get_rep(r).0].heat_with_degree())
+            .fold(0.0f64, f64::max);
+        let degen = f.refs.iter()
+            .map(|&r| groups.members_of(eg.get_rep(r)).len() as f64).sum::<f64>() / n as f64;
+        let extra = f.refs.len().saturating_sub(Self::minimum_size(f.kind));
+        let mine = f.ids.iter().filter(|x| is_user(x)).count() as f64 / n as f64;
+        Score { degree, heat, degen, extra, mine, total: 0.0 }
+    }
+
+    /// この回の発見全体を見て、内訳を 0〜1 に揃えてから合計を入れる。
+    ///
+    /// 重みは実測で決めたものではなく、内訳を見て納得できる順になるよう
+    /// 選んだ初期値。画面から内訳ごとに並べ替えられるようにしてあるので、
+    /// 「この重みだと違う」と分かったら直せる。
+    fn normalize(all: &mut [(Finding, Score)]) {
+        let max_of = |get: &dyn Fn(&Score) -> f64| -> f64 {
+            all.iter().map(|(_, sc)| get(sc)).fold(0.0f64, f64::max).max(1e-9)
+        };
+        let (md, mh, mg, me) = (
+            max_of(&|sc| sc.degree as f64),
+            max_of(&|sc| sc.heat),
+            max_of(&|sc| sc.degen),
+            max_of(&|sc| sc.extra as f64),
+        );
+        for (_, sc) in all.iter_mut() {
+            sc.total = 3.0 * (sc.degree as f64 / md)
+                + 1.5 * (sc.degen / mg)
+                + 1.0 * (sc.heat / mh)
+                + 1.0 * (sc.extra as f64 / me)
+                + 1.5 * sc.mine;
+        }
+    }
+}
+
+/// 本文を受け取り、出来た結果から順に `emit` へ渡す。
+/// `emit` が false を返したら(ブラウザが読むのをやめたら)そこで打ち切る。
+///
+/// 流す行:
+///   `stage|<状況>`                                今どこを走っているか
+///   `ok|<件数>`                                   ここから結果
+///   `aux|<作図手順1行>`                            自由作図が足した図形
+///   `finding|<番号>|<種類>|<文>|<名前csv>|<次数>|<熱>|<退化>|<点数>`
+///   `proof|<番号>|<proved|open|unsupported>`       後から届く証明の結果
+///   `error|<メッセージ>`
+fn discover_stream(body: &str, emit: &mut dyn FnMut(&str) -> bool) {
     let (cfg, script) = split_config(body);
     let (mut egraph, order) = match build_egraph(&script) {
         Ok(v) => v,
-        Err(e) => return format!("error|{}\n", e),
+        Err(e) => { emit(&format!("error|{}\n", e)); return; }
     };
     // 作図された実体の代表元 -> ユーザーが付けた名前。マージで代表元が
     // 入れ替わっても、ユーザーの付けた名前で報告したいので自前で持つ。
@@ -328,22 +458,26 @@ fn discover_response(body: &str) -> String {
 
     // 🌟 自由作図モード: 与えられた図から機械的に作図を伸ばしてから探す。
     if cfg.rounds > 0 {
+        if !emit(&format!("stage|図を広げています… ({}段, 最大{}秒)\n", cfg.rounds, cfg.seconds)) { return; }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(cfg.seconds);
         crate::discover::systematic_closure_until(
             &mut egraph, cfg.rounds, cfg.cap, cfg.per_kind, Some(deadline));
     }
 
-    let mut findings = collect_findings(&mut egraph, &name_of, cfg.sweep);
+    if !emit(&format!("stage|{}個の図形から関係を探しています…\n", egraph.entities.len())) { return; }
+    let findings = collect_findings(&mut egraph, &name_of, cfg.sweep);
 
-    // ユーザーが描いた図形に多く触れている発見を先に出す。自由作図は補助的な
-    // 図形どうしだけで閉じた関係もたくさん作るが、まず見たいのは「自分の図に
-    // ついて何が言えるか」なので。
+    // 🌟 面白い順に並べる(Scoreのドキュメント参照)。退化の走査も次数の
+    // 測定も実測で数十ミリ秒なので、毎回計算してよい。
+    if !emit("stage|面白さを測っています…\n") { return; }
     let is_user = |n: &String| order.iter().any(|(name, _)| name == n);
-    findings.sort_by_key(|f| {
-        let touched = f.ids.iter().filter(|n| is_user(n)).count();
-        (std::cmp::Reverse(touched), f.ids.len())
-    });
-    findings.truncate(cfg.top);
+    let groups = crate::padic_eval::compute_degeneration_groups(&egraph, 0x5EED_1234, 2);
+    let mut scored: Vec<(Finding, Score)> = findings.into_iter()
+        .map(|f| { let sc = Score::of(&egraph, &f, &is_user, &groups); (f, sc) })
+        .collect();
+    Score::normalize(&mut scored);
+    scored.sort_by(|a, b| b.1.total.partial_cmp(&a.1.total).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(cfg.top);
 
     // 発見に出てくる補助的な図形を、ブラウザが描けるように作図手順として
     // 書き出す。これが無いと「x3 と x7 が共点」と言われても何のことか
@@ -351,7 +485,7 @@ fn discover_response(body: &str) -> String {
     let mut emitter = AuxEmitter::new(&egraph, &order);
     let mut aux_lines: Vec<String> = Vec::new();
     let mut renamed: HashMap<String, String> = HashMap::new();
-    for f in &findings {
+    for (f, _) in &scored {
         for (n, id) in f.ids.iter().zip(f.refs.iter()) {
             if is_user(n) || renamed.contains_key(n) { continue; }
             if let Some(short) = emitter.emit_id(&egraph, *id, &mut aux_lines) {
@@ -360,31 +494,48 @@ fn discover_response(body: &str) -> String {
         }
     }
 
-    // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
-    // 自由作図で膨らませた図をそのまま使うので、補助的な図形を前提にした
-    // 主張もそのまま目標にできる。
-    let mut proofs: Vec<Proof> = vec![Proof::Untried; findings.len()];
-    if cfg.prove_seconds > 0 {
-        for (i, f) in findings.iter().enumerate().take(cfg.prove_max) {
-            proofs[i] = attempt_proof(&egraph, f, cfg.prove_seconds);
-        }
+    if !emit(&format!("ok|{}\n", scored.len())) { return; }
+    for line in &aux_lines {
+        if !emit(&format!("aux|{}\n", line)) { return; }
     }
-
-    let mut out = format!("ok|{}\n", findings.len());
-    for line in &aux_lines { out.push_str(&format!("aux|{}\n", line)); }
-    for (i, f) in findings.iter().enumerate() {
+    // 表示用の名前(長い作図式は x1, x2, … に差し替え済み)。証明のときに
+    // 図を組み直すのにも、この名前をそのまま使う。
+    let mut shown_ids: Vec<Vec<String>> = Vec::new();
+    for (i, (f, sc)) in scored.iter().enumerate() {
         let ids: Vec<String> = f.ids.iter()
             .map(|n| renamed.get(n).cloned().unwrap_or_else(|| n.clone())).collect();
-        // 表示用の文も、長い作図式のままだと読めないので短い名前に差し替える。
         let mut text = f.text.clone();
         let mut subs: Vec<(&String, &String)> = renamed.iter().collect();
         subs.sort_by_key(|(long, _)| std::cmp::Reverse(long.len()));
         for (long, short) in subs {
             if long != short { text = text.replace(long.as_str(), short.as_str()); }
         }
-        out.push_str(&format!("finding|{}|{}|{}|{}\n",
-            f.kind, text, ids.join(","), proofs[i].tag()));
+        let line = format!("finding|{}|{}|{}|{}|{}|{:.1}|{:.1}|{:.2}\n",
+            i, f.kind, text, ids.join(","), sc.degree, sc.heat, sc.degen, sc.total);
+        shown_ids.push(ids);
+        if !emit(&line) { return; }
     }
+
+    // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
+    // 1件終わるごとに結果を流すので、待っている間も埋まっていくのが見える。
+    if cfg.prove_seconds > 0 {
+        let n = scored.len().min(cfg.prove_max);
+        for i in 0..n {
+            if !emit(&format!("stage|証明を試しています… {}/{}\n", i + 1, n)) { return; }
+            let p = attempt_proof(&egraph, &scored[i].0, &shown_ids[i],
+                                  &script, &aux_lines, cfg.prove_seconds);
+            if !emit(&format!("proof|{}|{}\n", i, p.tag())) { return; }
+        }
+        emit("stage|\n");
+    } else {
+        emit("stage|\n");
+    }
+}
+
+#[cfg(test)]
+fn discover_response(body: &str) -> String {
+    let mut out = String::new();
+    discover_stream(body, &mut |l: &str| { out.push_str(l); true });
     out
 }
 
@@ -402,10 +553,76 @@ fn discover_response(body: &str) -> String {
 ///
 /// 証明できなかったことは偽である根拠には全くならない(制限時間と定理集合の
 /// 都合でしかない)ので、UI側の表記もそのつもりで書いてある。
-fn attempt_proof(base: &EGraph, f: &Finding, seconds: u64) -> Proof {
+/// この主張に実際に必要な補助作図だけを、依存関係を辿って選ぶ。
+///
+/// `aux` の各行は `<種類> <名前> <演算> <引数…>` という形なので、
+/// 4つ目以降のトークンがその図形の材料になる。ユーザーの図形の名前は
+/// `aux` に無いので、辿るのはそこで自然に止まる。
+fn needed_aux_lines(ids: &[String], aux: &[String]) -> Vec<String> {
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    for (i, l) in aux.iter().enumerate() {
+        if let Some(n) = l.split_whitespace().nth(1) { index.insert(n, i); }
+    }
+    let mut want = vec![false; aux.len()];
+    let mut stack: Vec<String> = ids.to_vec();
+    while let Some(n) = stack.pop() {
+        let i = match index.get(n.as_str()) { Some(&i) => i, None => continue };
+        if want[i] { continue; }
+        want[i] = true;
+        for t in aux[i].split_whitespace().skip(3) { stack.push(t.to_string()); }
+    }
+    aux.iter().zip(want).filter(|(_, w)| *w).map(|(l, _)| l.clone()).collect()
+}
+
+/// 🌟 ユーザー要望「エンジンですぐ証明できた性質はどれくらいあるのか
+/// 調べるボタンも欲しい」への対応。
+///
+/// 検出器が出すのは「乱数座標で何度やっても成り立つ」という強い数値的根拠
+/// だけで、証明ではない。ここで実際に定理の連鎖を短時間だけ走らせると、
+/// 「今の定理集合ですぐ出る = だいたい既知・簡単」と「数値的には確かなのに
+/// 出てこない = 面白い候補」を分けられる。
+///
+/// 証明できなかったことは偽である根拠には全くならない(制限時間と定理集合の
+/// 都合でしかない)ので、UI側の表記もそのつもりで書いてある。
+///
+/// 🐛 FIX (ユーザー報告「簡単に示せそうな結果まで何故かほとんど未証明として
+/// 検出されてしまっている。証明エンジン側に速度が足りてない？」): 速度では
+/// なく、証明を試す側の作りが2つの意味で足りていなかった。
+///
+///   1. 自由作図で膨らませたEGraph(実体数百)をそのまま渡していた。
+///      schedule_full_sweepは実体の組み合わせを舐めるので、主張と無関係な
+///      図形が大量にあると制限時間がそこで溶ける。主張に実際に必要な作図
+///      だけを組み直した小さい図で解かせる(needed_aux_lines)。
+///   2. 手詰まりになったとき main.rs の回復フェーズ(需要駆動の補助線・
+///      補助点・角度、目標からの逆算、候補capの段階的な拡張)を一切
+///      呼んでおらず、`run_step` が false を返した2回目で打ち切っていた。
+///      その結果、垂心の共点性(ベンチマークでは普通に解ける問題)ですら
+///      10秒の予算のうち 0.04秒 で「未証明」を返していた。
+fn attempt_proof(explored: &EGraph, f: &Finding, shown_ids: &[String],
+                 user_script: &str, aux: &[String], seconds: u64) -> Proof {
+    // 上の 1. 主張に必要な作図だけの小さい図を組み直す。組み直せない
+    // (無限遠など、作図手順に書き戻せない図形が混ざっている)場合だけ、
+    // 元の大きい図をそのまま使う。
+    let rebuilt = (|| -> Option<(EGraph, Vec<ClassId>)> {
+        let mut text = user_script.trim_end().to_string();
+        for l in needed_aux_lines(shown_ids, aux) {
+            text.push('\n');
+            text.push_str(&l);
+        }
+        let (eg, order) = build_egraph(&text).ok()?;
+        let mut refs = Vec::new();
+        for n in shown_ids {
+            refs.push(order.iter().find(|(nm, _)| nm == n)?.1);
+        }
+        Some((eg, refs))
+    })();
+    let (mut egraph, refs) = match rebuilt {
+        Some(v) => v,
+        None => (explored.clone(), f.refs.clone()),
+    };
+
     // 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
-    let mut egraph = base.clone();
-    let r = &f.refs;
+    let r = &refs;
     let target: (String, Vec<ClassId>) = match f.kind {
         "coincide" if r.len() >= 2 => ("Identical".to_string(), vec![r[0], r[1]]),
         "incident" if r.len() >= 2 => {
@@ -431,18 +648,18 @@ fn attempt_proof(base: &EGraph, f: &Finding, seconds: u64) -> Proof {
     };
     egraph.apply_congruence_closure();
 
-    let met = |eg: &EGraph| -> bool {
-        match target.0.as_str() {
-            "Identical" => eg.get_rep(target.1[0]) == eg.get_rep(target.1[1]),
-            "Connected" => eg.is_connected(eg.get_rep(target.1[0]), eg.get_rep(target.1[1])),
+    let met = |eg: &EGraph, t: &(String, Vec<ClassId>)| -> bool {
+        match t.0.as_str() {
+            "Identical" => eg.get_rep(t.1[0]) == eg.get_rep(t.1[1]),
+            "Connected" => eg.is_connected(eg.get_rep(t.1[0]), eg.get_rep(t.1[1])),
             "Concyclic" => {
-                let reps: Vec<ClassId> = target.1.iter().map(|&i| eg.get_rep(i)).collect();
+                let reps: Vec<ClassId> = t.1.iter().map(|&i| eg.get_rep(i)).collect();
                 eg.points_share_a_circle(&reps)
             }
             _ => false,
         }
     };
-    if met(&egraph) { return Proof::Proved; }
+    if met(&egraph, &target) { return Proof::Trivial; }
 
     let mut prover = crate::logic_core::ProverEngine::new(egraph);
     prover.theorems = crate::theorems::get_all_theorems()
@@ -451,17 +668,44 @@ fn attempt_proof(base: &EGraph, f: &Finding, seconds: u64) -> Proof {
     let goal = Some(target.clone());
     engine.schedule_full_sweep();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
-    let mut idle = 0;
+    // main.rs の FANOUT_HEAT_CAP_CEILING と同じ。行き詰まったら候補capを
+    // 広げて同じ探索をやり直す(MCTSより遥かに安い)。
+    const FANOUT_HEAT_CAP_CEILING: usize = 40;
     while std::time::Instant::now() < deadline {
-        let applied = engine.run_step(10000);
-        if met(&engine.prover.egraph) { return Proof::Proved; }
-        if applied { idle = 0; continue; }
-        // 手詰まりなら、目標から逆算した補助構成を一度だけ要求してみる。
-        if engine.resolve_target_demands(&goal) { idle = 0; continue; }
-        idle += 1;
-        if idle >= 2 { break; }   // これ以上は時間を使っても伸びない
+        if engine.run_step(10000) {
+            if met(&engine.prover.egraph, &target) { return Proof::Proved; }
+            continue;
+        }
+        if met(&engine.prover.egraph, &target) { return Proof::Proved; }
+        // 上の 2. 手詰まりになったときの回復フェーズ。main.rs のメイン
+        // ループと同じ順番で試す(MCTSだけは既定で無効なので入れていない)。
+        let mut recovered = engine.resolve_demands();
+        if engine.resolve_point_demands() { recovered = true; }
+        if engine.resolve_angle_demands() { recovered = true; }
+        if !recovered && engine.resolve_target_demands(&goal) { recovered = true; }
+        if !recovered && engine.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
+            engine.prover.fanout_heat_cap =
+                (engine.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
+            engine.schedule_full_sweep();
+            recovered = true;
+        }
+        if !recovered { break; }   // これ以上は時間を使っても伸びない
     }
-    if met(&engine.prover.egraph) { Proof::Proved } else { Proof::Open }
+    if !met(&engine.prover.egraph, &target) { return Proof::Open; }
+    // 🌟 main.rs のメインループと同じ最終防衛ライン。直線/点の一意性の
+    // 局所伝播は「十分な数の接続関係を共有していれば同一」というショート
+    // カットなので、噛み合わせ次第では図全体が退化(三角形の3辺が1本の
+    // 直線に潰れる等)して、矛盾から何でも従う形で目標が"証明"されうる。
+    // ここは「エンジンがすぐ証明できたか」を人に見せる場所なので、
+    // 乱数座標で成り立たない"証明"は証明として数えない。
+    if target.0 == "Identical" {
+        let tester = crate::mmp_tester::MMPTester::new();
+        if tester.sanity_check_identical(&engine.prover.egraph, target.1[0], target.1[1], 3)
+            == Some(false) {
+            return Proof::Open;
+        }
+    }
+    Proof::Proved
 }
 
 // ============================================================
@@ -696,6 +940,28 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
 mod tests {
     use super::*;
 
+    /// 応答は進捗の `stage|` 行から始まるので、先頭一致ではなく
+    /// 「その印で始まる行があるか」で見る。
+    fn has(out: &str, prefix: &str) -> bool {
+        out.lines().any(|l| l.starts_with(prefix))
+    }
+
+    /// `finding|<番号>|<種類>|<文>|…` の <文> の部分。
+    fn finding_text(line: &str) -> Option<&str> {
+        line.split('|').nth(3)
+    }
+
+    /// 三角形と3本の高さ。エンジンが普通に解けるいちばんやさしい図。
+    const ORTHOCENTER: &str = "point A free
+point B free
+point C free
+        line AB through A B
+line BC through B C
+line CA through C A
+        line altA perp BC A
+line altB perp CA B
+line altC perp AB C";
+
     #[test]
     fn script_builds_the_expected_construction() {
         let (egraph, order) = build_egraph("
@@ -740,13 +1006,65 @@ mod tests {
     #[test]
     fn degenerate_constructions_do_not_panic() {
         let body = discover_response("point A free\ncircle C through A A A");
-        assert!(body.starts_with("ok|") || body.starts_with("error|"),
+        assert!(has(&body, "ok|") || has(&body, "error|"),
             "何らかの応答を返すべき: {}", body);
     }
 
     /// 🌟 ブラウザで垂心の図を描いたときに、エンジンが「3本目の高さも
     /// その交点を通る」を見つけられること。UIから検出までの経路がひと続きに
     /// 動いていることの確認で、これが通らなければ画面上も何も出ない。
+    /// 🐛 回帰テスト(ユーザー報告「簡単に示せそうな結果まで何故かほとんど
+    /// 未証明として検出されてしまっている。証明エンジン側に速度が足りて
+    /// ない？」)。原因は速度ではなく、証明を試す側が main.rs の回復フェーズ
+    /// (需要駆動の補助線・補助点・角度、候補capの拡張)を呼んでおらず、
+    /// run_stepがfalseを返した2回目で打ち切っていたこと。垂心の共点性という
+    /// 一番やさしい定理ですら、10秒の予算のうち0.04秒で「未証明」を返して
+    /// いた。ここが再び未証明に戻ったら、それは同じ取りこぼしの再発を意味する。
+    #[test]
+    fn the_easiest_theorem_is_actually_proved() {
+        let out = discover_response(&format!(
+            "config rounds 0{n}config prove_seconds 30{n}config prove_max 4{n}{}",
+            ORTHOCENTER, n = "\n"));
+        assert!(has(&out, "ok|"), "作図が通らなかった: {}", out);
+        let proofs: Vec<&str> = out.lines().filter(|l| l.starts_with("proof|")).collect();
+        assert!(!proofs.is_empty(), "証明の結果が1件も返っていない:{n}{}", out, n = "\n");
+        assert!(proofs.iter().any(|l| l.ends_with("proved")),
+            "垂心の共点性は今の定理集合で普通に証明できるはず(回復フェーズが\
+             呼ばれていない可能性が高い):{n}{}", out, n = "\n");
+    }
+
+    /// 🌟 ユーザー要望「発見された性質は面白さ(熱)や次数、退化したときの
+    /// 関係性の数などで面白い順にソートしたい」への対応の確認。
+    ///
+    /// 「どれが本当に面白いか」は測れないので、代わりに(1)内訳が3つとも
+    /// 行に乗っていること、(2)合計点の降順で並んでいること、(3)退化の指標が
+    /// 自由作図の後でもちゃんと値を持つこと(代表元の取り違えで丸ごと0に
+    /// なっていた不具合の回帰)を見る。
+    #[test]
+    fn findings_come_back_ranked_with_their_score_breakdown() {
+        let out = discover_response(&format!(
+            "config rounds 2{n}config seconds 45{n}config cap 240{n}config sweep 40{n}config top 10{n}{}",
+            ORTHOCENTER, n = "\n"));
+        assert!(has(&out, "ok|"), "自由作図が走らなかった: {}", out);
+        let rows: Vec<Vec<&str>> = out.lines().filter(|l| l.starts_with("finding|"))
+            .map(|l| l.split('|').collect()).collect();
+        assert!(rows.len() >= 2, "並べ替えを見るには2件以上必要:{n}{}", out, n = "\n");
+
+        let mut previous = f64::INFINITY;
+        let mut any_degen = false;
+        for r in &rows {
+            assert_eq!(r.len(), 9, "内訳の欄が足りない: {:?}", r);
+            let degen: f64 = r[7].parse().expect("退化の欄が数値でない");
+            let total: f64 = r[8].parse().expect("点数の欄が数値でない");
+            assert!(total <= previous + 1e-9, "面白さの降順になっていない:{n}{}", out, n = "\n");
+            previous = total;
+            if degen > 0.0 { any_degen = true; }
+        }
+        assert!(any_degen,
+            "自由作図の後も退化の関係が測れているべき(自由点が代表元でなくなると\
+             丸ごと0になる不具合があった):{n}{}", out, n = "\n");
+    }
+
     #[test]
     fn discovers_the_third_altitude_through_the_orthocenter() {
         let script = "
@@ -761,9 +1079,9 @@ mod tests {
             line altC perp AB C
         ";
         let body = discover_response(script);
-        assert!(body.starts_with("ok|"), "作図が通らなかった: {}", body);
+        assert!(has(&body, "ok|"), "作図が通らなかった: {}", body);
         let found_concurrency = body.lines().any(|l| {
-            l.starts_with("finding|concurrent|")
+            l.starts_with("finding|") && l.split('|').nth(2) == Some("concurrent")
                 && l.contains("altA") && l.contains("altB") && l.contains("altC")
         });
         assert!(found_concurrency, "3本の高さの共点性を見つけられるべき:\n{}", body);
@@ -780,7 +1098,7 @@ mod tests {
         let out = discover_response(&format!(
             "config rounds 2{n}config seconds 60{n}config cap 220{n}config sweep 34{n}config top 4{n}{}",
             triangle, n = "\n"));
-        assert!(out.starts_with("ok|"), "自由作図が走らなかった: {}", out);
+        assert!(has(&out, "ok|"), "自由作図が走らなかった: {}", out);
         let aux: Vec<&str> = out.lines().filter(|l| l.starts_with("aux|")).map(|l| &l[4..]).collect();
         let found: Vec<&str> = out.lines().filter(|l| l.starts_with("finding|")).collect();
         assert!(!found.is_empty(), "裸の三角形から自由作図すれば何か見つかるはず:{n}{}", out, n = "\n");
@@ -791,11 +1109,11 @@ mod tests {
             triangle, n = "\n");
         for l in &aux { replay.push_str(l); replay.push('\n'); }
         let out2 = discover_response(&replay);
-        assert!(out2.starts_with("ok|"), "書き戻した作図が読めなかった: {}", out2);
+        assert!(has(&out2, "ok|"), "書き戻した作図が読めなかった: {}", out2);
 
         let texts2: Vec<&str> = out2.lines().filter(|l| l.starts_with("finding|"))
-            .filter_map(|l| l.splitn(4, '|').nth(2)).collect();
-        let reproduced = found.iter().filter_map(|l| l.splitn(4, '|').nth(2))
+            .filter_map(|l| finding_text(l)).collect();
+        let reproduced = found.iter().filter_map(|l| finding_text(l))
             .filter(|t| texts2.contains(t)).count();
         assert!(reproduced > 0,
             "補助作図を足し直しても同じ関係が1件も再現しなかった(書き戻しが図形を取り違えている)。{n}1回目:{n}{}{n}2回目:{n}{}",
