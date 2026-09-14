@@ -500,7 +500,7 @@ function invalidateFindings() {
 }
 
 /// 画面の設定を、サーバが読む `config <キー> <値>` の行に直す。
-function configLines() {
+function configLines(withProof) {
   const v = (id) => document.getElementById(id).value;
   return [
     `config rounds ${v('rounds')}`,
@@ -509,7 +509,38 @@ function configLines() {
     `config per_kind ${v('per_kind')}`,
     `config sweep ${v('sweep')}`,
     `config top ${v('top')}`,
+    `config prove_seconds ${withProof ? v('prove_seconds') : 0}`,
+    `config prove_max ${v('prove_max')}`,
   ].join('\n');
+}
+
+/// 今の図(補助作図も取り込んだ状態とみなす)について、どれがすぐ証明できるかを
+/// 確かめ直す。自由作図はやり直さない(段数0で送る)ので速い。
+async function proveAll() {
+  const btn = document.getElementById('proveall');
+  const el = document.getElementById('findings');
+  const auxScript = aux.map(o =>
+    o.op === 'on' ? `point ${o.name} on ${o.on}`
+                  : `${o.kind} ${o.name} ${o.op} ${o.args.join(' ')}`).join('\n');
+  const script = [serialize(), auxScript].filter(Boolean).join('\n');
+  const cfg = configLines(true).replace(/config rounds \d+/, 'config rounds 0');
+  btn.disabled = true;
+  const note = document.getElementById('sortnote');
+  note.textContent = `証明を試しています… 1件あたり最大 ${document.getElementById('prove_seconds').value} 秒`;
+  try {
+    const res = await fetch('/discover', { method: 'POST', body: cfg + '\n' + script });
+    const text = await res.text();
+    // 補助作図は既に手元にあるので、返ってきたものでは置き換えない。
+    const keep = aux;
+    renderFindings(text);
+    aux = keep;              // 返ってきた aux(段数0なので空)では置き換えない
+    updateAuxBar();
+    paintFindings();         // 「取り込む」ボタンは aux を戻してから描き直す
+  } catch (err) {
+    note.textContent = 'エンジンに繋がりませんでした。';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function discover() {
@@ -525,7 +556,7 @@ async function discover() {
     ? `自由作図(${rounds}段)をしてから調べています… 最大 ${document.getElementById('seconds').value} 秒`
     : '調べています…';
   try {
-    const res = await fetch('/discover', { method: 'POST', body: configLines() + '\n' + script });
+    const res = await fetch('/discover', { method: 'POST', body: configLines(false) + '\n' + script });
     const text = await res.text();
     renderFindings(text);
   } catch (err) {
@@ -570,8 +601,9 @@ function renderFindings(text) {
   }
   updateAuxBar();
   const findings = lines.filter(l => l.startsWith('finding|')).map(l => {
-    const [, kind, textPart, idsPart] = l.split('|');
-    return { kind, text: textPart, ids: (idsPart || '').split(',').filter(Boolean) };
+    const [, kind, textPart, idsPart, status] = l.split('|');
+    return { kind, text: textPart, ids: (idsPart || '').split(',').filter(Boolean),
+             status: status || 'untried' };
   });
   lastFindings = findings;
   if (!findings.length) {
@@ -590,13 +622,23 @@ let lastFindings = [];
 function paintFindings() {
   const el = document.getElementById('findings');
   const onlyMine = document.getElementById('onlymine').checked;
+  const hideProved = document.getElementById('hideproved').checked;
   const mineNames = new Set(objects.map(o => o.name));
   const isMine = (f) => f.ids.some(n => mineNames.has(n));
-  const shown = onlyMine ? lastFindings.filter(isMine) : lastFindings;
+  let shown = lastFindings;
+  if (onlyMine) shown = shown.filter(isMine);
+  if (hideProved) shown = shown.filter(f => f.status !== 'proved');
   document.getElementById('resulthead').hidden = false;
   document.getElementById('count').textContent =
     shown.length === lastFindings.length ? `${lastFindings.length}件`
                                          : `${shown.length} / ${lastFindings.length}件`;
+  const tried = lastFindings.filter(f => f.status === 'proved' || f.status === 'open');
+  const proved = lastFindings.filter(f => f.status === 'proved').length;
+  document.getElementById('sortnote').textContent = tried.length
+    ? `${tried.length}件を試して ${proved}件はすぐ証明できました。`
+      + '「未証明」は偽という意味ではなく、今の定理集合と制限時間では出なかった、というだけです。'
+    : '自分の図に関わるものから順に並んでいます(熱ではありません)。'
+      + '「証明を試す」で、どれが今の定理集合からすぐ出るか分かります。';
   el.innerHTML = '';
   if (!shown.length) {
     el.className = 'empty';
@@ -610,10 +652,32 @@ function paintFindings() {
     const k = document.createElement('div');
     k.className = 'kind';
     k.textContent = KIND_LABEL[f.kind] || f.kind;
+    const row = document.createElement('div');
+    row.className = 'row';
     const t = document.createElement('div');
     t.className = 'text';
     t.textContent = f.text;
-    div.append(k, t);
+    row.appendChild(t);
+    if (f.status === 'proved' || f.status === 'open') {
+      const b = document.createElement('span');
+      b.className = 'badge ' + f.status;
+      b.textContent = f.status === 'proved' ? '証明できた' : '未証明';
+      b.title = f.status === 'proved'
+        ? '今の定理集合から制限時間内に導けました'
+        : '制限時間内には導けませんでした(偽という意味ではありません)';
+      row.appendChild(b);
+    }
+    // この性質に必要な補助作図だけを取り込むボタン。
+    const needed = neededAux(f);
+    if (needed.length) {
+      const take = document.createElement('button');
+      take.className = 'take';
+      take.textContent = `取り込む (${needed.length})`;
+      take.title = 'この性質に出てくる補助作図だけを自分の図にします';
+      take.addEventListener('click', (e) => { e.stopPropagation(); adoptAux(needed); });
+      row.appendChild(take);
+    }
+    div.append(k, row);
     div.addEventListener('mouseenter', () => { highlight = new Set(f.ids); draw(); });
     div.addEventListener('mouseleave', () => { highlight.clear(); draw(); });
     el.appendChild(div);
@@ -650,6 +714,24 @@ function setupSplitter() {
   sp.addEventListener('dblclick', () => apply(360));
 }
 
+/// この性質を図の上で見るために要る補助作図を、依存関係を辿って集める。
+/// 「自分が選んだ性質のみ図に取り込みたい」ため、一覧の各行から
+/// その行のぶんだけを取り込めるようにしてある。
+function neededAux(f) {
+  const byName = new Map(aux.map(o => [o.name, o]));
+  const want = new Set();
+  const visit = (n) => {
+    const o = byName.get(n);
+    if (!o || want.has(n)) return;
+    want.add(n);
+    for (const d of (o.args || [])) visit(d);
+    if (o.on) visit(o.on);
+  };
+  for (const n of f.ids) visit(n);
+  // aux の並び(依存順)を保ったまま返す。
+  return aux.filter(o => want.has(o.name));
+}
+
 /// 補助作図を捨てる。作図を編集したら、それは古い図に対する提案なので残さない。
 function dropAux() {
   if (!aux.length) return;
@@ -658,14 +740,23 @@ function dropAux() {
 }
 
 /// 補助作図をユーザーの作図として取り込む。以後は掴めるし、次に調べるとき
-/// エンジンにも送られる。
-function adoptAux() {
-  if (!aux.length) return;
+/// エンジンにも送られる。which を渡すとその分だけ取り込む。
+function adoptAux(which) {
+  const take = which && which.length ? which : aux;
+  if (!take.length) return;
   snapshot();
-  for (const o of aux) { delete o.auxiliary; objects.push(o); }
-  aux = [];
+  const taken = new Set(take.map(o => o.name));
+  for (const o of aux) {
+    if (!taken.has(o.name)) continue;
+    delete o.auxiliary;
+    objects.push(o);
+  }
+  aux = aux.filter(o => !taken.has(o.name));
   updateAuxBar();
-  refresh();
+  // 取り込んだだけで作図の意味は変わらないので、結果は消さずに描き直す。
+  updateHint();
+  paintFindings();
+  draw();
 }
 
 function updateAuxBar() {
@@ -689,8 +780,10 @@ function init() {
   }
   document.getElementById('discover').addEventListener('click', discover);
   document.getElementById('onlymine').addEventListener('change', paintFindings);
+  document.getElementById('hideproved').addEventListener('change', paintFindings);
+  document.getElementById('proveall').addEventListener('click', proveAll);
   setupSplitter();
-  document.getElementById('adopt').addEventListener('click', adoptAux);
+  document.getElementById('adopt').addEventListener('click', () => adoptAux());
   document.getElementById('dropaux').addEventListener('click', () => { dropAux(); draw(); });
   document.getElementById('copy').addEventListener('click', (e) => {
     // summaryの中にあるので、そのままだと折りたたみが開閉してしまう。

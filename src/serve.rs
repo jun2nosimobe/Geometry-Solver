@@ -119,11 +119,16 @@ struct Config {
     sweep: usize,
     /// 返す発見の最大件数。
     top: usize,
+    /// 1件あたり何秒まで証明を試すか。0なら試さない。
+    prove_seconds: u64,
+    /// 証明を試す件数の上限(件数 × 秒 が待ち時間になるため)。
+    prove_max: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { rounds: 0, cap: 400, per_kind: 8, seconds: 20, sweep: 64, top: 30 }
+        Config { rounds: 0, cap: 400, per_kind: 8, seconds: 20, sweep: 64, top: 30,
+                 prove_seconds: 0, prove_max: 12 }
     }
 }
 
@@ -144,6 +149,8 @@ fn split_config(body: &str) -> (Config, String) {
                 "seconds" => cfg.seconds = (n as u64).clamp(1, 600),
                 "sweep" => cfg.sweep = n.clamp(8, 200),
                 "top" => cfg.top = n.clamp(1, 200),
+                "prove_seconds" => cfg.prove_seconds = (n as u64).min(120),
+                "prove_max" => cfg.prove_max = n.clamp(1, 100),
                 _ => {}
             }
             continue;
@@ -278,6 +285,30 @@ struct Finding {
     refs: Vec<ClassId>,
 }
 
+/// 「エンジンがすぐ証明できたか」の結果。
+#[derive(Clone, Copy, PartialEq)]
+enum Proof {
+    /// 試していない
+    Untried,
+    /// 名前付き定理の連鎖で導けた
+    Proved,
+    /// 制限時間内には導けなかった(偽という意味ではない)
+    Open,
+    /// この形の主張はまだ証明目標として表現していない
+    Unsupported,
+}
+
+impl Proof {
+    fn tag(self) -> &'static str {
+        match self {
+            Proof::Untried => "untried",
+            Proof::Proved => "proved",
+            Proof::Open => "open",
+            Proof::Unsupported => "unsupported",
+        }
+    }
+}
+
 fn discover_response(body: &str) -> String {
     let (cfg, script) = split_config(body);
     let (mut egraph, order) = match build_egraph(&script) {
@@ -329,9 +360,19 @@ fn discover_response(body: &str) -> String {
         }
     }
 
+    // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
+    // 自由作図で膨らませた図をそのまま使うので、補助的な図形を前提にした
+    // 主張もそのまま目標にできる。
+    let mut proofs: Vec<Proof> = vec![Proof::Untried; findings.len()];
+    if cfg.prove_seconds > 0 {
+        for (i, f) in findings.iter().enumerate().take(cfg.prove_max) {
+            proofs[i] = attempt_proof(&egraph, f, cfg.prove_seconds);
+        }
+    }
+
     let mut out = format!("ok|{}\n", findings.len());
     for line in &aux_lines { out.push_str(&format!("aux|{}\n", line)); }
-    for f in &findings {
+    for (i, f) in findings.iter().enumerate() {
         let ids: Vec<String> = f.ids.iter()
             .map(|n| renamed.get(n).cloned().unwrap_or_else(|| n.clone())).collect();
         // 表示用の文も、長い作図式のままだと読めないので短い名前に差し替える。
@@ -341,9 +382,86 @@ fn discover_response(body: &str) -> String {
         for (long, short) in subs {
             if long != short { text = text.replace(long.as_str(), short.as_str()); }
         }
-        out.push_str(&format!("finding|{}|{}|{}\n", f.kind, text, ids.join(",")));
+        out.push_str(&format!("finding|{}|{}|{}|{}\n",
+            f.kind, text, ids.join(","), proofs[i].tag()));
     }
     out
+}
+
+// ============================================================
+// 見つかった主張を、実際に証明できるか試す
+// ============================================================
+
+/// 🌟 ユーザー要望「エンジンですぐ証明できた性質はどれくらいあるのか
+/// 調べるボタンも欲しい」への対応。
+///
+/// 検出器が出すのは「乱数座標で何度やっても成り立つ」という強い数値的根拠
+/// だけで、証明ではない。ここで実際に定理の連鎖を短時間だけ走らせると、
+/// 「今の定理集合ですぐ出る = だいたい既知・簡単」と「数値的には確かなのに
+/// 出てこない = 面白い候補」を分けられる。
+///
+/// 証明できなかったことは偽である根拠には全くならない(制限時間と定理集合の
+/// 都合でしかない)ので、UI側の表記もそのつもりで書いてある。
+fn attempt_proof(base: &EGraph, f: &Finding, seconds: u64) -> Proof {
+    // 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
+    let mut egraph = base.clone();
+    let r = &f.refs;
+    let target: (String, Vec<ClassId>) = match f.kind {
+        "coincide" if r.len() >= 2 => ("Identical".to_string(), vec![r[0], r[1]]),
+        "incident" if r.len() >= 2 => {
+            // ids は [点..., 曲線] の並び。最後が曲線。
+            let curve = *r.last().unwrap();
+            ("Connected".to_string(), vec![r[0], curve])
+        }
+        "concyclic" if r.len() >= 4 => ("Concyclic".to_string(), r.clone()),
+        "collinear" if r.len() >= 3 => {
+            // 「P,Q,R が共線」= 直線PQ と 直線PR が同じ。
+            let l1 = egraph.create_entity("Goal_L1".into(), Definition::new_line(r[0], r[1]), EntityType::Line);
+            let l2 = egraph.create_entity("Goal_L2".into(), Definition::new_line(r[0], r[2]), EntityType::Line);
+            ("Identical".to_string(), vec![l1, l2])
+        }
+        "concurrent" if r.len() >= 3 => {
+            // 「l1,l2,l3 が共点」= l1∩l2 と l1∩l3 が同じ点。
+            let p1 = egraph.create_entity("Goal_P1".into(), Definition::Intersection(r[0], r[1]), EntityType::Point);
+            let p2 = egraph.create_entity("Goal_P2".into(), Definition::Intersection(r[0], r[2]), EntityType::Point);
+            ("Identical".to_string(), vec![p1, p2])
+        }
+        // 3円共点はまだ証明目標の語彙に無い。
+        _ => return Proof::Unsupported,
+    };
+    egraph.apply_congruence_closure();
+
+    let met = |eg: &EGraph| -> bool {
+        match target.0.as_str() {
+            "Identical" => eg.get_rep(target.1[0]) == eg.get_rep(target.1[1]),
+            "Connected" => eg.is_connected(eg.get_rep(target.1[0]), eg.get_rep(target.1[1])),
+            "Concyclic" => {
+                let reps: Vec<ClassId> = target.1.iter().map(|&i| eg.get_rep(i)).collect();
+                eg.points_share_a_circle(&reps)
+            }
+            _ => false,
+        }
+    };
+    if met(&egraph) { return Proof::Proved; }
+
+    let mut prover = crate::logic_core::ProverEngine::new(egraph);
+    prover.theorems = crate::theorems::get_all_theorems()
+        .into_iter().map(std::rc::Rc::new).collect();
+    let mut engine = crate::logic_core::BlackboardEngine::new(prover);
+    let goal = Some(target.clone());
+    engine.schedule_full_sweep();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut idle = 0;
+    while std::time::Instant::now() < deadline {
+        let applied = engine.run_step(10000);
+        if met(&engine.prover.egraph) { return Proof::Proved; }
+        if applied { idle = 0; continue; }
+        // 手詰まりなら、目標から逆算した補助構成を一度だけ要求してみる。
+        if engine.resolve_target_demands(&goal) { idle = 0; continue; }
+        idle += 1;
+        if idle >= 2 { break; }   // これ以上は時間を使っても伸びない
+    }
+    if met(&engine.prover.egraph) { Proof::Proved } else { Proof::Open }
 }
 
 // ============================================================

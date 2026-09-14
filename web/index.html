@@ -44,12 +44,14 @@
         </select>
       </label>
       <details id="advanced">
-        <summary>細かい設定</summary>
+        <summary><span class="twisty" aria-hidden="true"></span>細かい設定</summary>
         <label class="field"><span>時間の上限 (秒)</span><input id="seconds" type="number" min="1" max="600" value="20"></label>
         <label class="field"><span>作図の実体数の上限</span><input id="cap" type="number" min="20" max="4000" step="20" value="400"></label>
         <label class="field"><span>1段あたりの材料数</span><input id="per_kind" type="number" min="3" max="20" value="8"></label>
         <label class="field"><span>調べる図形の数</span><input id="sweep" type="number" min="8" max="200" value="64"></label>
         <label class="field"><span>報告する件数</span><input id="top" type="number" min="1" max="200" value="30"></label>
+        <label class="field"><span>証明に使う時間 (秒/件)</span><input id="prove_seconds" type="number" min="1" max="120" value="5"></label>
+        <label class="field"><span>証明を試す件数</span><input id="prove_max" type="number" min="1" max="100" value="20"></label>
         <p class="note">自由作図の段数・実体数・調べる図形の数を上げるほど深い関係に届きますが、時間は急に増えます。時間の上限に達したところで打ち切ります。</p>
       </details>
       <div id="auxbar" hidden>
@@ -57,14 +59,21 @@
         <button id="adopt" class="util">図に取り込む</button>
         <button id="dropaux" class="util">消す</button>
       </div>
-      <div class="sechead" id="resulthead" hidden>
-        <h2>見つかった性質 <span id="count"></span></h2>
-        <label class="filterbox"><input id="onlymine" type="checkbox">自分の図に関わるものだけ</label>
+      <div id="resulthead" hidden>
+        <div class="sechead">
+          <h2>見つかった性質 <span id="count"></span></h2>
+          <button id="proveall" class="util" title="今の図(補助作図も含む)で、どれが今の定理集合からすぐ出るかを確かめます">証明を試す</button>
+        </div>
+        <div class="filters">
+          <label class="filterbox"><input id="onlymine" type="checkbox">自分の図に関わるものだけ</label>
+          <label class="filterbox"><input id="hideproved" type="checkbox">証明できたものを隠す</label>
+        </div>
+        <p class="note" id="sortnote"></p>
       </div>
       <div id="findings" class="empty">まだ調べていません。</div>
     </section>
     <details id="scriptbox">
-      <summary>作図手順<button id="copy" class="util">コピー</button></summary>
+      <summary><span class="twisty" aria-hidden="true"></span>作図手順<span class="spacer"></span><button id="copy" class="util">コピー</button></summary>
       <pre id="script"></pre>
     </details>
   </aside>
