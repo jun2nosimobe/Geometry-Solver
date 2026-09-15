@@ -1325,3 +1325,26 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
         },
     ]
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🌟 dfs_match は「まだ消費していないパターン」を u64 のビットマスクで
+    /// 持つ(logic_core.rs::dfs_match のドキュメント参照)。定理1つあたりの
+    /// パターン数が64本を超えると、その上のビットが表現できず静かに
+    /// 取りこぼす。実測では最大31本だが、定理を足したときにここで気づける
+    /// ようにしておく。
+    #[test]
+    fn every_theorem_fits_the_pattern_bitmask() {
+        let mut all = get_all_theorems();
+        all.extend(get_projective_theorems());
+        all.extend(get_central_angle_theorem());
+        for t in &all {
+            assert!(t.patterns.len() <= 64,
+                "定理「{}」のパターンが{}本あり、u64のビットマスクに入らない。\
+                 dfs_matchのactiveをu128等に広げる必要がある。", t.name, t.patterns.len());
+        }
+        let widest = all.iter().map(|t| t.patterns.len()).max().unwrap_or(0);
+        assert!(widest > 0, "定理が1つも読めていない");
+    }
+}

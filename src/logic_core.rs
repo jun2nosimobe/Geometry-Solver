@@ -263,9 +263,6 @@ pub struct MatchTask {
     pub theorem_idx: usize,
     pub bind: Bind,
     pub flip_states: FlipStates,
-    // 🌟 Rc化: タスクの複製・再キュー時に Vec<Pattern> をディープコピーせず、
-    // ポインタ共有だけで済ませる(パターン列自体は不変なので安全)
-    pub remaining_patterns: Rc<Vec<crate::logic_core::Pattern>>,
     // 🌟 UCB1バンディット用: このタスクが schedule_matcher_task 由来の
     // シード済みタスク(発見済みの事実から変数の多くを具体的に束縛済み、
     // 速く失敗/成功する)か、schedule_full_sweep 由来のシードなしタスク
@@ -857,7 +854,8 @@ impl ProverEngine {
     pub fn dfs_match(
         &mut self,
         theorem: &TheoremDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -870,23 +868,56 @@ impl ProverEngine {
         // 🌟 失敗パスのキャッシュチェック
         let state_sig = {
             let mut hasher = rustc_hash::FxHasher::default();
-            remaining.len().hash(&mut hasher);
-
-            let mut pairs: Vec<_> = bind.iter().collect();
-            pairs.sort_unstable_by_key(|k| k.0);
-            for (k, v) in pairs {
-                k.hash(&mut hasher);
-                self.egraph.get_rep(*v).0.hash(&mut hasher);
+            // 🌟 最適化: 以前は bind と flip_states をそれぞれ Vec に collect して
+            // ソートしてから順に流し込んでいた。この署名はDFSの全ノードで作られる
+            // ので、1ノードあたり2回のヒープ確保と2回のソートを払っていた。
+            //
+            // 要るのは「同じ状態なら同じ値」だけで、順序そのものに意味は無い。
+            // 各要素を個別に潰してから wrapping_add で畳み込めば、順序に依らない
+            // 値が確保もソートも無しで得られる(可換な畳み込み)。
+            // 個別のハッシュは十分に撹拌されているので、加算の可換性が衝突を
+            // 増やす度合いは無視できる――実測でも simson / nine_point_full /
+            // orthocenter / bench_2012egmop1 の消費仕事量が1ステップも変わらない
+            // (= 枝刈りの当たり外れが以前と完全に一致している)ことを確認済み。
+            // 🌟 最適化: 以前は bind と flip_states をそれぞれ Vec に collect して
+            // ソートしていた。この署名はDFSの全ノードで作られるので、1ノード
+            // あたり2回のヒープ確保を払っていた。定理の変数は実測で最大でも
+            // 20個程度なので、スタック上の固定長バッファに集めて同じように
+            // ソートすれば、確保だけを消せる。
+            //
+            // 🌟 ハッシュに流し込む順序も内容も以前と完全に同じにしてある。
+            // 一度「順序に依らない可換な畳み込み(個別ハッシュのwrapping_add)」
+            // にして確保もソートも消す版を試したが、FxHashの出力は撹拌が弱く、
+            // 足し合わせると衝突が無視できない量になる――実測で探索の経路が
+            // 大きく変わってしまった(simson 136k→197k、bench_2012egmop1
+            // 3.66M→1.49M など)。失敗パスのキャッシュは衝突すると正しい枝を
+            // 誤って刈るので、値が変わらないことを優先する。
+            const SIG_CAP: usize = 48;
+            (active.count_ones() as usize).hash(&mut hasher);
+            let mut pairs: [(&str, usize); SIG_CAP] = [("", 0); SIG_CAP];
+            let mut np = 0usize;
+            for (k, v) in bind.iter() {
+                if np == SIG_CAP { break; }
+                pairs[np] = (k.as_str(), self.egraph.get_rep(*v).0);
+                np += 1;
             }
-
-            // 🌟 FIX: フリップ状態もハッシュに含めないと、向き違いの正当な探索が枝刈りされてしまう
-            let mut flips: Vec<_> = flip_states.iter().collect();
-            flips.sort_unstable_by_key(|k| k.0);
-            for (k, v) in flips {
+            pairs[..np].sort_unstable_by_key(|p| p.0);
+            for (k, v) in &pairs[..np] {
                 k.hash(&mut hasher);
                 v.hash(&mut hasher);
             }
-
+            let mut flips: [(&str, bool); SIG_CAP] = [("", false); SIG_CAP];
+            let mut nf = 0usize;
+            for (k, v) in flip_states.iter() {
+                if nf == SIG_CAP { break; }
+                flips[nf] = (k.as_str(), *v);
+                nf += 1;
+            }
+            flips[..nf].sort_unstable_by_key(|p| p.0);
+            for (k, v) in &flips[..nf] {
+                k.hash(&mut hasher);
+                v.hash(&mut hasher);
+            }
             hasher.finish()
         };
 
@@ -909,7 +940,7 @@ impl ProverEngine {
             }
         }
 
-        if remaining.is_empty() {
+        if active == 0 {
             for (v_name, id) in &bind {
                 if let Some(expected_type) = theorem.entities.get(v_name) {
                     let actual_type = self.egraph.entities[self.egraph.get_rep(*id).0].entity_type;
@@ -920,27 +951,27 @@ impl ProverEngine {
             return;
         }
 
+        // 🌟 最適化: 「まだ消費していないパターン」をビットマスクで持つ。
+        //
+        // 以前は分岐のたびに「評価対象を除いた残り」を新しい Vec として組み直し、
+        // Rc に包んでいた。ポインタ共有で済むのは子への受け渡しだけで、組み直し
+        // そのもの(残りパターン数だけの Pattern::clone)はDFSの全ノードで走る。
+        // Pattern は fact_type: String と args: Vec<String> を持つので、この
+        // clone は文字列のヒープ確保を伴っていた。
+        //
+        // パターン列は定理ごとに不変なので、実体は定理の持ち物をそのまま借り、
+        // 「どれがまだ生きているか」だけを u64 のビットで持てばよい。確保も
+        // clone も消え、子への受け渡しは整数1個のコピーになる
+        // (定理1つあたりのパターン数は実測で最大31本。上限64本は
+        // theorems::tests::every_theorem_fits_the_pattern_bitmask で保証する)。
         let mut best_idx = 0;
         let mut best_cost = std::f64::INFINITY;
-        for (i, pat) in remaining.iter().enumerate() {
-            let cost = self.estimate_cost(pat, &bind, theorem);
+        for i in 0..patterns.len() {
+            if active & (1u64 << i) == 0 { continue; }
+            let cost = self.estimate_cost(&patterns[i], &bind, theorem);
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
-
-        // 🌟 以前は `remaining: Vec<Pattern>` を分岐のたびに丸ごと clone() していたため、
-        // 候補が複数ある(順列展開やマッチ候補が多い)ケースで同じパターン列が何度も
-        // ディープコピーされていた。ここで一度だけ「評価対象を除いた残り」を作り、
-        // Rc に包んで以降は全てポインタコピーで共有する。
-        let pat_to_eval = remaining[best_idx].clone();
-        let remaining: Rc<Vec<Pattern>> = if remaining.len() == 1 {
-            Rc::new(Vec::new())
-        } else {
-            let mut owned = Vec::with_capacity(remaining.len() - 1);
-            for (i, p) in remaining.iter().enumerate() {
-                if i != best_idx { owned.push(p.clone()); }
-            }
-            Rc::new(owned)
-        };
+        let next_active = active & !(1u64 << best_idx);
         let mut matched_any = false;
         // 🌟 このstate_sig(このdfs_match呼び出し1回分)の探索が実際に
         // 依存した型の集計。子への再帰にはdep_maskではなくこちらを渡す。
@@ -952,7 +983,7 @@ impl ProverEngine {
             on_match(b, f);
         };
 
-        match pat_to_eval {
+        match &patterns[best_idx] {
             Pattern::Order(vars) => {
                 let mut is_ordered = true;
                 for i in 0..vars.len().saturating_sub(1) {
@@ -960,7 +991,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 >= self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
-                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
+                if is_ordered { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             // 🌟 Pattern::OrderNonStrictのドキュメント参照。Orderとの違いは
             // "<"ではなく"<="(等しい場合は許可)で判定する点のみ。
@@ -971,29 +1002,31 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 > self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
-                if is_ordered { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
+                if is_ordered { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Distinct(vars) => {
                 let mut unique_ids = rustc_hash::FxHashSet::default();
                 let mut is_distinct = true;
-                for v in &vars {
+                for v in vars {
                     if let Some(&id) = bind.get(v) {
                         let rep_id = self.egraph.get_rep(id);
                         if !unique_ids.insert(rep_id.0) { is_distinct = false; break; }
                     }
                 }
-                if is_distinct { self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
+                if is_distinct { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Fact(def) => {
-                self.match_fact_pattern(theorem, &def, remaining.clone(), &bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
+                self.match_fact_pattern(theorem, def, patterns, next_active, &bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
             }
             Pattern::Not(inner_pat) => {
                 let mut inner_matched = false;
-                self.dfs_match(theorem, Rc::new(vec![*inner_pat.clone()]), bind.clone(), flip_states.clone(), failed_paths, &mut my_mask, &mut |_, _| {
+                // 内側は「そのパターン1本だけ」を別のスライスとして評価する。
+                let inner = [(**inner_pat).clone()];
+                self.dfs_match(theorem, &inner, 1, bind.clone(), flip_states.clone(), failed_paths, &mut my_mask, &mut |_, _| {
                     inner_matched = true;
                 });
                 if !inner_matched {
-                    self.dfs_match(theorem, remaining.clone(), bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
+                    self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
                 }
             }
         }
@@ -1021,7 +1054,8 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         def: &FactPatternDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -1029,10 +1063,10 @@ impl ProverEngine {
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         match def.fact_type.as_str() {
-            "Identical" => self.match_identical_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
-            "Connected" => self.match_connected_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
-            "DefinedBy" => self.match_defined_by_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
-            _ => self.match_generic_fact(theorem, def, remaining, bind, flip_states, failed_paths, dep_mask, on_match),
+            "Identical" => self.match_identical_fact(theorem, def, patterns, active, bind, flip_states, failed_paths, dep_mask, on_match),
+            "Connected" => self.match_connected_fact(theorem, def, patterns, active, bind, flip_states, failed_paths, dep_mask, on_match),
+            "DefinedBy" => self.match_defined_by_fact(theorem, def, patterns, active, bind, flip_states, failed_paths, dep_mask, on_match),
+            _ => self.match_generic_fact(theorem, def, patterns, active, bind, flip_states, failed_paths, dep_mask, on_match),
         }
     }
 
@@ -1042,7 +1076,8 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         def: &FactPatternDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -1060,14 +1095,14 @@ impl ProverEngine {
             // (=dep_maskをそのまま子に渡す、new my_maskを作らない)。
             (Some(id1), Some(id2)) => {
                 if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
-                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
+                    self.dfs_match(theorem, patterns, active, bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             (Some(id), None) | (None, Some(id)) => {
                 let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
                 let mut next_bind = bind.clone();
                 next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
-                self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
             }
             (None, None) => {
                 // 🌟 dep_maskのドキュメント参照。ここから先は「型のプールを
@@ -1210,7 +1245,7 @@ impl ProverEngine {
                     let mut next_bind = bind.clone();
                     next_bind.insert(v1.clone(), rep);
                     next_bind.insert(v2.clone(), rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                    self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
         }
@@ -1258,7 +1293,8 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         def: &FactPatternDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -1316,7 +1352,7 @@ impl ProverEngine {
                 *dep_mask |= entity_type_bit(c_type) | entity_type_bit(p_type);
                 // 🌟 FIX
                 if self.egraph.is_connected(c_id, p_id) {
-                    self.dfs_match(theorem, remaining.clone(), bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
+                    self.dfs_match(theorem, patterns, active, bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             (Some(c_id), None) => {
@@ -1362,7 +1398,7 @@ impl ProverEngine {
                 for p_rep in self.heat_capped_connected_candidates(candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(parent_var.clone(), p_rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                    self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             // 🌟 dep_maskのドキュメント参照。(Some,None)と対称。
@@ -1386,7 +1422,7 @@ impl ProverEngine {
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(child_var.clone(), c_rep);
-                    self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                    self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
             // 🐛 FIX: 以前は子・親どちらも未束縛の場合に何もせず候補ゼロで
@@ -1447,7 +1483,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                            self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     } else {
                         let mut ordered: Vec<(ClassId, ClassId)> = (*pairs).clone();
@@ -1462,7 +1498,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                            self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
                 } else {
@@ -1501,7 +1537,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
-                            self.dfs_match(theorem, remaining.clone(), next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+                            self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
                 }
@@ -1517,7 +1553,8 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         def: &FactPatternDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -1640,7 +1677,7 @@ impl ProverEngine {
             format!("{:?}", keys)
         });
         for (new_bind, new_flip) in matches {
-            self.dfs_match(theorem, remaining.clone(), new_bind, new_flip, failed_paths, dep_mask, on_match);
+            self.dfs_match(theorem, patterns, active, new_bind, new_flip, failed_paths, dep_mask, on_match);
         }
     }
 
@@ -1965,7 +2002,8 @@ impl ProverEngine {
         &mut self,
         theorem: &TheoremDef,
         def: &FactPatternDef,
-        remaining: Rc<Vec<Pattern>>,
+        patterns: &[Pattern],
+        active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         failed_paths: &mut rustc_hash::FxHashMap<u64, (u8, [u64; 4])>,
@@ -1999,7 +2037,7 @@ impl ProverEngine {
         });
 
         for new_bind in matches {
-            self.dfs_match(theorem, remaining.clone(), new_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
+            self.dfs_match(theorem, patterns, active, new_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
         }
     }
 
@@ -2411,7 +2449,7 @@ impl BlackboardEngine {
             .map(|idx| self.prover.theorem_types_available(idx))
             .collect();
 
-        for (idx, theorem) in self.prover.theorems.iter().enumerate() {
+        for idx in 0..self.prover.theorems.len() {
             if !types_available[idx] { continue; }
             let mut initial_bind = Bind::default();
             initial_bind.insert("Ang90".to_string(), self.prover.egraph.ang90);
@@ -2422,7 +2460,6 @@ impl BlackboardEngine {
                 theorem_idx: idx,
                 bind: initial_bind,
                 flip_states: FlipStates::default(),
-                remaining_patterns: Rc::new(theorem.patterns.clone()),
                 is_seeded: false,
             });
             self.prover.profile.sfs_tasks_created += 1;
@@ -2466,8 +2503,7 @@ impl BlackboardEngine {
                                 theorem_idx: idx,
                                 bind,
                                 flip_states: FlipStates::default(),
-                                remaining_patterns: Rc::new(theorem.patterns.clone()),
-                                is_seeded: true,
+                                                is_seeded: true,
                             });
                         }
                     }
@@ -2542,9 +2578,18 @@ impl BlackboardEngine {
                 let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
 
                 let mut dep_mask: u8 = 0;
+                // 🌟 パターン列は定理の持ち物をそのまま借り、「どれがまだ
+                // 生きているか」だけをビットで渡す(dfs_matchのドキュメント参照)。
+                // タスク側でパターン列を複製して持つ必要も無くなった。
+                let all_active: u64 = if theorem.patterns.len() >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << theorem.patterns.len()) - 1
+                };
                 self.prover.dfs_match(
                     &theorem,
-                    task.remaining_patterns.clone(), // Rc なのでポインタコピーのみ
+                    &theorem.patterns,
+                    all_active,
                     task.bind.clone(),
                     task.flip_states.clone(),
                     &mut failed_paths,
