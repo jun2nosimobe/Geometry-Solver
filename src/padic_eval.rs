@@ -518,6 +518,7 @@ impl DegenerationRelations {
         self.edges.get(&a.0).map(|v| v.iter().copied().map(ClassId).collect()).unwrap_or_default()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool { self.edges.is_empty() }
 }
 
@@ -629,7 +630,6 @@ mod tests {
         assert_ne!(det4(&rows_off), pi(0), "円から外れた点を混ぜれば判定式は0でないべき");
     }
 
-    use super::*;
     use crate::mmp_core::EGraph;
 
     /// 🌟 三角形A,B,C+外心O+垂心Hという配置で、B,Cを退化させたときに
@@ -1195,6 +1195,10 @@ pub fn find_generic_concyclic_quadruples(egraph: &EGraph, seeds: &[u64], max_poi
 /// 報告をクラスタで大きくまとめる際、その集合全体で本当に主張が成り立って
 /// いるかを確かめるために使う(部分集合ごとの検出結果を素朴に併合すると、
 /// 平行な族の混入などで偽の大集合が出来てしまうため)。
+// 🌟 同じ図について何度も呼ぶ場面では verify_property_cached
+// (precompute_shapes で評価器を使い回す版)に置き換え済み。
+// 1回だけ確かめたいときのために素朴な版も残してある。
+#[allow(dead_code)]
 pub fn verify_property(egraph: &EGraph, seeds: &[u64], ids: &[ClassId], kind: PropertyKind) -> bool {
     let tables = precompute_shapes(egraph, seeds, ids);
     verify_property_cached(&tables, ids, kind)

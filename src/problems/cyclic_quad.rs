@@ -1,10 +1,10 @@
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     println!("=== 問題: 円に内接する四角形 (円周角の連鎖) ===");
 
-    let o = egraph.create_entity("O".to_string(), Definition::FreePoint, EntityType::Point);
+    let _o = egraph.create_entity("O".to_string(), Definition::FreePoint, EntityType::Point);
     let a = egraph.create_entity("A".to_string(), Definition::FreePoint, EntityType::Point);
     let b = egraph.create_entity("B".to_string(), Definition::FreePoint, EntityType::Point);
     let c = egraph.create_entity("C".to_string(), Definition::FreePoint, EntityType::Point);

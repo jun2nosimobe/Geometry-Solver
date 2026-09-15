@@ -18,7 +18,7 @@ mod proof;
 mod construction;
 mod query;
 mod raw_proof;
-pub use raw_proof::{RawProof, DeepProof, DeepStep};
+pub use raw_proof::{RawProof, DeepProof};
 #[cfg(test)]
 mod tests;
 
@@ -815,6 +815,11 @@ impl GeoEntity {
 pub enum Fact {
     Identical(ClassId, ClassId),
     Connected(ClassId, ClassId), // (Child, Parent)
+    /// 🌟 今はどこからも構成されない。平行は「2直線が同じ無限遠点を通る」
+    /// という接続(Connected)として表しており、専用のFact型は要らないため
+    /// (上のConcyclic/Collinearを廃した話と同じ理由)。文字列形式への
+    /// 変換側にはまだ対応する腕が残っているので、型としては残してある。
+    #[allow(dead_code)]
     Parallel(ClassId, ClassId),
 }
 

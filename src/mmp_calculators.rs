@@ -1,4 +1,3 @@
-use std::ops::{Add, Sub, Mul, Div, AddAssign, SubAssign, MulAssign};
 use crate::mmp_math::ModInt;
 
 // 同次座標の正規化 (P[2] が 1 になるように割る)

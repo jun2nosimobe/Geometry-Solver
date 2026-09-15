@@ -1236,6 +1236,7 @@ impl EGraph {
     /// deg(C)という素朴な和に対しCircumcircle(A,B,C)の次数が退化して小さい
     /// 3点の組は、A,B,Cが常に(あるいは頻繁に)同じ円に乗るような隠れた
     /// 構造を持っている兆候として「相性が良い」とみなせる。
+    #[allow(dead_code)]   // まだ探索のヒューリスティックに繋いでいない
     pub fn measure_circle_affinity(&self, a: ClassId, b: ClassId, c: ClassId, max_d: usize) -> Option<(usize, usize, usize, usize)> {
         let (degs, combined) = self.measure_group_degrees(
             &[a, b, c],

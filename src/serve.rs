@@ -317,8 +317,6 @@ struct Finding {
 /// 「エンジンがすぐ証明できたか」の結果。
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Proof {
-    /// 試していない
-    Untried,
     /// 作図を組み直した時点で既に成り立っていた。つまり定理を1つも使わず、
     /// 作図の定義と接続関係の整理(合同閉包)だけで出る = 事実上「自明」。
     /// 検出器の側では「まだ知られていない関係」に見えていても、実際には
@@ -337,7 +335,6 @@ enum Proof {
 impl Proof {
     fn tag(self) -> &'static str {
         match self {
-            Proof::Untried => "untried",
             Proof::Trivial => "trivial",
             Proof::Proved => "proved",
             Proof::Open => "open",

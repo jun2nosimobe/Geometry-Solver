@@ -1,5 +1,5 @@
 use crate::mmp_math::{ModInt};
-use crate::mmp_core::{ClassId, EGraph, EntityType, Fact};
+use crate::mmp_core::{ClassId, EGraph, Fact};
 use rustc_hash::FxHashMap;
 use rand::seq::SliceRandom;
 
@@ -15,6 +15,9 @@ impl MMPTester {
     }
 
     /// 2つのエンティティの数値的一致を有限体上で検証 (Schwartz-Zippel Lemma)
+    /// 🌟 以下はこのテスターの診断用API。今の呼び出し元は
+    /// sanity_check_identical だけだが、崩壊の原因を手で追うときに使う。
+    #[allow(dead_code)]
     pub fn verify_numerical_match(&self, v1: &[ModInt], v2: &[ModInt]) -> bool {
         if v1.len() != v2.len() || v1.is_empty() { return false; }
         
@@ -37,6 +40,7 @@ impl MMPTester {
     }
 
     /// 3点が共線（同一直線上）にあるかを外積の determinante で判定
+    #[allow(dead_code)]
     pub fn check_collinear(&self, p1: &[ModInt], p2: &[ModInt], p3: &[ModInt]) -> bool {
         if p1.len() < 3 || p2.len() < 3 || p3.len() < 3 { return false; }
         // x1(y2 - y3) + x2(y3 - y1) + x3(y1 - y2) == 0
@@ -45,6 +49,7 @@ impl MMPTester {
     }
 
     /// 4点が共円（同一円周上）にあるかを判定
+    #[allow(dead_code)]
     pub fn check_concyclic(&self, z: &[ModInt], p1: &[ModInt], p2: &[ModInt], p3: &[ModInt]) -> bool {
         // 3点から円を算出し、4点目がその円の方程式を満たすかチェック
         let circle = crate::mmp_calculators::calc_circumcircle(p1, p2, p3);
@@ -114,6 +119,7 @@ impl MMPTester {
         Some(true)
     }
 
+    #[allow(dead_code)]
     pub fn is_canonical_angle_order(&self, d1: &[ModInt], d2: &[ModInt]) -> bool {
         if d1.len() < 2 || d2.len() < 2 { return true; }
         let cross = d1[0] * d2[1] - d1[1] * d2[0];
@@ -125,6 +131,7 @@ impl MMPTester {
 
 
     /// 🌟 グラフ内の全ての有効図形をスキャンし、MMPによる隠れた関係を発見する
+    #[allow(dead_code)]
     pub fn discover_relations(&self, egraph: &EGraph, all_vars: &[String]) -> Vec<Fact> {
         let mut conjectures = Vec::new();
         let mut rng = rand::thread_rng();

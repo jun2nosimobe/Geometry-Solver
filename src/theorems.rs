@@ -9,6 +9,8 @@ fn entities(list: &[(&str, EntityType)]) -> FxHashMap<String, EntityType> {
     list.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
+// 定理のパターンを書くための補助。今の定理はどれも別の構成子を使っている。
+#[allow(dead_code)]
 fn fact(f_type: &str, args: &[&str]) -> Pattern {
     Pattern::Fact(FactPatternDef {
         fact_type: f_type.to_string(),

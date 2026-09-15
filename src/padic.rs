@@ -46,6 +46,7 @@ pub struct PInt {
 }
 
 impl PInt {
+    #[allow(dead_code)]   // 桁を直接与えて作る口。今は乱数生成と演算だけで足りている
     pub fn from_digits(digits: [i64; PREC]) -> Self {
         debug_assert!(digits.iter().all(|&d| (0..P).contains(&d)), "各桁は[0,P)の範囲であるべき: {:?}", digits);
         Self { digits }

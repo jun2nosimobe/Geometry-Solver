@@ -1,4 +1,4 @@
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {

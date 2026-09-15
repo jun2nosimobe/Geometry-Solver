@@ -21,6 +21,8 @@ use crate::action_space::{Action, ActionGenerator};
 #[derive(Debug, Clone)]
 pub struct MCTSNode {
     pub action: Option<Action>,
+    // 木の形として持っているが、今の探索は葉から根へ辿らない。
+    #[allow(dead_code)]
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     pub visits: u32,

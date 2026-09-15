@@ -229,7 +229,11 @@ pub struct ConstructTemplate {
 pub struct FactTemplate {
     pub fact_type: String,
     pub args: Vec<String>,
+    // パターン側から埋まるが、今のマッチャーは読んでいない
+    // (候補の絞り込みに使う余地を残してある)。
+    #[allow(dead_code)]
     pub target_type: Option<String>,
+    #[allow(dead_code)]
     pub sub_type: Option<String>,
 }
 
@@ -3030,6 +3034,4 @@ impl BlackboardEngine {
         }
         applied
     }
-
-    pub fn check_target_reached(&self) -> bool { false }
 }

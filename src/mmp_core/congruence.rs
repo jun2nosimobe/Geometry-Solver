@@ -16,12 +16,12 @@ impl EGraph {
 
         self.parents[root2.0].set(root1.0);
 
-        let mut root2_comps = std::mem::take(&mut self.entities[root2.0].components);
+        let root2_comps = std::mem::take(&mut self.entities[root2.0].components);
         let root2_heat = self.entities[root2.0].heat_bonus;
         let root2_imp = self.entities[root2.0].base_importance;
         let root2_mcts_depth = self.entities[root2.0].mcts_depth;
         let root2_name = std::mem::take(&mut self.entities[root2.0].name);
-        let mut root2_uses = std::mem::take(&mut self.entities[root2.0].uses);
+        let root2_uses = std::mem::take(&mut self.entities[root2.0].uses);
 
         // 🌟 FIX: root1のコンポーネントも一度takeし、mutable borrowの競合を回避する
         let mut root1_comps = std::mem::take(&mut self.entities[root1.0].components);
@@ -31,12 +31,6 @@ impl EGraph {
         // Vecに集めてから dedup_sorted_ids で仕上げる(生のHashSetを
         // そのまま最終的な順序として使わない)。
         let mut merged_subs_raw: Vec<ClassId> = Vec::new();
-        // 🌟 mmp_core/mod.rs::angle_generation/plain_scalar_generationの
-        // ドキュメント参照。この併合の結果、統合後の実体がAnglePair定義を
-        // 1つでも吸収しているか(=角度由来のScalarになるか)を、
-        // merged_defsが消費される前に控えておく。
-        let mut merge_touches_angle = false;
-
         for comp in root1_comps.drain(..) {
             for def in comp.definitions {
                 merged_defs.insert(self.normalize_definition(&def));
@@ -54,9 +48,11 @@ impl EGraph {
             }
         }
         let merged_subs = dedup_sorted_ids(merged_subs_raw);
-        // 🌟 merged_defsがこの直後にinto_iter().collect()で消費される前に、
-        // AnglePair定義を1つでも含むか(=角度由来のScalarか)を確認する。
-        merge_touches_angle = merged_defs.iter().any(|d| matches!(d, Definition::AnglePair(_, _)));
+        // 🌟 mmp_core/mod.rs::angle_generation/plain_scalar_generationの
+        // ドキュメント参照。merged_defsがこの直後にinto_iter().collect()で
+        // 消費される前に、AnglePair定義を1つでも含むか(=統合後の実体が
+        // 角度由来のScalarになるか)を控えておく。
+        let merge_touches_angle = merged_defs.iter().any(|d| matches!(d, Definition::AnglePair(_, _)));
 
         // ここで再度 root1_entity の可変参照を取得
         let root1_entity = &mut self.entities[root1.0];

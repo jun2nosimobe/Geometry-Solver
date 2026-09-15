@@ -1,4 +1,4 @@
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
 
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
@@ -8,7 +8,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let c = egraph.create_entity("C".to_string(), Definition::FreePoint, EntityType::Point);
 
     let l_ab = egraph.create_entity("Line_AB".to_string(), Definition::new_line(a, b), EntityType::Line);
-    let l_bc = egraph.create_entity("Line_BC".to_string(), Definition::new_line(b, c), EntityType::Line);
+    let _l_bc = egraph.create_entity("Line_BC".to_string(), Definition::new_line(b, c), EntityType::Line);
     let l_ca = egraph.create_entity("Line_CA".to_string(), Definition::new_line(c, a), EntityType::Line);
 
     let circ = egraph.create_entity("Circ_ABC".to_string(), Definition::Circumcircle(a, b, c), EntityType::Conic);
