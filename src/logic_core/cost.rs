@@ -12,6 +12,51 @@ use crate::mmp_core::ClassId;
 use super::*;
 
 impl ProverEngine {
+    /// 🌟 順序/相異の制約が、いま束縛されている変数の範囲だけで既に破れているか。
+    ///
+    /// Pattern::Order / Distinct は estimate_cost が「全変数が束縛されるまで
+    /// INFINITY」を返すので、DFSはそれらを最後まで選ばない。つまり A=B の
+    /// ような明らかに無駄な割り当てでも、残りの変数を全部束縛しきってから
+    /// 初めて弾かれる。各定理が distinct(&["LOA","LOB"]) →
+    /// distinct(&["LOA","LOB","LOC"]) → …と段階的な制約を手で書き並べている
+    /// のは、この穴の手作業の回避策(「複比の透視射影不変性」や
+    /// 「共点二弦の相似」のコメント参照)。
+    ///
+    /// これを使うと、束縛済みの範囲で既に破れている枝を最も早い時点で切れる。
+    /// まだ束縛されていない変数が絡む部分は「まだ分からない」として通すので、
+    /// 通る解は一切減らない(純粋に枝刈りが増えるだけ)――束縛済み変数の
+    /// 代表元はこのdfs_match木の中では動かない(マッチング中はe-graphを
+    /// 書き換えない)ので、いま破れている制約が深いところで満たされることは無い。
+    ///
+    /// 🐛 Distinct はここで見ない(実測の結果)。Distinct も同じ理屈で前倒し
+    /// できて、しかも効果は遥かに大きい――消費仕事量が simson −23%、
+    /// orthocenter −21%、bench_2012egmop1 −28% と、この前倒しで減る分の
+    /// ほぼ全部が Distinct 由来だった。にもかかわらず入れていないのは、
+    /// 37問中 30→29 と bench_2018chnwesternmop5 を落とすため。
+    ///
+    /// 枝刈り自体は健全なので、これは「無駄なはずの枝を探索していたことが、
+    /// たまたまその問題の証明に必要な状態を作っていた」という探索の巡り合わせ。
+    /// dfs_cap を1.5倍・2倍にしても、heat_cap や fanout_heat_cap を広げても
+    /// 戻らなかった。オンデマンド作図の回数も31対32でほぼ同じなので、
+    /// 「刈った枝が需要を登録していた」という筋でもない。
+    /// Distinct も見るようにするのは下の match に腕を1つ足すだけなので、
+    /// この巡り合わせへの弱さが別途解消できたときに入れ直せる。
+    pub(crate) fn violates_bound_part(&self, pat: &Pattern, bind: &Bind) -> bool {
+        match pat {
+            Pattern::Order(vars) | Pattern::OrderNonStrict(vars) => {
+                let strict = matches!(pat, Pattern::Order(_));
+                for i in 0..vars.len().saturating_sub(1) {
+                    if let (Some(a), Some(b)) = (bind.get(&vars[i]), bind.get(&vars[i + 1])) {
+                        let (ra, rb) = (self.egraph.get_rep(*a).0, self.egraph.get_rep(*b).0);
+                        if (strict && ra >= rb) || (!strict && ra > rb) { return true; }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn calc_bind_heat(&self, bind: &Bind) -> f64 {
         let mut heat = 0.0;
         for &id in bind.values() {

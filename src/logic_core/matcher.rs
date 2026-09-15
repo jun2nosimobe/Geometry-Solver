@@ -136,10 +136,25 @@ impl ProverEngine {
         // clone も消え、子への受け渡しは整数1個のコピーになる
         // (定理1つあたりのパターン数は実測で最大31本。上限64本は
         // theorems::tests::every_theorem_fits_the_pattern_bitmask で保証する)。
+        // 🌟 まだ消費していない順序/相異の制約を、束縛済みの部分だけで
+        // 先に検査する(ProverEngine::violates_bound_part のドキュメント参照)。
+        // best_idx を選ぶためにどのみち生きているパターンを1周するので、
+        // その同じ1周に混ぜている――制約でないパターンは判別子を1回見るだけ
+        // なので、この前倒しのために増える仕事は制約の検査そのものだけ。
+        //
+        // 破れていた枝は、通常の経路で弾かれたときと同じ形で失敗として
+        // 記録してから返す(マスク0 = 型がいくつ変化しても有効。署名には
+        // 束縛済み変数の代表元が入っているので、マージで代表元が動けば
+        // そもそも別のキーになる)。これを忘れると、同じ死んだ状態を
+        // キャッシュできずに何度も作り直すことになる。
         let mut best_idx = 0;
         let mut best_cost = std::f64::INFINITY;
         for i in 0..patterns.len() {
             if active & (1u64 << i) == 0 { continue; }
+            if self.violates_bound_part(&patterns[i], &bind) {
+                failed_paths.insert(state_sig, (0, snapshot_type_generations(&self.egraph)));
+                return;
+            }
             let cost = self.estimate_cost(&patterns[i], &bind, theorem);
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
