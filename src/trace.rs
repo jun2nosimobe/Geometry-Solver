@@ -102,6 +102,10 @@ pub struct ProofSupport {
     /// 由来を追い切れずに止まった箇所の数。ここが多いと、以下の集計は
     /// 「証明に効いた分」を過小評価している可能性がある。
     pub unresolved: usize,
+    /// 証明に使われた根拠の種類ごとの件数(定理/合同閉包/一意性/自明/前提)。
+    /// 「この証明は何でできているか」が分かると、名前付き定理が1つも
+    /// 出てこない証明(作図と局所伝播だけで閉じている)を見分けられる。
+    pub kinds: Vec<(&'static str, usize)>,
     /// 目標そのものが成立していたか。作図の定義だけで閉じる証明では
     /// merges/incidences がどちらも空になり得るので、「集合が空かどうか」では
     /// 到達判定にならない(実際 Concyclic の外接円はこの形になる)。
@@ -119,6 +123,7 @@ const GOAL_INCIDENCE: u8 = 1;
 pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> ProofSupport {
     let mut sup = ProofSupport::default();
     let mut names: FxHashSet<String> = FxHashSet::default();
+    let mut kinds: FxHashMap<&'static str, usize> = FxHashMap::default();
     let mut seen: FxHashSet<(u8, usize, usize)> = FxHashSet::default();
     let mut work: Vec<(u8, ClassId, ClassId)> = Vec::new();
 
@@ -171,7 +176,7 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
                 sup.entities.insert(eg.get_rep(edge.from).0);
                 sup.entities.insert(eg.get_rep(edge.to).0);
                 expand(eg, &edge.justification, edge.from, edge.to,
-                       &mut work, &mut names, &mut sup.unresolved);
+                       &mut work, &mut names, &mut sup.unresolved, &mut kinds);
             }
         } else {
             match eg.find_incidence_justification(a, b) {
@@ -181,14 +186,20 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
                     // 橋渡し(a≡orig_p, b≡orig_c)も証明の一部。
                     work.push((GOAL_IDENTICAL, a, orig_p));
                     work.push((GOAL_IDENTICAL, b, orig_c));
-                    expand(eg, &just, orig_p, orig_c, &mut work, &mut names, &mut sup.unresolved);
+                    expand(eg, &just, orig_p, orig_c, &mut work, &mut names, &mut sup.unresolved, &mut kinds);
                 }
                 // 🌟 provenance が無い接続は「作図そのものから従う」ものが
                 // ほとんど(Intersection(l1,l2) で作った点は定義上 l1・l2 に
                 // 乗っているし、LineThroughPoints(A,B) は定義上 A・B を通る)。
                 // これは証明の穴ではなく前提なので、unresolved には数えない。
-                None if structural_incidence(eg, a, b) => {}
-                None => sup.unresolved += 1,
+                // ただし「定義に書かれている親」と「いま接続している実体」が
+                // 別物で、後から合流して同じ同値類になっただけのことがある。
+                // その合流の理由まで辿らないと、点の一意性で閉じる証明が
+                // 丸ごと空に見える(structural_incidence のドキュメント参照)。
+                None => match structural_incidence(eg, a, b) {
+                    Some((parent, other)) => work.push((GOAL_IDENTICAL, parent, other)),
+                    None => sup.unresolved += 1,
+                },
             }
         }
     }
@@ -196,26 +207,52 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
     let mut v: Vec<String> = names.into_iter().collect();
     v.sort();
     sup.theorems = v;
+    sup.kinds = { let mut k: Vec<_> = kinds.into_iter().collect(); k.sort_by(|a, b| b.1.cmp(&a.1)); k };
     sup
 }
 
 /// 「x が y に乗っている」ことが、どちらかの作図の定義そのものから従うか。
-/// 一方の original_definition の親に他方が現れていれば、その接続は
-/// link_logical_incidence が定義に沿って張ったもの(=前提)であって、
-/// 定理が証明したものではない。
-fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> bool {
+///
+/// 🐛 ユーザー指摘への対応: 以前はここで真偽だけを返し、真なら「前提だから
+/// 追う必要なし」と打ち切っていた。しかし親との一致を見ているのは代表元
+/// どうし(get_rep)なので、「定義に書かれている親そのもの」ではなく
+/// 「定義に書かれている親に後から合流してきた実体」で一致していることが
+/// 多い。その合流こそが定理の仕事なのに、丸ごと見落としていた
+/// (orthocenter が「証明に効いた発火0件」に見えていた原因)。
+///
+/// そこで、一致した親(定義に書かれている側)と相手を返し、呼び出し側が
+/// 「その2つがなぜ同じ同値類にいるのか」を改めて辿れるようにする。
+/// 同じスロットそのものだった場合は explain_identical が空を返すだけなので、
+/// 呼び出し側は何も特別扱いしなくてよい。
+fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> Option<(ClassId, ClassId)> {
     let (rx, ry) = (eg.get_rep(x), eg.get_rep(y));
-    let has = |owner: ClassId, needle: ClassId| -> bool {
-        eg.entities[owner.0].original_definition.get_parents()
-            .iter().any(|&p| eg.get_rep(p) == needle)
-    };
-    has(rx, ry) || has(ry, rx) || has(x, ry) || has(y, rx)
+    // 接続は代表元の subobjects に記録されるが、定義を持っているのは
+    // その同値類に吸収された側であることもあるので、クラス全体を見る。
+    for i in 0..eg.entities.len() {
+        let owner_rep = eg.get_rep(ClassId(i));
+        let other_rep = if owner_rep == rx { ry } else if owner_rep == ry { rx } else { continue };
+        let other = if owner_rep == rx { y } else { x };
+        for p in eg.entities[i].original_definition.get_parents() {
+            if eg.get_rep(p) == other_rep { return Some((p, other)); }
+        }
+    }
+    None
 }
 
 /// 1つの Justification から、さらに遡るべき部分目標を積む。
 fn expand(eg: &EGraph, j: &Justification, from: ClassId, to: ClassId,
           work: &mut Vec<(u8, ClassId, ClassId)>, names: &mut FxHashSet<String>,
-          unresolved: &mut usize) {
+          unresolved: &mut usize, kinds: &mut FxHashMap<&'static str, usize>) {
+    let kind = match j {
+        Justification::Theorem { .. } => "名前付き定理",
+        Justification::Congruence { .. } => "合同閉包",
+        Justification::LineUniqueness { .. } => "直線の一意性",
+        Justification::ConicUniqueness { .. } => "円錐曲線の一意性",
+        Justification::PointUniqueness { .. } => "交点の一意性",
+        Justification::Trivial { .. } => "定義から自明",
+        Justification::Given => "問題の前提",
+    };
+    *kinds.entry(kind).or_insert(0) += 1;
     match j {
         Justification::Theorem { name, premises } => {
             names.insert(name.clone());
@@ -335,6 +372,10 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
             100.0 - pct(fired_work, total_work));
         println!("  証明に使われたマージ {}件 / 接続 {}件 / 実体 {}個 / 定理 {}種",
             sup.merges.len(), sup.incidences.len(), sup.entities.len(), sup.theorems.len());
+        if !sup.kinds.is_empty() {
+            let parts: Vec<String> = sup.kinds.iter().map(|(k, n)| format!("{} {}件", k, n)).collect();
+            println!("  証明の根拠の内訳 : {}", parts.join(" / "));
+        }
         if sup.unresolved > 0 {
             println!("  ⚠️ 由来を辿り切れなかった箇所が {}件あります(以下の集計は過小評価の可能性)。", sup.unresolved);
         }
@@ -400,11 +441,35 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
     // 絞り込みは次数抜きの heat() を使っているので、両方の順位を
     // 並べて「どちらで並べる方が証明に要る実体を上に持ち上げるか」を
     // その場で見比べられるようにする。
-    let rank_of = |ty: EntityType, with_degree: bool| -> (usize, Vec<usize>) {
+    // 🌟 ユーザー指摘「次数は低いほどうれしいから熱から次数を引くべきでは」
+    // への対応。ここで言う次数は uses.len()(参照数。heat_with_degree が
+    // 足している方)ではなく、動点法の代数的な次数(EGraph::cached_degree)。
+    // 低次数ほど単純で扱いやすいので、符号は負で入るのが自然なはず
+    // ――それを順位で確かめられるよう、3つの並べ方を同じ土俵で比べる。
+    const DEGREE_MAX_D: usize = 6;
+    const DEGREE_WEIGHT: f64 = 0.5;
+    let score_of = |i: usize, mode: u8| -> f64 {
+        match mode {
+            1 => eg.entities[i].heat_with_degree(),
+            2 => eg.entities[i].heat()
+                 - DEGREE_WEIGHT * eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+            // 熱を全く動かさず、同点のときだけ低次数を先にする辞書式。
+            // 熱の刻みは 1.5 単位、次数は高々 DEGREE_MAX_D なので、
+            // 熱を1000倍しておけば次数が熱の順序を覆すことはあり得ない。
+            3 => eg.entities[i].heat() * 1000.0
+                 - eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+            // 逆向きの同点処理(高次数を先に)。低次数優先が効くのかどうかを
+            // 片側だけ見ても判断できないので、必ず両方を並べて出す。
+            4 => eg.entities[i].heat() * 1000.0
+                 + eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+            _ => eg.entities[i].heat(),
+        }
+    };
+    let rank_of = |ty: EntityType, mode: u8| -> (usize, Vec<usize>) {
         let mut pool: Vec<(usize, f64)> = (0..eg.entities.len())
             .filter(|&i| eg.get_rep(ClassId(i)).0 == i)
             .filter(|&i| eg.entities[i].entity_type == ty && eg.entities[i].is_active())
-            .map(|i| (i, if with_degree { eg.entities[i].heat_with_degree() } else { eg.entities[i].heat() }))
+            .map(|i| (i, score_of(i, mode)))
             .collect();
         pool.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let n = pool.len();
@@ -415,42 +480,51 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
         (n, ranks)
     };
     let types = [EntityType::Point, EntityType::Line, EntityType::Scalar, EntityType::Conic];
-    let (mut sum_heat, mut sum_deg, mut n_ranked) = (0usize, 0usize, 0usize);
+    let mut sums = [0usize; 5];
+    let mut over_fan_counts = [0usize; 5];
+    let mut n_ranked = 0usize;
     for ty in types {
-        let (n, ranks) = rank_of(ty, false);
+        let (n, ranks) = rank_of(ty, 0);
         if n == 0 { continue; }
         if ranks.is_empty() {
             println!("  {:?}: 全{}個中、証明に登場したものは無し", ty, n);
             continue;
         }
-        let (_, ranks_d) = rank_of(ty, true);
+        let (_, ranks_uses) = rank_of(ty, 1);
+        let (_, ranks_deg) = rank_of(ty, 2);
+        let (_, ranks_tie) = rank_of(ty, 3);
+        let (_, ranks_tie_hi) = rank_of(ty, 4);
         let over_heat = ranks.iter().filter(|&&r| r > heat_cap).count();
-        let over_fan = ranks.iter().filter(|&&r| r > fanout_heat_cap).count();
-        let over_fan_d = ranks_d.iter().filter(|&&r| r > fanout_heat_cap).count();
         let shown: Vec<String> = ranks.iter().take(20)
             .map(|&r| if r > heat_cap { format!("{}*", r) } else { r.to_string() })
             .collect();
         println!("  {:?}: 全{}個中{}個が証明に登場。heat()の順位 = {}{}",
             ty, n, ranks.len(), shown.join(", "),
             if ranks.len() > 20 { ", ..." } else { "" });
-        println!("        heat_cap={} の外 : {}個 / fanout_heat_cap={} の外 : {}個 (heat_with_degree()で並べると {}個)",
-            heat_cap, over_heat, fanout_heat_cap, over_fan, over_fan_d);
-        sum_heat += ranks.iter().sum::<usize>();
-        sum_deg += ranks_d.iter().sum::<usize>();
+        println!("        heat_cap={} の外 : {}個", heat_cap, over_heat);
+        for (m, rs) in [&ranks, &ranks_uses, &ranks_deg, &ranks_tie, &ranks_tie_hi].iter().enumerate() {
+            sums[m] += rs.iter().sum::<usize>();
+            over_fan_counts[m] += rs.iter().filter(|&&r| r > fanout_heat_cap).count();
+        }
         n_ranked += ranks.len();
     }
     if n_ranked > 0 {
-        let (a, b) = (sum_heat as f64 / n_ranked as f64, sum_deg as f64 / n_ranked as f64);
-        println!("  証明に要る実体の平均順位: heat() = {:.1} / heat_with_degree() = {:.1} → {}",
-            a, b,
-            if b < a * 0.95 { "次数込みの式の方が上に来る" }
-            else if a < b * 0.95 { "次数抜き(現行)の式の方が上に来る" }
-            else { "差は小さい" });
+        let avg = |m: usize| sums[m] as f64 / n_ranked as f64;
+        println!("  証明に要る実体の平均順位(小さいほど良い並べ方):");
+        println!("    heat()                   = {:>5.1} / fanout_heat_cap={} の外 {}個", avg(0), fanout_heat_cap, over_fan_counts[0]);
+        println!("    heat() + 参照数*0.5      = {:>5.1} / fanout_heat_cap={} の外 {}個", avg(1), fanout_heat_cap, over_fan_counts[1]);
+        println!("    heat() - 代数的次数*{:.1}  = {:>5.1} / fanout_heat_cap={} の外 {}個", DEGREE_WEIGHT, avg(2), fanout_heat_cap, over_fan_counts[2]);
+        println!("    heat()→同点なら低次数   = {:>5.1} / fanout_heat_cap={} の外 {}個", avg(3), fanout_heat_cap, over_fan_counts[3]);
+        println!("    heat()→同点なら高次数   = {:>5.1} / fanout_heat_cap={} の外 {}個", avg(4), fanout_heat_cap, over_fan_counts[4]);
+        let best = (0..5).min_by_key(|&m| sums[m]).unwrap_or(0);
+        println!("    -> この問題で最も上に持ち上げるのは {}",
+            ["heat()", "heat() + 参照数", "heat() - 代数的次数", "heat()→同点なら低次数", "heat()→同点なら高次数"][best]);
     }
 
     // 熱・参照数・退化関係の生の値も、証明に登場したものと全体とで比べる。
-    let stat = |pick: &dyn Fn(usize) -> bool| -> (f64, f64, f64, usize) {
+    let stat = |pick: &dyn Fn(usize) -> bool| -> (f64, f64, f64, f64, usize) {
         let (mut n, mut heat, mut uses, mut degen) = (0usize, 0.0f64, 0.0f64, 0usize);
+        let (mut deg_sum, mut deg_n) = (0usize, 0usize);
         for i in 0..eg.entities.len() {
             if eg.get_rep(ClassId(i)).0 != i { continue; }
             if !eg.entities[i].is_active() { continue; }
@@ -458,18 +532,20 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
             n += 1;
             heat += eg.entities[i].heat();
             uses += eg.entities[i].uses.len() as f64;
+            if let Some(d) = eg.cached_degree(ClassId(i), DEGREE_MAX_D) { deg_sum += d; deg_n += 1; }
             if let Some(rel) = &eg.degeneration_groups {
                 degen += rel.members_of(ClassId(i)).len();
             }
         }
-        if n == 0 { return (0.0, 0.0, 0.0, 0); }
-        (heat / n as f64, uses / n as f64, degen as f64 / n as f64, n)
+        if n == 0 { return (0.0, 0.0, 0.0, 0.0, 0); }
+        let deg_avg = if deg_n > 0 { deg_sum as f64 / deg_n as f64 } else { 0.0 };
+        (heat / n as f64, uses / n as f64, deg_avg, degen as f64 / n as f64, n)
     };
-    let (h_all, u_all, d_all, n_all) = stat(&|_| true);
-    let (h_pr, u_pr, d_pr, n_pr) = stat(&|i| sup.entities.contains(&i));
-    println!("\n  {:<12} {:>6} {:>10} {:>12} {:>14}", "", "実体数", "平均熱", "平均参照数", "平均退化関係数");
-    println!("  {:<12} {:>6} {:>10.2} {:>12.2} {:>14.2}", "全体", n_all, h_all, u_all, d_all);
-    println!("  {:<12} {:>6} {:>10.2} {:>12.2} {:>14.2}", "証明に登場", n_pr, h_pr, u_pr, d_pr);
+    let (h_all, u_all, g_all, d_all, n_all) = stat(&|_| true);
+    let (h_pr, u_pr, g_pr, d_pr, n_pr) = stat(&|i| sup.entities.contains(&i));
+    println!("\n  {:<12} {:>6} {:>8} {:>10} {:>12} {:>14}", "", "実体数", "平均熱", "平均参照数", "平均代数的次数", "平均退化関係数");
+    println!("  {:<12} {:>6} {:>8.2} {:>10.2} {:>12.2} {:>14.2}", "全体", n_all, h_all, u_all, g_all, d_all);
+    println!("  {:<12} {:>6} {:>8.2} {:>10.2} {:>12.2} {:>14.2}", "証明に登場", n_pr, h_pr, u_pr, g_pr, d_pr);
     if eg.degeneration_groups.is_none() {
         println!("  (退化関係は未計算です。--degen-heat を付けると計算されます。)");
     }
@@ -533,7 +609,17 @@ mod tests {
         let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
         let b = eg.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
         let l = eg.create_entity("L".into(), Definition::new_line(a, b), EntityType::Line);
-        assert!(structural_incidence(&eg, a, l), "直線L=AB は定義上Aを通る");
-        assert!(!structural_incidence(&eg, b, a), "自由点どうしに構造的な接続は無い");
+        assert!(structural_incidence(&eg, a, l).is_some(), "直線L=AB は定義上Aを通る");
+        assert!(structural_incidence(&eg, b, a).is_none(), "自由点どうしに構造的な接続は無い");
+
+        // 🌟 「定義に書かれている親」ではなく「そこへ後から合流した実体」で
+        // 接続が成立している場合、橋渡しとして返るのは定義側の親であること。
+        // これを返さないと、その合流を生んだ定理の発火が証明から漏れる。
+        let c = eg.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        eg.merge_entities_justified(a, c, Justification::Theorem {
+            name: "橋渡しの定理".into(), premises: Vec::new() });
+        let (parent, other) = structural_incidence(&eg, c, l).expect("Cはaと同値なのでL上にある");
+        assert_eq!(eg.get_rep(parent), eg.get_rep(a));
+        assert_eq!(eg.get_rep(other), eg.get_rep(c));
     }
 }
