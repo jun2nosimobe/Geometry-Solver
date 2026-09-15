@@ -114,14 +114,29 @@ pub struct ProofSupport {
 
 const GOAL_IDENTICAL: u8 = 0;
 const GOAL_INCIDENCE: u8 = 1;
+/// 🌟 「この実体が今の姿になるまでに、誰がここへ合流してきたか」を辿る目標。
+/// 前提が Identical(X, X) や DefinedBy の形だと explain_identical は空を返し、
+/// 一見すると自明な基底事実に見えるが、実際にはその合流こそが定理の仕事で
+/// あることが多い(raw_proof.rs::build_result_ancestry_step と同じ話)。
+const GOAL_ANCESTRY: u8 = 2;
 
 /// 目標の事実から出発して、証明に実際に使われたマージ・接続・実体を集める。
 ///
 /// EGraph::explain_identical / find_incidence_justification が返す
 /// Justification を辿るだけの素直な探索で、raw_proof::verify_identical が
 /// 出力テキストに対して行っているのと同じことを、生きたe-graphに対して行う。
-pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> ProofSupport {
+pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>),
+                             follow_ancestry: bool) -> ProofSupport {
     let mut sup = ProofSupport::default();
+    // 「誰がこの実体へ合流してきたか」の逆引き。proof_edges は吸収された側の
+    // スロット番号を鍵にしているので、生き残った側からは引けない。
+    let mut reverse: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+    if follow_ancestry {
+        for (&absorbed, edge) in eg.proof_edges.iter() {
+            reverse.entry(edge.to.0).or_default().push(absorbed);
+        }
+        for v in reverse.values_mut() { v.sort_unstable(); }
+    }
     let mut names: FxHashSet<String> = FxHashSet::default();
     let mut kinds: FxHashMap<&'static str, usize> = FxHashMap::default();
     let mut seen: FxHashSet<(u8, usize, usize)> = FxHashSet::default();
@@ -163,7 +178,28 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
         sup.entities.insert(ra);
         sup.entities.insert(rb);
 
-        if kind == GOAL_IDENTICAL {
+        if kind == GOAL_ANCESTRY {
+            // 前向き: この実体が吸収されて root に向かう道。
+            let mut cur = ra;
+            let mut hops = 0;
+            while let Some(edge) = eg.proof_edges.get(&cur) {
+                hops += 1;
+                if hops > 500 { break; }
+                sup.merges.insert(key(ClassId(cur), edge.to));
+                expand(eg, &edge.justification, ClassId(cur), edge.to,
+                       &mut work, &mut names, &mut sup.unresolved, &mut kinds, follow_ancestry);
+                cur = edge.to.0;
+            }
+            // 逆向き: 誰がこの実体へ合流してきたか。代表元はそもそも
+            // proof_edges の鍵にならないので、こちらを見ないと何も出てこない。
+            for &src in reverse.get(&ra).into_iter().flatten() {
+                if let Some(edge) = eg.proof_edges.get(&src) {
+                    sup.merges.insert(key(ClassId(src), edge.to));
+                    expand(eg, &edge.justification, ClassId(src), edge.to,
+                           &mut work, &mut names, &mut sup.unresolved, &mut kinds, follow_ancestry);
+                }
+            }
+        } else if kind == GOAL_IDENTICAL {
             let edges = eg.explain_identical(a, b);
             if edges.is_empty() {
                 // 同じ実体そのもの(説明すべきことが無い)なら正常。
@@ -176,7 +212,7 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
                 sup.entities.insert(eg.get_rep(edge.from).0);
                 sup.entities.insert(eg.get_rep(edge.to).0);
                 expand(eg, &edge.justification, edge.from, edge.to,
-                       &mut work, &mut names, &mut sup.unresolved, &mut kinds);
+                       &mut work, &mut names, &mut sup.unresolved, &mut kinds, follow_ancestry);
             }
         } else {
             match eg.find_incidence_justification(a, b) {
@@ -186,7 +222,7 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
                     // 橋渡し(a≡orig_p, b≡orig_c)も証明の一部。
                     work.push((GOAL_IDENTICAL, a, orig_p));
                     work.push((GOAL_IDENTICAL, b, orig_c));
-                    expand(eg, &just, orig_p, orig_c, &mut work, &mut names, &mut sup.unresolved, &mut kinds);
+                    expand(eg, &just, orig_p, orig_c, &mut work, &mut names, &mut sup.unresolved, &mut kinds, follow_ancestry);
                 }
                 // 🌟 provenance が無い接続は「作図そのものから従う」ものが
                 // ほとんど(Intersection(l1,l2) で作った点は定義上 l1・l2 に
@@ -197,7 +233,9 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
                 // その合流の理由まで辿らないと、点の一意性で閉じる証明が
                 // 丸ごと空に見える(structural_incidence のドキュメント参照)。
                 None => match structural_incidence(eg, a, b) {
-                    Some((parent, other)) => work.push((GOAL_IDENTICAL, parent, other)),
+                    Some(bridges) => {
+                        for (p, q) in bridges { work.push((GOAL_IDENTICAL, p, q)); }
+                    }
                     None => sup.unresolved += 1,
                 },
             }
@@ -224,25 +262,40 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> Pr
 /// 「その2つがなぜ同じ同値類にいるのか」を改めて辿れるようにする。
 /// 同じスロットそのものだった場合は explain_identical が空を返すだけなので、
 /// 呼び出し側は何も特別扱いしなくてよい。
-fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> Option<(ClassId, ClassId)> {
+fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> Option<Vec<(ClassId, ClassId)>> {
     let (rx, ry) = (eg.get_rep(x), eg.get_rep(y));
+    let mut bridges: Vec<(ClassId, ClassId)> = Vec::new();
+    let mut found = false;
     // 接続は代表元の subobjects に記録されるが、定義を持っているのは
     // その同値類に吸収された側であることもあるので、クラス全体を見る。
     for i in 0..eg.entities.len() {
-        let owner_rep = eg.get_rep(ClassId(i));
+        let owner = ClassId(i);
+        let owner_rep = eg.get_rep(owner);
         let other_rep = if owner_rep == rx { ry } else if owner_rep == ry { rx } else { continue };
-        let other = if owner_rep == rx { y } else { x };
+        // owner が x 側なら相手は y、y 側なら相手は x。
+        let (other, same_side) = if owner_rep == rx { (y, x) } else { (x, y) };
         for p in eg.entities[i].original_definition.get_parents() {
-            if eg.get_rep(p) == other_rep { return Some((p, other)); }
+            if eg.get_rep(p) != other_rep { continue; }
+            found = true;
+            // ① 相手の側の橋渡し: 定義に書かれている親 p と、いま問われている実体。
+            if p != other { bridges.push((p, other)); }
+            // ② 器の側の橋渡し: 定義を持っている実体 owner と、いま問われている実体。
+            //    orthocenter はここが本体だった――Line_A_H_AltB_AltC は定義上
+            //    H_AltB_AltC を通るが、目標の接続先はそれと合流した別の直線で、
+            //    その合流(同位角による平行判定 → 直線の一意性)こそが垂心定理。
+            //    ①だけ返して打ち切ると、この連鎖が丸ごと証明から消える。
+            if owner != same_side { bridges.push((owner, same_side)); }
+            break;
         }
     }
-    None
+    if found { Some(bridges) } else { None }
 }
 
 /// 1つの Justification から、さらに遡るべき部分目標を積む。
 fn expand(eg: &EGraph, j: &Justification, from: ClassId, to: ClassId,
           work: &mut Vec<(u8, ClassId, ClassId)>, names: &mut FxHashSet<String>,
-          unresolved: &mut usize, kinds: &mut FxHashMap<&'static str, usize>) {
+          unresolved: &mut usize, kinds: &mut FxHashMap<&'static str, usize>,
+          follow_ancestry: bool) {
     let kind = match j {
         Justification::Theorem { .. } => "名前付き定理",
         Justification::Congruence { .. } => "合同閉包",
@@ -257,13 +310,29 @@ fn expand(eg: &EGraph, j: &Justification, from: ClassId, to: ClassId,
         Justification::Theorem { name, premises } => {
             names.insert(name.clone());
             for (ft, args) in premises {
-                if args.len() < 2 { continue; }
+                if args.is_empty() { continue; }
                 match ft.as_str() {
-                    "Identical" => work.push((GOAL_IDENTICAL, args[0], args[1])),
-                    "Connected" => work.push((GOAL_INCIDENCE, args[0], args[1])),
+                    "Identical" if args.len() >= 2 => {
+                        work.push((GOAL_IDENTICAL, args[0], args[1]));
+                        // 🌟 args[0] と args[1] が既に同じ実体だと explain_identical は
+                        // 空を返し、追跡がここで止まる。しかしその実体がその姿に
+                        // なったのは他の実体が合流してきたからで、多くの場合それこそが
+                        // 定理の仕事(orthocenter の「同位角による平行判定」の前提が
+                        // まさにこれ)。合流履歴まで辿る設定なら、そちらへ回す。
+                        if follow_ancestry {
+                            work.push((GOAL_ANCESTRY, args[0], args[0]));
+                            work.push((GOAL_ANCESTRY, args[1], args[1]));
+                        }
+                    }
+                    "Connected" if args.len() >= 2 => work.push((GOAL_INCIDENCE, args[0], args[1])),
                     // DefinedBy(親…, 結果)は「結果はこの定義で作られている」
-                    // という構造的な前提で、遡るべき等式を含まない。
-                    _ => {}
+                    // という構造的な前提で、遡るべき等式そのものは含まない。
+                    // ただし結果の実体の合流履歴は上と同じ理由で意味を持つ。
+                    _ => {
+                        if follow_ancestry {
+                            for &a in args { work.push((GOAL_ANCESTRY, a, a)); }
+                        }
+                    }
                 }
             }
         }
@@ -315,7 +384,7 @@ fn on_proof_path(f: &Firing, sup: &ProofSupport) -> bool {
         || f.incidences.iter().any(|i| sup.incidences.contains(i))
 }
 
-struct Row { fires: u64, useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
+struct Row { fires: u64, useful: u64, anc_useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
 
 pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>)>,
               total_work: u64, heat_cap: usize, fanout_heat_cap: usize) {
@@ -326,8 +395,19 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
         return;
     }
 
+    // 🌟 2通りで集める。
+    //   厳密: 証明の説明経路に直接現れたマージ/接続だけ(下界)。
+    //   合流込み: 前提が「既に同じ実体」だったときに、その実体へ誰が合流して
+    //             きたかまで辿ったもの(上界)。raw_proof.rs が同じ近似を
+    //             使っており、この特定の前提と無関係な合流が混ざり得る。
+    // orthocenter のように、証明の本体が「前提の実体が既に合流済みである
+    // こと」そのものに隠れている問題があるので、片方だけでは判断を誤る。
     let sup = match target {
-        Some(t) => collect_proof_support(eg, t),
+        Some(t) => collect_proof_support(eg, t, false),
+        None => ProofSupport::default(),
+    };
+    let sup_anc = match target {
+        Some(t) => collect_proof_support(eg, t, true),
         None => ProofSupport::default(),
     };
     let have_proof = sup.reached;
@@ -340,12 +420,20 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
     let mut useful_tasks: FxHashSet<u64> = FxHashSet::default();
     let mut per: FxHashMap<&str, Row> = FxHashMap::default();
     let (mut total_useful, mut useful_work, mut fired_work) = (0u64, 0u64, 0u64);
+    let mut anc_useful = 0u64;
+    let mut anc_work_tasks: FxHashSet<u64> = FxHashSet::default();
+    let mut anc_work = 0u64;
     for f in &log.firings {
         let good = have_proof && on_proof_path(f, &sup);
+        if have_proof && on_proof_path(f, &sup_anc) {
+            anc_useful += 1;
+            if anc_work_tasks.insert(f.task_seq) { anc_work += f.dfs_calls_used; }
+        }
         let first_of_task = counted_task.insert(f.task_seq);
         let r = per.entry(f.theorem.as_str())
-            .or_insert(Row { fires: 0, useful: 0, work: 0, useful_work: 0, pri_sum: 0, seeded: 0 });
+            .or_insert(Row { fires: 0, useful: 0, anc_useful: 0, work: 0, useful_work: 0, pri_sum: 0, seeded: 0 });
         r.fires += 1;
+        if have_proof && on_proof_path(f, &sup_anc) { r.anc_useful += 1; }
         r.pri_sum += f.priority as i64;
         if f.is_seeded { r.seeded += 1; }
         if first_of_task {
@@ -365,13 +453,21 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
     let pct = |x: u64, y: u64| -> f64 { if y > 0 { 100.0 * x as f64 / y as f64 } else { 0.0 } };
     println!("  発火 {}件 / 仕事量 {} ステップ", log.firings.len(), total_work);
     if have_proof {
-        println!("  うち証明に残った発火 : {}件 ({:.1}%)", total_useful, pct(total_useful, log.firings.len() as u64));
-        println!("  証明に残った発火を生んだタスクの仕事量 : {} ({:.2}% of 全体)", useful_work, pct(useful_work, total_work));
+        println!("  うち証明に残った発火 : {}件 ({:.1}%) / 合流履歴まで含めると {}件 ({:.1}%)",
+            total_useful, pct(total_useful, log.firings.len() as u64),
+            anc_useful, pct(anc_useful, log.firings.len() as u64));
+        println!("  証明に残った発火を生んだタスクの仕事量 : {} ({:.2}% of 全体) / 合流履歴まで {} ({:.2}%)",
+            useful_work, pct(useful_work, total_work), anc_work, pct(anc_work, total_work));
         println!("  発火したタスク全体の仕事量             : {} ({:.2}% of 全体)", fired_work, pct(fired_work, total_work));
         println!("    -> 残りの {:.2}% は、一度も結論を適用できなかったタスクが使った分。",
             100.0 - pct(fired_work, total_work));
         println!("  証明に使われたマージ {}件 / 接続 {}件 / 実体 {}個 / 定理 {}種",
             sup.merges.len(), sup.incidences.len(), sup.entities.len(), sup.theorems.len());
+        println!("  合流履歴まで含めると  マージ {}件 / 接続 {}件 / 実体 {}個 / 定理 {}種",
+            sup_anc.merges.len(), sup_anc.incidences.len(), sup_anc.entities.len(), sup_anc.theorems.len());
+        if !sup_anc.theorems.is_empty() {
+            println!("  合流履歴まで含めた定理 : {}", sup_anc.theorems.join(", "));
+        }
         if !sup.kinds.is_empty() {
             let parts: Vec<String> = sup.kinds.iter().map(|(k, n)| format!("{} {}件", k, n)).collect();
             println!("  証明の根拠の内訳 : {}", parts.join(" / "));
@@ -384,12 +480,12 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
     }
 
     let mut rows: Vec<(&str, &Row)> = per.iter().map(|(k, v)| (*k, v)).collect();
-    rows.sort_by(|a, b| (b.1.useful, b.1.fires).cmp(&(a.1.useful, a.1.fires)));
+    rows.sort_by(|a, b| (b.1.useful, b.1.anc_useful, b.1.fires).cmp(&(a.1.useful, a.1.anc_useful, a.1.fires)));
     println!("\n  --- 定理ごとの発火(証明に残った数の多い順、上位20件) ---");
-    println!("  {:>6} {:>6} {:>10} {:>10} {:>8} {:>6}  定理", "発火", "有効", "仕事量", "有効分", "平均優先", "シード");
+    println!("  {:>6} {:>6} {:>8} {:>10} {:>10} {:>8} {:>6}  定理", "発火", "有効", "合流込", "仕事量", "有効分", "平均優先", "シード");
     for (name, r) in rows.iter().take(20) {
-        println!("  {:>6} {:>6} {:>10} {:>10} {:>+8.1} {:>5.0}%  {}",
-            r.fires, r.useful, r.work, r.useful_work,
+        println!("  {:>6} {:>6} {:>8} {:>10} {:>10} {:>+8.1} {:>5.0}%  {}",
+            r.fires, r.useful, r.anc_useful, r.work, r.useful_work,
             r.pri_sum as f64 / r.fires as f64,
             100.0 * r.seeded as f64 / r.fires as f64,
             name);
@@ -581,7 +677,7 @@ mod tests {
         eg.merge_entities_justified(c, d, Justification::Theorem {
             name: "定理Y".into(), premises: Vec::new() });
 
-        let sup = collect_proof_support(&eg, &("Identical".to_string(), vec![a, b]));
+        let sup = collect_proof_support(&eg, &("Identical".to_string(), vec![a, b]), false);
         assert_eq!(sup.theorems, vec!["定理X".to_string()],
             "目標A≡Bの証明に使われたのは定理Xだけのはず");
 
@@ -613,13 +709,36 @@ mod tests {
         assert!(structural_incidence(&eg, b, a).is_none(), "自由点どうしに構造的な接続は無い");
 
         // 🌟 「定義に書かれている親」ではなく「そこへ後から合流した実体」で
-        // 接続が成立している場合、橋渡しとして返るのは定義側の親であること。
-        // これを返さないと、その合流を生んだ定理の発火が証明から漏れる。
+        // 接続が成立している場合、その合流を橋渡しとして返すこと。
+        // これを返さないと、合流を生んだ定理の発火が証明から漏れる。
         let c = eg.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
         eg.merge_entities_justified(a, c, Justification::Theorem {
-            name: "橋渡しの定理".into(), premises: Vec::new() });
-        let (parent, other) = structural_incidence(&eg, c, l).expect("Cはaと同値なのでL上にある");
-        assert_eq!(eg.get_rep(parent), eg.get_rep(a));
-        assert_eq!(eg.get_rep(other), eg.get_rep(c));
+            name: "点の橋渡しの定理".into(), premises: Vec::new() });
+        let bridges = structural_incidence(&eg, c, l).expect("Cはaと同値なのでL上にある");
+        assert!(bridges.iter().any(|&(p, q)| eg.get_rep(p) == eg.get_rep(a) && eg.get_rep(q) == eg.get_rep(c)),
+            "点の側の橋渡し(定義に書かれた親 A と、問われている C)が要る");
+    }
+
+    /// 🌟 orthocenter の検証で判明した取りこぼしの回帰テスト。点が乗っている
+    /// のは「定義上その点を通る直線」ではなく、それと後から合流した別の直線。
+    /// 器の側の合流を返さないと、合流を生んだ定理が証明から丸ごと消える。
+    #[test]
+    fn the_container_side_merge_is_also_part_of_the_proof() {
+        let mut eg = EGraph::new();
+        let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let h = eg.create_entity("H".into(), Definition::FreePoint, EntityType::Point);
+        let p = eg.create_entity("P".into(), Definition::FreePoint, EntityType::Point);
+        // L1 は定義上 H を通る。L2 は通らない。
+        let l1 = eg.create_entity("L1".into(), Definition::new_line(a, h), EntityType::Line);
+        let l2 = eg.create_entity("L2".into(), Definition::new_line(a, p), EntityType::Line);
+        eg.merge_entities_justified(l1, l2, Justification::Theorem {
+            name: "直線の橋渡しの定理".into(), premises: Vec::new() });
+
+        let bridges = structural_incidence(&eg, h, l2).expect("HはL1上にあり、L1はL2と同値");
+        assert!(bridges.iter().any(|&(x, y)| {
+                let (rx, ry) = (eg.get_rep(x), eg.get_rep(y));
+                rx == ry && (x == l1 || y == l1) && (x == l2 || y == l2)
+            }),
+            "器の側の橋渡し(L1 と L2 の合流)が返らないと、その合流を生んだ定理が追えない");
     }
 }

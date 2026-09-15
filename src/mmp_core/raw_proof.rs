@@ -475,10 +475,107 @@ impl RawProof {
             let sub_headline = format!("{} は {} に接続", self.name_of(entity), self.name_of(line));
             match self.incidence.get(&key) {
                 Some(inc_edge) => children.push(self.build_step(key.0, inc_edge, true, visited, depth + 1)),
-                None => children.push(DeepStep::leaf(sub_headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string())),
+                None => children.push(self.build_structural_incidence_step(entity, line, sub_headline, exclude, visited, depth + 1)),
             }
         }
         DeepStep { headline, reason: "共有点/共有直線としての由来".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
+    }
+
+    /// 🌟 接続の由来が incidence に記録されていない場合の基底ケース。
+    ///
+    /// 🐛 以前はここで無条件に「作図時点の構造的な接続(定義から機械的に従う)」
+    /// という葉にしていた。しかしそれが本当なのは「いま問われている直線・円
+    /// そのものが、定義上その点を通る」場合だけで、実際には
+    /// 「定義上その点を通る別の実体が、後からこの直線・円と合流した」
+    /// ケースが混ざる。その合流こそが名前付き定理の仕事なので、基底扱いに
+    /// すると証明の本体が丸ごと消える。
+    ///
+    /// orthocenter がまさにこれだった: 目標は結局
+    /// 「H_AltB_AltC が Alt_A 上にある」に帰着するが、その接続の記録は無い。
+    /// 定義上 H_AltB_AltC を通るのは Line_A_H_AltB_AltC で、これが
+    /// 「同位角による平行判定」→「直線の一意性」で Alt_A と合流したことが
+    /// 垂心定理の本体である。以前の extract_proof はこれを落としたまま
+    /// 「7ステップ全て厳密」と報告していた。
+    fn build_structural_incidence_step(
+        &self,
+        entity: usize,
+        line: usize,
+        headline: String,
+        exclude: (usize, usize),
+        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        depth: usize,
+    ) -> DeepStep {
+        let (re, rl) = (self.final_rep(entity), self.final_rep(line));
+        let is_excluded = |a: usize, b: usize| (a, b) == exclude || (b, a) == exclude;
+        // 定義が「この接続」を直に持つ実体 o と、その定義中の該当引数 a を探す。
+        // o が器の側なら (a ≡ 点) と (o ≡ 器)、o が点の側なら (o ≡ 点) と (a ≡ 器)
+        // が橋渡しになる。id が一致する橋渡しは不要(本当に構造的)。
+        let mut best: Option<(usize, usize, Vec<(usize, usize)>)> = None;
+        for (&o, (_, args)) in self.original_defs.iter() {
+            let ro = self.final_rep(o);
+            let owner_is_container = ro == rl;
+            if !owner_is_container && ro != re { continue; }
+            for &a in args {
+                let ra = self.final_rep(a);
+                let bridges: Vec<(usize, usize)> = if owner_is_container {
+                    if ra != re { continue; }
+                    [(a, entity), (o, line)].into_iter().filter(|&(x, y)| x != y).collect()
+                } else {
+                    if ra != rl { continue; }
+                    [(o, entity), (a, line)].into_iter().filter(|&(x, y)| x != y).collect()
+                };
+                // 🌟 いま検証中の辺そのものを根拠にすると循環する
+                // (実際、これを見落として「証明したい等式」で接続を
+                // 正当化する出力が出た)。
+                if bridges.iter().any(|&(x, y)| is_excluded(x, y)) { continue; }
+                // 橋渡しが少ないものを優先し、同数なら id で決定的に選ぶ。
+                let better = match &best {
+                    None => true,
+                    Some((bo, ba, bb)) => (bridges.len(), o, a) < (bb.len(), *bo, *ba),
+                };
+                if better { best = Some((o, a, bridges)); }
+            }
+        }
+        let Some((o, _a, bridges)) = best else {
+            return DeepStep::leaf(headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string());
+        };
+        if bridges.is_empty() {
+            return DeepStep::leaf(headline, "作図時点の構造的な接続(定義から機械的に従う)".to_string());
+        }
+        let key = ("STRUCT_INC".to_string(), vec![entity, line, o]);
+        if !visited.insert(key) {
+            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        }
+        let mut children = Vec::new();
+        for (x, y) in &bridges {
+            match self.explain(*x, *y) {
+                Some(edges) => {
+                    for (f, e) in edges {
+                        children.push(self.build_step(f, &e, false, visited, depth + 1));
+                    }
+                }
+                None => children.push(DeepStep {
+                    headline: format!("{} ≡ {}", self.name_of(*x), self.name_of(*y)),
+                    reason: String::new(),
+                    children: Vec::new(),
+                    is_gap: true,
+                    gap_reason: Some("この2つが合流する経路がraw_proof中に見つかりませんでした".to_string()),
+                    is_shortcut: false,
+                }),
+            }
+        }
+        DeepStep {
+            headline,
+            reason: format!("{} の定義がこの接続を直に持ち、あとは{}",
+                self.name_of(o),
+                bridges.iter()
+                    .map(|&(x, y)| format!("{} ≡ {}", self.name_of(x), self.name_of(y)))
+                    .collect::<Vec<_>>().join(" かつ ")),
+            children,
+            is_gap: false,
+            gap_reason: None,
+            is_shortcut: false,
+        }
     }
 
     /// 🌟 DefinedBy前提(の結果として参照される実体)や、Identical(X,X)の
@@ -939,5 +1036,53 @@ impl DeepProof {
         let idx = steps.len();
         seen.insert(node.headline.clone(), idx);
         Some(idx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🌟 orthocenter の検証で判明した取りこぼしの回帰テスト。
+    ///
+    /// 目標の点 H2 が直線 L_a に乗っている根拠は、どこにも直接記録されていない。
+    /// 記録から言えるのは「H2 は定義上 L_c 上にある」ことだけで、L_c が
+    /// 名前付き定理で L_a と合流したからこそ H2 は L_a 上に来る。以前の
+    /// extract_proof はこれを「作図時点の構造的な接続」として基底扱いし、
+    /// 証明の本体である定理を落としたまま「全て厳密」と報告していた。
+    fn fixture() -> String {
+        let mut t = String::new();
+        for (id, name) in [(0, "H1"), (1, "H2"), (2, "L_a"), (3, "L_b"), (4, "L_c")] {
+            t.push_str(&format!("E\t{}\t{}\tPoint\n", id, name));
+        }
+        // H1 = L_a ∩ L_b、H2 = L_b ∩ L_c
+        t.push_str("D\t0\tIntersection\t2,3\n");
+        t.push_str("D\t1\tIntersection\t3,4\n");
+        // L_c が「鍵となる定理」で L_a に合流した。
+        t.push_str("P\t4\t2\tTheorem\t鍵となる定理|\n");
+        // 目標: H1 ≡ H2 は L_a と L_b の交点の一意性から。
+        t.push_str("P\t0\t1\tPointUniqueness\t2,3\n");
+        t
+    }
+
+    #[test]
+    fn the_container_side_merge_is_not_swallowed_as_a_construction() {
+        let raw = RawProof::parse(&fixture());
+        let report = raw.verify_identical(0, 1);
+        let text = report.format_deep();
+        assert!(text.contains("鍵となる定理"),
+            "器(直線)の側の合流を生んだ定理が証明に現れていない:\n{}", text);
+    }
+
+    /// 🌟 同じ修正で一度踏んだ落とし穴の回帰テスト。接続の根拠として
+    /// 「いま証明しようとしている等式そのもの」を選ぶと循環する。
+    #[test]
+    fn the_edge_under_verification_is_never_used_to_justify_itself() {
+        let raw = RawProof::parse(&fixture());
+        let report = raw.verify_identical(0, 1);
+        let text = report.format_deep();
+        let occurrences = text.matches("H1 ≡ H2").count() + text.matches("H2 ≡ H1").count();
+        assert!(occurrences <= 1,
+            "目標の等式が自分自身の根拠として再登場している(循環):\n{}", text);
     }
 }
