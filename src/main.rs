@@ -570,6 +570,11 @@ fn main() {
             if !recovered && engine.resolve_target_demands(&problem.target_fact) {
                 recovered = true;
             }
+            // 🌟 複比の一意性(透視射影不変性の逆)に持ち込むための作図。
+            // BlackboardEngine::resolve_cross_ratio_demands のドキュメント参照。
+            if !recovered && engine.resolve_cross_ratio_demands(&problem.target_fact) {
+                recovered = true;
+            }
             engine.prover.profile.recovery_time += recovery_start.elapsed();
             // 🌟 FANOUT_HEAT_CAP_CEILINGのドキュメント参照。需要駆動の回復が
             // 尽きても、MCTS(無方向な探索)へ頼る前に、まず今の決定的な

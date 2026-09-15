@@ -1103,3 +1103,62 @@ fn merged_definitions_keep_a_deterministic_order() {
         "同じ手順で組んだ図なのに統合後の定義の並びが変わっている。\n\
          HashSetの反復順(プロセス/インスタンスごとにランダム)が漏れていないか。");
 }
+
+/// 🌟 ユーザー要望「複比の透視射影不変性の逆を1つ書く」の確認。
+///
+/// 共線な4点の複比 (A,B;C,D) は A,B,C を固定すると D について単射なので、
+/// (A,B;C,D) = (A,B;C,E) で5点が同じ直線上なら D ≡ E。
+/// 既存の射影の定理は「接続を前提に複比の等式を結論する」向きばかりで、
+/// 探索が出す共点・共線の主張を証明するのに要る逆向きが無かった。
+#[test]
+fn equal_cross_ratios_force_the_fourth_point_to_coincide() {
+    let mut egraph = EGraph::new();
+    let l = egraph.create_entity("L".into(), Definition::FreePoint, EntityType::Line);
+    let mut on_line = |eg: &mut EGraph, name: &str| {
+        let p = eg.create_entity(name.into(), Definition::FreePoint, EntityType::Point);
+        eg.link_logical_incidence(p, l);
+        p
+    };
+    let a = on_line(&mut egraph, "A");
+    let b = on_line(&mut egraph, "B");
+    let c = on_line(&mut egraph, "C");
+    let d = on_line(&mut egraph, "D");
+    let e = on_line(&mut egraph, "E");
+
+    let cr1 = egraph.create_entity("CR1".into(), Definition::CrossRatio(a, b, c, d), EntityType::Scalar);
+    let cr2 = egraph.create_entity("CR2".into(), Definition::CrossRatio(a, b, c, e), EntityType::Scalar);
+    egraph.apply_congruence_closure();
+    assert_ne!(egraph.get_rep(d), egraph.get_rep(e), "まだ何も分かっていないので別の点のはず");
+
+    // 「2つの複比が等しい」を与える。ここから D ≡ E が出るのが逆向きの定理。
+    egraph.merge_entities_justified(cr1, cr2, Justification::Given);
+    egraph.apply_congruence_closure();
+    assert_eq!(egraph.get_rep(d), egraph.get_rep(e),
+        "複比が等しく5点が共線なら4点目は一致するはず(複比の一意性が働いていない)");
+}
+
+/// 一意性が効かない場面で誤って結合しないこと。
+/// 固定する3点のうち2つが同じなら複比は4点目を決めない。
+#[test]
+fn equal_cross_ratios_do_not_merge_when_the_fixed_points_repeat() {
+    let mut egraph = EGraph::new();
+    let l = egraph.create_entity("L".into(), Definition::FreePoint, EntityType::Line);
+    let mut on_line = |eg: &mut EGraph, name: &str| {
+        let p = eg.create_entity(name.into(), Definition::FreePoint, EntityType::Point);
+        eg.link_logical_incidence(p, l);
+        p
+    };
+    let a = on_line(&mut egraph, "A");
+    let b = on_line(&mut egraph, "B");
+    let d = on_line(&mut egraph, "D");
+    let e = on_line(&mut egraph, "E");
+
+    // 3点目がAと同じ = 固定点が相異ならない。
+    let cr1 = egraph.create_entity("CR1".into(), Definition::CrossRatio(a, b, a, d), EntityType::Scalar);
+    let cr2 = egraph.create_entity("CR2".into(), Definition::CrossRatio(a, b, a, e), EntityType::Scalar);
+    egraph.apply_congruence_closure();
+    egraph.merge_entities_justified(cr1, cr2, Justification::Given);
+    egraph.apply_congruence_closure();
+    assert_ne!(egraph.get_rep(d), egraph.get_rep(e),
+        "固定する3点が相異ならないときは4点目を決められないので、結合してはいけない");
+}

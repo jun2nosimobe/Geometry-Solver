@@ -783,7 +783,8 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], second
             for _ in 0..open.len() {
                 let i = open[rotate % open.len()];
                 rotate += 1;
-                if engine.resolve_target_demands(&Some(targets[i].clone())) {
+                let g = Some(targets[i].clone());
+                if engine.resolve_target_demands(&g) || engine.resolve_cross_ratio_demands(&g) {
                     recovered = true;
                     break;
                 }
@@ -1265,6 +1266,49 @@ point Oc inter pb CA";
             "垂直二等分線の距離の等価性は証明できるはず(得られたのは {}):{n}{}",
             proof, out, n = "
 ");
+    }
+
+    /// 🌟 「複比の透視射影不変性の逆」を実際に使える形にする残り半分。
+    ///
+    /// 逆の規則(EGraph::propagate_cross_ratio_uniqueness)は
+    /// 「(A,B;C,P) と (A,B;C,Q) が同じ値なら P ≡ Q」を与えるが、その2つの
+    /// 複比が実体として存在しないと一度も発火しない。実測でも、規則を入れた
+    /// 直後はベンチマーク32問でも自由作図の発見でも一度も呼ばれなかった。
+    /// そこで目標が「同じ直線上の2点の一致」のときだけ、その直線上の他の
+    /// 3点を使って2つの複比を作る(resolve_cross_ratio_demands)。
+    /// ここではその作図が実際に行われることを確かめる。
+    #[test]
+    fn a_point_identity_goal_builds_the_two_cross_ratios() {
+        let script = "point A free
+point B free
+line L through A B
+            point C on L
+point X free
+point Y free
+point Z free
+            line m1 through X Y
+point P inter L m1
+            line m2 through X Z
+point Q inter L m2";
+        let (egraph, order) = build_egraph(script).expect("図が組めるべき");
+        let find = |n: &str| order.iter().find(|(nm, _)| nm == n).unwrap().1;
+        let (p, q) = (find("P"), find("Q"));
+
+        let before = egraph.entities.iter()
+            .filter(|e| matches!(e.original_definition, Definition::CrossRatio(..))).count();
+        assert_eq!(before, 0, "まだ複比は1つも作られていないはず");
+
+        let mut prover = crate::logic_core::ProverEngine::new(egraph);
+        prover.theorems = crate::theorems::get_all_theorems()
+            .into_iter().map(std::rc::Rc::new).collect();
+        let mut engine = crate::logic_core::BlackboardEngine::new(prover);
+        let goal = Some(("Identical".to_string(), vec![p, q]));
+        assert!(engine.resolve_cross_ratio_demands(&goal),
+            "同じ直線上の2点の一致が目標なら、複比を作るはず");
+
+        let after = engine.prover.egraph.entities.iter()
+            .filter(|e| matches!(e.original_definition, Definition::CrossRatio(..))).count();
+        assert_eq!(after, 2, "目標の2点それぞれについて複比が1つずつ作られるはず(作られたのは{}個)", after);
     }
 
     #[test]

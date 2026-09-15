@@ -225,6 +225,11 @@ impl EGraph {
                 // 単純にEntityType::Pointだけを見ればよく、以前のように
                 // 「PointとDirectionをここでは同じに扱う」という特別扱いの
                 // コメントも不要になった。
+                // 🌟 スカラー(複比)の一致から、点の一致を導く。
+                // propagate_cross_ratio_uniqueness のドキュメント参照。
+                EntityType::Scalar => {
+                    if self.propagate_cross_ratio_uniqueness(rep_id) { changed_any = true; }
+                }
                 EntityType::Point => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
 
@@ -267,7 +272,6 @@ impl EGraph {
                         if self.propagate_conic_uniqueness(c) { changed_any = true; }
                     }
                 }
-                _ => {}
             }
         }
 
@@ -520,6 +524,87 @@ impl EGraph {
     /// Definition::DirectionOf(line) という別のDefinitionで登録されている
     /// (定理側のパターンを変えずに済ませるため、あえて既存の表現のままにしてある)。
     /// そのため、ペアのどちらかが無限遠直線のときは DirectionOf での読み替えも試す。
+    /// 🌟 「複比の透視射影不変性の逆」。ユーザー要望で追加。
+    ///
+    /// 共線な4点の複比 (A,B;C,D) は、A,B,C を固定すると D の射影座標そのもの
+    /// (D についての1次分数変換)なので、D について単射。したがって
+    ///
+    ///   (A,B;C,D) = (A,B;C,E) かつ A,B,C が相異なり、5点が同じ直線上 ⟹ D = E
+    ///
+    /// 既存の射影の定理5つのうち4つは「接続を前提にスカラーの等式を結論する」
+    /// 向きで、逆向き(スカラーの等式から接続を結論する)はシュタイナーの定理の
+    /// 逆しか無かった。ところが探索が見つけるのは共点・共線という接続の主張
+    /// なので、証明に使いたいのはまさにこの逆向きで、実測でも複比の発見は
+    /// 0/5しか証明できていなかった。これは比についての古典的な主張
+    /// (メネラウス・チェバの逆)を射影的に言い換えたものでもある。
+    ///
+    /// 🌟 dfs_matchの定理(TheoremDef)ではなく合同閉包の局所伝播として書いて
+    /// ある。CrossRatioはV4クライン群 {(a,b,c,d),(b,a,d,c),(c,d,a,b),(d,c,b,a)}
+    /// で正準化される(normalize_definition参照)ため、「3つが同じで1つだけ
+    /// 違う」がどのスロットに現れるかが ClassId の大小で変わってしまい、
+    /// パターンで書くと4通りに分裂して探索コストも4倍になる。ここなら軌道を
+    /// 自分で回して照合できる。HarmonicConjugateOf/PerpDirectionOf の対合性を
+    /// apply_trivial_relations に構造的に登録しているのと同じ方針。
+    fn propagate_cross_ratio_uniqueness(&mut self, scalar: ClassId) -> bool {
+        let scalar = self.get_rep(scalar);
+        // 同じ同値類に入っている = 値が等しい複比たち。
+        let defs: Vec<[ClassId; 4]> = match self.entities[scalar.0].components.first() {
+            Some(c) => c.definitions.iter().filter_map(|d| match d {
+                Definition::CrossRatio(a, b, c2, d2) =>
+                    Some([self.get_rep(*a), self.get_rep(*b), self.get_rep(*c2), self.get_rep(*d2)]),
+                _ => None,
+            }).collect(),
+            None => return false,
+        };
+        if defs.len() < 2 { return false; }
+
+        for i in 0..defs.len() {
+            for j in (i + 1)..defs.len() {
+                let t1 = defs[i];
+                let t2 = defs[j];
+                // t2 のV4軌道を回して、t1 と3箇所一致するものを探す。
+                let orbit = [
+                    [t2[0], t2[1], t2[2], t2[3]],
+                    [t2[1], t2[0], t2[3], t2[2]],
+                    [t2[2], t2[3], t2[0], t2[1]],
+                    [t2[3], t2[2], t2[1], t2[0]],
+                ];
+                for u in orbit {
+                    let diff: Vec<usize> = (0..4).filter(|&k| t1[k] != u[k]).collect();
+                    if diff.len() != 1 { continue; }
+                    let k = diff[0];
+                    let (p, q) = (t1[k], u[k]);
+                    if p == q { continue; }
+                    // 一意性が効くのは、固定された3点が相異なるときだけ。
+                    let fixed: Vec<ClassId> = (0..4).filter(|&x| x != k).map(|x| t1[x]).collect();
+                    if fixed[0] == fixed[1] || fixed[1] == fixed[2] || fixed[0] == fixed[2] { continue; }
+                    // 複比が意味を持つのは4点が共線のときだけ。t1側の共通直線を
+                    // 取り、qもその上にあることを確かめる(そうでなければ
+                    // 「同じ直線上の射影座標」という議論が成り立たない)。
+                    let line = match self.find_common_line(&t1) { Some(l) => l, None => continue };
+                    if !self.is_connected(q, line) { continue; }
+                    if self.numeric_plausibility_check(p, q, 2) == Some(false) {
+                        let (n1, n2) = (self.entities[p.0].name.clone(), self.entities[q.0].name.clone());
+                        println!("  🚫 [健全性チェック] {} と {} は複比の一意性から一致するはずだが数値的に別の点のため結合を却下", n1, n2);
+                        continue;
+                    }
+                    let (n1, n2) = (self.entities[p.0].name.clone(), self.entities[q.0].name.clone());
+                    let justification = Justification::Theorem {
+                        name: "複比の透視射影不変性の逆(共線4点の4点目の一意性)".to_string(),
+                        premises: fixed.iter().map(|&f| ("Connected".to_string(), vec![f, line]))
+                            .chain(std::iter::once(("Connected".to_string(), vec![q, line])))
+                            .collect(),
+                    };
+                    if self.merge_entities_justified(p, q, justification) {
+                        println!("  ⚙️ [E-Graph自動マージ] 複比の一意性(透視射影不変性の逆)により点を結合: {} ≡ {}", n1, n2);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn propagate_point_uniqueness(&mut self, point: ClassId) -> bool {
         let point = self.get_rep(point);
         // 🐛 FIX: subobjects の重複エントリを rep 化した後に除いてから使う(理由は

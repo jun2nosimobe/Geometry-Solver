@@ -2865,6 +2865,67 @@ impl BlackboardEngine {
         applied
     }
 
+    /// 🌟 目標が「同じ直線上の2点が一致すること」のとき、その2点の複比を作る。
+    ///
+    /// EGraph::propagate_cross_ratio_uniqueness(複比の透視射影不変性の逆)は
+    /// 「(A,B;C,P) と (A,B;C,Q) が同じ値なら P ≡ Q」を与えるが、そもそも
+    /// その2つの複比が実体として存在しないと一度も発火しない――実測でも、
+    /// 逆の規則を入れた直後は単体テストでは働くのにベンチマーク32問でも
+    /// 自由作図の発見でも一度も呼ばれなかった。
+    ///
+    /// 発見される主張の多くは「3直線が1点で交わる」で、それは
+    /// 「l1∩l2 と l1∩l3 が同じ点」= l1 上の2点の一致に翻訳される。
+    /// そこで目標がまさにその形のときだけ、その直線上の他の3点を取って
+    /// 2つの複比を作ってやる。あとは順方向の射影の定理(透視射影不変性)が
+    /// その2つを等しいと示せれば、逆の規則が一致を結論する。
+    ///
+    /// 中点の需要(resolve_midpoint_demands)と同じく、目標に直接関係する
+    /// ときだけ作るので、複比と無関係な問題には一切コストがかからない。
+    pub fn resolve_cross_ratio_demands(&mut self, target: &Option<(String, Vec<ClassId>)>) -> bool {
+        let Some((kind, args)) = target else { return false; };
+        if kind != "Identical" || args.len() < 2 { return false; }
+        let (p, q) = (self.prover.egraph.get_rep(args[0]), self.prover.egraph.get_rep(args[1]));
+        if p == q { return false; }
+        let is_point = |eg: &EGraph, id: ClassId| eg.entities[id.0].entity_type == EntityType::Point;
+        if !is_point(&self.prover.egraph, p) || !is_point(&self.prover.egraph, q) { return false; }
+
+        // 2点が共有する直線。そこに乗っている他の点から3つ選ぶ。
+        let line = match self.prover.egraph.find_common_line(&[p, q]) { Some(l) => l, None => return false };
+        if line == self.prover.egraph.line_infinity { return false; }
+        let mut others: Vec<ClassId> = self.prover.egraph.entities[line.0].components.first()
+            .map(|c| c.subobjects.clone()).unwrap_or_default()
+            .into_iter()
+            .map(|x| self.prover.egraph.get_rep(x))
+            .filter(|&x| is_point(&self.prover.egraph, x) && x != p && x != q)
+            .collect();
+        others.sort_unstable_by_key(|id| id.0);
+        others.dedup();
+        if others.len() < 3 { return false; }
+        // 図の要になっている点から選ぶ(熱の高い順)。
+        others.sort_by(|&a, &b| self.prover.egraph.entities[b.0].heat_with_degree()
+            .partial_cmp(&self.prover.egraph.entities[a.0].heat_with_degree())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0)));
+        let (x, y, z) = (others[0], others[1], others[2]);
+
+        let mut applied = false;
+        for (fourth, label) in [(p, "P"), (q, "Q")] {
+            let def = self.prover.egraph.normalize_definition(&Definition::CrossRatio(x, y, z, fourth));
+            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let name = format!("CR_{}_(TargetDemand)", label);
+            println!("  💡 [目標駆動オンデマンド作図] 複比の一意性に持ち込むため {} を生成", name);
+            let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Scalar);
+            self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+            self.prover.egraph.apply_trivial_relations(new_id, &def);
+            applied = true;
+        }
+        if applied {
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep();
+        }
+        applied
+    }
+
     // 🌟 フェーズ2.5: 交点(Point)の需要を解消する。2種類の需要源を合流させる:
     //   (a) match_defined_by_fact由来のpoint_construction_demands――今のところ
     //       どの定理も"Intersection"をDefinedByパターンとして問い合わせて
