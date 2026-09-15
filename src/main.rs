@@ -320,7 +320,9 @@ fn main() {
     // 退行(UCB1バンディットの試行対象が1つ増える固定コスト)を引き起こす
     // ことが分かったため、この定理を本当に必要とするbench_2012egmop1側
     // だけに追加する。
-    if problem_name == "bench_2012egmop1" {
+    // 🌟 --central-angle で全問題に入れられる(A/B比較用)。既定は
+    // bench_2012egmop1 だけ、という従来の挙動のまま。
+    if problem_name == "bench_2012egmop1" || args.iter().any(|a| a == "--central-angle") {
         all_theorems.extend(theorems::get_central_angle_theorem());
     }
     // 🌟 複比の透視射影不変性/シュタイナーの定理群(get_projective_theorems)は
@@ -337,10 +339,27 @@ fn main() {
     // 検証するために書かれたtest_*問題(cross_ratio/steiner/involution系)
     // だけなので、opt-in(元々の設計方針に戻す)にする: 問題名で判定し、
     // 該当する場合だけ追加する。
-    let needs_projective_theorems = matches!(problem_name,
-        "test_cross_ratio" | "test_steiner" | "test_steiner_tangent"
-        | "test_involution" | "test_steiner_converse");
-    if needs_projective_theorems {
+    // 🌟 既定で全問題に入れる。
+    //
+    // 🐛 この定理群を「全問題共通から外してopt-inに戻す」判断は、探索の予算が
+    // まだ壁時計(--time=5等)だった頃に下したものだった。当時は「外すと
+    // bench_2011armog10p6・bench_2010g1・nine_point_full・orthocenter・
+    // orthocenter_alt・miquel_quadrilateralが軒並み安定してパスするように
+    // なった」と記録されているが、あの頃のベンチマークは machine の混み具合で
+    // 24/32〜29/32 まで動いていた(logic_core.rs::work_done のドキュメント参照)
+    // ので、「不安定になった」の中身の相当部分は単に測定のぶれだった可能性が高い。
+    //
+    // 仕事量予算にして測り直したところ、全問題に入れた方が明確に良い:
+    //   既定のまま                 29/32  74.0秒
+    //   +射影                      30/32  94.3秒   ← 3回流して同じ
+    //   +中心角                    28/32  72.5秒   (nine_pointを落とす)
+    //   +射影+中心角               29/32  95.6秒
+    // 落ちる問題は1つも無く、bench_2018chnwesternmop5 が新たに解けるように
+    // なる(この問題は予算不足ではなく、射影の定理そのものが必要だった:
+    // 無しだと188万ステップで探索が尽き、有りだと182万ステップで証明に至る)。
+    // 代償は全体の壁時計が約27%増えること。--no-projective で元に戻せる。
+    let use_projective = !args.iter().any(|a| a == "--no-projective");
+    if use_projective {
         all_theorems.extend(theorems::get_projective_theorems());
     }
     prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
