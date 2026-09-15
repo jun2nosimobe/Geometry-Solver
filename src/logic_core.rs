@@ -110,7 +110,12 @@ fn required_hard_types(theorem: &TheoremDef) -> Vec<crate::mmp_core::EntityType>
             }
         }
     }
-    set.into_iter().collect()
+    // 🐛 FIX: HashSetの反復順はプロセスごとに変わるので、ここで並べ直す。
+    // この結果は定理マッチングの事前チェックの順序に使われるため、
+    // 揃えておかないと同じ問題でも実行のたびに探索順が変わる。
+    let mut out: Vec<EntityType> = set.into_iter().collect();
+    out.sort_by_key(|t| format!("{:?}", t));
+    out
 }
 
 /// 🌟 探索木キャッシュの型依存追跡(ユーザー提案「新規作図でfailed pathが
@@ -496,6 +501,18 @@ pub struct ProfileStats {
 }
 
 impl ProverEngine {
+    /// 🌟 これまでに消費した「仕事量」= dfs_match の呼び出し回数の累計。
+    ///
+    /// 探索の予算を壁時計の秒数で測ると、同じコード・同じ問題でも machine の
+    /// 混み具合で結果が変わってしまう(実測で、同一バイナリの32問ベンチが
+    /// 空いているときは 29/32・81秒、混んでいるときは 24/32・200秒になった)。
+    /// 予算をこの数で測れば、何度流しても、どの machine で流しても同じ結果に
+    /// なる。dfs_match は --profile の内訳でも実行時間の大半を占めるので、
+    /// 実際の計算量のよい代理になる。
+    pub fn work_done(&self) -> u64 {
+        self.profile.seeded_dfs_calls + self.profile.unseeded_dfs_calls
+    }
+
     pub fn new(egraph: EGraph) -> Self {
         Self {
             egraph,

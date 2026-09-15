@@ -67,10 +67,25 @@ impl Mode {
 use Arg::{None as Switch, Value};
 use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
 
+/// 探索の既定の予算(dfs_match の呼び出し回数)。
+/// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
+///
+/// 値の根拠: 32問すべてを予算無制限に近い状態で流して、解けた問題が実際に
+/// 使った仕事量を測った。一番重いのが bench_2012egmop1 の約224万ステップ、
+/// 次が bench_2005ctstp1 の約88万。そこに3倍以上の余裕を見て800万にしてある。
+/// (解けない問題はこの予算に達する前に探索が尽きて自分から止まるので、
+/// この値を上げても実行時間は延びない。)
+pub const DEFAULT_STEP_BUDGET: u64 = 8_000_000;
+/// --time の既定。解けるかどうかを決める予算ではなく、
+/// 「どれだけ待っても終わらない」を防ぐだけの安全弁。
+pub const DEFAULT_TIME_CAP_SECS: u64 = 600;
+
 pub const OPTIONS: &[Opt] = &[
     // ---- 問題を解くモード ----
-    Opt { name: "--time", arg: Value("秒"), default: "5", mode: Solve,
-          help: "探索の時間予算。解けない問題を長く回したいときに上げる" },
+    Opt { name: "--steps", arg: Value("回"), default: "8000000", mode: Solve,
+          help: "探索の予算(dfs_matchの呼び出し回数)。壁時計ではないので結果が再現する" },
+    Opt { name: "--time", arg: Value("秒"), default: "600", mode: Solve,
+          help: "打ち切るまでの壁時計の上限。予算ではなく暴走を止めるための安全弁" },
     Opt { name: "--mcts", arg: Switch, default: "無効", mode: Solve,
           help: "MCTSによる補助点の作図を有効にする(既定は無効)" },
     Opt { name: "--heat-cap", arg: Value("個"), default: "40", mode: Solve,
@@ -143,7 +158,7 @@ pub const OPTIONS: &[Opt] = &[
           help: "振りたいオプションと値の候補。複数回指定すると直積を全部試す" },
     Opt { name: "--base", arg: Value("フラグ列"), default: "なし", mode: Sweep,
           help: "全ての組み合わせに共通で付けるオプション(空白区切り)" },
-    Opt { name: "--timeout", arg: Value("秒"), default: "30", mode: Sweep,
+    Opt { name: "--timeout", arg: Value("秒"), default: "600", mode: Sweep,
           help: "1問あたりの打ち切り時間" },
     Opt { name: "--repeat", arg: Value("回"), default: "1", mode: Sweep,
           help: "同じ組み合わせを何回走らせて合算するか(ゆらぎを均すため)" },
@@ -219,15 +234,15 @@ pub fn print_help() {
     println!("  # ブラウザで作図しながら定理を探す");
     println!("  geom_solver serve");
     println!("  # 1問だけ、時間を伸ばして解かせる");
-    println!("  geom_solver simson --time=30 --mcts");
+    println!("  geom_solver simson --steps=20000000 --mcts");
     println!("  # 全問まとめて回して、いま何問解けるかを見る(回帰確認)");
-    println!("  geom_solver sweep --problems=all --timeout=30");
+    println!("  geom_solver sweep --problems=all");
     println!("  # 裸の三角形から、決定的な作図閉包で未知の関係を探す");
     println!("  geom_solver discover --systematic=4,800,10 --seed-points=3 --top=6");
     println!("  # 既存の問題の配置を種にして探す(検出器が何を捨てたかも出す)");
     println!("  geom_solver discover --preset=orthocenter --systematic=3,700,10 --sweep-debug");
     println!("  # パラメータを振って効き目を比べる(組み合わせの直積を全部試す)");
-    println!("  geom_solver sweep --problems=bench --vary=--heat-cap=20,40,80 --base=\"--mcts --time=20\"");
+    println!("  geom_solver sweep --problems=bench --vary=--heat-cap=20,40,80 --base=\"--mcts\"");
     println!("  # 図形を退化させて関連の深い図形の組を探す");
     println!("  geom_solver discover-degenerate orthocenter --min-hits=3");
     println!("  # 問題名・プリセット名の一覧");

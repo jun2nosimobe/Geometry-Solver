@@ -227,10 +227,18 @@ fn main() {
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
     // 確認したい場合や、UCB1バンディットの学習(schedule_full_sweepの
     // 呼び出し回数)をより多く積ませて効果を見たい場合に必要になる。
+    // 🌟 ユーザー要望「予算を秒ではなく仕事量で測る」への対応。
+    // 探索の本当の予算はこちら(ProverEngine::work_done のドキュメント参照)。
+    let step_budget: u64 = args.iter()
+        .find_map(|a| a.strip_prefix("--steps="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(cli::DEFAULT_STEP_BUDGET);
+    // --time は「どれだけ待っても終わらない」を防ぐだけの安全弁に格下げ。
+    // 解けるかどうかを決めるのは step_budget の方。
     let time_budget_secs: u64 = args.iter()
         .find_map(|a| a.strip_prefix("--time="))
         .and_then(|v| v.parse().ok())
-        .unwrap_or(5);
+        .unwrap_or(cli::DEFAULT_TIME_CAP_SECS);
     // 🌟 UCB1バンディットの効果測定用A/Bスイッチ。--no-banditを付けると
     // schedule_full_sweepのシードなしタスクの優先度を常に0固定にし、
     // バンディット導入前と同じ挙動に戻す。既定はバンディット有効。
@@ -391,7 +399,8 @@ fn main() {
 
     engine.schedule_full_sweep();
 
-    while start_time.elapsed() < std::time::Duration::from_secs(time_budget_secs) {
+    while engine.prover.work_done() < step_budget
+        && start_time.elapsed() < std::time::Duration::from_secs(time_budget_secs) {
         // 🌟 ProverEngine::ProfileStatsのドキュメント参照: メインループの
         // 3大フェーズ(dfs_match本体・回復フェーズ・MCTS)それぞれに
         // 実際どれだけの壁時計時間が使われているかを計測する。
@@ -582,6 +591,7 @@ fn main() {
     // 出力なので必ず書き出す(成功時は既に上で書き出し済みだが、その後に
     // 状態が変わっていないので上書きは無害)。後からextract_proofで
     // (どこまで進んで、どこで止まったかを含め)監査できるようにするため。
+    println!("🧮 消費した仕事量: {} ステップ (予算 {})", engine.prover.work_done(), step_budget);
     output_raw_proof(&engine.prover.egraph, problem_name);
     engine.prover.egraph.dump_state();
 

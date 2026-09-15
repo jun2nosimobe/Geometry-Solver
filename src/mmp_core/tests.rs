@@ -1060,3 +1060,46 @@ fn test_radical_axis_and_second_intersection_of_circles() {
     let va = mmp_calculators::normalize(&egraph.evaluate_node(a, &vars, &mut cache).unwrap());
     assert_ne!(vsecond, va, "第2交点が既知の交点Aと同じになってはいけない");
 }
+
+/// 🐛 回帰テスト: 統合後の定義の並び順が実行ごとに変わらないこと。
+///
+/// LogicalComponent::subobjects は「std::collections::HashSet の反復順が
+/// プロセスごとに変わるせいで探索順序まで変わる」という理由で既にVec化されて
+/// いたが、同じ構造体の definitions が merge_entities の中で HashSet のまま
+/// 残っていた。評価器は「計算できる定義が見つかるまで順に試す」ので、
+/// この並びが変わると探索そのものが変わる――実測で nine_point_full を
+/// 同じ引数で3回流すと出力が 6560行 / 4832行 / 4832行 と別物になっていた。
+///
+/// std の RandomState はインスタンスごとに鍵が変わるので、同じプロセスの中で
+/// 図を2回組んで比べるだけでこの不具合を捕まえられる(HashSetに戻すと落ちる)。
+#[test]
+fn merged_definitions_keep_a_deterministic_order() {
+    fn build() -> Vec<Definition> {
+        let mut egraph = EGraph::new();
+        let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+        let l1 = egraph.create_entity("L1".into(), Definition::new_line(a, b), EntityType::Line);
+        let l2 = egraph.create_entity("L2".into(), Definition::new_line(c, d), EntityType::Line);
+        let l3 = egraph.create_entity("L3".into(), Definition::new_line(a, c), EntityType::Line);
+        let l4 = egraph.create_entity("L4".into(), Definition::new_line(b, d), EntityType::Line);
+        // 別々の作図で作った点をすべて同じ類へ押し込み、1つのコンポーネントに
+        // 複数の定義を同居させる(並び順が問題になる状況を作る)。
+        let p1 = egraph.create_entity("P1".into(), Definition::Intersection(l1, l2), EntityType::Point);
+        let p2 = egraph.create_entity("P2".into(), Definition::Intersection(l3, l4), EntityType::Point);
+        let p3 = egraph.create_entity("P3".into(), Definition::Midpoint(a, b), EntityType::Point);
+        let p4 = egraph.create_entity("P4".into(), Definition::Midpoint(c, d), EntityType::Point);
+        egraph.merge_entities(p1, p2);
+        egraph.merge_entities(p1, p3);
+        egraph.merge_entities(p1, p4);
+        let rep = egraph.get_rep(p1);
+        egraph.entities[rep.0].components[0].definitions.clone()
+    }
+    let first = build();
+    let second = build();
+    assert!(first.len() >= 4, "並び順を見るには定義が複数同居している必要がある: {:?}", first);
+    assert_eq!(first, second,
+        "同じ手順で組んだ図なのに統合後の定義の並びが変わっている。\n\
+         HashSetの反復順(プロセス/インスタンスごとにランダム)が漏れていないか。");
+}

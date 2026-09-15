@@ -33,9 +33,12 @@ pub fn run(args: &[String]) {
         .map(|s| s.split_whitespace().map(|t| t.to_string()).collect())
         .unwrap_or_default();
     let timeout_secs: u64 = args.iter()
+        // 🌟 探索の予算は --steps(仕事量)で決まるので、ここは「暴走を
+        // 止める」ためだけの安全弁。短くすると machine の混み具合で結果が
+        // 変わってしまい、仕事量で測る意味が無くなるので既定を長く取る。
         .find_map(|a| a.strip_prefix("--timeout="))
         .and_then(|v| v.parse().ok())
-        .unwrap_or(30);
+        .unwrap_or(600);
     let repeat: u32 = args.iter()
         .find_map(|a| a.strip_prefix("--repeat="))
         .and_then(|v| v.parse().ok())

@@ -26,14 +26,30 @@ impl EGraph {
         // 🌟 FIX: root1のコンポーネントも一度takeし、mutable borrowの競合を回避する
         let mut root1_comps = std::mem::take(&mut self.entities[root1.0].components);
 
-        let mut merged_defs = std::collections::HashSet::new();
+        // 🐛 FIX: definitionsも以前は std::collections::HashSet(標準の
+        // RandomState、インスタンスごとに異なるランダムな鍵)に溜めて、
+        // そのまま into_iter().collect() していた。
+        // LogicalComponent::subobjects が全く同じ理由で既にVec化されている
+        // (そちらのドキュメント参照)のに、同じ構造体のdefinitionsだけが
+        // 取り残されていた。
+        //
+        // 評価器は「コンポーネント内の全定義を、計算できるものが見つかる
+        // まで順に試す」ので、この並び順が変わると探索そのものが変わる。
+        // 実測でも nine_point_full を同じ引数で3回流すと、出力が
+        // 6560行 / 4832行 / 4832行 と実行ごとに別物になっていた。
+        // subobjectsと同じく挿入順を保持するVecに変え、重複除去は明示的に
+        // 行う(コンポーネントは小さいので線形探索で十分)。
+        let mut merged_defs: Vec<Definition> = Vec::new();
+        let push_def = |defs: &mut Vec<Definition>, d: Definition| {
+            if !defs.contains(&d) { defs.push(d); }
+        };
         // 🌟 subobjectsは重複除去だけでなく順序も決定的にしたいので、
         // Vecに集めてから dedup_sorted_ids で仕上げる(生のHashSetを
         // そのまま最終的な順序として使わない)。
         let mut merged_subs_raw: Vec<ClassId> = Vec::new();
         for comp in root1_comps.drain(..) {
             for def in comp.definitions {
-                merged_defs.insert(self.normalize_definition(&def));
+                push_def(&mut merged_defs, self.normalize_definition(&def));
             }
             for sub in comp.subobjects {
                 merged_subs_raw.push(self.get_rep(sub));
@@ -41,7 +57,7 @@ impl EGraph {
         }
         for comp in root2_comps {
             for def in comp.definitions {
-                merged_defs.insert(self.normalize_definition(&def));
+                push_def(&mut merged_defs, self.normalize_definition(&def));
             }
             for sub in comp.subobjects {
                 merged_subs_raw.push(self.get_rep(sub));
@@ -65,7 +81,7 @@ impl EGraph {
         root1_entity.mcts_depth = root1_entity.mcts_depth.min(root2_mcts_depth);
 
         root1_entity.components = vec![LogicalComponent {
-            definitions: merged_defs.into_iter().collect(),
+            definitions: merged_defs,
             subobjects: merged_subs,
         }];
 

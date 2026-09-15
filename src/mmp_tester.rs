@@ -2,6 +2,8 @@ use crate::mmp_math::{ModInt};
 use crate::mmp_core::{ClassId, EGraph, Fact};
 use rustc_hash::FxHashMap;
 use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 pub struct MMPTester {
     pub t_samples: Vec<ModInt>,
@@ -94,7 +96,13 @@ impl MMPTester {
     /// None(判定不能、これまで通り構造的な証明を信用する)を返す。
     pub fn sanity_check_identical(&self, egraph: &EGraph, id1: ClassId, id2: ClassId, trials: usize) -> Option<bool> {
         use crate::mmp_core::Definition;
-        let mut rng = rand::thread_rng();
+        // 🐛 FIX: 以前は rand::thread_rng()。このチェックが Some(false) を
+        // 返すと main.rs は成立した証明を却下して探索を打ち切るので、
+        // 引きの悪い乱数1回で結果が変わりうる=実行ごとに結果がぶれる。
+        // 固定シードにして、同じ図なら常に同じ判定になるようにする。
+        // (Schwartz-Zippel の保証は「ランダムな1点で成り立てば高確率で恒真」
+        // であって、点が実行ごとに変わる必要は無い。)
+        let mut rng = StdRng::seed_from_u64(0x5A17_7E57);
 
         let free_point_names: Vec<String> = egraph.entities.iter()
             .filter(|e| egraph.get_rep(e.id) == e.id)
