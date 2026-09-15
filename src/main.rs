@@ -229,6 +229,7 @@ fn main() {
     // しか答えられないのに対し、--trace は「使った仕事のうちどれが
     // 証明に残ったか」を答える(trace.rs の先頭のドキュメント参照)。
     let show_trace = args.iter().any(|a| a == "--trace");
+    let seeded_rematch = args.iter().any(|a| a == "--seeded-rematch");
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -372,6 +373,7 @@ fn main() {
     prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = bandit_enabled;
+    engine.seeded_rematch_enabled = seeded_rematch;
     if show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
     // 🌟 MCTSを再有効化。以前は実際のロールアウト評価をせずスコア固定
     // (=常に1.0)だったが、合同閉包による実際のマージ数と、構造的な

@@ -18,6 +18,11 @@ pub struct BlackboardEngine {
     // schedule_full_sweep がシードなしタスクの優先度を常に0固定にする
     // (バンディット導入前の挙動に戻す)。既定は有効(true)。
     pub bandit_enabled: bool,
+    // 🌟 シード付き再マッチング(schedule_matcher_task)を使うか。
+    // run_step の Event::FactProven の腕に実測結果を書いてある通り、
+    // 現状のファンアウトのまま有効にすると掛け合わせが明確に悪化するので
+    // 既定は無効。--seeded-rematch で有効にできる。
+    pub seeded_rematch_enabled: bool,
 }
 
 impl BlackboardEngine {
@@ -27,6 +32,7 @@ impl BlackboardEngine {
             task_queue: BinaryHeap::new(),
             event_queue: VecDeque::new(),
             bandit_enabled: true,
+            seeded_rematch_enabled: false,
         }
     }
 
@@ -221,8 +227,28 @@ impl BlackboardEngine {
                         }
                     },
                     Event::FactProven(fact) => {
+                        // 🐛 --trace の実測で見つかった死んだ分岐。apply_conclusions は
+                        // Connected の結論を適用した時点で既に self.facts へ push してから
+                        // new_facts を返すので、以前ここにあった !contains の中に
+                        // schedule_matcher_task を置く形だと条件は常に偽で、
+                        // シード付き再マッチングの経路が一度も走っていなかった
+                        // (--profile の「シード済みタスクのポップ数」が全問題で0回)。
+                        //
+                        // 🌟 実測して既定を決めた: そのまま呼ぶようにすると
+                        // 掛け合わせで 29/37・65秒 → 28/37・416秒(6.4倍)。
+                        // 完全な損ではなく bench_2018chnwesternmop5 を新たに解く一方で、
+                        // nine_point_full と bench_2005ctstp1 を落とす――schedule_matcher_task は
+                        // (定理 × 一致するパターン × 全順列)の数だけ優先度10のタスクを
+                        // 一気に積むため、全探索側のタスクを押しのけて予算を使い切ってしまう。
+                        // simson 単体で見ると分かりやすい: 解けることは解けるが、
+                        // 消費仕事量が 105,430 → 740,036 ステップ(7倍)になり、その 87.7% を
+                        // シード済みタスク(1455回ポップ)が食う。
+                        // 仕組み自体は無駄では無さそうなので、resolve_midpoint_demands と同じく
+                        // フラグ(--seeded-rematch)で残し、ファンアウトの絞り方を別途試せるようにする。
                         if !self.prover.facts.contains(&fact) {
                             self.prover.facts.push(fact.clone());
+                        }
+                        if self.seeded_rematch_enabled {
                             self.schedule_matcher_task(&fact);
                         }
                     }
