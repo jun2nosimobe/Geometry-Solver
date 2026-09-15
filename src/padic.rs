@@ -40,7 +40,8 @@ pub const PREC: usize = 4;
 
 /// Z/P^PRECZ の元。digits[0]が最下位桁(=通常のmod P剰余そのもの)、
 /// digits[i]がP^iの係数。「基数Pの4桁ビッグ整数」を素直に実装したもの。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Hashは「同じ値の線分の長さをまとめて数える」等、値でバケツ分けするため。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PInt {
     digits: [i64; PREC],
 }

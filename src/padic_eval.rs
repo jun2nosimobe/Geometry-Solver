@@ -35,6 +35,12 @@ pub enum DegenShape {
     /// (既知点Qから任意方向dへ引いた直線の"もう一方の交点"は、Qが既に根で
     /// あることを使うと1次方程式で解ける)。
     Circle { center: Triple, r_sq: PInt, known: Triple },
+    /// 🌟 スカラー量(長さの二乗・その積・複比)を num/den の比のまま持つ。
+    ///
+    /// p進の環では割り算が常にできる(=分母が単元である)とは限らないので、
+    /// 商にしてしまうと分母が退化した瞬間に評価不能になる。比のまま持って
+    /// num1*den2 == num2*den1 で比べれば、無限遠が絡む複比もそのまま扱える。
+    Scalar { num: PInt, den: PInt },
 }
 
 /// アフィン座標(x,y)を得るため、同次座標をzで割る。zの方が退化して
@@ -211,6 +217,9 @@ impl<'a> DegenEvaluator<'a> {
     fn circle_of(&mut self, id: ClassId) -> Option<(Triple, PInt)> {
         match self.eval(id)? { DegenShape::Circle { center, r_sq, .. } => Some((center, r_sq)), _ => None }
     }
+    fn scalar_of(&mut self, id: ClassId) -> Option<(PInt, PInt)> {
+        match self.eval(id)? { DegenShape::Scalar { num, den } => Some((num, den)), _ => None }
+    }
 
     /// この点が構造的に接続されている曲線(直線・二次曲線)。自由点にとっては
     /// 「その上にある」という問題の仮定そのものなので制約として扱う。
@@ -349,6 +358,33 @@ impl<'a> DegenEvaluator<'a> {
                 let b = self.point_of(*p2)?;
                 Some(DegenShape::Point(midpoint(&a, &b)))
             }
+            // 🌟 スカラー量。これが評価できないと、長さや複比についての
+            // 主張を検出器にも証明の目標にも載せられない。
+            Definition::LengthSq(p1, p2) => {
+                let a = self.point_of(*p1)?;
+                let b = self.point_of(*p2)?;
+                Some(DegenShape::Scalar { num: squared_distance(&a, &b)?, den: PInt::one() })
+            }
+            Definition::Product(s1, s2) => {
+                let (n1, d1) = self.scalar_of(*s1)?;
+                let (n2, d2) = self.scalar_of(*s2)?;
+                Some(DegenShape::Scalar { num: n1.mul(&n2), den: d1.mul(&d2) })
+            }
+            Definition::CrossRatio(a, b, c, d) => {
+                let (pa, pb) = (self.point_of(*a)?, self.point_of(*b)?);
+                let (pc, pd) = (self.point_of(*c)?, self.point_of(*d)?);
+                let (num, den) = cross_ratio_pair(&pa, &pb, &pc, &pd)?;
+                Some(DegenShape::Scalar { num, den })
+            }
+            Definition::CrossRatioOfLines(a, b, c, d) => {
+                // 直線の同次係数(a,b,c)を双対平面の"点"とみなせば、
+                // 点の複比と全く同じ計算になる(mmp_core::Definitionの
+                // CrossRatioOfLinesのドキュメント参照)。
+                let (la, lb) = (self.line_of(*a)?, self.line_of(*b)?);
+                let (lc, ld) = (self.line_of(*c)?, self.line_of(*d)?);
+                let (num, den) = cross_ratio_pair(&la, &lb, &lc, &ld)?;
+                Some(DegenShape::Scalar { num, den })
+            }
             Definition::PerpendicularLine(l, p) => {
                 let ll = self.line_of(*l)?;
                 let pp = self.point_of(*p)?;
@@ -426,7 +462,219 @@ fn leading_order_of(shape: &DegenShape) -> Option<(EntityType, usize, [i64; 3])>
         DegenShape::Point(t) => padic::leading_order(t).map(|(v, l)| (EntityType::Point, v, l)),
         DegenShape::Line(t) => padic::leading_order(t).map(|(v, l)| (EntityType::Line, v, l)),
         DegenShape::Circle { center, .. } => padic::leading_order(center).map(|(v, l)| (EntityType::Conic, v, l)),
+        // num/den を [num, den, 0] という同次座標とみなせば、射影的に等しい
+        // = num1*den2 == num2*den1 で、そのまま既存の比較に載る。
+        DegenShape::Scalar { num, den } =>
+            padic::leading_order(&[*num, *den, PInt::zero()]).map(|(v, l)| (EntityType::Scalar, v, l)),
     }
+}
+
+/// 共線な4点(あるいは共点な4直線)の複比を num/den の形で返す。
+///
+/// 同次座標のまま2x2行列式で組み立てるので、割り算も平方根も要らず、
+/// 無限遠点(z=0)が混ざっていてもそのまま扱える――これは重要で、
+/// 「線分の比 AX:XB」は「A,B,X とその直線の無限遠点の複比」に他ならないため、
+/// 比についての古典的な主張(メネラウス・チェバ)をこの語彙で表せる。
+fn cross_ratio_pair(a: &Triple, b: &Triple, c: &Triple, d: &Triple) -> Option<(PInt, PInt)> {
+    // 3つの座標から2つを選んで2x2行列式を作る。直線の向きによっては
+    // ある組み合わせが全部0になるので、意味のある組が出るまで順に試す。
+    for (i, k) in [(0usize, 2usize), (1usize, 2usize), (0usize, 1usize)] {
+        let det = |p: &Triple, q: &Triple| p[i].mul(&q[k]).sub(&p[k].mul(&q[i]));
+        let num = det(a, c).mul(&det(b, d));
+        let den = det(a, d).mul(&det(b, c));
+        if num.valuation().is_some() || den.valuation().is_some() {
+            return Some((num, den));
+        }
+    }
+    None
+}
+
+/// 2つのスカラー(比の形)が射影的に等しいか。
+fn scalars_equal(x: (PInt, PInt), y: (PInt, PInt)) -> bool {
+    let (n1, d1) = x;
+    let (n2, d2) = y;
+    // 0/0 は比較する意味が無い。
+    if n1.valuation().is_none() && d1.valuation().is_none() { return false; }
+    if n2.valuation().is_none() && d2.valuation().is_none() { return false; }
+    n1.mul(&d2) == n2.mul(&d1)
+}
+
+// ============================================================
+// 🌟 スカラーの検出器
+//
+// ユーザー指摘「スカラー関連の検出器は必要そう(複比と長さの二乗関連？
+// 純粋な長さ比はあまり使ってなかった気がする)」への対応。
+//
+// これまでの検出器6本はすべて接続幾何(一致・共線・共点・共円・接続)で、
+// 長さや複比についての主張は発見すらできなかった。その結果、定理集合の
+// 計量側(LengthSq・Product・方冪の定理)と射影側(複比)は、証明の途中経過
+// としては使われても「発見された主張」としては一度も現れていなかった。
+//
+// 量は長さそのものではなく長さの二乗と複比で測る。前者は平方根が要らず
+// 有限体上の多項式になり、後者は無限遠点を4点目に取ることで比の情報を
+// 射影的に運べる(cross_ratio_pair のドキュメント参照)。
+// ============================================================
+
+/// 2つの線分の長さの二乗が、独立な乱数すべてで等しい組を探す。
+///
+/// 返すのは [A, B, C, D] で「|AB|² = |CD|²」の意味。同じ2点の組や、
+/// 4点が2点しか使っていないものは除く。
+pub fn find_generic_equal_lengths(egraph: &EGraph, seeds: &[u64], max_points: usize)
+    -> Vec<[ClassId; 4]>
+{
+    if seeds.is_empty() { return Vec::new(); }
+    let ids = hot_reps_of_type(egraph, EntityType::Point, max_points, true);
+    if ids.len() < 3 { return Vec::new(); }
+
+    // 点の組を固定の順序で並べておく(どのseedでも同じ添字を指すように)。
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() { pairs.push((i, j)); }
+    }
+
+    let mut candidates: Option<std::collections::HashSet<(usize, usize)>> = None;
+    for &seed in seeds {
+        let mut ev = DegenEvaluator::new(egraph, seed, None);
+        let coords: Vec<Option<Triple>> = ids.iter()
+            .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None })
+            .collect();
+        // 長さの二乗でバケツ分けすると、総当たり(組の組)を避けられる。
+        let mut buckets: FxHashMap<PInt, Vec<usize>> = FxHashMap::default();
+        for (k, &(i, j)) in pairs.iter().enumerate() {
+            let (a, b) = match (&coords[i], &coords[j]) { (Some(a), Some(b)) => (a, b), _ => continue };
+            let d = match squared_distance(a, b) { Some(d) => d, None => continue };
+            // 長さ0(同じ点)は比べる意味が無い。
+            if d.valuation().is_none() { continue; }
+            buckets.entry(d).or_default().push(k);
+        }
+        // 🌟 平行で長さも等しい2線分は、端点を共有していない限り
+        // 「片方をずらしたもの」=平行四辺形の言い換えにしかならない。
+        // 自由作図は中点や平行線を大量に作るのでこれが山ほど出てしまい、
+        // 他の種類の発見を押し流す。数値の向きで判定して落とす。
+        let parallel = |k1: usize, k2: usize| -> bool {
+            let ((i1, j1), (i2, j2)) = (pairs[k1], pairs[k2]);
+            if i1 == i2 || i1 == j2 || j1 == i2 || j1 == j2 { return false; }  // 端点を共有
+            let get = |i: usize, j: usize| -> Option<(PInt, PInt)> {
+                let (a, b) = (coords[i].as_ref()?, coords[j].as_ref()?);
+                let (ax, ay) = affine_xy(a)?;
+                let (bx, by) = affine_xy(b)?;
+                Some((bx.sub(&ax), by.sub(&ay)))
+            };
+            match (get(i1, j1), get(i2, j2)) {
+                (Some((dx1, dy1)), Some((dx2, dy2))) =>
+                    dx1.mul(&dy2).sub(&dy1.mul(&dx2)).valuation().is_none(),
+                _ => false,
+            }
+        };
+        let mut here: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        for (_, group) in buckets {
+            // 同じ長さの組が多すぎるのは退化(全部同じ点に潰れている等)の兆候。
+            if group.len() > 12 { continue; }
+            for x in 0..group.len() {
+                for y in (x + 1)..group.len() {
+                    if parallel(group[x], group[y]) { continue; }
+                    here.insert((group[x], group[y]));
+                }
+            }
+        }
+        candidates = Some(match candidates {
+            None => here,
+            Some(prev) => prev.intersection(&here).copied().collect(),
+        });
+        if candidates.as_ref().map_or(true, |c| c.is_empty()) { return Vec::new(); }
+    }
+
+    let mut out: Vec<[ClassId; 4]> = Vec::new();
+    for (k1, k2) in candidates.unwrap_or_default() {
+        let (i1, j1) = pairs[k1];
+        let (i2, j2) = pairs[k2];
+        // 使っている点が2つしかない(= 同じ線分)ものは除く。
+        let mut used = vec![i1, j1, i2, j2];
+        used.sort_unstable();
+        used.dedup();
+        if used.len() < 3 { continue; }
+        out.push([ids[i1], ids[j1], ids[i2], ids[j2]]);
+    }
+    out.sort_by_key(|q| (q[0].0, q[1].0, q[2].0, q[3].0));
+    out
+}
+
+/// 複比が等しい2つの4点組を探す。
+///
+/// 複比が意味を持つのは4点が共線のときだけなので、候補は「構造的に同じ
+/// 直線に乗っていると分かっている点」から作る。同じ直線上の4点組どうしの
+/// 一致は複比の定義から自明なことが多いので、異なる直線に乗る組どうしだけを
+/// 報告する(これが射影変換で移り合う配置=透視・射影の主張になる)。
+pub fn find_generic_equal_cross_ratios(egraph: &EGraph, seeds: &[u64], max_lines: usize)
+    -> Vec<[ClassId; 8]>
+{
+    if seeds.is_empty() { return Vec::new(); }
+    let lines = hot_reps_of_type(egraph, EntityType::Line, max_lines, false);
+
+    // 各直線について、その上の点を熱の順に少数だけ取り、4点組を作る。
+    let mut quads: Vec<(ClassId, [ClassId; 4])> = Vec::new();
+    for &l in &lines {
+        if egraph.get_rep(l) == egraph.line_infinity { continue; }
+        let mut pts: Vec<ClassId> = egraph.entities[egraph.get_rep(l).0].components.first()
+            .map(|c| c.subobjects.clone()).unwrap_or_default()
+            .into_iter()
+            .map(|p| egraph.get_rep(p))
+            .filter(|&p| egraph.entities[p.0].entity_type == EntityType::Point)
+            .filter(|&p| !egraph.is_connected(p, egraph.line_infinity))
+            .collect();
+        pts.sort_unstable_by_key(|id| id.0);
+        pts.dedup();
+        if pts.len() < 4 { continue; }
+        // 組み合わせ爆発を避けるため、熱の高い上位6点までに絞る。
+        pts.sort_by(|&a, &b| egraph.entities[b.0].heat_with_degree()
+            .partial_cmp(&egraph.entities[a.0].heat_with_degree()).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0)));
+        pts.truncate(6);
+        pts.sort_unstable_by_key(|id| id.0);
+        for a in 0..pts.len() { for b in (a+1)..pts.len() {
+            for c in (b+1)..pts.len() { for d in (c+1)..pts.len() {
+                quads.push((l, [pts[a], pts[b], pts[c], pts[d]]));
+            }}
+        }}
+    }
+    if quads.len() < 2 { return Vec::new(); }
+
+    let mut candidates: Option<std::collections::HashSet<(usize, usize)>> = None;
+    for &seed in seeds {
+        let mut ev = DegenEvaluator::new(egraph, seed, None);
+        let values: Vec<Option<(PInt, PInt)>> = quads.iter().map(|(_, q)| {
+            let pts: Option<Vec<Triple>> = q.iter().map(|&id| match ev.eval(id) {
+                Some(DegenShape::Point(t)) => Some(t), _ => None }).collect();
+            let pts = pts?;
+            cross_ratio_pair(&pts[0], &pts[1], &pts[2], &pts[3])
+        }).collect();
+        let mut here: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        for x in 0..quads.len() {
+            let vx = match values[x] { Some(v) => v, None => continue };
+            for y in (x + 1)..quads.len() {
+                if quads[x].0 == quads[y].0 { continue; }   // 同じ直線どうしは自明
+                let vy = match values[y] { Some(v) => v, None => continue };
+                if scalars_equal(vx, vy) { here.insert((x, y)); }
+            }
+        }
+        candidates = Some(match candidates {
+            None => here,
+            Some(prev) => prev.intersection(&here).copied().collect(),
+        });
+        if candidates.as_ref().map_or(true, |c| c.is_empty()) { return Vec::new(); }
+    }
+
+    let mut out: Vec<[ClassId; 8]> = Vec::new();
+    for (x, y) in candidates.unwrap_or_default() {
+        let (a, b) = (quads[x].1, quads[y].1);
+        // 2つの4点組が3点以上を共有しているなら、複比の一致はほぼ言い換え。
+        let mut shared = 0;
+        for p in a.iter() { if b.contains(p) { shared += 1; } }
+        if shared >= 3 { continue; }
+        out.push([a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]]);
+    }
+    out.sort_by_key(|q| (q[0].0, q[1].0, q[2].0, q[3].0, q[4].0));
+    out
 }
 
 /// 与えられたmerge_pair(Noneなら退化させない一般乱数)のもとで、egraph内の
@@ -953,7 +1201,8 @@ pub fn find_generic_point_on_curve(egraph: &EGraph, seeds: &[u64], max_points: u
                             None => continue,
                         }
                     }
-                    DegenShape::Point(_) => continue,
+                    // 点とスカラーは「その上に乗る」対象ではない。
+                    DegenShape::Point(_) | DegenShape::Scalar { .. } => continue,
                 };
                 if !on { continue; }
                 // 🐛 FIX(実測で判明): 「点Pが直線L上にある」の中身が、実は

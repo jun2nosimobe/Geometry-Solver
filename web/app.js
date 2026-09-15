@@ -524,6 +524,7 @@ function auxScript() {
 const KIND_LABEL = {
   coincide: '一致', collinear: '共線', concurrent: '共点',
   circles: '3円共点', incident: '接続', concyclic: '共円',
+  equal_length: '等長', cross_ratio: '複比',
 };
 
 const PROOF_BADGE = {

@@ -382,7 +382,8 @@ impl Score {
     fn minimum_size(kind: &str) -> usize {
         match kind {
             "coincide" | "incident" => 2,
-            "concyclic" => 4,
+            "concyclic" | "equal_length" => 4,
+            "cross_ratio" => 8,
             _ => 3,
         }
     }
@@ -474,6 +475,20 @@ fn discover_stream(body: &str, emit: &mut dyn FnMut(&str) -> bool) {
         .collect();
     Score::normalize(&mut scored);
     scored.sort_by(|a, b| b.1.total.partial_cmp(&a.1.total).unwrap_or(std::cmp::Ordering::Equal));
+    // 🌟 1つの検出器が上位を埋め尽くさないようにする。実測で、長さの検出を
+    // 足した直後は上位40件のうち35件が「等長」になり、共線・共点・共円が
+    // 画面から消えた(自由作図は中点や平行線を大量に作るので等長が山ほど
+    // 出る)。種類ごとに取り分の上限を設け、あふれた分は捨てずに後ろへ
+    // 回すだけにする――点数順は各種類の中で保たれる。
+    let per_kind_cap = (cfg.top / 3).max(3);
+    let mut seen_of_kind: HashMap<&str, usize> = HashMap::new();
+    let (mut kept, mut spill): (Vec<(Finding, Score)>, Vec<(Finding, Score)>) = (Vec::new(), Vec::new());
+    for item in scored {
+        let n = seen_of_kind.entry(item.0.kind).or_insert(0);
+        if *n < per_kind_cap { *n += 1; kept.push(item); } else { spill.push(item); }
+    }
+    kept.append(&mut spill);
+    let mut scored = kept;
     scored.truncate(cfg.top);
 
     // 発見に出てくる補助的な図形を、ブラウザが描けるように作図手順として
@@ -651,6 +666,22 @@ fn goal_for(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize)
             ("Connected".to_string(), vec![r[0], *r.last().unwrap()])
         }
         "concyclic" if r.len() >= 4 => ("Concyclic".to_string(), r.to_vec()),
+        // 🌟 スカラーの主張は、その量を実体として作ってから Identical を狙う。
+        // これで初めて定理集合の計量側(方冪の定理など)が証明で試される。
+        "equal_length" if r.len() >= 4 => {
+            let s1 = egraph.create_entity(format!("Goal{}_Len1", tag),
+                Definition::LengthSq(r[0], r[1]), EntityType::Scalar);
+            let s2 = egraph.create_entity(format!("Goal{}_Len2", tag),
+                Definition::LengthSq(r[2], r[3]), EntityType::Scalar);
+            ("Identical".to_string(), vec![s1, s2])
+        }
+        "cross_ratio" if r.len() >= 8 => {
+            let s1 = egraph.create_entity(format!("Goal{}_CR1", tag),
+                Definition::CrossRatio(r[0], r[1], r[2], r[3]), EntityType::Scalar);
+            let s2 = egraph.create_entity(format!("Goal{}_CR2", tag),
+                Definition::CrossRatio(r[4], r[5], r[6], r[7]), EntityType::Scalar);
+            ("Identical".to_string(), vec![s1, s2])
+        }
         "collinear" if r.len() >= 3 => {
             // 「P,Q,R が共線」= 直線PQ と 直線PR が同じ。
             let l1 = egraph.create_entity(format!("Goal{}_L1", tag),
@@ -985,6 +1016,34 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
         });
     }
 
+    // 🌟 7. 長さの二乗が等しい2つの線分
+    //
+    // ユーザー指摘「スカラー関連の検出器は必要そう」への対応。これまでの
+    // 検出は全て接続幾何だったので、計量の主張は発見すらできなかった。
+    for q in pe::find_generic_equal_lengths(egraph, &SEEDS, cap) {
+        // 端点を共有する場合(|AB|=|AC|)は「AはB,Cから等距離」の言い換え。
+        // どちらも報告する価値があるので、文だけ読みやすく分ける。
+        let n: Vec<String> = q.iter().map(|&id| name_of(egraph, id)).collect();
+        let text = if q[0] == q[2] || q[0] == q[3] || q[1] == q[2] || q[1] == q[3] {
+            format!("{}{} と {}{} の長さは等しい", n[0], n[1], n[2], n[3])
+        } else {
+            format!("線分 {}{} と {}{} の長さは等しい", n[0], n[1], n[2], n[3])
+        };
+        out.push(Finding { kind: "equal_length", text, ids: n, refs: q.to_vec() });
+    }
+
+    // 🌟 8. 複比が等しい2つの4点組(射影的な主張)
+    for q in pe::find_generic_equal_cross_ratios(egraph, &SEEDS, cap) {
+        let n: Vec<String> = q.iter().map(|&id| name_of(egraph, id)).collect();
+        out.push(Finding {
+            kind: "cross_ratio",
+            text: format!("({} , {} ; {} , {}) と ({} , {} ; {} , {}) の複比は等しい",
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]),
+            ids: n,
+            refs: q.to_vec(),
+        });
+    }
+
     for (curve_name, inc) in incidences {
         let point_names: Vec<String> = inc.points.iter().map(|(n, _)| n.clone()).collect();
         let mut ids = point_names.clone();
@@ -1159,6 +1218,53 @@ line altC perp AB C";
         assert_eq!(got, Proof::Proved,
             "中点連結定理の形は証明できるべき(得られたのは {:?})。\
              needed な中点が補われていない可能性が高い。", got.tag());
+    }
+
+    /// 🌟 ユーザー指摘「スカラー関連の検出器は必要そう(複比と長さの二乗
+    /// 関連？)」への対応の確認。
+    ///
+    /// これまでの検出器は全て接続幾何(一致・共線・共点・共円・接続)で、
+    /// 長さや複比についての主張は発見すらできなかった。そのため定理集合の
+    /// 計量側(LengthSq・Product・方冪の定理)は、証明の途中経過としては
+    /// 使われても「発見された主張」としては一度も現れていなかった。
+    ///
+    /// 垂直二等分線上の点はその線分の両端から等距離、という一番素直な
+    /// 計量の主張で、(1)検出できること、(2)それが証明の目標に翻訳できて
+    /// 実際に証明が通ること(=計量側の定理が初めて実戦で使われること)を見る。
+    #[test]
+    fn finds_and_proves_an_equal_length_claim() {
+        let script = "point A free
+point B free
+point C free
+            line BC through B C
+line CA through C A
+            point M mid B C
+line pb perp BC M
+point Oc inter pb CA";
+        let out = discover_response(&format!(
+            "config rounds 0{n}config sweep 40{n}config top 20{n}             config prove_seconds 30{n}config prove_max 10{n}{}", script, n = "
+"));
+        assert!(has(&out, "ok|"), "作図が通らなかった: {}", out);
+
+        let rows: Vec<&str> = out.lines()
+            .filter(|l| l.starts_with("finding|") && l.split('|').nth(2) == Some("equal_length"))
+            .collect();
+        assert!(!rows.is_empty(), "長さの等式が1件も検出されていない:{n}{}", out, n = "
+");
+
+        // 「Oc は B と C から等距離」が検出され、しかも証明できるはず。
+        let target = rows.iter().find(|l| {
+            let ids = l.split('|').nth(4).unwrap_or("");
+            ids.contains("Oc") && ids.contains('B') && ids.contains('C')
+        }).unwrap_or_else(|| panic!("垂直二等分線上の点の等距離が出ていない:{}", out));
+        let idx = target.split('|').nth(1).unwrap();
+        let proof = out.lines()
+            .find(|l| l.starts_with(&format!("proof|{}|", idx)))
+            .unwrap_or_else(|| panic!("この主張の証明結果が返っていない:{}", out));
+        assert!(proof.ends_with("proved") || proof.ends_with("trivial"),
+            "垂直二等分線の距離の等価性は証明できるはず(得られたのは {}):{n}{}",
+            proof, out, n = "
+");
     }
 
     #[test]
