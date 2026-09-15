@@ -545,16 +545,41 @@ fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
                     script: &str, aux_lines: &[String], cfg: &Config,
                     emit: &mut dyn FnMut(&str) -> bool) -> bool
 {
-    let n = scored.len().min(cfg.prove_max);
-    let mut result: Vec<Proof> = vec![Proof::Unsupported; n];
+    // 🌟 証明を試す枠は、種類ごとに順番に配る。
+    //
+    // 点数の高い順にそのまま上から取ると、数の多い検出器(自由作図では等長が
+    // 大量に出る)が枠を埋めてしまい、共点性のように「今まさに新しい機構を
+    // 入れた種類」が一度も試されない。実測でも、複比の一意性のために作った
+    // 目標駆動の作図(resolve_cross_ratio_demands)は共点性の目標でしか
+    // 動かないのに、その目標が枠に入らず一度も呼ばれていなかった。
+    let mut by_kind: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (i, (f, _)) in scored.iter().enumerate() {
+        match by_kind.iter_mut().find(|(k, _)| *k == f.kind) {
+            Some((_, v)) => v.push(i),
+            None => by_kind.push((f.kind, vec![i])),
+        }
+    }
+    let mut order: Vec<usize> = Vec::new();
+    let mut round = 0;
+    while order.len() < scored.len() {
+        let mut added = false;
+        for (_, v) in by_kind.iter() {
+            if let Some(&i) = v.get(round) { order.push(i); added = true; }
+        }
+        if !added { break; }
+        round += 1;
+    }
+    let n = order.len().min(cfg.prove_max);
+    let mut result: Vec<Proof> = vec![Proof::Unsupported; scored.len()];
 
     // --- 第1段: まとめて推論する ---
     if !emit(&format!("stage|{}件をまとめて推論しています…\n", n)) { return false; }
-    let all_ids: Vec<String> = shown_ids[..n].iter().flatten().cloned().collect();
+    let chosen: Vec<usize> = order[..n].to_vec();
+    let all_ids: Vec<String> = chosen.iter().flat_map(|&i| shown_ids[i].clone()).collect();
     let mut shared: Vec<usize> = Vec::new();      // targets[k] は scored[shared[k]]
     if let Some((mut eg, names)) = proof_figure(script, aux_lines, &all_ids) {
         let mut targets = Vec::new();
-        for i in 0..n {
+        for &i in &chosen {
             let refs: Option<Vec<ClassId>> =
                 shown_ids[i].iter().map(|x| names.get(x).copied()).collect();
             let refs = match refs { Some(r) => r, None => continue };
@@ -566,14 +591,14 @@ fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
         let done = prove_together(eg, &targets, cfg.prove_seconds);
         for (k, &i) in shared.iter().enumerate() { result[i] = done[k]; }
     }
-    for i in 0..n {
+    for &i in &chosen {
         if result[i] != Proof::Open {
             if !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
         }
     }
 
     // --- 第2段: 残りを1件ずつ、その主張のためだけの図で ---
-    let rest: Vec<usize> = (0..n).filter(|&i| result[i] == Proof::Open).collect();
+    let rest: Vec<usize> = chosen.iter().copied().filter(|&i| result[i] == Proof::Open).collect();
     for (k, &i) in rest.iter().enumerate() {
         if !emit(&format!("stage|残りを1件ずつ確かめています… {}/{}\n", k + 1, rest.len())) {
             return false;
