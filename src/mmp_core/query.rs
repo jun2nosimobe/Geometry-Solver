@@ -116,6 +116,42 @@ impl EGraph {
     }
 
     /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
+    /// 🌟 自由点どうしが同じ同値類に入っていないか(= e-graphが崩壊して
+    /// いないか)を調べ、崩壊していれば最初に見つけた組を返す。
+    ///
+    /// 自由点は互いに独立に置けるから自由点なので、正しい推論だけを積んだ
+    /// 限り絶対に一致しない。一致しているなら、どこかの局所マージが無関係な
+    /// 図形を結合して図全体が潰れており、その状態からは「矛盾から何でも
+    /// 従う」形で任意の目標が"証明"できてしまう。
+    ///
+    /// 🐛 これを入れた経緯: bench_2018chnwesternmop5 がまさにこの状態で
+    /// 「証明完了」を出していた。5つの自由点A..Eのうち C と E が消え、
+    /// 最終的な同値類が13個(正常に解ける問題は78〜362個)、生き残った
+    /// スカラーに LengthSq(B,B)(=0)まで混ざっていた。目標が
+    /// Identical(LengthSq, LengthSq) だったので数値サニティチェックは
+    /// 走っていたが、潰れたe-graphの定義をたどって評価するため、
+    /// そのチェック自体が騙されていた。
+    /// 戻り値は見つかった2つの自由点の名前。merge_entities は吸収された側の
+    /// name を std::mem::take で奪ってしまうので、崩壊を検出した時点で
+    /// entities[..].name を読んでも空文字になっている。作られた順に
+    /// 名前を控えながら走査して、元の名前を返す。
+    pub fn merged_free_points(&self) -> Option<(String, String)> {
+        let mut seen: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+        for i in 0..self.entities.len() {
+            let e = &self.entities[i];
+            if e.entity_type != EntityType::Point { continue; }
+            if !matches!(e.original_definition, Definition::FreePoint) { continue; }
+            // 吸収済みなら name は空なので、その場合は作成順の番号で示す。
+            let label = if e.name.is_empty() { format!("#{}", i) } else { e.name.clone() };
+            let rep = self.get_rep(ClassId(i));
+            if let Some(other) = seen.get(&rep.0) {
+                return Some((other.clone(), label));
+            }
+            seen.insert(rep.0, label);
+        }
+        None
+    }
+
     pub fn dump_state(&self) {
         println!("\n=== 📊 E-Graph State Dump ===");
         let mut active_nodes = Vec::new();

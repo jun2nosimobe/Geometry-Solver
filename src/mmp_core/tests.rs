@@ -1162,3 +1162,38 @@ fn equal_cross_ratios_do_not_merge_when_the_fixed_points_repeat() {
     assert_ne!(egraph.get_rep(d), egraph.get_rep(e),
         "固定する3点が相異ならないときは4点目を決められないので、結合してはいけない");
 }
+
+/// 🐛 回帰テスト: 自由点どうしが同じ同値類に入った図を「崩壊」として検出できること。
+///
+/// bench_2018chnwesternmop5 がこの状態のまま「証明完了」を出していた
+/// (5つの自由点のうち2つが消え、最終的な同値類が13個。正常に解ける問題は
+/// 78〜362個)。目標が Identical(LengthSq, LengthSq) だったので数値サニティ
+/// チェックは走っていたが、潰れたe-graphの定義をたどって評価するため
+/// チェック自体が騙されていた。自由点の独立性は、その評価に依らずに
+/// 崩壊を捕まえられる。
+#[test]
+fn collapsed_figures_are_detected_by_merged_free_points() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let _c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    // 自由点から作った点どうしが一致するのは普通のことなので、それだけでは
+    // 崩壊と見なさない。
+    let m1 = egraph.create_entity("M1".into(), Definition::Midpoint(a, b), EntityType::Point);
+    let m2 = egraph.create_entity("M2".into(), Definition::Midpoint(b, a), EntityType::Point);
+    egraph.apply_congruence_closure();
+    assert_eq!(egraph.merged_free_points(), None,
+        "中点どうしが同一視されただけでは崩壊ではない");
+    let _ = (m1, m2);
+
+    // 自由点そのものが一致したら崩壊。
+    egraph.merge_entities_justified(a, b, Justification::Given);
+    egraph.apply_congruence_closure();
+    let found = egraph.merged_free_points();
+    assert!(found.is_some(), "自由点どうしのマージを崩壊として検出できていない");
+    // 吸収された側は merge_entities に name を奪われているので、
+    // 名前が残っているとは限らない(その場合は作成順の番号で示される)。
+    let (x, y) = found.unwrap();
+    assert!(x == "A" || y == "A", "生き残った側の名前が出ていない: {:?}", (&x, &y));
+    assert!(x != y, "同じものを2回報告している: {:?}", (&x, &y));
+}

@@ -437,6 +437,15 @@ fn main() {
         engine.process_pending_conjectures(&problem.target_fact);
 
         // 🌟 FIX: & をつけて参照としてパターンマッチし、所有権の移動（move）を防ぐ
+        // 🌟 崩壊した図から出た"証明"は受け付けない(EGraph::merged_free_points
+        // のドキュメント参照)。自由点どうしが同じ同値類に入った時点で図は
+        // 潰れており、そこからは何でも従ってしまう。目標に到達したかを見る
+        // 前に判定する。
+        if let Some((p, q)) = engine.prover.egraph.merged_free_points() {
+            println!("🚨 [図の崩壊を検出] 自由点 {} と {} が同じ同値類に入りました。", p, q);
+            println!("    -> 自由点は互いに独立なので、正しい推論だけでは絶対に一致しません。どこかの局所マージが無関係な図形を結合して図全体が潰れています。この状態からはどんな目標も\"証明\"できてしまうため、探索を打ち切ります。");
+            break;
+        }
         if let Some((fact_type, target_args)) = &problem.target_fact {
             if fact_type == "Identical" {
                 let r1 = engine.prover.egraph.get_rep(target_args[0]);

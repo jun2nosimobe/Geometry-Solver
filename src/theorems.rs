@@ -1329,6 +1329,58 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
 mod tests {
     use super::*;
 
+    /// 🐛 Order / Distinct に出てくる変数が、Factパターンのどれかにも
+    /// 出てくること。
+    ///
+    /// dfs_match は estimate_cost が一番安いパターンを選んで消費するが、
+    /// Order / Distinct は「全変数が束縛されるまで INFINITY」を返す。
+    /// 生きているパターンが全部 INFINITY だった場合、best_cost の比較
+    /// (cost < best_cost)は一度も真にならず、best_idx は初期値のまま
+    /// 一番若い添字が選ばれる――つまり **変数が未束縛のままの Order /
+    /// Distinct が消費されうる**。そのとき検査されるのは束縛済みの変数だけ
+    /// なので、未束縛の変数についての制約は永久に検査されない。
+    ///
+    /// これが起きるのは「Factパターンが1つも残っていないのに、まだ
+    /// 束縛されていない変数が Order / Distinct に残っている」ときだけ。
+    /// 逆に言えば、制約に出てくる変数が全てどこかのFactパターンにも
+    /// 出てくるなら、その変数は必ず束縛されてから制約が評価される。
+    /// ここではその不変条件を全定理について確かめる。
+    #[test]
+    fn every_constrained_variable_is_also_bound_by_a_fact() {
+        fn vars_of(pat: &Pattern, out: &mut Vec<String>) {
+            match pat {
+                Pattern::Fact(d) => out.extend(d.args.iter().cloned()),
+                Pattern::Order(v) | Pattern::OrderNonStrict(v) | Pattern::Distinct(v) =>
+                    out.extend(v.iter().cloned()),
+                Pattern::Not(inner) => vars_of(inner, out),
+            }
+        }
+        let mut all = get_all_theorems();
+        all.extend(get_projective_theorems());
+        all.extend(get_central_angle_theorem());
+        let mut bad: Vec<String> = Vec::new();
+        for t in &all {
+            let mut fact_vars: Vec<String> = Vec::new();
+            let mut constrained: Vec<String> = Vec::new();
+            for p in &t.patterns {
+                match p {
+                    Pattern::Fact(_) | Pattern::Not(_) => vars_of(p, &mut fact_vars),
+                    _ => vars_of(p, &mut constrained),
+                }
+            }
+            for v in constrained {
+                if !fact_vars.contains(&v) {
+                    bad.push(format!("定理「{}」の変数 {}", t.name, v));
+                }
+            }
+        }
+        assert!(bad.is_empty(),
+            "Order/Distinct にしか出てこない変数がある。dfs_match は生きている             パターンが全部 INFINITY のとき一番若い添字を無条件に消費するので、             その変数についての制約は検査されないまま捨てられる:{n}{}",
+            bad.join("
+"), n = "
+");
+    }
+
     /// 🌟 dfs_match は「まだ消費していないパターン」を u64 のビットマスクで
     /// 持つ(logic_core.rs::dfs_match のドキュメント参照)。定理1つあたりの
     /// パターン数が64本を超えると、その上のビットが表現できず静かに

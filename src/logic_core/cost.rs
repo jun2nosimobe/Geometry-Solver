@@ -53,6 +53,15 @@ impl ProverEngine {
                 }
                 false
             }
+            Pattern::Distinct(vars) => {
+                let mut seen = rustc_hash::FxHashSet::default();
+                for v in vars {
+                    if let Some(&id) = bind.get(v) {
+                        if !seen.insert(self.egraph.get_rep(id).0) { return true; }
+                    }
+                }
+                false
+            }
             _ => false,
         }
     }
