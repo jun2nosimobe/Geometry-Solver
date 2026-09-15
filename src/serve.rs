@@ -315,7 +315,7 @@ struct Finding {
 }
 
 /// 「エンジンがすぐ証明できたか」の結果。
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Proof {
     /// 試していない
     Untried,
@@ -517,19 +517,68 @@ fn discover_stream(body: &str, emit: &mut dyn FnMut(&str) -> bool) {
     }
 
     // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
-    // 1件終わるごとに結果を流すので、待っている間も埋まっていくのが見える。
     if cfg.prove_seconds > 0 {
-        let n = scored.len().min(cfg.prove_max);
-        for i in 0..n {
-            if !emit(&format!("stage|証明を試しています… {}/{}\n", i + 1, n)) { return; }
-            let p = attempt_proof(&egraph, &scored[i].0, &shown_ids[i],
-                                  &script, &aux_lines, cfg.prove_seconds);
-            if !emit(&format!("proof|{}|{}\n", i, p.tag())) { return; }
-        }
-        emit("stage|\n");
-    } else {
-        emit("stage|\n");
+        if !prove_and_report(&scored, &shown_ids, &script, &aux_lines, &cfg, emit) { return; }
     }
+    emit("stage|\n");
+}
+
+/// 見つかった主張を証明してみて、決まったものから順に流す。
+///
+/// 2段構えにしてある。まず上位の主張をまとめて1つの図に載せ、1回の推論を
+/// 全部で共有する(同じ図の同じ基本的な事実を主張の数だけ導き直さない)。
+/// そこで出なかったものだけを、必要な作図だけに絞った小さい図で1件ずつ
+/// 本気で解く。戻り値は「ブラウザがまだ読んでいるか」。
+fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
+                    script: &str, aux_lines: &[String], cfg: &Config,
+                    emit: &mut dyn FnMut(&str) -> bool) -> bool
+{
+    let n = scored.len().min(cfg.prove_max);
+    let mut result: Vec<Proof> = vec![Proof::Unsupported; n];
+
+    // --- 第1段: まとめて推論する ---
+    if !emit(&format!("stage|{}件をまとめて推論しています…\n", n)) { return false; }
+    let all_ids: Vec<String> = shown_ids[..n].iter().flatten().cloned().collect();
+    let mut shared: Vec<usize> = Vec::new();      // targets[k] は scored[shared[k]]
+    if let Some((mut eg, names)) = proof_figure(script, aux_lines, &all_ids) {
+        let mut targets = Vec::new();
+        for i in 0..n {
+            let refs: Option<Vec<ClassId>> =
+                shown_ids[i].iter().map(|x| names.get(x).copied()).collect();
+            let refs = match refs { Some(r) => r, None => continue };
+            if let Some(t) = goal_for(&mut eg, scored[i].0.kind, &refs, i) {
+                shared.push(i);
+                targets.push(t);
+            }
+        }
+        let done = prove_together(eg, &targets, cfg.prove_seconds);
+        for (k, &i) in shared.iter().enumerate() { result[i] = done[k]; }
+    }
+    for i in 0..n {
+        if result[i] != Proof::Open {
+            if !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
+        }
+    }
+
+    // --- 第2段: 残りを1件ずつ、その主張のためだけの図で ---
+    let rest: Vec<usize> = (0..n).filter(|&i| result[i] == Proof::Open).collect();
+    for (k, &i) in rest.iter().enumerate() {
+        if !emit(&format!("stage|残りを1件ずつ確かめています… {}/{}\n", k + 1, rest.len())) {
+            return false;
+        }
+        let refs_and_figure = proof_figure(script, aux_lines, &shown_ids[i])
+            .and_then(|(mut eg, names)| {
+                let refs: Option<Vec<ClassId>> =
+                    shown_ids[i].iter().map(|x| names.get(x).copied()).collect();
+                let t = goal_for(&mut eg, scored[i].0.kind, &refs?, i)?;
+                Some((eg, t))
+            });
+        if let Some((eg, t)) = refs_and_figure {
+            result[i] = prove_together(eg, &[t], cfg.prove_seconds)[0];
+        }
+        if !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -574,115 +623,144 @@ fn needed_aux_lines(ids: &[String], aux: &[String]) -> Vec<String> {
     aux.iter().zip(want).filter(|(_, w)| *w).map(|(l, _)| l.clone()).collect()
 }
 
-/// 🌟 ユーザー要望「エンジンですぐ証明できた性質はどれくらいあるのか
-/// 調べるボタンも欲しい」への対応。
+/// 🌟 ユーザー提案「一回各問題を解くときにその問題に必要な作図だけを
+/// 取り出してそこでソルバーを動かした方が良いかもしれない」への対応。
 ///
-/// 検出器が出すのは「乱数座標で何度やっても成り立つ」という強い数値的根拠
-/// だけで、証明ではない。ここで実際に定理の連鎖を短時間だけ走らせると、
-/// 「今の定理集合ですぐ出る = だいたい既知・簡単」と「数値的には確かなのに
-/// 出てこない = 面白い候補」を分けられる。
-///
-/// 証明できなかったことは偽である根拠には全くならない(制限時間と定理集合の
-/// 都合でしかない)ので、UI側の表記もそのつもりで書いてある。
-///
-/// 🐛 FIX (ユーザー報告「簡単に示せそうな結果まで何故かほとんど未証明として
-/// 検出されてしまっている。証明エンジン側に速度が足りてない？」): 速度では
-/// なく、証明を試す側の作りが2つの意味で足りていなかった。
-///
-///   1. 自由作図で膨らませたEGraph(実体数百)をそのまま渡していた。
-///      schedule_full_sweepは実体の組み合わせを舐めるので、主張と無関係な
-///      図形が大量にあると制限時間がそこで溶ける。主張に実際に必要な作図
-///      だけを組み直した小さい図で解かせる(needed_aux_lines)。
-///   2. 手詰まりになったとき main.rs の回復フェーズ(需要駆動の補助線・
-///      補助点・角度、目標からの逆算、候補capの段階的な拡張)を一切
-///      呼んでおらず、`run_step` が false を返した2回目で打ち切っていた。
-///      その結果、垂心の共点性(ベンチマークでは普通に解ける問題)ですら
-///      10秒の予算のうち 0.04秒 で「未証明」を返していた。
-fn attempt_proof(explored: &EGraph, f: &Finding, shown_ids: &[String],
-                 user_script: &str, aux: &[String], seconds: u64) -> Proof {
-    // 上の 1. 主張に必要な作図だけの小さい図を組み直す。組み直せない
-    // (無限遠など、作図手順に書き戻せない図形が混ざっている)場合だけ、
-    // 元の大きい図をそのまま使う。
-    let rebuilt = (|| -> Option<(EGraph, Vec<ClassId>)> {
-        let mut text = user_script.trim_end().to_string();
-        for l in needed_aux_lines(shown_ids, aux) {
-            text.push('\n');
-            text.push_str(&l);
-        }
-        let (eg, order) = build_egraph(&text).ok()?;
-        let mut refs = Vec::new();
-        for n in shown_ids {
-            refs.push(order.iter().find(|(nm, _)| nm == n)?.1);
-        }
-        Some((eg, refs))
-    })();
-    let (mut egraph, refs) = match rebuilt {
-        Some(v) => v,
-        None => (explored.clone(), f.refs.clone()),
-    };
+/// 自由作図で膨らませたEGraph(実体数百)をそのまま証明に渡すと、
+/// schedule_full_sweepが主張と無関係な実体の組み合わせを舐めるだけで
+/// 制限時間が終わる。主張に出てくる図形と、その材料になる補助作図だけを
+/// 選んで作図し直した小さい図を返す。
+fn proof_figure(user_script: &str, aux: &[String], ids: &[String])
+    -> Option<(EGraph, HashMap<String, ClassId>)>
+{
+    let mut text = user_script.trim_end().to_string();
+    for l in needed_aux_lines(ids, aux) {
+        text.push('\n');
+        text.push_str(&l);
+    }
+    let (eg, order) = build_egraph(&text).ok()?;
+    Some((eg, order.into_iter().collect()))
+}
 
-    // 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
-    let r = &refs;
-    let target: (String, Vec<ClassId>) = match f.kind {
+/// 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
+/// 共線・共点は目標用の実体(2直線・2交点)をその図の上に作る。
+fn goal_for(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize)
+    -> Option<(String, Vec<ClassId>)>
+{
+    Some(match kind {
         "coincide" if r.len() >= 2 => ("Identical".to_string(), vec![r[0], r[1]]),
         "incident" if r.len() >= 2 => {
             // ids は [点..., 曲線] の並び。最後が曲線。
-            let curve = *r.last().unwrap();
-            ("Connected".to_string(), vec![r[0], curve])
+            ("Connected".to_string(), vec![r[0], *r.last().unwrap()])
         }
-        "concyclic" if r.len() >= 4 => ("Concyclic".to_string(), r.clone()),
+        "concyclic" if r.len() >= 4 => ("Concyclic".to_string(), r.to_vec()),
         "collinear" if r.len() >= 3 => {
             // 「P,Q,R が共線」= 直線PQ と 直線PR が同じ。
-            let l1 = egraph.create_entity("Goal_L1".into(), Definition::new_line(r[0], r[1]), EntityType::Line);
-            let l2 = egraph.create_entity("Goal_L2".into(), Definition::new_line(r[0], r[2]), EntityType::Line);
+            let l1 = egraph.create_entity(format!("Goal{}_L1", tag),
+                Definition::new_line(r[0], r[1]), EntityType::Line);
+            let l2 = egraph.create_entity(format!("Goal{}_L2", tag),
+                Definition::new_line(r[0], r[2]), EntityType::Line);
             ("Identical".to_string(), vec![l1, l2])
         }
         "concurrent" if r.len() >= 3 => {
             // 「l1,l2,l3 が共点」= l1∩l2 と l1∩l3 が同じ点。
-            let p1 = egraph.create_entity("Goal_P1".into(), Definition::Intersection(r[0], r[1]), EntityType::Point);
-            let p2 = egraph.create_entity("Goal_P2".into(), Definition::Intersection(r[0], r[2]), EntityType::Point);
+            let p1 = egraph.create_entity(format!("Goal{}_P1", tag),
+                Definition::Intersection(r[0], r[1]), EntityType::Point);
+            let p2 = egraph.create_entity(format!("Goal{}_P2", tag),
+                Definition::Intersection(r[0], r[2]), EntityType::Point);
             ("Identical".to_string(), vec![p1, p2])
         }
         // 3円共点はまだ証明目標の語彙に無い。
-        _ => return Proof::Unsupported,
-    };
-    egraph.apply_congruence_closure();
+        _ => return None,
+    })
+}
 
-    let met = |eg: &EGraph, t: &(String, Vec<ClassId>)| -> bool {
-        match t.0.as_str() {
-            "Identical" => eg.get_rep(t.1[0]) == eg.get_rep(t.1[1]),
-            "Connected" => eg.is_connected(eg.get_rep(t.1[0]), eg.get_rep(t.1[1])),
-            "Concyclic" => {
-                let reps: Vec<ClassId> = t.1.iter().map(|&i| eg.get_rep(i)).collect();
-                eg.points_share_a_circle(&reps)
-            }
-            _ => false,
+/// その目標が今の図で成り立っているか。
+fn goal_met(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
+    match t.0.as_str() {
+        "Identical" => eg.get_rep(t.1[0]) == eg.get_rep(t.1[1]),
+        "Connected" => eg.is_connected(eg.get_rep(t.1[0]), eg.get_rep(t.1[1])),
+        "Concyclic" => {
+            let reps: Vec<ClassId> = t.1.iter().map(|&i| eg.get_rep(i)).collect();
+            eg.points_share_a_circle(&reps)
         }
+        _ => false,
+    }
+}
+
+/// 図が退化した結果の「証明」を証明として数えないための最終確認。
+/// main.rs のメインループが目標到達時にやっているのと同じ数値サニティ
+/// チェック(直線/点の一意性の局所伝播は数値サンプリングだけが根拠なので、
+/// 噛み合わせ次第では図全体が潰れて「矛盾から何でも従う」形になりうる)。
+fn proof_is_sound(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
+    if t.0 != "Identical" { return true; }
+    let tester = crate::mmp_tester::MMPTester::new();
+    tester.sanity_check_identical(eg, t.1[0], t.1[1], 3) != Some(false)
+}
+
+/// 🌟 ユーザー提案「示されたfactなどのキャッシュを使いまわしたり」への対応。
+///
+/// 主張を1件ずつ独立に解くと、どれも同じ図の同じ基本的な事実(どの直線が
+/// 平行か、どの点がどの円の上にあるか)をゼロから導き直すことになる。
+/// 目標をまとめて渡せば、その推論を全部で共有できる――導かれた事実は
+/// EGraphに溜まるので、2件目以降はその続きから始まる。
+///
+/// 手詰まりのときの回復は main.rs のメインループと同じ順で、需要駆動の
+/// 補助線・補助点・角度・中点、目標からの逆算、候補capの拡張を試す
+/// (MCTSだけは入れていない。実測で結果が実行ごとにぶれる上、決定的な
+/// 回復手段で届く場合はそちらの方が速く確実だったため)。
+fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], seconds: u64)
+    -> Vec<Proof>
+{
+    egraph.apply_congruence_closure();
+    // 定理を1つも使わずに出るもの(作図の定義と接続関係の整理だけで済むもの)は
+    // 「作図から自明」として、証明できた件数とは別に数える。そうしないと
+    // エンジンの証明能力を過大評価してしまう。
+    let trivial: Vec<bool> = targets.iter().map(|t| goal_met(&egraph, t)).collect();
+    let mut done: Vec<bool> = trivial.clone();
+    let finish = |done: &[bool], trivial: &[bool]| -> Vec<Proof> {
+        done.iter().zip(trivial).map(|(&d, &t)| {
+            if t { Proof::Trivial } else if d { Proof::Proved } else { Proof::Open }
+        }).collect()
     };
-    if met(&egraph, &target) { return Proof::Trivial; }
+    if targets.is_empty() || done.iter().all(|d| *d) { return finish(&done, &trivial); }
 
     let mut prover = crate::logic_core::ProverEngine::new(egraph);
     prover.theorems = crate::theorems::get_all_theorems()
         .into_iter().map(std::rc::Rc::new).collect();
     let mut engine = crate::logic_core::BlackboardEngine::new(prover);
-    let goal = Some(target.clone());
     engine.schedule_full_sweep();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
     // main.rs の FANOUT_HEAT_CAP_CEILING と同じ。行き詰まったら候補capを
-    // 広げて同じ探索をやり直す(MCTSより遥かに安い)。
+    // 広げて同じ探索をやり直す。
     const FANOUT_HEAT_CAP_CEILING: usize = 40;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut rotate = 0usize;
     while std::time::Instant::now() < deadline {
-        if engine.run_step(10000) {
-            if met(&engine.prover.egraph, &target) { return Proof::Proved; }
-            continue;
+        let applied = engine.run_step(10000);
+        let mut all_done = true;
+        for (i, t) in targets.iter().enumerate() {
+            if !done[i] && goal_met(&engine.prover.egraph, t) { done[i] = true; }
+            if !done[i] { all_done = false; }
         }
-        if met(&engine.prover.egraph, &target) { return Proof::Proved; }
-        // 上の 2. 手詰まりになったときの回復フェーズ。main.rs のメイン
-        // ループと同じ順番で試す(MCTSだけは既定で無効なので入れていない)。
+        if all_done { break; }
+        if applied { continue; }
+
         let mut recovered = engine.resolve_demands();
         if engine.resolve_point_demands() { recovered = true; }
         if engine.resolve_angle_demands() { recovered = true; }
-        if !recovered && engine.resolve_target_demands(&goal) { recovered = true; }
+        if !recovered && engine.resolve_midpoint_demands() { recovered = true; }
+        if !recovered {
+            // まだ導けていない目標を順に回して、逆算した補助線を要求する。
+            let open: Vec<usize> = (0..targets.len()).filter(|&i| !done[i]).collect();
+            for _ in 0..open.len() {
+                let i = open[rotate % open.len()];
+                rotate += 1;
+                if engine.resolve_target_demands(&Some(targets[i].clone())) {
+                    recovered = true;
+                    break;
+                }
+            }
+        }
         if !recovered && engine.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
             engine.prover.fanout_heat_cap =
                 (engine.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
@@ -691,21 +769,11 @@ fn attempt_proof(explored: &EGraph, f: &Finding, shown_ids: &[String],
         }
         if !recovered { break; }   // これ以上は時間を使っても伸びない
     }
-    if !met(&engine.prover.egraph, &target) { return Proof::Open; }
-    // 🌟 main.rs のメインループと同じ最終防衛ライン。直線/点の一意性の
-    // 局所伝播は「十分な数の接続関係を共有していれば同一」というショート
-    // カットなので、噛み合わせ次第では図全体が退化(三角形の3辺が1本の
-    // 直線に潰れる等)して、矛盾から何でも従う形で目標が"証明"されうる。
-    // ここは「エンジンがすぐ証明できたか」を人に見せる場所なので、
-    // 乱数座標で成り立たない"証明"は証明として数えない。
-    if target.0 == "Identical" {
-        let tester = crate::mmp_tester::MMPTester::new();
-        if tester.sanity_check_identical(&engine.prover.egraph, target.1[0], target.1[1], 3)
-            == Some(false) {
-            return Proof::Open;
-        }
+    for (i, t) in targets.iter().enumerate() {
+        if !done[i] { done[i] = goal_met(&engine.prover.egraph, t); }
+        if done[i] && !trivial[i] && !proof_is_sound(&engine.prover.egraph, t) { done[i] = false; }
     }
-    Proof::Proved
+    finish(&done, &trivial)
 }
 
 // ============================================================
@@ -1063,6 +1131,37 @@ line altC perp AB C";
         assert!(any_degen,
             "自由作図の後も退化の関係が測れているべき(自由点が代表元でなくなると\
              丸ごと0になる不具合があった):{n}{}", out, n = "\n");
+    }
+
+    /// 🐛 回帰テスト(ユーザー報告「まだ証明のパワーが弱い」)。
+    ///
+    /// 自由作図が見つけた「BC と、ABに平行でACの中点を通る直線と、CAに
+    /// 平行でABの中点を通る直線が1点で交わる」――中点連結定理そのものの
+    /// 形が、20秒の予算のうち0.4秒で「行き詰まり」を返していた。
+    /// 切り分けた結果、足りなかったのは探索の幅でも定理でもなく補助点1つで、
+    /// 射影・中心角の定理を足しても、候補capを3倍に広げても、退化熱でも、
+    /// MCTSでも届かず、**BCの中点を図に足すだけ**で決定的に証明できた。
+    /// それを一般の手にしたのが BlackboardEngine::resolve_midpoint_demands。
+    ///
+    /// 自由作図はこの形(平行線を「垂線の垂線」として作る)で出してくるので、
+    /// 素直に中点を結んだ図ではなく、その形のまま確かめる。
+    #[test]
+    fn a_missing_midpoint_no_longer_blocks_the_proof() {
+        // x14 は x13(ABへの垂線)への垂線 = ABに平行で、ACの中点を通る。
+        // x16 は x1(CAへの垂線)への垂線 = CAに平行で、ABの中点を通る。
+        let figure = "point A free\npoint B free\npoint C free\n\
+            line AB through A B\nline BC through B C\nline CA through C A\n\
+            circle O through A B C\n\
+            line x13 perp AB B\npoint x8 mid A C\nline x14 perp x13 x8\n\
+            line x1 perp CA A\npoint x15 mid A B\nline x16 perp x1 x15";
+        let ids: Vec<String> = ["BC", "x14", "x16"].iter().map(|x| x.to_string()).collect();
+        let (mut eg, names) = proof_figure(figure, &[], &ids).expect("図が組めるべき");
+        let refs: Vec<ClassId> = ids.iter().map(|n| names[n]).collect();
+        let target = goal_for(&mut eg, "concurrent", &refs, 0).expect("共点は目標にできるべき");
+        let got = prove_together(eg, &[target], 30)[0];
+        assert_eq!(got, Proof::Proved,
+            "中点連結定理の形は証明できるべき(得られたのは {:?})。\
+             needed な中点が補われていない可能性が高い。", got.tag());
     }
 
     #[test]

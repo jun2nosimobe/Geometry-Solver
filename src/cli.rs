@@ -81,6 +81,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "UCB1バンディットによる定理の優先順位付けを切る(A/B比較用)" },
     Opt { name: "--no-mcts-target-bias", arg: Switch, default: "バイアス有効", mode: Solve,
           help: "MCTSが証明目標に近い図形を優先するのを切る(A/B比較用)" },
+    Opt { name: "--midpoint-demands", arg: Switch, default: "無効", mode: Solve,
+          help: "行き詰まったら、図に既にある中点の端点について残りの中点も作る" },
     Opt { name: "--degen-heat", arg: Switch, default: "無効", mode: Solve,
           help: "退化させたとき一致する図形どうしにheatボーナスを配る" },
     Opt { name: "--degen-heat-seed", arg: Value("整数"), default: "12345", mode: Solve,

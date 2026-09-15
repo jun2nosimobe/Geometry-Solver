@@ -205,6 +205,7 @@ fn main() {
     // MCTSの無方向な探索がそこを突く可能性を完全には排除できないという
     // 慎重さによるもの。
     let use_mcts = args.iter().any(|a| a == "--mcts");
+    let use_midpoint_demands = args.iter().any(|a| a == "--midpoint-demands");
     // 🌟 HAGeo-409ベンチマーク拡充にあたり、「なぜ解けない/遅いのか」を
     // 事後に切り分けるための診断フラグ。--statsを付けると終了時に
     // UCB1バンディットのtheorem_stats(定理ごとの試行回数・平均報酬)を
@@ -523,6 +524,16 @@ fn main() {
                 recovered = true;
             }
             if engine.resolve_angle_demands() {
+                recovered = true;
+            }
+            // 🌟 需要駆動の中点作図(BlackboardEngine::resolve_midpoint_demandsの
+            // ドキュメント参照)。自由作図で見つけた主張を証明する側では
+            // 決定的に効く(中点連結定理の形が0.4秒の行き詰まりから0.7秒の
+            // 証明に変わる)が、ベンチマーク32問に既定で入れると実測で
+            // 29/32→28/32・76秒→100秒と悪化した(bench_2012egmop1が落ちる)。
+            // 中点を補う価値がある図とそうでない図がはっきり分かれるので、
+            // 既定では入れず --midpoint-demands で有効にする。
+            if use_midpoint_demands && !recovered && engine.resolve_midpoint_demands() {
                 recovered = true;
             }
             // 🌟 最後の砦(MCTSに頼る直前): 証明目標に現れる点同士でまだ

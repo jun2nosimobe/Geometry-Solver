@@ -2955,5 +2955,81 @@ impl BlackboardEngine {
         applied
     }
 
+    /// 🌟 需要駆動の中点作図。
+    ///
+    /// ユーザー報告「まだ証明のパワーが弱い」の実測から入れた回復手段。
+    /// 自由作図が見つけた「BC と、ABに平行でACの中点を通る直線と、CAに
+    /// 平行でABの中点を通る直線が1点で交わる」(=中点連結定理そのもの)が、
+    /// 20秒の予算のうち0.4秒で「行き詰まり」を返していた。切り分けたところ、
+    /// 定理を足しても(射影・中心角)、候補capを3倍に広げても、退化熱を
+    /// 入れても、MCTSに頼っても届かず、**BCの中点を図に足すだけで
+    /// 決定的に証明できる**ことが分かった。足りなかったのは探索の幅でも
+    /// 定理でもなく、1つの補助点だった。
+    ///
+    /// そこで「図に既に中点がいくつかあるなら、その端点になっている点の
+    /// 集合について、まだ取られていない中点を補う」という一般の手を入れる。
+    /// 人間が「他の中点も取ってみる」と考えるのと同じ動きで、中点連結定理の
+    /// ように「3つの中点のうち2つしか図に無い」状況を埋める。中点が1つも
+    /// 無い図では何もしない(中点と無関係な問題に中点を撒かないため)。
+    ///
+    /// 一度に作るのは需要の高い2点まで。resolve_point_demandsと同じ理由で、
+    /// 一度に全部作ると探索が拡散して逆に届かなくなる――本当に必要なら
+    /// 次のStallでまた候補に挙がるので、完全性は失われない。
+    pub fn resolve_midpoint_demands(&mut self) -> bool {
+        let eg = &self.prover.egraph;
+        // 図に既にある中点の、端点になっている点を集める。
+        let mut anchors: Vec<ClassId> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..eg.entities.len() {
+            let id = ClassId(i);
+            if eg.get_rep(id) != id { continue; }
+            for c in &eg.entities[i].components {
+                for d in &c.definitions {
+                    if let Definition::Midpoint(a, b) = d {
+                        for p in [eg.get_rep(*a), eg.get_rep(*b)] {
+                            if seen.insert(p) { anchors.push(p); }
+                        }
+                    }
+                }
+            }
+        }
+        if anchors.len() < 3 { return false; }   // 補える組が無い
+        anchors.sort_unstable_by_key(|id| id.0);
+
+        // まだ取られていない中点の候補を、両端の熱の合計が高い順に。
+        let mut candidates: Vec<(ClassId, ClassId, f64)> = Vec::new();
+        for i in 0..anchors.len() {
+            for j in (i + 1)..anchors.len() {
+                let (a, b) = (anchors[i], anchors[j]);
+                let def = eg.normalize_definition(&Definition::Midpoint(a, b));
+                if eg.memo.contains_key(&def) { continue; }
+                let heat = eg.entities[a.0].heat() + eg.entities[b.0].heat();
+                candidates.push((a, b, heat));
+            }
+        }
+        if candidates.is_empty() { return false; }
+        candidates.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| x.0.0.cmp(&y.0.0)).then_with(|| x.1.0.cmp(&y.1.0)));
+
+        let mut applied = false;
+        for (a, b, heat) in candidates.into_iter().take(2) {
+            let def = self.prover.egraph.normalize_definition(&Definition::Midpoint(a, b));
+            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let name = format!("Mid_{}_{}_(Demand)",
+                self.prover.egraph.entities[a.0].name, self.prover.egraph.entities[b.0].name);
+            println!("  💡 [オンデマンド作図] 要請により {} (中点)を生成 (需要: {:.1})", name, heat);
+            let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
+            // Demand線・Demand点と同じく重要度を下げ、推論の主軸がブレるのを防ぐ。
+            self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+            self.prover.egraph.apply_trivial_relations(new_id, &def);
+            applied = true;
+        }
+        if applied {
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep();
+        }
+        applied
+    }
+
     pub fn check_target_reached(&self) -> bool { false }
 }
