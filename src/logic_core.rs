@@ -761,9 +761,12 @@ impl ProverEngine {
                         let parent_var = &def.args[1];
                         match theorem.entities.get(parent_var) {
                             Some(&expected_type) => {
-                                let count = self.egraph.entities.iter()
-                                    .filter(|e| e.entity_type == expected_type)
-                                    .count();
+                                // 🌟 最適化: 以前はここで entities を毎回全走査していた。
+                                // estimate_cost はDFSの各ノードで残りパターンの数だけ
+                                // 呼ばれるホットパスなので、実体数が数百になる自由作図後は
+                                // 見積もりだけで効いてくる。EGraph側のキャッシュを使う
+                                // (type_generationが動いたときだけ数え直す)。
+                                let count = self.egraph.count_of_type(expected_type);
                                 (count as f64) * 5.0 + 10.0
                             }
                             None => 10000.0, // 型情報すら無ければ従来通り最後回し

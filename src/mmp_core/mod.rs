@@ -385,6 +385,9 @@ pub struct EGraph {
     // 保つ)、それぞれの内部でnote_type_changedを呼ぶことで「この値を
     // 更新し忘れる」余地を構造的に無くした。
     pub type_generation: rustc_hash::FxHashMap<EntityType, u64>,
+    /// 🌟 EntityTypeごとの実体数のキャッシュ。(数えた世代, 個数)を持ち、
+    /// type_generation が動いていなければ数え直さない。
+    pub(crate) type_counts: std::cell::RefCell<rustc_hash::FxHashMap<EntityType, (u64, usize)>>,
     /// 🌟 EntityType::Angle撤廃(このモジュールのEntityTypeドキュメント参照)
     /// により、有向角(AnglePair)は他の全てのScalar(長さ・積・複比等)と
     /// 同じEntityType::Scalarを共有し、type_generation[Scalar]も
@@ -503,6 +506,7 @@ impl EGraph {
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
+            type_counts: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             angle_generation: 0,
             plain_scalar_generation: 0,
             degeneration_groups: None,
@@ -625,6 +629,27 @@ impl EGraph {
 
         self.apply_trivial_relations(id, &norm_def);
         id
+    }
+
+    /// 🌟 このEntityTypeの実体数。
+    ///
+    /// logic_core.rs::estimate_cost の Connected(未束縛, 未束縛) 分岐が
+    /// 「親の型がグラフに何個あるか」で見積もるために呼ぶ。estimate_cost は
+    /// DFSの各ノードで残りパターンの数だけ呼ばれるホットパスなので、
+    /// 以前のように毎回 entities を全走査すると、実体数が数百になる
+    /// 自由作図後は見積もりだけで無視できない量になる。
+    /// type_generation が動いていなければ前回の値をそのまま返す
+    /// (返す値は全走査と完全に同じなので、探索の経路は一切変わらない。
+    /// 実測でも simson / nine_point_full / orthocenter / bench_2012egmop1 の
+    /// 消費仕事量が1ステップも変わらないことを確認済み)。
+    pub fn count_of_type(&self, ty: EntityType) -> usize {
+        let current = self.type_generation.get(&ty).copied().unwrap_or(0);
+        if let Some(&(cached_gen, n)) = self.type_counts.borrow().get(&ty) {
+            if cached_gen == current { return n; }
+        }
+        let n = self.entities.iter().filter(|e| e.entity_type == ty).count();
+        self.type_counts.borrow_mut().insert(ty, (current, n));
+        n
     }
 
     /// 🌟 type_generationのドキュメント参照。EGraphの生の構造フィールド
