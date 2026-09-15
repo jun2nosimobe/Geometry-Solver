@@ -15,6 +15,7 @@ mod discover_viz;
 mod padic;
 mod padic_eval;
 mod discover_degenerate;
+mod trace;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
@@ -222,6 +223,12 @@ fn main() {
     // 所要時間・作り直したシードなしタスク数を表示する
     // (ProverEngine::ProfileStatsのドキュメント参照)。
     let show_profile = args.iter().any(|a| a == "--profile");
+    // 🌟 ユーザ要望「証明に有効な定理がどの優先順位で発火して、熱や次数、
+    // 退化の振る舞いなどのパラメーターがどうなっているのかを調べる方法が
+    // あったらよい」への対応。--stats/--profile が「何に時間を使ったか」
+    // しか答えられないのに対し、--trace は「使った仕事のうちどれが
+    // 証明に残ったか」を答える(trace.rs の先頭のドキュメント参照)。
+    let show_trace = args.iter().any(|a| a == "--trace");
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -365,6 +372,7 @@ fn main() {
     prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = bandit_enabled;
+    if show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
     // 🌟 MCTSを再有効化。以前は実際のロールアウト評価をせずスコア固定
     // (=常に1.0)だったが、合同閉包による実際のマージ数と、構造的な
     // ヒューリスティック(次数・作図の種類・目標への近さ)による本物の
@@ -627,6 +635,11 @@ fn main() {
     println!("🧮 消費した仕事量: {} ステップ (予算 {})", engine.prover.work_done(), step_budget);
     output_raw_proof(&engine.prover.egraph, problem_name);
     engine.prover.egraph.dump_state();
+
+    if let Some(log) = &engine.prover.trace {
+        trace::report(&engine.prover.egraph, log, &problem.target_fact,
+            engine.prover.work_done(), engine.prover.heat_cap, engine.prover.fanout_heat_cap);
+    }
 
     if show_stats {
         println!("\n=== 📊 定理ごとのUCB1統計 (試行回数の多い順、上位20件) ===");

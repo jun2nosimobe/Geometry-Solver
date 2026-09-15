@@ -114,6 +114,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に定理ごとの試行回数・平均報酬を表示する" },
     Opt { name: "--profile", arg: Switch, default: "非表示", mode: Solve,
           help: "終了時に探索の各フェーズの所要時間の内訳を表示する" },
+    Opt { name: "--trace", arg: Switch, default: "非表示", mode: Solve,
+          help: "終了時に「どの定理がどの優先度で発火し、うち証明に残ったのはどれか」と、熱・参照数・退化関係数の分布を表示する" },
 
     // ---- 自由探索・発見モード ----
     Opt { name: "--preset", arg: Value("名前|all"), default: "自由点だけ", mode: Discover,

@@ -237,6 +237,13 @@ impl BlackboardEngine {
                 // Copy型としてここで先に控えておく。
                 let task_theorem_idx = task.theorem_idx;
                 let task_is_seeded = task.is_seeded;
+                // 🌟 --trace 診断(trace.rs 参照): 発火を記録するのは
+                // apply_conclusions だが、「どの優先度のタスクから発火したか」を
+                // 知っているのはこちらだけなので、ポップのたびに手渡しておく。
+                if let Some(t) = self.prover.trace.as_mut() {
+                    t.current = (task.priority, task.is_seeded);
+                    t.task_seq += 1;
+                }
                 // 🌟 theorems は Vec<Rc<TheoremDef>> なので、この clone() はもう
                 // ディープコピーではなく参照カウントのインクリメントのみ(ポインタコピー相当)
                 let theorem = self.prover.theorems[task.theorem_idx].clone();

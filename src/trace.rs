@@ -1,0 +1,539 @@
+//! 🌟 探索の「効き」を実測するための診断(--trace)。
+//!
+//! これまでの計測フラグは、どちらも「何に時間を使ったか」しか答えられなかった:
+//!   --profile  フェーズごとの壁時計時間の内訳
+//!   --stats    定理ごとのUCB1統計。ただし is_seeded=false のタスクしか
+//!              数えないので、実測で仕事量の大半を占めるシード済みタスクが
+//!              まるごと視界の外にある(ProfileStats のドキュメント参照)。
+//!
+//! ここで足すのは「使った仕事のうち、どれが証明に残ったか」という別軸の問い。
+//! 1回の発火(定理の結論を実際にe-graphへ適用できた瞬間)ごとに、そのときの
+//! 優先度・シード由来か・累計仕事量を記録しておき、実行後に証明を根から
+//! 辿って「実際に使われたマージ/接続」の集合を作り、両者を突き合わせる。
+//!
+//! 突き合わせは定理名ではなくマージそのもの(無向のスロット対)で行う。
+//! 同じ定理が50回発火して1回だけ証明に残ることは普通にあるので、名前で
+//! 結合すると「効いた仕事量」を大幅に過大評価してしまう。
+//!
+//! これで次の3つが実測で言えるようになる:
+//!   ① 全仕事量のうち、証明に残る発火を生んだタスクが使ったのは何%か
+//!      (小さいほど、探索の大半が捨て札になっている)
+//!   ② 証明に効いた発火が、実行のどのあたりで・どの優先度で起きたか
+//!      (前半に固まっていれば打ち切りの問題、散らばっていれば順序の問題)
+//!   ③ 証明に登場した実体が、熱で並べたときに何位にいるか
+//!      (heat_cap/fanout_heat_cap の外にいるなら、絞りすぎが真因)
+
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::mmp_core::{ClassId, EGraph, EntityType, Justification};
+
+/// 1回の「発火」= 定理の結論を実際にe-graphへ適用できた瞬間の記録。
+#[derive(Debug, Clone)]
+pub struct Firing {
+    pub theorem: String,
+    /// この発火を生んだタスクの優先度(MatchTask::priority)。UCB1の
+    /// theorem_priority_bonus とシード有無で決まる、まさに「発火の順番」を
+    /// 決めている値そのもの。
+    pub priority: i32,
+    pub is_seeded: bool,
+    /// この発火の時点での累計仕事量(ProverEngine::work_done)。
+    pub work_at: u64,
+    /// この発火を生んだタスク1回が消費した dfs_call 数。
+    pub dfs_calls_used: u64,
+    /// この発火を生んだタスクの通し番号。1回のタスクが複数の結論を適用して
+    /// 複数の発火になることがあるので、仕事量を足し合わせるときは必ずこれで
+    /// 重複を落とす(落とさないと同じタスクの dfs_call を何度も数えてしまい、
+    /// 全体を超える割合が出る)。
+    pub task_seq: u64,
+    /// この発火が作ったマージ(無向のスロット対)。証明との突き合わせの鍵。
+    pub merges: Vec<(usize, usize)>,
+    /// この発火が張った接続(無向のスロット対)。
+    pub incidences: Vec<(usize, usize)>,
+}
+
+/// 発火ログ本体。ProverEngine::trace が Some のときだけ積まれる
+/// (既定は None なので、診断を使わない実行には一切のコストが無い)。
+#[derive(Debug, Default)]
+pub struct TraceLog {
+    pub firings: Vec<Firing>,
+    /// いま処理中のタスクの(優先度, シード由来か)。run_step がタスクを
+    /// pop するたびに書き換え、apply_conclusions が発火を記録するときに読む。
+    /// 発火の記録側(prover)と、優先度を知っている側(blackboard)が別関数に
+    /// 分かれているため、この1段の受け渡しが要る。
+    pub current: (i32, bool),
+    /// タスクの通し番号。run_step がタスクを pop するたびに1つ進める。
+    pub task_seq: u64,
+}
+
+impl TraceLog {
+    /// apply_conclusions から呼ぶ。1回の apply_conclusions 呼び出しが
+    /// 複数の結論を適用することがあるので、まとめて1発火として記録する。
+    pub fn record(&mut self, theorem: &str, work_at: u64, dfs_calls_used: u64,
+                  merges: Vec<(usize, usize)>, incidences: Vec<(usize, usize)>) {
+        if merges.is_empty() && incidences.is_empty() { return; }
+        self.firings.push(Firing {
+            theorem: theorem.to_string(),
+            priority: self.current.0,
+            is_seeded: self.current.1,
+            work_at,
+            dfs_calls_used,
+            task_seq: self.task_seq,
+            merges,
+            incidences,
+        });
+    }
+}
+
+/// 無向のスロット対。マージ辺は「吸収された側のスロット番号」で一意に
+/// 決まるので、順序を落とした対も同じく一意(explain_identical は読みやすさの
+/// ために b 側の経路の from/to を入れ替えて返すため、順序に依存できない)。
+fn key(a: ClassId, b: ClassId) -> (usize, usize) {
+    if a.0 <= b.0 { (a.0, b.0) } else { (b.0, a.0) }
+}
+
+/// 証明を根から辿って集めた「実際に使われたもの」。
+#[derive(Default)]
+pub struct ProofSupport {
+    pub merges: FxHashSet<(usize, usize)>,
+    pub incidences: FxHashSet<(usize, usize)>,
+    /// 証明に登場した実体の代表元。熱の順位を見るのに使う。
+    pub entities: FxHashSet<usize>,
+    pub theorems: Vec<String>,
+    /// 由来を追い切れずに止まった箇所の数。ここが多いと、以下の集計は
+    /// 「証明に効いた分」を過小評価している可能性がある。
+    pub unresolved: usize,
+    /// 目標そのものが成立していたか。作図の定義だけで閉じる証明では
+    /// merges/incidences がどちらも空になり得るので、「集合が空かどうか」では
+    /// 到達判定にならない(実際 Concyclic の外接円はこの形になる)。
+    pub reached: bool,
+}
+
+const GOAL_IDENTICAL: u8 = 0;
+const GOAL_INCIDENCE: u8 = 1;
+
+/// 目標の事実から出発して、証明に実際に使われたマージ・接続・実体を集める。
+///
+/// EGraph::explain_identical / find_incidence_justification が返す
+/// Justification を辿るだけの素直な探索で、raw_proof::verify_identical が
+/// 出力テキストに対して行っているのと同じことを、生きたe-graphに対して行う。
+pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>)) -> ProofSupport {
+    let mut sup = ProofSupport::default();
+    let mut names: FxHashSet<String> = FxHashSet::default();
+    let mut seen: FxHashSet<(u8, usize, usize)> = FxHashSet::default();
+    let mut work: Vec<(u8, ClassId, ClassId)> = Vec::new();
+
+    let (fact_type, args) = target;
+    match fact_type.as_str() {
+        // 🌟 Concyclic は「N点が同じ円に乗っている」= 共通の円への接続N本。
+        // proof.rs::generate_proof と同じく、まず共通の円を特定してから
+        // 各点の接続の由来を辿る(ここを Identical と取り違えると、実際には
+        // 別物である最初の2点を同一視しようとして証明が1件も見つからない)。
+        "Concyclic" => {
+            if let Some(circle) = eg.find_shared_circle(args) {
+                sup.reached = true;
+                sup.entities.insert(eg.get_rep(circle).0);
+                for &p in args { work.push((GOAL_INCIDENCE, p, circle)); }
+            }
+        }
+        "Connected" if args.len() >= 2 => {
+            sup.reached = eg.is_connected(eg.get_rep(args[0]), eg.get_rep(args[1]));
+            work.push((GOAL_INCIDENCE, args[0], args[1]));
+        }
+        _ if args.len() >= 2 => {
+            sup.reached = eg.get_rep(args[0]) == eg.get_rep(args[1]);
+            work.push((GOAL_IDENTICAL, args[0], args[1]));
+        }
+        _ => {}
+    }
+
+    // 安全弁: 証明の森は有限だが、接続の橋渡しで往復する可能性があるので
+    // 上限を切っておく(診断なので、打ち切っても実害は集計の過小評価だけ)。
+    let mut guard = 0usize;
+    while let Some((kind, a, b)) = work.pop() {
+        guard += 1;
+        if guard > 500_000 { break; }
+        let (ra, rb) = (eg.get_rep(a).0, eg.get_rep(b).0);
+        let canon = if ra <= rb { (kind, ra, rb) } else { (kind, rb, ra) };
+        if !seen.insert(canon) { continue; }
+        sup.entities.insert(ra);
+        sup.entities.insert(rb);
+
+        if kind == GOAL_IDENTICAL {
+            let edges = eg.explain_identical(a, b);
+            if edges.is_empty() {
+                // 同じ実体そのもの(説明すべきことが無い)なら正常。
+                // 別の同値類のままなら、証明が繋がっていない。
+                if ra != rb { sup.unresolved += 1; }
+                continue;
+            }
+            for edge in edges {
+                sup.merges.insert(key(edge.from, edge.to));
+                sup.entities.insert(eg.get_rep(edge.from).0);
+                sup.entities.insert(eg.get_rep(edge.to).0);
+                expand(eg, &edge.justification, edge.from, edge.to,
+                       &mut work, &mut names, &mut sup.unresolved);
+            }
+        } else {
+            match eg.find_incidence_justification(a, b) {
+                Some((orig_p, orig_c, just)) => {
+                    sup.incidences.insert(key(orig_p, orig_c));
+                    // 記録時と違う実体経由で同じ代表元に来ている場合、その
+                    // 橋渡し(a≡orig_p, b≡orig_c)も証明の一部。
+                    work.push((GOAL_IDENTICAL, a, orig_p));
+                    work.push((GOAL_IDENTICAL, b, orig_c));
+                    expand(eg, &just, orig_p, orig_c, &mut work, &mut names, &mut sup.unresolved);
+                }
+                // 🌟 provenance が無い接続は「作図そのものから従う」ものが
+                // ほとんど(Intersection(l1,l2) で作った点は定義上 l1・l2 に
+                // 乗っているし、LineThroughPoints(A,B) は定義上 A・B を通る)。
+                // これは証明の穴ではなく前提なので、unresolved には数えない。
+                None if structural_incidence(eg, a, b) => {}
+                None => sup.unresolved += 1,
+            }
+        }
+    }
+
+    let mut v: Vec<String> = names.into_iter().collect();
+    v.sort();
+    sup.theorems = v;
+    sup
+}
+
+/// 「x が y に乗っている」ことが、どちらかの作図の定義そのものから従うか。
+/// 一方の original_definition の親に他方が現れていれば、その接続は
+/// link_logical_incidence が定義に沿って張ったもの(=前提)であって、
+/// 定理が証明したものではない。
+fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> bool {
+    let (rx, ry) = (eg.get_rep(x), eg.get_rep(y));
+    let has = |owner: ClassId, needle: ClassId| -> bool {
+        eg.entities[owner.0].original_definition.get_parents()
+            .iter().any(|&p| eg.get_rep(p) == needle)
+    };
+    has(rx, ry) || has(ry, rx) || has(x, ry) || has(y, rx)
+}
+
+/// 1つの Justification から、さらに遡るべき部分目標を積む。
+fn expand(eg: &EGraph, j: &Justification, from: ClassId, to: ClassId,
+          work: &mut Vec<(u8, ClassId, ClassId)>, names: &mut FxHashSet<String>,
+          unresolved: &mut usize) {
+    match j {
+        Justification::Theorem { name, premises } => {
+            names.insert(name.clone());
+            for (ft, args) in premises {
+                if args.len() < 2 { continue; }
+                match ft.as_str() {
+                    "Identical" => work.push((GOAL_IDENTICAL, args[0], args[1])),
+                    "Connected" => work.push((GOAL_INCIDENCE, args[0], args[1])),
+                    // DefinedBy(親…, 結果)は「結果はこの定義で作られている」
+                    // という構造的な前提で、遡るべき等式を含まない。
+                    _ => {}
+                }
+            }
+        }
+        Justification::Congruence { .. } => {
+            // 合同閉包 f(a)=f(b) if a=b。どの引数が等しかったのかは
+            // Justification には残っていないが、両辺の original_definition
+            // から機械的に復元できる(同じ構築子・同じ引数個数のはず)。
+            // 引数は normalize_definition でソートされていることがあるので、
+            // まず「既に同値なもの」同士を取り除いてから残りを順に対応づける。
+            let pa = eg.entities[from.0].original_definition.get_parents();
+            let pb = eg.entities[to.0].original_definition.get_parents();
+            if pa.len() != pb.len() || pa.is_empty() {
+                *unresolved += 1;
+                return;
+            }
+            let mut left: Vec<ClassId> = Vec::new();
+            let mut right: Vec<ClassId> = pb.clone();
+            for &x in &pa {
+                match right.iter().position(|&y| eg.get_rep(y) == eg.get_rep(x)) {
+                    Some(i) => { right.remove(i); }
+                    None => left.push(x),
+                }
+            }
+            for (x, y) in left.into_iter().zip(right.into_iter()) {
+                work.push((GOAL_IDENTICAL, x, y));
+            }
+        }
+        Justification::LineUniqueness { shared_points }
+        | Justification::ConicUniqueness { shared_points } => {
+            for &p in shared_points {
+                work.push((GOAL_INCIDENCE, p, from));
+                work.push((GOAL_INCIDENCE, p, to));
+            }
+        }
+        Justification::PointUniqueness { via_lines } => {
+            for &l in &[via_lines.0, via_lines.1] {
+                work.push((GOAL_INCIDENCE, from, l));
+                work.push((GOAL_INCIDENCE, to, l));
+            }
+        }
+        // Given / Trivial は仮定・定義から機械的に従うもので、遡る先が無い。
+        Justification::Given | Justification::Trivial { .. } => {}
+    }
+}
+
+/// 発火ログ1件が証明に残ったか。
+fn on_proof_path(f: &Firing, sup: &ProofSupport) -> bool {
+    f.merges.iter().any(|m| sup.merges.contains(m))
+        || f.incidences.iter().any(|i| sup.incidences.contains(i))
+}
+
+struct Row { fires: u64, useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
+
+pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>)>,
+              total_work: u64, heat_cap: usize, fanout_heat_cap: usize) {
+    println!("\n=== 🔬 発火と証明への寄与 (--trace) ===");
+    if log.firings.is_empty() {
+        println!("  発火が1件もありませんでした。");
+        println!("=============================\n");
+        return;
+    }
+
+    let sup = match target {
+        Some(t) => collect_proof_support(eg, t),
+        None => ProofSupport::default(),
+    };
+    let have_proof = sup.reached;
+
+    // --- ① 定理ごとの発火と、そのうち証明に残った数 -------------------
+    // 🌟 仕事量は必ずタスク単位で数える。1回のタスクが複数の結論を適用して
+    // 複数の発火になることがあり、発火ごとに dfs_calls_used を足すと同じ
+    // タスクの仕事を何度も数えてしまう(実測で全体の182%という値が出た)。
+    let mut counted_task: FxHashSet<u64> = FxHashSet::default();
+    let mut useful_tasks: FxHashSet<u64> = FxHashSet::default();
+    let mut per: FxHashMap<&str, Row> = FxHashMap::default();
+    let (mut total_useful, mut useful_work, mut fired_work) = (0u64, 0u64, 0u64);
+    for f in &log.firings {
+        let good = have_proof && on_proof_path(f, &sup);
+        let first_of_task = counted_task.insert(f.task_seq);
+        let r = per.entry(f.theorem.as_str())
+            .or_insert(Row { fires: 0, useful: 0, work: 0, useful_work: 0, pri_sum: 0, seeded: 0 });
+        r.fires += 1;
+        r.pri_sum += f.priority as i64;
+        if f.is_seeded { r.seeded += 1; }
+        if first_of_task {
+            r.work += f.dfs_calls_used;
+            fired_work += f.dfs_calls_used;
+        }
+        if good {
+            r.useful += 1;
+            total_useful += 1;
+            if useful_tasks.insert(f.task_seq) {
+                r.useful_work += f.dfs_calls_used;
+                useful_work += f.dfs_calls_used;
+            }
+        }
+    }
+
+    let pct = |x: u64, y: u64| -> f64 { if y > 0 { 100.0 * x as f64 / y as f64 } else { 0.0 } };
+    println!("  発火 {}件 / 仕事量 {} ステップ", log.firings.len(), total_work);
+    if have_proof {
+        println!("  うち証明に残った発火 : {}件 ({:.1}%)", total_useful, pct(total_useful, log.firings.len() as u64));
+        println!("  証明に残った発火を生んだタスクの仕事量 : {} ({:.2}% of 全体)", useful_work, pct(useful_work, total_work));
+        println!("  発火したタスク全体の仕事量             : {} ({:.2}% of 全体)", fired_work, pct(fired_work, total_work));
+        println!("    -> 残りの {:.2}% は、一度も結論を適用できなかったタスクが使った分。",
+            100.0 - pct(fired_work, total_work));
+        println!("  証明に使われたマージ {}件 / 接続 {}件 / 実体 {}個 / 定理 {}種",
+            sup.merges.len(), sup.incidences.len(), sup.entities.len(), sup.theorems.len());
+        if sup.unresolved > 0 {
+            println!("  ⚠️ 由来を辿り切れなかった箇所が {}件あります(以下の集計は過小評価の可能性)。", sup.unresolved);
+        }
+    } else {
+        println!("  (目標に到達していないため、証明との突き合わせはできません。発火の内訳だけ表示します。)");
+    }
+
+    let mut rows: Vec<(&str, &Row)> = per.iter().map(|(k, v)| (*k, v)).collect();
+    rows.sort_by(|a, b| (b.1.useful, b.1.fires).cmp(&(a.1.useful, a.1.fires)));
+    println!("\n  --- 定理ごとの発火(証明に残った数の多い順、上位20件) ---");
+    println!("  {:>6} {:>6} {:>10} {:>10} {:>8} {:>6}  定理", "発火", "有効", "仕事量", "有効分", "平均優先", "シード");
+    for (name, r) in rows.iter().take(20) {
+        println!("  {:>6} {:>6} {:>10} {:>10} {:>+8.1} {:>5.0}%  {}",
+            r.fires, r.useful, r.work, r.useful_work,
+            r.pri_sum as f64 / r.fires as f64,
+            100.0 * r.seeded as f64 / r.fires as f64,
+            name);
+    }
+    if rows.len() > 20 { println!("  ... 他 {}種", rows.len() - 20); }
+
+    // --- ② 証明に効いた発火が、実行のどのあたりで起きたか ---------------
+    if have_proof {
+        println!("\n  --- 証明に効いた発火の時点(発火順) ---");
+        let mut shown = 0;
+        let mut first_pos = 100.0f64;
+        let mut last_pos = 0.0f64;
+        for (i, f) in log.firings.iter().enumerate() {
+            if !on_proof_path(f, &sup) { continue; }
+            last_pos = pct(f.work_at, total_work);
+            if shown == 0 { first_pos = last_pos; }
+            if shown < 25 {
+                println!("    発火#{:<4} 仕事量 {:>9} ({:>5.1}%) 優先度{:>+3} {} : {}",
+                    i + 1, f.work_at, last_pos, f.priority,
+                    if f.is_seeded { "シード" } else { "全探索" }, f.theorem);
+            }
+            shown += 1;
+        }
+        if shown > 25 { println!("    ... 他 {}件", shown - 25); }
+        if shown > 0 {
+            println!("    -> 証明に効いた発火は全仕事量の {:.1}% 〜 {:.1}% の区間にある。", first_pos, last_pos);
+            if last_pos < 60.0 {
+                println!("       残り {:.1}% は証明が出揃った後の探索。打ち切り/目標検知の側に伸びしろがある。", 100.0 - last_pos);
+            } else if first_pos > 60.0 {
+                println!("       必要な発火が終盤に偏っている。それまでの {:.1}% は、証明に要る定理が選ばれないまま使われた分。順序付け(優先度/シード)に伸びしろがある。", first_pos);
+            } else {
+                println!("       実行全体に散らばっている。順序付けより、連鎖そのものの長さが支配的。");
+            }
+        }
+    }
+
+    // --- ③ ヒューリスティックのパラメータが実際どうなっているか ---------
+    println!("\n  --- 証明に登場した実体のヒューリスティック値 ---");
+    if !have_proof {
+        println!("  (証明が無いので比較できません。)");
+        println!("=============================\n");
+        return;
+    }
+
+    // heat_cap による絞り込みは「同じ型の中で heat() の降順に並べて上位N件」
+    // という形(cost.rs の heat_capped_* / matcher.rs の自己束縛ソート)なので、
+    // 順位も同じ土俵、すなわち型ごと・heat()降順で数える。
+    // 熱には2つの式がある(GeoEntity::heat / heat_with_degree)。cap の
+    // 絞り込みは次数抜きの heat() を使っているので、両方の順位を
+    // 並べて「どちらで並べる方が証明に要る実体を上に持ち上げるか」を
+    // その場で見比べられるようにする。
+    let rank_of = |ty: EntityType, with_degree: bool| -> (usize, Vec<usize>) {
+        let mut pool: Vec<(usize, f64)> = (0..eg.entities.len())
+            .filter(|&i| eg.get_rep(ClassId(i)).0 == i)
+            .filter(|&i| eg.entities[i].entity_type == ty && eg.entities[i].is_active())
+            .map(|i| (i, if with_degree { eg.entities[i].heat_with_degree() } else { eg.entities[i].heat() }))
+            .collect();
+        pool.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let n = pool.len();
+        let ranks = pool.iter().enumerate()
+            .filter(|(_, (i, _))| sup.entities.contains(i))
+            .map(|(r, _)| r + 1)
+            .collect();
+        (n, ranks)
+    };
+    let types = [EntityType::Point, EntityType::Line, EntityType::Scalar, EntityType::Conic];
+    let (mut sum_heat, mut sum_deg, mut n_ranked) = (0usize, 0usize, 0usize);
+    for ty in types {
+        let (n, ranks) = rank_of(ty, false);
+        if n == 0 { continue; }
+        if ranks.is_empty() {
+            println!("  {:?}: 全{}個中、証明に登場したものは無し", ty, n);
+            continue;
+        }
+        let (_, ranks_d) = rank_of(ty, true);
+        let over_heat = ranks.iter().filter(|&&r| r > heat_cap).count();
+        let over_fan = ranks.iter().filter(|&&r| r > fanout_heat_cap).count();
+        let over_fan_d = ranks_d.iter().filter(|&&r| r > fanout_heat_cap).count();
+        let shown: Vec<String> = ranks.iter().take(20)
+            .map(|&r| if r > heat_cap { format!("{}*", r) } else { r.to_string() })
+            .collect();
+        println!("  {:?}: 全{}個中{}個が証明に登場。heat()の順位 = {}{}",
+            ty, n, ranks.len(), shown.join(", "),
+            if ranks.len() > 20 { ", ..." } else { "" });
+        println!("        heat_cap={} の外 : {}個 / fanout_heat_cap={} の外 : {}個 (heat_with_degree()で並べると {}個)",
+            heat_cap, over_heat, fanout_heat_cap, over_fan, over_fan_d);
+        sum_heat += ranks.iter().sum::<usize>();
+        sum_deg += ranks_d.iter().sum::<usize>();
+        n_ranked += ranks.len();
+    }
+    if n_ranked > 0 {
+        let (a, b) = (sum_heat as f64 / n_ranked as f64, sum_deg as f64 / n_ranked as f64);
+        println!("  証明に要る実体の平均順位: heat() = {:.1} / heat_with_degree() = {:.1} → {}",
+            a, b,
+            if b < a * 0.95 { "次数込みの式の方が上に来る" }
+            else if a < b * 0.95 { "次数抜き(現行)の式の方が上に来る" }
+            else { "差は小さい" });
+    }
+
+    // 熱・参照数・退化関係の生の値も、証明に登場したものと全体とで比べる。
+    let stat = |pick: &dyn Fn(usize) -> bool| -> (f64, f64, f64, usize) {
+        let (mut n, mut heat, mut uses, mut degen) = (0usize, 0.0f64, 0.0f64, 0usize);
+        for i in 0..eg.entities.len() {
+            if eg.get_rep(ClassId(i)).0 != i { continue; }
+            if !eg.entities[i].is_active() { continue; }
+            if !pick(i) { continue; }
+            n += 1;
+            heat += eg.entities[i].heat();
+            uses += eg.entities[i].uses.len() as f64;
+            if let Some(rel) = &eg.degeneration_groups {
+                degen += rel.members_of(ClassId(i)).len();
+            }
+        }
+        if n == 0 { return (0.0, 0.0, 0.0, 0); }
+        (heat / n as f64, uses / n as f64, degen as f64 / n as f64, n)
+    };
+    let (h_all, u_all, d_all, n_all) = stat(&|_| true);
+    let (h_pr, u_pr, d_pr, n_pr) = stat(&|i| sup.entities.contains(&i));
+    println!("\n  {:<12} {:>6} {:>10} {:>12} {:>14}", "", "実体数", "平均熱", "平均参照数", "平均退化関係数");
+    println!("  {:<12} {:>6} {:>10.2} {:>12.2} {:>14.2}", "全体", n_all, h_all, u_all, d_all);
+    println!("  {:<12} {:>6} {:>10.2} {:>12.2} {:>14.2}", "証明に登場", n_pr, h_pr, u_pr, d_pr);
+    if eg.degeneration_groups.is_none() {
+        println!("  (退化関係は未計算です。--degen-heat を付けると計算されます。)");
+    }
+    if h_pr > h_all * 1.2 {
+        println!("  -> 熱は効いている(証明に要る実体の方が明確に熱い)。");
+    } else if h_pr < h_all {
+        println!("  -> ⚠️ 証明に要る実体の方が平均的に冷たい。熱は今の形では効いていない。");
+    } else {
+        println!("  -> 熱の差は小さい。今の熱の式では証明に要る実体をほとんど区別できていない。");
+    }
+    println!("=============================\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mmp_core::Definition;
+
+    /// 🌟 突き合わせの核: 証明を根から辿って「実際に使われたマージ」を
+    /// 集められること、そしてそこに使われていない発火を取り違えないこと。
+    /// この2つが崩れると --trace の数字は全部意味を失う。
+    #[test]
+    fn proof_support_finds_the_merge_that_the_target_actually_used() {
+        let mut eg = EGraph::new();
+        let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = eg.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let c = eg.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+        let d = eg.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
+
+        // 目標に使うマージ(定理X)と、使わないマージ(定理Y)を1つずつ作る。
+        eg.merge_entities_justified(a, b, Justification::Theorem {
+            name: "定理X".into(), premises: Vec::new() });
+        eg.merge_entities_justified(c, d, Justification::Theorem {
+            name: "定理Y".into(), premises: Vec::new() });
+
+        let sup = collect_proof_support(&eg, &("Identical".to_string(), vec![a, b]));
+        assert_eq!(sup.theorems, vec!["定理X".to_string()],
+            "目標A≡Bの証明に使われたのは定理Xだけのはず");
+
+        let used = Firing {
+            theorem: "定理X".into(), priority: 0, is_seeded: false, work_at: 0,
+            dfs_calls_used: 1, task_seq: 1,
+            merges: vec![key(a, b)], incidences: Vec::new(),
+        };
+        let unused = Firing {
+            theorem: "定理Y".into(), priority: 0, is_seeded: false, work_at: 0,
+            dfs_calls_used: 1, task_seq: 2,
+            merges: vec![key(c, d)], incidences: Vec::new(),
+        };
+        assert!(on_proof_path(&used, &sup));
+        assert!(!on_proof_path(&unused, &sup),
+            "同じ実行の中の無関係なマージを証明に数えてはいけない");
+    }
+
+    /// 🌟 作図の定義そのものから従う接続(Intersectionで作った点が、その2直線に
+    /// 乗っていること)は前提であって、定理が証明したものではない。ここを
+    /// 「由来不明」と数えると、点の一意性で閉じる証明が丸ごと追えなくなる。
+    #[test]
+    fn incidences_implied_by_the_construction_are_treated_as_premises() {
+        let mut eg = EGraph::new();
+        let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = eg.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let l = eg.create_entity("L".into(), Definition::new_line(a, b), EntityType::Line);
+        assert!(structural_incidence(&eg, a, l), "直線L=AB は定義上Aを通る");
+        assert!(!structural_incidence(&eg, b, a), "自由点どうしに構造的な接続は無い");
+    }
+}

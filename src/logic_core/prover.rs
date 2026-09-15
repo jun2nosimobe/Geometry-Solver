@@ -145,6 +145,10 @@ pub struct ProverEngine {
     // フェーズ・MCTS)の実行時間を計測してここに積み上げ、--profileで
     // 終了時に集計を表示する(ProfileStatsのドキュメント参照)。
     pub profile: ProfileStats,
+    // 🌟 --trace 診断の発火ログ(trace.rs 参照)。None が既定で、
+    // その場合は apply_conclusions が発火を一切記録しないので
+    // 診断を使わない実行にはコストが無い。
+    pub trace: Option<crate::trace::TraceLog>,
 }
 
 /// 🌟 ProverEngine::profileのドキュメント参照。schedule_full_sweep自体の
@@ -207,6 +211,7 @@ impl ProverEngine {
             defined_by_full_scan_cache: FxHashMap::default(),
             global_failed_paths: Vec::new(),
             profile: ProfileStats::default(),
+            trace: None,
         }
     }
 
@@ -455,6 +460,13 @@ impl ProverEngine {
         let mut new_facts = Vec::new();
         let theorem_name = theorem.name.as_str();
         let premises = Self::compute_theorem_premises(theorem, bind);
+        // 🌟 --trace 診断(trace.rs 参照): この発火が実際に作った
+        // マージ/接続を控えておく。後で証明を根から辿って得られる
+        // 「実際に使われたマージ」の集合と突き合わせるための鍵で、
+        // 定理名ではなくマージそのもので紐づけるのが要点。
+        let tracing = self.trace.is_some();
+        let mut traced_merges: Vec<(usize, usize)> = Vec::new();
+        let mut traced_incidences: Vec<(usize, usize)> = Vec::new();
 
         for conc in &theorem.conclusions {
             match conc.fact_type.as_str() {
@@ -483,6 +495,9 @@ impl ProverEngine {
                             premises: premises.clone(),
                         };
                         if self.egraph.merge_entities_justified(r1, r2, justification) {
+                            if tracing {
+                                traced_merges.push(if r1.0 <= r2.0 { (r1.0, r2.0) } else { (r2.0, r1.0) });
+                            }
                             println!("  🟢 [マージ実行] {} ≡ {} (理由: {})", name1, name2, theorem_name);
                             // 🌟 マージされた代表元の熱を上げて今後のDFSで優先させる[cite: 5]
                             // (EGraph::bump_heat_bonus経由: degeneration_groupsが計算済みなら
@@ -504,6 +519,9 @@ impl ProverEngine {
                             premises: premises.clone(),
                         };
                         self.egraph.link_logical_incidence_justified(c_rep, p_rep, justification);
+                        if tracing {
+                            traced_incidences.push(if c_rep.0 <= p_rep.0 { (c_rep.0, p_rep.0) } else { (p_rep.0, c_rep.0) });
+                        }
                         applied_anything = true;
                         println!("  🟢 [リンク構築] {} ∈ {} (理由: {})",
                             self.egraph.entities[c_rep.0].name, self.egraph.entities[p_rep.0].name, theorem_name);
@@ -524,6 +542,13 @@ impl ProverEngine {
                     }
                 },
                 _ => {}
+            }
+        }
+        if tracing {
+            let work_at = self.work_done();
+            let used = self.dfs_calls;
+            if let Some(t) = self.trace.as_mut() {
+                t.record(theorem_name, work_at, used, traced_merges, traced_incidences);
             }
         }
         (applied_anything, new_facts)

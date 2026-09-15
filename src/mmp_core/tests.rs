@@ -1114,7 +1114,7 @@ fn merged_definitions_keep_a_deterministic_order() {
 fn equal_cross_ratios_force_the_fourth_point_to_coincide() {
     let mut egraph = EGraph::new();
     let l = egraph.create_entity("L".into(), Definition::FreePoint, EntityType::Line);
-    let mut on_line = |eg: &mut EGraph, name: &str| {
+    let on_line = |eg: &mut EGraph, name: &str| {
         let p = eg.create_entity(name.into(), Definition::FreePoint, EntityType::Point);
         eg.link_logical_incidence(p, l);
         p
@@ -1143,7 +1143,7 @@ fn equal_cross_ratios_force_the_fourth_point_to_coincide() {
 fn equal_cross_ratios_do_not_merge_when_the_fixed_points_repeat() {
     let mut egraph = EGraph::new();
     let l = egraph.create_entity("L".into(), Definition::FreePoint, EntityType::Line);
-    let mut on_line = |eg: &mut EGraph, name: &str| {
+    let on_line = |eg: &mut EGraph, name: &str| {
         let p = eg.create_entity(name.into(), Definition::FreePoint, EntityType::Point);
         eg.link_logical_incidence(p, l);
         p
