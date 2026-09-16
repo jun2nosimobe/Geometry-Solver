@@ -75,7 +75,19 @@ impl EGraph {
         in_progress: &mut HashSet<usize>,
     ) -> Option<Vec<ModInt>> {
         match def {
-            Definition::FreePoint | Definition::GivenPoint => {
+            // 🐛 座標がまだ割り当てられていない自由点は、(0,0) で黙って計算を
+            // 続けず評価不能にする。マージで1つの同値類に複数の定義が同居すると
+            // (外接円 Circumcircle(A,B,C) と Circumcircle(B,C,D) など)、座標の揃って
+            // いない定義を (0,0) で評価してしまい、揃っている別の定義に切り替わら
+            // なかった。None を返せば evaluate_node_inner が次の定義を試す。
+            // 呼び出し側は全ての祖先の自由点に座標を入れてから呼ぶので、座標が
+            // 欠けるのは制約付きサンプリングの途中だけ。
+            Definition::FreePoint => {
+                let x = vars.get(&format!("{}_x", name)).copied()?;
+                let y = vars.get(&format!("{}_y", name)).copied()?;
+                Some(vec![x, y, ModInt::new(1)])
+            }
+            Definition::GivenPoint => {
                 let x = vars.get(&format!("{}_x", name)).copied().unwrap_or(ModInt::new(0));
                 let y = vars.get(&format!("{}_y", name)).copied().unwrap_or(ModInt::new(0));
                 Some(vec![x, y, ModInt::new(1)])
@@ -747,10 +759,67 @@ impl EGraph {
     /// 依存する評価」を(0,0)で誤魔化さず確実に弾く必要があるため、
     /// evaluate_nodeを呼ぶ前に明示的にチェックする。
     fn free_point_ancestors_ready(&self, id: ClassId, vars: &FxHashMap<String, ModInt>) -> bool {
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(id, &mut visited, &mut ancestors);
-        ancestors.iter().all(|&fp| vars.contains_key(&format!("{}_x", self.entities[fp.0].name)))
+        // 🐛 以前は「全ての定義の全ての祖先に座標があるか」を見ていた。マージで
+        // 定義が同居した同値類(外接円が Circumcircle(A,B,C) と Circumcircle(B,C,D)
+        // を両方持つなど)では、どれか1つの定義で評価できれば十分なのに、同居する
+        // 別の定義がまだ座標の無い点を含むだけで「準備できていない」になっていた。
+        let mut stack = HashSet::new();
+        let mut ready_memo = FxHashMap::default();
+        self.node_ready(id, vars, &mut stack, &mut ready_memo)
+    }
+
+    /// nodeを、座標が既に割り当てられた自由点だけで評価できる定義が(再帰的に)
+    /// 少なくとも1つあるか。循環に当たった経路は「評価できない」とみなす。
+    /// 循環の影響を受けた偽は経路に依存するので、真だけをメモ化する。
+    fn node_ready(&self, id: ClassId, vars: &FxHashMap<String, ModInt>,
+                  stack: &mut HashSet<usize>, memo: &mut FxHashMap<usize, bool>) -> bool {
+        let rep = self.get_rep(id);
+        if memo.contains_key(&rep.0) { return true; }
+        if !stack.insert(rep.0) { return false; }
+        let defs = self.entities[rep.0].components.first()
+            .map(|c| c.definitions.clone()).unwrap_or_default();
+        let name = &self.entities[rep.0].name;
+        let ready = defs.iter().any(|d| match d {
+            Definition::FreePoint => vars.contains_key(&format!("{}_x", name)),
+            Definition::GivenPoint => true,
+            _ => d.get_parents().iter().all(|&p| self.node_ready(p, vars, stack, memo)),
+        });
+        stack.remove(&rep.0);
+        if ready { memo.insert(rep.0, true); }
+        ready
+    }
+
+    /// 自由点 fp が、自身の定義からは従わない全ての接続(直線・二次曲線に乗っている)を、
+    /// いま割り当てた座標で実際に満たしているか。
+    fn incidences_hold(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>,
+                       cache: &mut FxHashMap<usize, Vec<ModInt>>) -> bool {
+        let Some(p) = self.evaluate_node(fp, vars, cache) else { return false };
+        if p.len() < 3 { return false; }
+        let (x, y, z) = (p[0], p[1], p[2]);
+        self.find_extraneous_incidences(fp).into_iter().all(|curve| {
+            let Some(v) = self.evaluate_node(curve, vars, cache) else { return false };
+            match self.entities[curve.0].entity_type {
+                EntityType::Line if v.len() >= 3 => (v[0] * x + v[1] * y + v[2] * z).0 == 0,
+                EntityType::Conic if v.len() >= 6 =>
+                    (v[0] * x * x + v[1] * x * y + v[2] * y * y + v[3] * x * z + v[4] * y * z + v[5] * z * z).0 == 0,
+                _ => false,
+            }
+        })
+    }
+
+    /// curve の定義のうち少なくとも1つが point を必要とするか(= その定義で評価
+    /// する限り、point が curve に乗っていることは自動的に満たされる)。
+    fn some_definition_requires(&self, point: ClassId, curve: ClassId) -> bool {
+        let (point, curve) = (self.get_rep(point), self.get_rep(curve));
+        let defs = match self.entities[curve.0].components.first() {
+            Some(c) => c.definitions.clone(),
+            None => return false,
+        };
+        let mut memo = rustc_hash::FxHashMap::default();
+        defs.iter().any(|d| d.get_parents().iter().any(|&p| {
+            let mut stack = HashSet::new();
+            self.evaluation_requires_point(point, p, &mut stack, &mut memo)
+        }))
     }
 
     /// 🌟 直線の係数(a,b,c: a*x+b*y+c=0)を満たすランダムな点(x,y)を1つ選ぶ。
@@ -894,11 +963,19 @@ impl EGraph {
             Some(c) => c,
             None => return Vec::new(),
         };
-        comp.subobjects.iter()
+        // 🐛 subobjects はマージ前の生のIDを持ち続けるので、代表元に直すと同じ曲線が
+        // 何度も現れる(miquel では CircAEF が数十回)。重複を落とさないと、下の
+        // 「2本の直線に乗っているなら交点」の分岐が同じ直線どうしの交点を計算して
+        // 退化し、その点の座標が決まらなくなる(発見モードの compute_incidence_constraints
+        // で直したのと同じ穴)。
+        let mut out: Vec<ClassId> = comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic)
-                && !self.is_natural_incidence(rep, s))
-            .collect()
+            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
+            .collect();
+        out.sort_unstable_by_key(|c| c.0);
+        out.dedup();
+        out.retain(|&s| !self.is_natural_incidence(rep, s));
+        out
     }
 
     /// 🌟 numeric_plausibility_check用に、祖先の自由点それぞれへ座標を割り当てる。
@@ -920,9 +997,18 @@ impl EGraph {
             }
         }
 
+        let constrained: Vec<ClassId> = pending.clone();
         let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
         loop {
-            if pending.is_empty() { return true; }
+            if pending.is_empty() {
+                // 🐛 最後に、制約付きの自由点が全ての構造的前提を本当に満たしているかを
+                // 確かめる。サンプリングは前提を1つしか満たさない(直線と円の両方に乗る点は
+                // 片方にしか乗らない)ことがあり、行き詰まりの解消で自由に置いた点も前提を
+                // 外れうる。そういう座標で比べると、正しい結合を「数値的に別物」と誤って
+                // 却下してしまう(bench_2010g1 で75件)。前提を満たさない座標しか作れない
+                // ときは、これまで通り判定不能にする。
+                return constrained.iter().all(|&fp| self.incidences_hold(fp, vars, &mut cache));
+            }
             let mut progressed = false;
             let mut still_pending = Vec::new();
             for fp in pending.drain(..) {
@@ -937,7 +1023,34 @@ impl EGraph {
                 }
             }
             pending = still_pending;
-            if !progressed { return false; }
+            if !progressed {
+                // 🐛 循環の解消(実測で判明): 円 Omega = Circumcircle(A,B,C) の上に自由点D
+                // がある図で、証明が進んで Omega に Circumcircle(B,C,D) などの定義が
+                // 同居すると、A・B・C それぞれにも「Aを使わずに Omega を評価する経路が
+                // ある」ので Omega への接続が制約扱いになる。すると A,B,C,D の全員が
+                // 互いの座標を待って1つも決まらず、数値チェックが全部「判定不能」を
+                // 返していた。判定不能は結合を許す側に倒れるので、無関係な直線どうしが
+                // 結合され、図が崩壊した(bench_2016armog10p2)。
+                //
+                // 実際に必要なのは「どの点を自由に置き、どの点を曲線上に取るか」の
+                // 順序だけで、A,B,C を自由に置けば D は Circumcircle(A,B,C) の上に
+                // 取れ、全ての定義が一致する。そこで行き詰まったら、制約の相手の曲線の
+                // どれかの定義がその点を必要とする(=その定義で評価すれば自動的に
+                // 乗っている)点のうち、最も古い1つを自由に置いてから続ける。
+                let pick = pending.iter().copied()
+                    .filter(|&fp| self.find_extraneous_incidences(fp).iter()
+                        .all(|&c| self.some_definition_requires(fp, c)))
+                    .min_by_key(|fp| fp.0);
+                match pick {
+                    Some(fp) => {
+                        let name = self.entities[fp.0].name.clone();
+                        vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
+                        vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
+                        pending.retain(|&q| q != fp);
+                    }
+                    None => return false,
+                }
+            }
         }
     }
 
