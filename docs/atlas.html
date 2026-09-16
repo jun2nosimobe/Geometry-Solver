@@ -228,13 +228,13 @@
     <p class="subtitle">e-graph上の合同閉包 + 定理マッチングによる幾何定理自動証明エンジンの、現在の構造と最適化の来歴。次に何へ着手するかを判断するための一枚。</p>
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/main.rs(全体像は§01)</span>
-      <span><b>ベンチ</b> 39問(単体検証14 + 古典幾何15 + HAGeo-409由来10)</span>
+      <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
       <span><b>最新コミット</b> cb106e0</span>
     </div>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="n">30/39</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
+    <div class="stat"><div class="n">31/44</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
     <div class="stat"><div class="n">22</div><div class="l">既定で有効な定理(基本17 + 射影5)。中心角の定理はopt-in</div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
@@ -302,7 +302,7 @@
       <div class="gterm"><b>logic_core/matcher.rs</b><p>深さ優先探索の本体(<code>dfs_match</code>)と、fact_typeごとの候補の展開。どれを選ぶかの方針はcost.rsに分離済み。</p></div>
       <div class="gterm"><b>logic_core/blackboard.rs</b><p>探索の司令塔。タスク待ち行列を回し、行き詰まったときの需要駆動の補助作図(<code>resolve_*_demands</code>)で図を伸ばす。</p></div>
       <div class="gterm"><b>src/theorems.rs</b><p>定理の定義(23件)。<code>get_all_theorems</code>17件 + <code>get_projective_theorems</code>5件(既定で有効) + 中心角の定理1件(opt-in)。</p></div>
-      <div class="gterm"><b>src/problems/</b><p>ベンチ39問。単体検証(<code>test_*</code>)・古典幾何・HAGeo-409由来(<code>bench_*</code>)。<code>mod.rs</code>に「目標が数値的にも本当に成り立つか」の検査を置いてある。</p></div>
+      <div class="gterm"><b>src/problems/</b><p>ベンチ44問。単体検証(<code>test_*</code>)・古典幾何・HAGeo-409由来(<code>bench_*</code>)。<code>mod.rs</code>に「目標が数値的にも本当に成り立つか」の検査を置いてある。</p></div>
       <div class="gterm"><b>src/trace.rs</b><p>診断(<code>--trace</code>)。使った仕事のうちどれが証明に残ったかを、発火の記録と証明の遡りを突き合わせて測る(§05)。</p></div>
       <div class="gterm"><b>action_space.rs / mcts.rs</b><p>補助構成の行動空間と、それを探索するMCTS。需要駆動の回復も尽きたときの最後の手段(既定は無効)。</p></div>
       <div class="gterm"><b>padic.rs / padic_eval.rs</b><p>図形を退化させたときの振る舞いの解析。どの実体どうしが「一緒に潰れる」かを観測し、熱のボーナス伝播に使う(<code>--degen-heat</code>)。</p></div>
@@ -711,6 +711,16 @@ flowchart TD
         </div>
       </div>
 
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>難易度2帯のHAGeo-409を5問追加し、共円・共線の目標も数値検算する</h3><span class="pill shipped">d8b497a</span></div>
+          <div class="desc">実装済みのHAGeo-409は難易度1.2〜1.8だけだったので、2.0〜2.3の帯から5問を足した。409問を作図語彙の制約(内心・角の二等分線・反射・弧の中点が書けない、円と直線の交点は片方が既知の場合しか書けない)で機械的に絞り込み、そのまま写し取れるものだけを採っている: <code>bench_2022balkanmop1</code>(2.0、共線)・<code>bench_2012chnwesternmop5</code>(2.0、共円)・<code>bench_2008armog10p6</code>(2.2、平行)・<code>bench_2016armog10p2</code>(2.3、平行)・<code>bench_2000usatstp2</code>(2.3、垂直)。解けたのは1問(bench_2022balkanmop1、520,335ステップ)。</div>
+          <div class="evidence"><b>あわせて検算の穴を塞いだ:</b> 既存の <code>identical_targets_actually_hold_numerically</code> は <code>kind == "Identical"</code> しか見ておらず、Concyclic と Connected を目標にする問題は素通りしていた。main.rs の目標判定側もこの2種類には数値サニティチェックを入れていない(「今回のスコープでは見送った」)ので、作図の写し取りが間違っていても構造的に繋がりさえすれば「証明完了」になる ― 一度その形の偽陽性(図の崩壊)を踏んでいる。共線は「MYとMZの方向が一致」、共円は「3点で決まる円が4点目を替えても同じ」として既存の <code>numeric_plausibility_check</code> に帰着させて検算する。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -721,6 +731,34 @@ flowchart TD
     <div class="backlog-list">
 
 
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>★ 未解決13問は全部「作図のネタ切れ」で止まる。予算切れは0問 ― 律速はもう探索速度ではない</h3>
+          <div class="desc">難易度2帯を足したうえで、未解決の全問題がどう止まっているかを数えた。<b>13問すべてが同じ</b>で、<code>要求がなく、MCTSも無効なため探索を打ち切ります</code> ― 需要駆動の補助作図が尽きて止まる。<b>800万ステップの予算を使い切った問題は1つも無い</b>:</div>
+          <table style="margin:10px 0;border-collapse:collapse;font-size:13px">
+          <tr><th style="text-align:left;padding:2px 12px 2px 0">問題</th><th style="text-align:right;padding:2px 12px 2px 0">消費仕事量</th><th style="text-align:right">予算比</th></tr>
+          <tr><td style="padding:2px 12px 2px 0">centroid</td><td style="text-align:right;padding:2px 12px 2px 0">29,867</td><td style="text-align:right">0.4%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">pappus</td><td style="text-align:right;padding:2px 12px 2px 0">46,460</td><td style="text-align:right">0.6%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">desargues</td><td style="text-align:right;padding:2px 12px 2px 0">59,263</td><td style="text-align:right">0.7%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">newton_gauss</td><td style="text-align:right;padding:2px 12px 2px 0">63,497</td><td style="text-align:right">0.8%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2005usamop3</td><td style="text-align:right;padding:2px 12px 2px 0">96,665</td><td style="text-align:right">1.2%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2000usatstp2</td><td style="text-align:right;padding:2px 12px 2px 0">140,886</td><td style="text-align:right">1.8%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2011balkanmop1</td><td style="text-align:right;padding:2px 12px 2px 0">179,827</td><td style="text-align:right">2.2%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2018chnwesternmop5</td><td style="text-align:right;padding:2px 12px 2px 0">1,149,966</td><td style="text-align:right">14.4%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">pascal</td><td style="text-align:right;padding:2px 12px 2px 0">1,274,001</td><td style="text-align:right">15.9%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2016armog10p2</td><td style="text-align:right;padding:2px 12px 2px 0">1,325,733</td><td style="text-align:right">16.6%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2015apmop1</td><td style="text-align:right;padding:2px 12px 2px 0">1,390,667</td><td style="text-align:right">17.4%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2008armog10p6</td><td style="text-align:right;padding:2px 12px 2px 0">2,205,694</td><td style="text-align:right">27.6%</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">bench_2012chnwesternmop5</td><td style="text-align:right;padding:2px 12px 2px 0">2,327,815</td><td style="text-align:right">29.1%</td></tr>
+          </table>
+          <div class="desc"><b>これは今までの改善の位置づけを変える。</b> §04で積んだマッチングの高速化(見積もりの修正で全体−12.8%、射影の課税回収、バンディット無効化で−20%)は、どれも「<b>速く行き詰まる</b>」方向の改善であって、届く範囲は1ミリも広げていない。予算が余っている以上、探索の速度はもう律速ではない。
+          <br><br><b>MCTSを足すと「ネタ切れ」が「予算切れ」に変わるだけだった。</b> 需要が尽きた後の受け皿であるMCTSを有効にして測ると、<code>bench_2008armog10p6</code> は 8,046,561 ステップ、<code>bench_2012chnwesternmop5</code> は 8,467,597 ステップで<b>予算を使い切る</b>(MCTSは8〜27回起動している)が、どれも解けない。つまり作図の供給量が足りないのではなく、<b>供給されるものが当たっていない</b> ― 無方向なMCTSは予算をいくらでも消費できるが、必要な補助対象を引き当てない。
+          <br><br><b>次に効くのはここ。</b> 「何を作図するか」を目標から逆算する側(<code>resolve_target_demands</code> / MCTSの行動選択)。§05-#1(空振り75〜79%)や#10(部分マッチ共有)は速度の話なので、予算が余っている今は優先度が下がる。</div>
+          <div class="b-tags"><span class="tag">13/13が作図のネタ切れ・予算切れ0</span><span class="tag">MCTSは量を出すが当たらない</span></div>
+        </div>
+      </div>
       <div class="b-item">
         <div class="b-rank">0</div>
         <div>
