@@ -23,6 +23,8 @@ pub mod test_power_of_point;
 pub mod test_steiner_converse;
 pub mod geo_helpers;
 pub mod bench_2012egmop1;
+pub mod bench_2019g1;
+pub mod bench_2015apmop1;
 pub mod bench_2018silkroadp1;
 pub mod bench_2011armog10p6;
 pub mod bench_2010g1;
@@ -73,6 +75,8 @@ pub const ALL_PROBLEMS: &[&str] = &[
     "test_power_of_point",
     "test_steiner_converse",
     "bench_2012egmop1",
+    "bench_2019g1",
+    "bench_2015apmop1",
     "bench_2018silkroadp1",
     "bench_2011armog10p6",
     "bench_2010g1",
@@ -114,6 +118,8 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "test_power_of_point" => test_power_of_point::setup(egraph),
         "test_steiner_converse" => test_steiner_converse::setup(egraph),
         "bench_2012egmop1" => bench_2012egmop1::setup(egraph),
+        "bench_2019g1" => bench_2019g1::setup(egraph),
+        "bench_2015apmop1" => bench_2015apmop1::setup(egraph),
         "bench_2018silkroadp1" => bench_2018silkroadp1::setup(egraph),
         "bench_2011armog10p6" => bench_2011armog10p6::setup(egraph),
         "bench_2010g1" => bench_2010g1::setup(egraph),
