@@ -229,7 +229,21 @@ fn main() {
     // しか答えられないのに対し、--trace は「使った仕事のうちどれが
     // 証明に残ったか」を答える(trace.rs の先頭のドキュメント参照)。
     let show_trace = args.iter().any(|a| a == "--trace");
+    // 🌟 ユーザー要望「オンデマンド作図や DefinedBy でその場で作られた作図が
+    // どれくらい有効活用されているのか調べたい」への対応。--trace が「どの発火が
+    // 証明に残ったか」を答えるのに対し、--origins は「どの出どころで作られた
+    // 図形が証明に残ったか」を答える(trace::report_origins 参照)。
+    let show_origins = args.iter().any(|a| a == "--origins") || show_trace;
     let seeded_rematch = args.iter().any(|a| a == "--seeded-rematch");
+    // 🌟 行き詰まったときの手を個別に外す A/B スイッチ。--origins は「作ったものが
+    // 証明に残っているか」という相関しか言えないので、外してみて初めて
+    // 「その手が無ければ解けなかった」が言える。
+    let skip_recovery: Vec<String> = args.iter()
+        .filter_map(|a| a.strip_prefix("--skip-recovery="))
+        .flat_map(|v| v.split(',').map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let skipped = |name: &str| skip_recovery.iter().any(|s| s == name);
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -589,11 +603,11 @@ fn main() {
         if !applied_logic {
             println!("⏳ ロジックがStallしました。リカバリーフェーズに移行します...");
             let recovery_start = std::time::Instant::now();
-            let mut recovered = engine.resolve_demands();
-            if engine.resolve_point_demands() {
+            let mut recovered = !skipped("line") && engine.resolve_demands();
+            if !skipped("point") && engine.resolve_point_demands() {
                 recovered = true;
             }
-            if engine.resolve_angle_demands() {
+            if !skipped("angle") && engine.resolve_angle_demands() {
                 recovered = true;
             }
             // 🌟 需要駆動の中点作図(BlackboardEngine::resolve_midpoint_demandsの
@@ -603,18 +617,18 @@ fn main() {
             // 29/32→28/32・76秒→100秒と悪化した(bench_2012egmop1が落ちる)。
             // 中点を補う価値がある図とそうでない図がはっきり分かれるので、
             // 既定では入れず --midpoint-demands で有効にする。
-            if use_midpoint_demands && !recovered && engine.resolve_midpoint_demands() {
+            if use_midpoint_demands && !skipped("mid") && !recovered && engine.resolve_midpoint_demands() {
                 recovered = true;
             }
             // 🌟 最後の砦(MCTSに頼る直前): 証明目標に現れる点同士でまだ
             // 直線が引かれていないペアに補助線を引いてみる
             // (BlackboardEngine::resolve_target_demandsのドキュメント参照)。
-            if !recovered && engine.resolve_target_demands(&problem.target_fact) {
+            if !skipped("target") && !recovered && engine.resolve_target_demands(&problem.target_fact) {
                 recovered = true;
             }
             // 🌟 複比の一意性(透視射影不変性の逆)に持ち込むための作図。
             // BlackboardEngine::resolve_cross_ratio_demands のドキュメント参照。
-            if !recovered && engine.resolve_cross_ratio_demands(&problem.target_fact) {
+            if !skipped("target") && !recovered && engine.resolve_cross_ratio_demands(&problem.target_fact) {
                 recovered = true;
             }
             engine.prover.profile.recovery_time += recovery_start.elapsed();
@@ -664,6 +678,10 @@ fn main() {
     if let Some(log) = &engine.prover.trace {
         trace::report(&engine.prover.egraph, log, &problem.target_fact,
             engine.prover.work_done(), engine.prover.heat_cap, engine.prover.fanout_heat_cap);
+    }
+
+    if show_origins {
+        trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);
     }
 
     if show_stats {

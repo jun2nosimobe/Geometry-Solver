@@ -1013,8 +1013,12 @@ impl ProverEngine {
                 let prefix = if target_type == "DirectionOf" { "Dir" } else { target_type };
                 let name = format!("{}_{}_(Auto)", prefix, p_names.join("_"));
 
+                // 🌟 出どころを刻む。ここで作られた図形が本当に証明へ効いて
+                // いるのかを --origins で測れるようにするため(EntityOrigin 参照)。
+                let prev_origin = self.egraph.set_origin(crate::mmp_core::EntityOrigin::DefinedBy);
                 let new_id = self.egraph.create_entity(name, temp_def.clone(), e_type);
                 self.egraph.apply_trivial_relations(new_id, &temp_def);
+                self.egraph.set_origin(prev_origin);
                 // 🌟 ユーザー提案:「複比同士の関係式からconjectureを発行して、
                 // そこから定理適用の形を見つける」への対応。新しく作られた
                 // 複比(点の複比・線束の複比のどちらでも)の値を既存の他の

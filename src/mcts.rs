@@ -102,6 +102,15 @@ impl MCTSSearchEngine {
     /// 行動を(クローン後の)e-graphに実際に適用し、生成物のIDを返す。
     fn apply_action(egraph: &mut EGraph, action: &Action) -> Option<ClassId> {
         if !Self::action_refs_valid(egraph, action) { return None; }
+        // 🌟 ここで作られる図形には MCTS の印が付く(EntityOrigin 参照)。
+        // 調和共役の作図は自分で別の印を立てるので、ここでは包まない。
+        let prev_origin = egraph.set_origin(crate::mmp_core::EntityOrigin::Mcts);
+        let result = Self::apply_action_inner(egraph, action);
+        egraph.set_origin(prev_origin);
+        result
+    }
+
+    fn apply_action_inner(egraph: &mut EGraph, action: &Action) -> Option<ClassId> {
         match action {
             Action::Construct(def) => {
                 if egraph.memo.contains_key(def) { return None; }

@@ -422,6 +422,12 @@ pub struct EGraph {
     // 割合(0.5=元の半分)。main.rsの--degen-heat-factor=Xでチューニング
     // 実験できるようにCLIから調整可能にしてある。
     pub degeneration_heat_factor: f64,
+    /// 🌟 いま作られる図形に刻む出どころ。既定は Given (問題文) で、オンデマンド
+    /// 作図などの呼び出し側が set_origin で一時的に差し替える。
+    pub current_origin: EntityOrigin,
+    /// apply_trivial_relations の入れ子の深さ。0 より大きい間に作られた図形は
+    /// 「付随して生えたもの」として印を付ける。
+    pub trivial_depth: u32,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -511,6 +517,8 @@ impl EGraph {
             plain_scalar_generation: 0,
             degeneration_groups: None,
             degeneration_heat_factor: 0.5,
+            current_origin: EntityOrigin::Given,
+            trivial_depth: 0,
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Scalar);
@@ -605,6 +613,8 @@ impl EGraph {
             uses: rustc_hash::FxHashSet::default(),
             mcts_depth: 0,
             degree_cache: std::cell::Cell::new(None),
+            origin: self.current_origin,
+            origin_cascade: self.trivial_depth > 0,
         };
 
         self.entities.push(entity);
@@ -746,6 +756,68 @@ pub(crate) fn dedup_sorted_ids(ids: impl IntoIterator<Item = ClassId>) -> Vec<Cl
     out
 }
 
+/// 🌟 その図形を「誰が作ったか」。探索の途中で作られた補助構成が実際に
+/// 証明へ効いているのかを後から測るために、create_entity の時点で一度だけ
+/// 刻む(以後どれだけマージが起きても書き換えない)。
+///
+/// 動機(ユーザー要望): オンデマンド作図(resolve_*_demands)と、定理の
+/// マッチングが DefinedBy パターンを満たすためにその場で作る図形は、
+/// どちらも「行き詰まったら図を増やす」という同じ賭けをしている。賭けが
+/// 当たっているのか(=作ったものが本当に証明に使われているのか)はこれまで
+/// 一切測れていなかった。名前の接尾辞 (Auto) は「定義からの自動派生」と
+/// 「マッチャのその場生成」の両方に使われていて事後には区別できないので、
+/// 作る側で印を付けるしかない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EntityOrigin {
+    /// 問題文(あるいは作図スクリプト)で最初から与えられたもの。
+    Given,
+    /// 定理のマッチングが DefinedBy パターンを満たすためにその場で作ったもの
+    /// (logic_core::matcher::defined_by_valid_nodes)。
+    DefinedBy,
+    /// 定理の結論テンプレート(constructions)が作ったもの。
+    Construct,
+    /// 需要駆動の補助線 (resolve_demands)。
+    LineDemand,
+    /// 需要駆動の交点 (resolve_point_demands)。
+    PointDemand,
+    /// 需要駆動の中点 (resolve_midpoint_demands)。
+    MidDemand,
+    /// 需要駆動の角・方向 (resolve_angle_demands)。
+    AngleDemand,
+    /// 目標駆動の補助線・複比 (resolve_target_demands / resolve_cross_ratio_demands)。
+    TargetDemand,
+    /// MCTS が選んだ補助構成。
+    Mcts,
+    /// 調和共役点の完全四辺形作図 (construct_harmonic_conjugate)。
+    Harmonic,
+}
+
+impl EntityOrigin {
+    /// 表示用の短い名前。
+    pub fn label(&self) -> &'static str {
+        match self {
+            EntityOrigin::Given => "問題文",
+            EntityOrigin::DefinedBy => "DefinedBy生成",
+            EntityOrigin::Construct => "定理の結論",
+            EntityOrigin::LineDemand => "需要:補助線",
+            EntityOrigin::PointDemand => "需要:交点",
+            EntityOrigin::MidDemand => "需要:中点",
+            EntityOrigin::AngleDemand => "需要:角/方向",
+            EntityOrigin::TargetDemand => "目標駆動",
+            EntityOrigin::Mcts => "MCTS",
+            EntityOrigin::Harmonic => "調和共役作図",
+        }
+    }
+
+    /// 報告で並べる順。
+    pub const ALL: &'static [EntityOrigin] = &[
+        EntityOrigin::Given, EntityOrigin::DefinedBy, EntityOrigin::Construct,
+        EntityOrigin::LineDemand, EntityOrigin::PointDemand, EntityOrigin::MidDemand,
+        EntityOrigin::AngleDemand, EntityOrigin::TargetDemand, EntityOrigin::Mcts,
+        EntityOrigin::Harmonic,
+    ];
+}
+
 #[derive(Debug, Clone)]
 pub struct GeoEntity {
     pub id: ClassId,
@@ -794,6 +866,13 @@ pub struct GeoEntity {
     // ホットパス(logic_core.rs::match_defined_by_fact)から&selfのまま
     // 読み書きできるようにするための内部可変性。
     pub degree_cache: std::cell::Cell<Option<Option<usize>>>,
+    // 🌟 この図形を「誰が作ったか」(EntityOrigin 参照)。
+    pub origin: EntityOrigin,
+    // 🌟 上の origin が「直接そう頼まれて作られた」のか、「その作図に付随して
+    // apply_trivial_relations が芋づる式に作った」のかの区別。補助線を1本引く
+    // だけで方向・長さ等が何個も派生するので、分けないと「作った数」が実態より
+    // 何倍にも見えてしまう。
+    pub origin_cascade: bool,
 }
 
 // 🌟 熱関連処理の統一(ユーザー要望「熱関連の処理をリファクタリングして整理」)。
@@ -1013,8 +1092,22 @@ impl EGraph {
         }
     }
 
-    // 🌟 Trivial Relations (作図時のおまけリンクと方向生成)
+    /// 🌟 作図に付随して生えた図形に印を付けるためだけの包み。中身から
+    /// create_entity 経由で再帰するので、深さを数える。
     pub fn apply_trivial_relations(&mut self, new_id: ClassId, def: &Definition) {
+        self.trivial_depth += 1;
+        self.apply_trivial_relations_inner(new_id, def);
+        self.trivial_depth -= 1;
+    }
+
+    /// 🌟 選ばれた出どころを一時的に差し替える。前の値を返すので、作り終えたら
+    /// 必ず戻すこと。
+    pub fn set_origin(&mut self, o: EntityOrigin) -> EntityOrigin {
+        std::mem::replace(&mut self.current_origin, o)
+    }
+
+    // 🌟 Trivial Relations (作図時のおまけリンクと方向生成)
+    fn apply_trivial_relations_inner(&mut self, new_id: ClassId, def: &Definition) {
         match def {
             // 🌟 方向(Direction)は create_entity 経由なら生成元を問わず必ずここを通るので、
             // ここ一箇所で「無限遠直線上の点」として構造的にリンクしておけば、

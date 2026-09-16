@@ -118,6 +118,10 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に探索の各フェーズの所要時間の内訳を表示する" },
     Opt { name: "--trace", arg: Switch, default: "非表示", mode: Solve,
           help: "終了時に「どの定理がどの優先度で発火し、うち証明に残ったのはどれか」と、熱・参照数・退化関係数の分布を表示する" },
+    Opt { name: "--origins", arg: Switch, default: "非表示", mode: Solve,
+          help: "終了時に「どの出どころで作られた図形(オンデマンド作図・DefinedBy生成・MCTS等)が、実際に証明へ残ったか」を集計する" },
+    Opt { name: "--skip-recovery", arg: Value("line,point,mid,angle,target"), default: "どれも外さない", mode: Solve,
+          help: "行き詰まったときの手を個別に外す(A/B用)。line=補助線, point=交点, mid=中点, angle=角/方向, target=目標駆動の補助線と複比" },
     Opt { name: "--seeded-rematch", arg: Switch, default: "無効", mode: Solve,
           help: "証明された事実から定理をシードして再マッチングする(実測で掛け合わせが悪化するため既定無効)" },
 

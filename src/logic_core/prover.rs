@@ -422,8 +422,10 @@ impl ProverEngine {
                 let prefix = if constr.def_type == "DirectionOf" { "Dir" } else { constr.def_type.as_str() };
                 let name = format!("{}_{}_(Auto)", prefix, parent_names.join("_"));
 
+                let prev_origin = self.egraph.set_origin(crate::mmp_core::EntityOrigin::Construct);
                 let id = self.egraph.create_entity(name, def.clone(), entity_type);
                 self.egraph.apply_trivial_relations(id, &def);
+                self.egraph.set_origin(prev_origin);
                 id
             };
             

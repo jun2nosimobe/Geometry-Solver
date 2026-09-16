@@ -1197,3 +1197,35 @@ fn collapsed_figures_are_detected_by_merged_free_points() {
     assert!(x == "A" || y == "A", "生き残った側の名前が出ていない: {:?}", (&x, &y));
     assert!(x != y, "同じものを2回報告している: {:?}", (&x, &y));
 }
+
+#[test]
+fn an_on_demand_line_and_what_it_drags_in_carry_the_demand_origin() {
+    // 🌟 --origins の集計はこの印だけを頼りにしている。補助線を1本引くと
+    // apply_trivial_relations が方向などを芋づる式に作るので、
+    // (1) 頼まれて作ったもの自体は「直接」、(2) 付随して生えたものは
+    // 同じ出どころの「付随」、(3) 作り終えて印を戻した後に作ったものは
+    // 問題文、になっていなければ、出どころ別の効きは測れない。
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    assert_eq!(egraph.entities[a.0].origin, EntityOrigin::Given);
+
+    let before = egraph.entities.len();
+    let prev = egraph.set_origin(EntityOrigin::LineDemand);
+    let line = egraph.create_entity("Line_A_B_(Demand)".into(), Definition::new_line(a, b), EntityType::Line);
+    egraph.set_origin(prev);
+
+    assert_eq!(egraph.entities[line.0].origin, EntityOrigin::LineDemand);
+    assert!(!egraph.entities[line.0].origin_cascade, "頼まれて作った直線そのものは付随ではない");
+    let dragged: Vec<usize> = (before..egraph.entities.len()).filter(|&i| i != line.0).collect();
+    assert!(!dragged.is_empty(), "直線を作ると方向が付随して生えるはず");
+    for i in dragged {
+        assert_eq!(egraph.entities[i].origin, EntityOrigin::LineDemand, "{} の出どころ", egraph.entities[i].name);
+        assert!(egraph.entities[i].origin_cascade, "{} は付随として印が付くはず", egraph.entities[i].name);
+    }
+
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    assert_eq!(egraph.entities[c.0].origin, EntityOrigin::Given, "印を戻した後は問題文に戻る");
+    assert!(!egraph.entities[c.0].origin_cascade);
+    assert_eq!(egraph.trivial_depth, 0, "apply_trivial_relations の深さが戻っていない");
+}

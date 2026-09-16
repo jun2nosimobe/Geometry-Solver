@@ -2,7 +2,7 @@
 //! 完全四辺形作図のみ(円錐曲線を一切使わず、直線と交点だけで作る)。
 
 use std::collections::HashSet;
-use super::{ClassId, Definition, EntityType, EGraph, Justification};
+use super::{ClassId, Definition, EntityOrigin, EntityType, EGraph, Justification};
 
 impl EGraph {
     /// 🌟 与えられた図形群すべてが乗っている共通の直線を(あれば)1つ返す。
@@ -46,6 +46,16 @@ impl EGraph {
     /// apply_trivial_relationsの汎用ディスパッチには載せず、この関数だけが
     /// 有限個(3つ)の追加エンティティを明示的に作る。
     pub fn construct_harmonic_conjugate(&mut self, a: ClassId, b: ClassId, c: ClassId) -> ClassId {
+        // 🌟 この作図が生む図形はまとめて「調和共役作図」の出どころにする
+        // (EntityOrigin 参照)。10個近くの補助点・補助線を一度に作るので、
+        // 効いているかどうかは特に測る価値がある。
+        let prev_origin = self.set_origin(EntityOrigin::Harmonic);
+        let result = self.construct_harmonic_conjugate_inner(a, b, c);
+        self.set_origin(prev_origin);
+        result
+    }
+
+    fn construct_harmonic_conjugate_inner(&mut self, a: ClassId, b: ClassId, c: ClassId) -> ClassId {
         let a = self.get_rep(a);
         let b = self.get_rep(b);
         let c = self.get_rep(c);

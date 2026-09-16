@@ -6,7 +6,7 @@
 
 use std::collections::{BinaryHeap, VecDeque};
 
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, Fact};
+use crate::mmp_core::{ClassId, Definition, EGraph, EntityOrigin, EntityType, Fact};
 use super::*;
 use rustc_hash::FxHashMap;
 
@@ -480,12 +480,14 @@ impl BlackboardEngine {
             let def = Definition::AnglePair(d1, d2);
             if !self.prover.egraph.memo.contains_key(&def) {
                 let name = format!("AnglePair_{}_{}_(Auto)", self.prover.egraph.entities[d1.0].name, self.prover.egraph.entities[d2.0].name);
+                let prev = self.prover.egraph.set_origin(EntityOrigin::AngleDemand);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Scalar);
                 
                 // 🌟 FIX: Auto生成されたAngleの重要度を下げ、無駄なヒューリスティック探索を抑制
                 self.prover.egraph.entities[new_id.0].base_importance = 0.2;
                 
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
+                self.prover.egraph.set_origin(prev);
                 applied = true;
             }
         }
@@ -503,8 +505,10 @@ impl BlackboardEngine {
             return self.prover.egraph.get_rep(dir_id);
         }
         let name = format!("Dir_{}_(Fallback)", self.prover.egraph.entities[line_id.0].name);
+        let prev = self.prover.egraph.set_origin(EntityOrigin::AngleDemand);
         let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
         self.prover.egraph.apply_trivial_relations(new_id, &def);
+        self.prover.egraph.set_origin(prev);
         new_id
     }
 
@@ -554,12 +558,14 @@ impl BlackboardEngine {
                         println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1})", name, score);
                     }
                 }
+                let prev = self.prover.egraph.set_origin(EntityOrigin::LineDemand);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Line);
 
                 // 🌟 FIX: Demand線の重要度を下げ、推論の主軸がブレるのを防ぐ
                 self.prover.egraph.entities[new_id.0].base_importance = 0.5;
 
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
+                self.prover.egraph.set_origin(prev);
                 applied = true;
                 count += 1;
                 if count >= 3 { break; }
@@ -628,10 +634,12 @@ impl BlackboardEngine {
                 if self.prover.egraph.find_common_line(&[p1, p2]).is_some() { continue; }
                 let name = format!("Line_{}_{}_(TargetDemand)", self.prover.egraph.entities[p1.0].name, self.prover.egraph.entities[p2.0].name);
                 println!("  💡 [目標駆動オンデマンド作図] 証明目標に現れる点を結ぶ {} を生成", name);
+                let prev = self.prover.egraph.set_origin(EntityOrigin::TargetDemand);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Line);
                 // 🌟 他のDemand系と同様、新規図形の重要度は下げて推論の主軸がブレるのを防ぐ
                 self.prover.egraph.entities[new_id.0].base_importance = 0.5;
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
+                self.prover.egraph.set_origin(prev);
                 applied = true;
                 count += 1;
                 if count >= 3 { break 'outer; }
@@ -694,9 +702,11 @@ impl BlackboardEngine {
             if self.prover.egraph.memo.contains_key(&def) { continue; }
             let name = format!("CR_{}_(TargetDemand)", label);
             println!("  💡 [目標駆動オンデマンド作図] 複比の一意性に持ち込むため {} を生成", name);
+            let prev = self.prover.egraph.set_origin(EntityOrigin::TargetDemand);
             let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Scalar);
             self.prover.egraph.entities[new_id.0].base_importance = 0.5;
             self.prover.egraph.apply_trivial_relations(new_id, &def);
+            self.prover.egraph.set_origin(prev);
             applied = true;
         }
         if applied {
@@ -788,12 +798,14 @@ impl BlackboardEngine {
                     self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
                 let deg_str = deg.map(|d| d.to_string()).unwrap_or_else(|| "不明".to_string());
                 println!("  💡 [オンデマンド作図] 要請により {} (交点、次数{})を生成 (需要: {:.1})", name, deg_str, score);
+                let prev = self.prover.egraph.set_origin(EntityOrigin::PointDemand);
                 let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
 
                 // 🌟 Demand点の重要度を下げ、推論の主軸がブレるのを防ぐ(Demand線と同じ配慮)
                 self.prover.egraph.entities[new_id.0].base_importance = 0.5;
 
                 self.prover.egraph.apply_trivial_relations(new_id, &def);
+                self.prover.egraph.set_origin(prev);
                 applied = true;
                 count += 1;
                 // 🌟 実測に基づくFIX: 当初は上限4(三角形の垂線3本+余裕1)にしていたが、
@@ -880,10 +892,12 @@ impl BlackboardEngine {
             let name = format!("Mid_{}_{}_(Demand)",
                 self.prover.egraph.entities[a.0].name, self.prover.egraph.entities[b.0].name);
             println!("  💡 [オンデマンド作図] 要請により {} (中点)を生成 (需要: {:.1})", name, heat);
+            let prev = self.prover.egraph.set_origin(EntityOrigin::MidDemand);
             let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
             // Demand線・Demand点と同じく重要度を下げ、推論の主軸がブレるのを防ぐ。
             self.prover.egraph.entities[new_id.0].base_importance = 0.5;
             self.prover.egraph.apply_trivial_relations(new_id, &def);
+            self.prover.egraph.set_origin(prev);
             applied = true;
         }
         if applied {

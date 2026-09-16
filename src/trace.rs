@@ -25,7 +25,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::mmp_core::{ClassId, EGraph, EntityType, Justification};
+use crate::mmp_core::{ClassId, EGraph, EntityOrigin, EntityType, Justification};
 
 /// 1回の「発火」= 定理の結論を実際にe-graphへ適用できた瞬間の記録。
 #[derive(Debug, Clone)]
@@ -385,6 +385,138 @@ fn on_proof_path(f: &Firing, sup: &ProofSupport) -> bool {
 }
 
 struct Row { fires: u64, useful: u64, anc_useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
+
+
+/// 🌟 「その場で作った図形は、本当に使われているのか」の集計(--origins)。
+///
+/// 動機(ユーザー要望): オンデマンド作図(resolve_*_demands)と、定理の
+/// マッチングが DefinedBy パターンを満たすためにその場で作る図形は、
+/// どちらも「行き詰まったら図を増やす」という賭けをしている。作った数は
+/// ログに出ていたが、作ったものが実際に証明へ効いたかは一度も測れていな
+/// かった。
+///
+/// 数え方で気を付けたのは2点:
+///
+/// - 直接作ったものと、その作図に付随して apply_trivial_relations が芋づる式に
+///   作ったもの(方向・長さ・自動生成の直線)を分ける。補助線を1本引くと
+///   何個も派生するので、混ぜると「作った数」が実態の何倍にも見える。
+/// - 「証明に登場した」は代表元ではなくスロット単位で数える。代表元で数えると、
+///   たまたま同じ同値類へ合流しただけの無関係な補助図形まで「証明に登場した」に
+///   なってしまう(合流させること自体が目的の補助図形では、これは深刻な
+///   過大評価になる)。collect_proof_support の merges/incidences は生の
+///   スロット対で記録されているので、そのまま使える。
+pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, problem: &str) {
+    // --- 証明に実際に登場したスロット ---
+    let mut in_proof: FxHashSet<usize> = FxHashSet::default();
+    // 証明の手順そのもの(マージ・接続)に端点として登場したスロットだけ。
+    // in_proof はこれを親方向へ閉じたものなので、両方出さないと
+    // 「本当に推論に使われた」のか「ただの材料」なのかが区別できない。
+    let mut in_steps: FxHashSet<usize> = FxHashSet::default();
+    let mut reached = false;
+    if let Some(t) = target {
+        let sup = collect_proof_support(eg, t, true);
+        reached = sup.reached;
+        for &(a, b) in sup.merges.iter().chain(sup.incidences.iter()) {
+            in_proof.insert(a);
+            in_proof.insert(b);
+            in_steps.insert(a);
+            in_steps.insert(b);
+        }
+        for &id in &t.1 { in_proof.insert(id.0); }
+        // 証明のステップが乗っている作図そのもの(親)も「使われた」に数える。
+        // 「Pt_l1_l2 を作ったから l1∩l2 の接続が言えた」という筋を、材料側の
+        // 直線まで含めて拾うため。
+        let mut stack: Vec<usize> = in_proof.iter().copied().collect();
+        let mut guard = 0usize;
+        while let Some(i) = stack.pop() {
+            guard += 1;
+            if guard > 200_000 { break; }
+            if i >= eg.entities.len() { continue; }
+            for p in eg.entities[i].original_definition.get_parents() {
+                if in_proof.insert(p.0) { stack.push(p.0); }
+            }
+        }
+    }
+
+    // --- マージの履歴に一度でも現れたスロット(吸収された側・吸収した側の両方) ---
+    // このエンジンの進捗は全てマージか接続なので、一度もマージに関与しなかった
+    // 図形は「作っただけで何も生まなかった」と言い切れる。
+    let mut merged: FxHashSet<usize> = FxHashSet::default();
+    for (&absorbed, edge) in eg.proof_edges.iter() {
+        merged.insert(absorbed);
+        merged.insert(edge.to.0);
+    }
+
+    println!("\n=== 🧱 作図の出どころ別の効き (--origins) ===");
+    println!("  目標: {}", if target.is_none() { "なし(自由探索)" }
+        else if reached { "到達" } else { "未到達(「証明に登場」列は参考値)" });
+    println!("  {:<16} {:>6} {:>6} | {:>10} {:>6} | {:>12} {:>12} {:>6}",
+        "出どころ", "直接", "付随", "マージ関与", "割合", "証明の手順", "証明の材料", "割合");
+
+    let mut total_in_proof = 0usize;
+    for &o in EntityOrigin::ALL {
+        let mut direct = 0usize;
+        let mut cascade = 0usize;
+        let mut m = 0usize;
+        let mut p = 0usize;
+        let mut st = 0usize;
+        for (i, e) in eg.entities.iter().enumerate() {
+            if e.origin != o { continue; }
+            if e.origin_cascade { cascade += 1; } else { direct += 1; }
+            if merged.contains(&i) { m += 1; }
+            if in_proof.contains(&i) { p += 1; }
+            if in_steps.contains(&i) { st += 1; }
+        }
+        let n = direct + cascade;
+        if n == 0 { continue; }
+        total_in_proof += p;
+        println!("  {:<16} {:>6} {:>6} | {:>10} {:>5.0}% | {:>12} {:>12} {:>5.0}%",
+            o.label(), direct, cascade,
+            m, 100.0 * m as f64 / n as f64,
+            st, p, 100.0 * p as f64 / n as f64);
+        // 掠えで集計するための機械可読な行(シェルから拾う)。
+        println!("ORIGINS	{}	{:?}	{}	{}	{}	{}	{}	{}",
+            problem, o, direct, cascade, m, st, p, reached);
+    }
+
+    // 出どころ × 定義の種類の内訳。DefinedBy 生成や角の需要は1問で数百個
+    // 作るので、「どの種類を作りすぎているのか」まで割らないと、次に何を
+    // 絞ればよいかが決められない。
+    let mut kinds: std::collections::BTreeMap<(EntityOrigin, &'static str), (usize, usize, usize)> =
+        std::collections::BTreeMap::new();
+    for (i, e) in eg.entities.iter().enumerate() {
+        if e.origin == EntityOrigin::Given || e.origin_cascade { continue; }
+        let k = kinds.entry((e.origin, e.original_definition.get_type_name())).or_insert((0, 0, 0));
+        k.0 += 1;
+        if merged.contains(&i) { k.1 += 1; }
+        if in_steps.contains(&i) { k.2 += 1; }
+    }
+    if !kinds.is_empty() {
+        println!("  -- 直接作ったものの種類別 (作った / マージ関与 / 証明の手順) --");
+        for (&(o, ty), &(n, m, st)) in &kinds {
+            println!("    {:<14} {:<26} {:>5} {:>5} {:>5}", o.label(), ty, n, m, st);
+            println!("ORIGINKIND\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}", problem, o, ty, n, m, st, reached);
+        }
+    }
+
+    // 証明に登場した「その場で作った図形」を実名で挙げる。数字だけだと
+    // 「何が効いたのか」が分からず、次に何を強化すべきか判断できない。
+    if reached && total_in_proof > 0 {
+        let mut named: Vec<&str> = eg.entities.iter().enumerate()
+            .filter(|(i, e)| e.origin != EntityOrigin::Given && !e.origin_cascade && in_proof.contains(i))
+            .map(|(_, e)| e.original_name.as_str())
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        if named.is_empty() {
+            println!("  証明に効いた「その場の作図」: なし(問題文の図形だけで閉じている)");
+        } else {
+            println!("  証明に効いた「その場の作図」({}件): {}", named.len(),
+                named.iter().take(12).cloned().collect::<Vec<_>>().join(", "));
+        }
+    }
+    println!("=============================\n");
+}
 
 pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>)>,
               total_work: u64, heat_cap: usize, fanout_heat_cap: usize) {
