@@ -613,10 +613,7 @@ impl EGraph {
     pub(crate) fn is_natural_incidence(&self, point: ClassId, curve: ClassId) -> bool {
         let point_rep = self.get_rep(point);
         let curve_rep = self.get_rep(curve);
-        let curve_defs = match self.entities[curve_rep.0].components.first() {
-            Some(c) => c.definitions.clone(),
-            None => return false,
-        };
+        if self.entities[curve_rep.0].components.first().is_none() { return false; }
         // 🐛 FIX (HAGeo-409ベンチマークで判明、propagate_circle_uniquenessの
         // 導入で顕在化): 以前はcurve_defsの「いずれか」の定義でpointが親なら
         // 自然な接続とみなしていた。しかしpropagate_line_uniqueness/
@@ -638,60 +635,46 @@ impl EGraph {
         // 従属点として引き続き制約付きサンプリング(sample_point_on_constraint)
         // の対象にする――これは不健全化ではなく、むしろより正確な扱いになる
         // (F自身の座標はどのみちline_ab上に拘束されるべきものなので)。
-        match Self::canonical_shape_definition(&curve_defs) {
-            Some(def) if def.get_parents().iter().any(|&p| self.get_rep(p) == point_rep) => return true,
-            _ => {}
-        }
-        // 🌟 ユーザー指摘への対応: pointが直接の親でなくても、curveの
-        // (canonicalな)定義を辿った先の祖先にpoint自身が現れる場合も
-        // 自然な接続として扱う。この場合、pointが「curveの上にある」という
-        // 事実はpointの真の(自由な)位置さえ決まればcurveの構築を通じて
-        // 自動的に成り立つ帰結であり、それを独立した追加の制約として
-        // sample_point_on_constraintに満たさせようとする必要はない――
-        // そもそもcurve自身の評価がpointの値に依存するため、制約として
-        // 扱うと必ず循環依存になり、assign_free_point_coordsが解決不能
-        // (false)に陥って以後のnumeric_plausibility_checkを全滅させる。
-        let mut visited = HashSet::new();
-        self.point_is_ancestor_of_curve(point_rep, curve_rep, &mut visited)
-    }
-
-    /// 🌟 is_natural_incidenceのドキュメント参照。point_repがcurve(の
-    /// canonicalな定義)を根から辿った祖先に含まれるかどうかを判定する。
-    fn point_is_ancestor_of_curve(&self, point_rep: ClassId, of: ClassId, visited: &mut HashSet<usize>) -> bool {
-        let of_rep = self.get_rep(of);
-        if of_rep == point_rep { return true; }
-        if !visited.insert(of_rep.0) { return false; }
-        let defs = match self.entities[of_rep.0].components.first() {
-            Some(c) => c.definitions.clone(),
-            None => return false,
-        };
-        let parents: Vec<ClassId> = match Self::canonical_shape_definition(&defs) {
-            Some(def) => def.get_parents(),
-            None => defs.iter().flat_map(|d| d.get_parents()).collect(),
-        };
-        parents.iter().any(|&p| self.point_is_ancestor_of_curve(point_rep, p, visited))
-    }
-
-    /// 🌟 is_natural_incidenceのための決定論的な選択(親のClassId列が辞書順
-    /// 最小の定義を「真の生成点の定義」とみなす)。
-    fn canonical_shape_definition(defs: &[Definition]) -> Option<&Definition> {
-        defs.iter()
-            .filter(|d| d.get_parents().len() >= 2)
-            .min_by_key(|d| d.get_parents().iter().map(|p| p.0).collect::<Vec<_>>())
+        // 🐛 以前はここで canonical_shape_definition(親のClassIdが辞書順最小の
+        // 定義)という代理指標を使っていたが、それは「どの定義で評価されるか」
+        // とは無関係に決まるので、両者が食い違うと図が壊れる。
+        //
+        // 実際に踏んだ例(ユーザ報告): 「x3 = ABにAで立てた垂線」の上に
+        // 自由点Eを置くと、直線の一意性伝播が x3 と Line(A,E) を結合する。
+        // すると x3 の同値類の定義は {PerpendicularLine(l1,A), LineThroughPoints(A,E)}
+        // になり、代理指標は後者を選んで「Eはx3の生成点だから自然な接続」
+        // と判定し、Eを制約なしの乱数座標に置いていた。ところが評価器は
+        // PerpendicularLine 側で x3 を計算するので、E は x3 の上に無い。
+        // 結果、「Intersection(x3,l2) と E は一致するはずなのに数値が違う」という
+        // 健全性チェックの却下が数千件出て、何も推論できなくなっていた。
+        //
+        // 正しい基準は「その点無しで曲線を評価できるか」で、これは
+        // evaluation_requires_point がそのまま答える(全ての定義がその点を
+        // 必要とするときだけ true)。評価できるなら接続は本物の制約なので
+        // 制約付きサンプリングに回すし、評価できない(=循環する)なら
+        // 自然な接続として放っておけばよい。垂線の例では
+        // PerpendicularLine(l1,A) がEを必要としないので false → 正しく制約になる。
+        //
+        // この厳密な判定は発見モード側(padic_eval.rs::compute_incidence_constraints)
+        // では既に採用済みで、そちらのコメントに「証明エンジン側は回帰のため
+        // 元の緩い判定のままにしてある」と書いてあった。ここで揃える。
+        let mut memo = rustc_hash::FxHashMap::default();
+        let mut stack = HashSet::new();
+        self.evaluation_requires_point(point_rep, curve_rep, &mut stack, &mut memo)
     }
 
     /// 🌟 nodeを数値評価するのに point_rep の座標が不可欠かどうか。
     ///
     /// 経緯: is_natural_incidence(「pointのcurveへの接続は、curve自身の定義
     /// から自然に従うものか」)の判定を、ClassIdの小ささを代理指標にする
-    /// canonical_shape_definition方式からこの直接判定に差し替えたところ、
-    /// 発見モード側の誤サンプリングは直った一方で、32問の回帰が
-    /// 27/32 → 24/32 に落ちた(nine_point_full, bench_2018silkroadp1 が新たに
-    /// 失敗)。証明エンジン側は「祖先なら自然」という緩い判定を前提に
-    /// チューニングされているため、本体のis_natural_incidenceは元のままに
-    /// 戻し、この厳密版は数値評価の忠実さが最優先となる発見モードの
-    /// p進評価器(padic_eval::DegenEvaluator::incidence_constraints)だけで
-    /// 使う。
+    /// canonical_shape_definition方式からこの直接判定に差し替えたとき、
+    /// 一度は「32問の回帰が27/32 → 24/32に落ちた」と記録して見送っていた。
+    /// しかしその測定は予算がまだ壁時計だった頃のもので、同じバイナリでも
+    /// machineの混み具合だけで24〜29/32の間を揺れていた時期にあたる
+    /// (logic_core::work_done のドキュメント参照)。仕事量予算にして測り直すと
+    /// 44問で31/44・解けない13問の顔ぶれも変わらず、消費仕事量はむしろ0.6%
+    /// 減った ― 回帰は無かった。現在は発見モードと証明エンジンの両方が
+    /// この厳密判定を使う。
     ///
     /// 定義: nodeがpoint自身なら不可欠。そうでなければ「nodeの持つ全ての
     /// 定義が、その親のどれかを通じてpointを必要とする」ときに限り不可欠
