@@ -87,8 +87,11 @@
       <div id="findings" class="empty">まだ調べていません。</div>
     </section>
     <details id="scriptbox">
-      <summary><span class="twisty" aria-hidden="true"></span>作図手順<span class="spacer"></span><button id="copy" class="util">コピー</button></summary>
-      <pre id="script"></pre>
+      <summary><span class="twisty" aria-hidden="true"></span>作図手順<span class="spacer"></span><button id="apply" class="util" title="書き換えた作図手順を図に反映します(名前の変更もここで)">適用</button><button id="copy" class="util">コピー</button></summary>
+      <textarea id="script" spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="point A free&#10;line l1 through A B&#10;fact collinear A B C"
+        title="そのまま書き換えられます。名前を変えたいときもここで直して「適用」(Ctrl+Enter)を押してください"></textarea>
+      <p class="scripterr" id="scripterr" hidden></p>
     </details>
   </aside>
 </div>

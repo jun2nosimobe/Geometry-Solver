@@ -1204,6 +1204,24 @@ impl EGraph {
                 let line_def = Definition::new_line(*a, *b);
                 let line_id = self.create_entity(format!("Line_{}_{}_(Auto)", self.entities[a.0].name, self.entities[b.0].name), line_def, EntityType::Line);
                 self.link_logical_incidence(new_id, line_id);
+                // 🐛 中点の定義から直に従う「MA = MB」をここで出していなかった。
+                // そのため discover モードのスカラー検出器が、中点を作るたびに
+                // この自明な等式を「発見」し直していた(ユーザ指摘:
+                // 「長さが等しいという発見が多すぎる」)。垂線→Ang90 や
+                // 外接円→生成元の接続と同じく、定義から機械的に従う事実は
+                // ここで構造的に登録するのがこのエンジンの方針。
+                // 検出器が黙るだけでなく、証明側もこの等式を前提として使えるようになる。
+                let la_def = self.normalize_definition(&Definition::LengthSq(*a, new_id));
+                let la = self.create_entity(
+                    format!("LenSq_{}_{}_(Auto)", self.entities[a.0].name, self.entities[new_id.0].name),
+                    la_def, EntityType::Scalar);
+                let lb_def = self.normalize_definition(&Definition::LengthSq(new_id, *b));
+                let lb = self.create_entity(
+                    format!("LenSq_{}_{}_(Auto)", self.entities[new_id.0].name, self.entities[b.0].name),
+                    lb_def, EntityType::Scalar);
+                self.merge_entities_justified(la, lb, Justification::Trivial {
+                    reason: "中点の定義より、両端までの距離の二乗は等しい".to_string(),
+                });
             },
             Definition::LengthSq(a, b) => {
                 self.link_logical_incidence(*a, new_id);

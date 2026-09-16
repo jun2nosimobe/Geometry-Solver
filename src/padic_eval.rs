@@ -519,6 +519,20 @@ fn scalars_equal(x: (PInt, PInt), y: (PInt, PInt)) -> bool {
 ///
 /// 返すのは [A, B, C, D] で「|AB|² = |CD|²」の意味。同じ2点の組や、
 /// 4点が2点しか使っていないものは除く。
+/// 🌟 2つの線分の長さの二乗が、e-graph上で既に同じ同値類に
+/// 入っているか(= 発見するまでもなく既知か)。
+///
+/// LengthSq は遼延生成なので、まだ実体が無い場合は「既知ではない」とする
+/// (検出器は読み取り専用なので、ここで新しく作りはしない)。
+fn lengths_already_known_equal(egraph: &EGraph, a: ClassId, b: ClassId, c: ClassId, d: ClassId) -> bool {
+    let l1 = egraph.normalize_definition(&crate::mmp_core::Definition::LengthSq(a, b));
+    let l2 = egraph.normalize_definition(&crate::mmp_core::Definition::LengthSq(c, d));
+    match (egraph.memo.get(&l1), egraph.memo.get(&l2)) {
+        (Some(&x), Some(&y)) => egraph.get_rep(x) == egraph.get_rep(y),
+        _ => false,
+    }
+}
+
 pub fn find_generic_equal_lengths(egraph: &EGraph, seeds: &[u64], max_points: usize)
     -> Vec<[ClassId; 4]>
 {
@@ -593,6 +607,13 @@ pub fn find_generic_equal_lengths(egraph: &EGraph, seeds: &[u64], max_points: us
         used.sort_unstable();
         used.dedup();
         if used.len() < 3 { continue; }
+        // 🐛 ここで「既に構造的に分かっている相等」を落としていなかった。
+        // 共線性・共円性の検出器は「構造的にまだ知られていない」ものだけを
+        // 報告するのに、長さだけが純粋に数値だけで判定していたため、
+        // 例えば中点Mについて AM = MB を作図のたびに「発見」し直し、
+        // 他の種類の発見を押し流していた(ユーザ指摘)。
+        // 両方のLengthSqが既に同じ同値類にいるなら、それは既知。
+        if lengths_already_known_equal(egraph, ids[i1], ids[j1], ids[i2], ids[j2]) { continue; }
         out.push([ids[i1], ids[j1], ids[i2], ids[j2]]);
     }
     out.sort_by_key(|q| (q[0].0, q[1].0, q[2].0, q[3].0));

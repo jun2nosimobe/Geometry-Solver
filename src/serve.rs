@@ -217,12 +217,21 @@ fn build_egraph(script: &str) -> Result<(EGraph, Vec<(String, ClassId)>), String
     let mut egraph = EGraph::new();
     let mut env: HashMap<String, ClassId> = HashMap::new();
     let mut order: Vec<(String, ClassId)> = Vec::new();
+    // 🌟 `fact <種類> <名前...>` は作図ではなく「前提として与える主張」。
+    // 見つかった性質を前提に積んで先へ進む(UIの「前提にする」ボタン)ための行で、
+    // 作図が全部揃ってから適用したいので、ここに集めておく。
+    let mut facts: Vec<(usize, String, Vec<String>)> = Vec::new();
 
     for (lineno, raw) in script.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();
         if line.is_empty() { continue; }
         let t: Vec<&str> = line.split_whitespace().collect();
         let err = |m: String| format!("{}行目: {}", lineno + 1, m);
+        if t[0] == "fact" {
+            if t.len() < 3 { return Err(err(format!("項目が足りません: 「{}」", line))); }
+            facts.push((lineno, t[1].to_string(), t[2..].iter().map(|x| x.to_string()).collect()));
+            continue;
+        }
         if t.len() < 3 { return Err(err(format!("項目が足りません: 「{}」", line))); }
         let (kind, name, op) = (t[0], t[1].to_string(), t[2]);
         if env.contains_key(&name) { return Err(err(format!("名前「{}」が重複しています", name))); }
@@ -294,6 +303,18 @@ fn build_egraph(script: &str) -> Result<(EGraph, Vec<(String, ClassId)>), String
     }
     if order.is_empty() { return Err("作図が空です".to_string()); }
     egraph.apply_congruence_closure();
+    // 🌟 前提として与えられた主張を、作図が揃ってから適用する。
+    for (i, (lineno, kind, names)) in facts.iter().enumerate() {
+        let err = |m: String| format!("{}行目: {}", lineno + 1, m);
+        let mut ids = Vec::new();
+        for n in names {
+            ids.push(*env.get(n.as_str())
+                .ok_or_else(|| err(format!("「{}」がまだ作図されていません", n)))?);
+        }
+        assert_fact(&mut egraph, kind, &ids, 900_000 + i)
+            .ok_or_else(|| err(format!("前提にできない形です: 「fact {} …」", kind)))?;
+        egraph.apply_congruence_closure();
+    }
     Ok((egraph, order))
 }
 
@@ -677,6 +698,31 @@ fn proof_figure(user_script: &str, aux: &[String], ids: &[String])
     }
     let (eg, order) = build_egraph(&text).ok()?;
     Some((eg, order.into_iter().collect()))
+}
+
+/// 🌟 見つかった主張を「前提」として図に書き込む(UIの「前提にする」)。
+///
+/// 目標に翻訳する goal_for をそのまま使い、証明しに行く代わりに成り立つものと
+/// して与える。これで「この性質を認めたら、次に何が出るか」を試せる ―
+/// 人間が補題を1つ認めて先へ進むのと同じことを、画面の上でできるようにする。
+/// 与えた根拠は Justification::Given なので、あとから証明を辿れば
+/// 「ここは前提として置いた」と分かる。
+fn assert_fact(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize) -> Option<()> {
+    let (goal_kind, args) = goal_for(egraph, kind, r, tag)?;
+    let given = crate::mmp_core::Justification::Given;
+    match goal_kind.as_str() {
+        "Identical" if args.len() >= 2 => { egraph.merge_entities_justified(args[0], args[1], given); }
+        "Connected" if args.len() >= 2 => { egraph.link_logical_incidence_justified(args[0], args[1], given); }
+        "Concyclic" if args.len() >= 4 => {
+            let circ = egraph.create_entity(format!("FactCirc{}", tag),
+                Definition::Circumcircle(args[0], args[1], args[2]), EntityType::Conic);
+            for &p in &args[3..] {
+                egraph.link_logical_incidence_justified(p, circ, given.clone());
+            }
+        }
+        _ => return None,
+    }
+    Some(())
 }
 
 /// 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
@@ -1257,6 +1303,69 @@ line altC perp AB C";
     /// 垂直二等分線上の点はその線分の両端から等距離、という一番素直な
     /// 計量の主張で、(1)検出できること、(2)それが証明の目標に翻訳できて
     /// 実際に証明が通ること(=計量側の定理が初めて実戦で使われること)を見る。
+    /// 🐛 中点を作るだけで「AM = MB」が発見として上がってきていた
+    /// (ユーザ指摘:「長さが等しいという発見が多すぎる」)。原因は2つ:
+    /// apply_trivial_relations が Midpoint から LengthSq の相等を出して
+    /// おらず、かつ検出器が「既に構造的に分かっている相等」を落として
+    /// いなかった。両方直したので、中点だけの図では何も出ないはず。
+    /// 🌟 `fact <種類> <名前...>` で、見つかった性質を前提として
+    /// 図に与えられること(UIの「前提にする」)。与えた後はそれが
+    /// 構造的に知られているので、同じ主張が「発見」としては二度と出ない。
+    #[test]
+    fn a_finding_can_be_given_as_an_assumption() {
+        let base = "point A free
+point B free
+point C free
+point D free
+line l1 through A B
+line l2 through C D
+point P inter l1 l2";
+        let cfg = "config rounds 0
+config sweep 40
+config top 30
+";
+
+        // 前提なし: A, B, C は共線では無い。
+        let plain = discover_response(&format!("{}{}", cfg, base));
+        assert!(has(&plain, "ok|"), "作図が通らなかった: {}", plain);
+
+        // 前提を与えるとエラーにならず、その共線は以後「既知」になる。
+        let with_fact = discover_response(&format!("{}{}
+fact collinear A B C", cfg, base));
+        assert!(has(&with_fact, "ok|"), "前提を与えたら作図が通らなくなった: {}", with_fact);
+        let reported_again = with_fact.lines().any(|l| {
+            l.starts_with("finding|") && l.split('|').nth(2) == Some("collinear")
+                && { let ids = l.split('|').nth(4).unwrap_or("");
+                     ids.contains('A') && ids.contains('B') && ids.contains('C') }
+        });
+        assert!(!reported_again,
+            "前提として与えた共線が、まだ「発見」として報告されている:{n}{}", with_fact, n = "
+");
+
+        // 知らない名前を指す前提は、黙って無視せずエラーにする。
+        let bad = discover_response(&format!("{}{}
+fact collinear A B Z", cfg, base));
+        assert!(!has(&bad, "ok|"), "存在しない名前を指す前提が通ってしまった: {}", bad);
+    }
+
+    #[test]
+    fn a_plain_midpoint_is_not_reported_as_a_discovery() {
+        let script = "point A free
+point B free
+point M mid A B";
+        let out = discover_response(&format!(
+            "config rounds 0{n}config sweep 40{n}config top 20{n}{}", script, n = "
+"));
+        assert!(has(&out, "ok|"), "作図が通らなかった: {}", out);
+        let rows: Vec<&str> = out.lines()
+            .filter(|l| l.starts_with("finding|") && l.split('|').nth(2) == Some("equal_length"))
+            .collect();
+        assert!(rows.is_empty(),
+            "中点の定義から直に従う長さの等式が発見として報告されている:{n}{:?}",
+            rows, n = "
+");
+    }
+
     #[test]
     fn finds_and_proves_an_equal_length_claim() {
         let script = "point A free

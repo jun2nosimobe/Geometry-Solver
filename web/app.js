@@ -13,6 +13,9 @@
 //   x,y は自由点・曲線上の点だけが持つ(画面上のどこに置いたか)
 //   on  は曲線上の点が乗っている曲線名
 let objects = [];
+/// 🌟 「前提にする」で積んだ主張。`fact <種類> <名前...>` の行そのままで持ち、
+/// 作図手順の一部としてサーバへ送る。作図手順の枠から直接消すこともできる。
+let userFacts = [];
 let history = [];
 // エンジンが自由作図で足してきた補助的な図形。ユーザーの作図とは分けて
 // 持ち、薄い破線で描く。掴めないし、エンジンへ送り返しもしない
@@ -35,12 +38,15 @@ function freshName(kind) {
 function byName(n) { return objects.find(o => o.name === n); }
 
 function snapshot() {
-  history.push(JSON.stringify(objects));
+  // 🌟 前提(userFacts)も作図の一部なので一緒に控える。
+  history.push(JSON.stringify({ objects, userFacts }));
   if (history.length > 200) history.shift();
 }
 function undo() {
   if (!history.length) return;
-  objects = JSON.parse(history.pop());
+  const prev = JSON.parse(history.pop());
+  objects = prev.objects || [];
+  userFacts = prev.userFacts || [];
   pending = [];
   invalidateFindings();
   refresh();
@@ -288,7 +294,9 @@ function draw() {
     labelAt(s, o.name, hot ? colAcc : colDraw, 8, -8);
   }
   ctx.globalAlpha = 1;
-  document.getElementById('script').textContent = serialize() || '(まだ何もありません)';
+  // 🌟 編集中に書き換えると入力が飛ぶので、触っている間は更新しない。
+  const box = document.getElementById('script');
+  if (document.activeElement !== box) box.value = serialize();
 }
 
 function labelAt(s, text, color, dx, dy) {
@@ -479,11 +487,101 @@ function build(t, args) {
 // エンジンとのやりとり
 // ============================================================
 function serialize() {
-  return objects.map(o => {
+  const lines = objects.map(o => {
     if (o.op === 'free') return `point ${o.name} free`;
     if (o.op === 'on') return `point ${o.name} on ${o.on}`;
     return `${o.kind} ${o.name} ${o.op} ${o.args.join(' ')}`;
-  }).join('\n');
+  });
+  return lines.concat(userFacts).join('\n');
+}
+
+/// 🌟 作図手順の文字列を読み戻す。ユーザーが枠の中で直接書き換えられるように
+/// するための逆変換で、名前の変更もこれで通る。
+///
+/// 自由点の座標は文字列に入っていないので、同じ名前の点があればその座標を、
+/// 無ければ「何番目の点か」で古い図の同じ位置の点から引き継ぐ ― 名前だけを
+/// 書き換えたときに図が崩れないようにするため。
+function deserialize(text) {
+  const oldByName = new Map(objects.map(o => [o.name, o]));
+  const oldPoints = objects.filter(o => o.op === 'free' || o.op === 'on');
+  const next = [], facts = [], seen = new Set();
+  let ptIdx = 0;
+  const lines = text.split('\n').map(l => l.split('#')[0].trim()).filter(Boolean);
+  for (const line of lines) {
+    const t = line.split(/\s+/);
+    if (t[0] === 'fact') {
+      if (t.length < 3) throw new Error(`前提の書き方が違います: 「${line}」`);
+      facts.push(t.join(' '));
+      continue;
+    }
+    if (t.length < 3) throw new Error(`項目が足りません: 「${line}」`);
+    const [kind, name, op] = t;
+    if (!['point', 'line', 'circle'].includes(kind)) throw new Error(`知らない種類です: 「${kind}」`);
+    if (seen.has(name)) throw new Error(`名前「${name}」が重複しています`);
+    let o;
+    if (op === 'free') o = { name, kind, op, args: [] };
+    else if (op === 'on') {
+      if (!t[3]) throw new Error(`どの曲線の上かが要ります: 「${line}」`);
+      o = { name, kind, op, args: [], on: t[3] };
+    } else o = { name, kind, op, args: t.slice(3) };
+    for (const a of (o.on ? [o.on] : []).concat(o.args)) {
+      if (!seen.has(a)) throw new Error(`「${a}」がまだ作図されていません: 「${line}」`);
+    }
+    if (op === 'free' || op === 'on') {
+      const prev = oldByName.get(name);
+      const src = (prev && (prev.op === 'free' || prev.op === 'on')) ? prev : oldPoints[ptIdx];
+      o.x = src ? src.x : (ptIdx * 1.4 - 2);
+      o.y = src ? src.y : ((ptIdx % 2) ? 1.2 : -1.2);
+      ptIdx++;
+    }
+    seen.add(name);
+    next.push(o);
+  }
+  // 前提が指す名前も、作図の中に無ければ弾く(サーバで落ちる前に気づけるように)。
+  for (const f of facts) {
+    for (const n of f.split(/\s+/).slice(2)) {
+      if (!seen.has(n)) throw new Error(`前提が指す「${n}」が作図にありません: 「${f}」`);
+    }
+  }
+  if (!next.length) throw new Error('作図が空です');
+  return { objects: next, facts };
+}
+
+/// 枠に書かれている作図手順を図に反映する。
+function applyScript() {
+  const box = document.getElementById('script');
+  try {
+    const r = deserialize(box.value);
+    snapshot();
+    objects = r.objects;
+    userFacts = r.facts;
+    pending = [];
+    dropAux();
+    invalidateFindings();
+    scriptError('');
+    refresh();
+  } catch (e) {
+    scriptError(e.message);
+  }
+}
+
+function scriptError(msg) {
+  const p = document.getElementById('scripterr');
+  p.hidden = !msg;
+  p.textContent = msg || '';
+}
+
+/// 🌟 見つかった性質を前提として積む。以後の「調べる」「証明を試す」は
+/// これを成り立つものとして走るので、「この補題を認めたら次に何が出るか」を
+/// 人間が補題を1つ認めて先へ進むのと同じ感覚で試せる。
+function assumeFinding(f) {
+  const line = `fact ${f.kind} ${f.ids.join(' ')}`;
+  if (userFacts.includes(line)) return;
+  snapshot();
+  userFacts.push(line);
+  invalidateFindings();
+  scriptError('');
+  refresh();
 }
 
 function invalidateFindings() {
@@ -769,6 +867,19 @@ function paintFindings() {
       take.addEventListener('click', (e) => { e.stopPropagation(); adoptAux(needed); });
       row.appendChild(take);
     }
+    // 🌟 この性質を前提として積むボタン。図の中の名前だけで書けるものに限る
+    // (補助作図の中の図形は、先に「取り込む」で自分の図にしてもらう)。
+    const assume = document.createElement('button');
+    assume.className = 'util assume';
+    assume.textContent = '前提にする';
+    const known = f.ids.every(n => mineNames.has(n));
+    const already = userFacts.includes(`fact ${f.kind} ${f.ids.join(' ')}`);
+    assume.disabled = !known || already;
+    assume.title = already ? 'すでに前提に入っています'
+      : known ? 'この性質を成り立つものとして図に与えます(作図手順に fact の行が増えます)'
+      : 'まず「取り込む」で、この性質に出てくる補助作図を自分の図にしてください';
+    assume.addEventListener('click', (e) => { e.stopPropagation(); assumeFinding(f); });
+    row.appendChild(assume);
     // 面白さの内訳。どうしてこの順なのかが分かるように、そのまま出す。
     const parts = document.createElement('div');
     parts.className = 'parts';
@@ -885,6 +996,15 @@ function init() {
   setupSplitter();
   document.getElementById('adopt').addEventListener('click', () => adoptAux());
   document.getElementById('dropaux').addEventListener('click', () => { dropAux(); draw(); });
+  document.getElementById('apply').addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    applyScript();
+  });
+  document.getElementById('script').addEventListener('keydown', (e) => {
+    // Ctrl/Cmd + Enter でも適用できるようにする(ボタンまで行かずに済む)。
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); applyScript(); }
+    e.stopPropagation();
+  });
   document.getElementById('copy').addEventListener('click', (e) => {
     // summaryの中にあるので、そのままだと折りたたみが開閉してしまう。
     e.preventDefault(); e.stopPropagation();
@@ -892,7 +1012,7 @@ function init() {
   });
   document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
     if (b.dataset.act === 'undo') undo();
-    if (b.dataset.act === 'clear') { snapshot(); objects = []; pending = []; invalidateFindings(); refresh(); }
+    if (b.dataset.act === 'clear') { snapshot(); objects = []; userFacts = []; pending = []; invalidateFindings(); refresh(); }
   }));
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }

@@ -232,3 +232,17 @@ summary::-webkit-details-marker { display: none; }
   #side { border-left: none; border-top: 1px solid var(--line); overflow: visible; }
   #findings { max-height: 50vh; }
 }
+
+/* 🌟 作図手順は読むだけでなく直接書き換えられる(名前の変更もここで行う)。 */
+#script{
+  width:100%; box-sizing:border-box; min-height:120px; max-height:40vh;
+  resize:vertical; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size:12px; line-height:1.5; padding:8px 10px;
+  border:1px solid var(--line); border-radius:6px;
+  background:var(--panel); color:var(--ink); white-space:pre; overflow:auto;
+}
+#script:focus{ outline:2px solid var(--accent); outline-offset:-1px; }
+.scripterr{ margin:6px 0 0; font-size:12px; color:var(--warn); }
+/* 見つかった性質を前提として積むボタン。取り込む(.take)と同じ見た目に揃える。 */
+.assume{ white-space:nowrap; }
+.assume[disabled]{ opacity:.45; cursor:default; }
