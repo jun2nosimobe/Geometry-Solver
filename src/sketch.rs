@@ -275,11 +275,31 @@ pub fn diagnose(args: &[String]) {
 
     println!("🔎 {} の筋書き(補助作図{}件、手順{}個)を {} 段で試します", problem, sketch.aux.len(), n, rungs.len());
     // 段ごとの (解けたか, 仕事量, 手順ごとの状態)
+    // 🌟 段は互いに独立で、予算は壁時計ではなく仕事量なので、並べて走らせても結果は
+    // 変わらない。1段ずつ順に回すと、解けない段が毎回予算を使い切るので1問に10分以上
+    // かかっていた。コア数まで同時に走らせる。
+    let width = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).max(1);
+    let mut outputs: Vec<Option<(bool, String)>> = vec![None; rungs.len()];
+    for chunk in (0..rungs.len()).collect::<Vec<_>>().chunks(width) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk.iter().map(|&k| {
+                let mut argv = vec![problem.clone(), format!("--sketch={}", rungs[k].arg())];
+                argv.extend(passthrough.iter().cloned());
+                let exe = &exe;
+                (k, scope.spawn(move || {
+                    let (solved, _secs, out) = crate::sweep::run_capture(exe, &argv, 600);
+                    (solved, out)
+                }))
+            }).collect();
+            for (k, h) in handles {
+                outputs[k] = h.join().ok();
+            }
+        });
+    }
+
     let mut rows: Vec<(Rung, bool, Option<u64>, Vec<String>)> = Vec::new();
-    for &rung in &rungs {
-        let mut argv = vec![problem.clone(), format!("--sketch={}", rung.arg())];
-        argv.extend(passthrough.iter().cloned());
-        let (solved, _secs, out) = crate::sweep::run_capture(&exe, &argv, 600);
+    for (k, &rung) in rungs.iter().enumerate() {
+        let (solved, out) = outputs[k].take().unwrap_or((false, String::new()));
         let work = out.lines().find_map(|l| l.split("消費した仕事量: ").nth(1))
             .and_then(|r| r.split_whitespace().next()).and_then(|v| v.parse().ok());
         let mut st = vec![String::from("?"); n];
