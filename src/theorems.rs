@@ -106,7 +106,6 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 
                 fact_ext("DefinedBy", &["Apex2", "Base1", "L_A2_B1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["Apex2", "Base2", "L_A2_B2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L_A2_B1", "L_A2_B2"]),
                 
                 fact_ext("Connected", &["Apex2", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["Base1", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
@@ -294,7 +293,6 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 fact_ext("Connected", &["A", "LineAC"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["B", "LineAB"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["B", "LineBC"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "B"]),
                 fact_ext("Connected", &["C", "LineBC"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["C", "LineAC"], Some("Line"), Some("Point"), false, None),
                 distinct(&["A", "B", "C"]),
@@ -365,9 +363,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 不変性」定理群のバグ修正と全く同じ理由)。
                 fact_ext("Connected", &["LineAB", "DirAB"], Some("Direction"), Some("Line"), false, None),
                 fact_ext("Connected", &["LineAD", "DirAD"], Some("Direction"), Some("Line"), false, None),
-                distinct(&["LineAB", "LineAD"]),
                 fact_ext("Connected", &["LineCD", "DirCD"], Some("Direction"), Some("Line"), false, None),
-                distinct(&["LineAB", "LineAD", "LineCD"]),
                 fact_ext("Connected", &["LineCB", "DirCB"], Some("Direction"), Some("Line"), false, None),
                 distinct(&["LineAB", "LineAD", "LineCD", "LineCB"]),
 
@@ -377,17 +373,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // C = LineCD ∩ LineCB (∠Cの頂点)
                 fact_ext("Connected", &["C", "LineCD"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["C", "LineCB"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "C"]),
                 // P = LineAB ∩ LineCD (2弦の交点)。A,Cが確定した直後に見つけて
                 // すぐdistinctで弾くことで、「PがAやCに化けた」まま後段の
                 // B,D探索まで持ち越してしまう無駄を防ぐ。
                 fact_ext("Connected", &["P", "LineAB"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "C", "P"]),
                 fact_ext("Connected", &["P", "LineCD"], Some("Line"), Some("Point"), false, None),
                 distinct(&["A", "C", "P"]),
                 // B = LineAB ∩ LineCB (弦ABのもう一端。LineCBの上にもある点として一意に特定)
                 fact_ext("Connected", &["B", "LineAB"], Some("Line"), Some("Point"), false, None),
-                distinct(&["A", "P", "B"]),
                 fact_ext("Connected", &["B", "LineCB"], Some("Line"), Some("Point"), false, None),
                 distinct(&["A", "P", "B"]),
                 // D = LineCD ∩ LineAD (弦CDのもう一端)
@@ -469,9 +462,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
 
                 fact_ext("Connected", &["LineEA", "DirEA"], Some("Direction"), Some("Line"), false, None),
                 fact_ext("Connected", &["LineEB", "DirEB"], Some("Direction"), Some("Line"), false, None),
-                distinct(&["LineEA", "LineEB"]),
                 fact_ext("Connected", &["LineED", "DirED"], Some("Direction"), Some("Line"), false, None),
-                distinct(&["LineEA", "LineEB", "LineED"]),
                 fact_ext("Connected", &["LineEC", "DirEC"], Some("Direction"), Some("Line"), false, None),
                 distinct(&["LineEA", "LineEB", "LineED", "LineEC"]),
 
@@ -485,11 +476,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
 
                 // A,B,D,C = それぞれの直線上のEでない方の点
                 fact_ext("Connected", &["A", "LineEA"], Some("Line"), Some("Point"), false, None),
-                distinct(&["E", "A"]),
                 fact_ext("Connected", &["B", "LineEB"], Some("Line"), Some("Point"), false, None),
-                distinct(&["E", "A", "B"]),
                 fact_ext("Connected", &["D", "LineED"], Some("Line"), Some("Point"), false, None),
-                distinct(&["E", "A", "B", "D"]),
                 fact_ext("Connected", &["C", "LineEC"], Some("Line"), Some("Point"), false, None),
                 distinct(&["E", "A", "B", "D", "C"]),
 
@@ -1052,10 +1040,8 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 fact_ext("Connected", &["O", "LOA"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["B", "LOB"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["O", "LOB"], Some("Line"), Some("Point"), false, None),
-                distinct(&["LOA", "LOB"]),
                 fact_ext("Connected", &["C", "LOC"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["O", "LOC"], Some("Line"), Some("Point"), false, None),
-                distinct(&["LOA", "LOB", "LOC"]),
                 fact_ext("Connected", &["D", "LOD"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["O", "LOD"], Some("Line"), Some("Point"), false, None),
                 distinct(&["LOA", "LOB", "LOC", "LOD"]),
@@ -1102,10 +1088,8 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 not(fact_ext("Connected", &["Ap", "L2"], Some("Line"), Some("Point"), false, None)),
                 fact_ext("Connected", &["Bp", "L2"], Some("Line"), Some("Point"), false, None),
                 not(fact_ext("Connected", &["Bp", "L1"], Some("Line"), Some("Point"), false, None)),
-                distinct(&["Ap", "Bp"]),
                 fact_ext("Connected", &["Cp", "L3"], Some("Line"), Some("Point"), false, None),
                 not(fact_ext("Connected", &["Cp", "L1"], Some("Line"), Some("Point"), false, None)),
-                distinct(&["Ap", "Bp", "Cp"]),
                 fact_ext("Connected", &["Dp", "L4"], Some("Line"), Some("Point"), false, None),
                 not(fact_ext("Connected", &["Dp", "L1"], Some("Line"), Some("Point"), false, None)),
                 distinct(&["Ap", "Bp", "Cp", "Dp"]),
@@ -1153,7 +1137,6 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 束縛する(「複比の透視射影不変性(線束→点)」がCrossRatioOfLines
                 // からL1..L4を直接束縛するのと全く同じ発想)。
                 fact_ext("DefinedBy", &["P1", "P2", "P3", "P4", "P5", "Conic"], Some("ConicThrough5Points"), None, false, None),
-                distinct(&["P1", "P2", "P3", "P4", "P5"]),
                 // 二次曲線上のもう1点Qを局所スキャンで見つける(唯一の
                 // 「新規に探す」変数)。
                 fact_ext("Connected", &["Q", "Conic"], None, None, false, None),
@@ -1162,17 +1145,13 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 円周角の定理のL_A1_B1等と同じ「DefinedBy+作図需要」で作る)。
                 fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L1_P2", "L1_P3"]),
                 fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L1_P2", "L1_P3", "L1_P4"]),
                 fact_ext("DefinedBy", &["P1", "Q", "L1_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
                 // P5から見た同じP2,P3,P4,Qへの4直線。
                 fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L5_P2", "L5_P3"]),
                 fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L5_P2", "L5_P3", "L5_P4"]),
                 fact_ext("DefinedBy", &["P5", "Q", "L5_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
             ],
@@ -1228,7 +1207,6 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // P1から見たP2,P3,P4への3直線。
                 fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L1_P2", "L1_P3"]),
                 fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 distinct(&["L1_P2", "L1_P3", "L1_P4"]),
 
@@ -1236,9 +1214,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // として、シュタイナーの定理のQと同じ役割で扱う)。
                 fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L5_P2", "L5_P3"]),
                 fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                distinct(&["L5_P2", "L5_P3", "L5_P4"]),
                 fact_ext("DefinedBy", &["P5", "P1", "L5_P1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_P1"]),
             ],
@@ -1300,18 +1276,14 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 fact_ext("Connected", &["P5", "L5_P3"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["P5", "L5_P4"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["P5", "L5_Q"], Some("Line"), Some("Point"), false, None),
-                distinct(&["P1", "P5"]),
 
                 // P2 = L1_P2とL5_P2に共通の点(視点P1,P5以外)。P3,P4,Qも同様。
                 fact_ext("Connected", &["P2", "L1_P2"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["P2", "L5_P2"], Some("Line"), Some("Point"), false, None),
-                distinct(&["P1", "P5", "P2"]),
                 fact_ext("Connected", &["P3", "L1_P3"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["P3", "L5_P3"], Some("Line"), Some("Point"), false, None),
-                distinct(&["P1", "P5", "P2", "P3"]),
                 fact_ext("Connected", &["P4", "L1_P4"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["P4", "L5_P4"], Some("Line"), Some("Point"), false, None),
-                distinct(&["P1", "P5", "P2", "P3", "P4"]),
                 fact_ext("Connected", &["Q", "L1_Q"], Some("Line"), Some("Point"), false, None),
                 fact_ext("Connected", &["Q", "L5_Q"], Some("Line"), Some("Point"), false, None),
                 distinct(&["P1", "P5", "P2", "P3", "P4", "Q"]),
