@@ -267,7 +267,7 @@
         <div class="when">方針C<span class="sha">MCTS/補助構成</span></div>
         <div>
           <div class="headline"><h3>個別定理の追加より、汎用の補助構成ヒューリスティックを優先</h3><span class="pill open">実験継続中</span></div>
-          <div class="desc">ユーザー指示「無闇に定理を追加してもノイズが増えるだけ、ondemand作図やmctsの補助点作図を改善すべき」に基づく路線。<code>SecondIntersectionOfLineAndConic</code>(直線と二次曲線のもう一方の交点)を汎用プリミティブとして追加したが、A/B検証の結果これ自体が決め手だった例はまだ無い。より大きな発見: <b>既定実行は<code>--mcts</code>を無効にしており、需要駆動の補助構成が尽きると探索を完全に打ち切る</b>(main.rsのリカバリーフェーズ)。<code>bench_2018silkroadp1</code>/<code>bench_2005ctstp1</code>は<code>--mcts --time=30</code>なら解けることを確認済み――既定の5秒予算では時間が足りないだけで、定理不足ではない。MCTSを既定で有効化する実験は既定5秒予算のままだと75/96とほぼ横ばい(nine_point_full/orthocenterの安定性とのトレードオフ)で、時間予算を上げる/MCTSの健全性チェックを強化するところまで踏み込まないと純増にならない。</div>
+          <div class="desc">ユーザー指示「無闇に定理を追加してもノイズが増えるだけ、ondemand作図やmctsの補助点作図を改善すべき」に基づく路線。<code>SecondIntersectionOfLineAndConic</code>(直線と二次曲線のもう一方の交点)を汎用プリミティブとして追加したが、A/B検証の結果これ自体が決め手だった例はまだ無い。より大きな発見: <b>既定実行は<code>--mcts</code>を無効にしており、需要駆動の補助構成が尽きると探索を完全に打ち切る</b>(main.rsのリカバリーフェーズ)。<code>bench_2018silkroadp1</code>/<code>bench_2005ctstp1</code>は<code>--mcts --time=30</code>なら解けることを確認済み――既定の5秒予算では時間が足りないだけで、定理不足ではない。MCTSを既定で有効化する実験は既定5秒予算のままだと75/96とほぼ横ばい(nine_point_full/orthocenterの安定性とのトレードオフ)で、時間予算を上げる/MCTSの健全性チェックを強化するところまで踏み込まないと純増にならない。<br><b>2026-09-16 の実測(§04 --origins):</b> 需要駆動の補助線を外すと31→15問、交点を外すと31→29問 ― 解けている問題の約半分はこの路線の手で支えられている。一方で目標から逆算する作図は一度も効いておらず、MCTSは既定で無効なので、「何を作図するか」を目標側から決める手はまだ実質無い(§05)。</div>
         </div>
       </div>
 
@@ -314,7 +314,7 @@
 
     <p class="section-note" style="margin-top:20px">入口(サブコマンド)は次の通り。いずれも <code>geom_solver help</code> に一覧が出る。</p>
     <div class="gloss">
-      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定800万)が本当の予算で、<code>--time</code>(既定600秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>。</p></div>
+      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定800万)が本当の予算で、<code>--time</code>(既定600秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>(作図の出どころ別の効き)。行き詰まり時の手を個別に外すA/Bは<code>--skip-recovery=line,point,mid,angle,target</code>。</p></div>
       <div class="gterm"><b>geom_solver sweep</b><p>全37問を順に解いて成否と所要時間を集計する。<code>--vary</code>でパラメータを振れる。</p></div>
       <div class="gterm"><b>geom_solver discover</b><p>目標なしの自由作図から非自明な性質を探す。<code>--prove</code>で見つけた性質の証明まで試す。</p></div>
       <div class="gterm"><b>geom_solver discover-degenerate</b><p>図を退化させて「一緒に潰れる」実体の組を観測する。</p></div>
@@ -721,6 +721,30 @@ flowchart TD
         </div>
       </div>
 
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>その場で作った図形が証明に効いているかを測る(--origins / --skip-recovery)</h3><span class="pill shipped">0f6f52c</span></div>
+          <div class="desc">ユーザー要望「オンデマンド作図や DefinedBy でその場で作られた作図がどれくらい有効活用されているのか調べたい」。どちらも「行き詰まったら図を増やす」という賭けだが、作った数はログに出ていても、作ったものが証明に残ったかは一度も測れていなかった。名前の接尾辞 <code>(Auto)</code> は定義からの自動派生とマッチャのその場生成の両方に使われていて事後には区別できないので、<code>GeoEntity</code> に<b>出どころ</b>(<code>EntityOrigin</code>: 問題文 / DefinedBy生成 / 定理の結論 / 需要:補助線・交点・中点・角 / 目標駆動 / MCTS / 調和共役作図)を <code>create_entity</code> の時点で刻むようにした。補助線を1本引くと方向などが芋づる式に生えるので、<code>apply_trivial_relations</code> の中で生えたものには「付随」の印を別に付けて数を水増ししない。「証明に登場した」は代表元ではなく<b>スロット単位</b>で数える(代表元で数えると、同じ同値類へ合流しただけの無関係な補助図形まで証明に登場したことになる)。</div>
+          <div class="desc">解けた31問で、直接作ったものの種類別(「証明の手順に登場」= 証明を根から辿ったマージ・接続の端点に現れたか):</div>
+          <table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">出どころ</th><th style="text-align:left;padding:2px 12px 2px 0">種類</th><th style="text-align:right;padding:2px 12px 2px 0">作った数</th><th style="text-align:right;padding:2px 12px 2px 0">証明の手順に登場</th><th style="text-align:right;padding:2px 12px 2px 0">割合</th></tr><tr><td style="padding:2px 12px 2px 0">需要: 補助線</td><td style="padding:2px 12px 2px 0">2点を通る直線</td><td style="text-align:right;padding:2px 12px 2px 0">235</td><td style="text-align:right;padding:2px 12px 2px 0">144</td><td style="text-align:right;padding:2px 12px 2px 0"><b>61%</b></td></tr><tr><td style="padding:2px 12px 2px 0">需要: 交点</td><td style="padding:2px 12px 2px 0">2直線の交点</td><td style="text-align:right;padding:2px 12px 2px 0">17</td><td style="text-align:right;padding:2px 12px 2px 0">14</td><td style="text-align:right;padding:2px 12px 2px 0"><b>82%</b></td></tr><tr><td style="padding:2px 12px 2px 0">定理の結論</td><td style="padding:2px 12px 2px 0">外接円</td><td style="text-align:right;padding:2px 12px 2px 0">332</td><td style="text-align:right;padding:2px 12px 2px 0">159</td><td style="text-align:right;padding:2px 12px 2px 0">48%</td></tr><tr><td style="padding:2px 12px 2px 0">定理の結論</td><td style="padding:2px 12px 2px 0">2点を通る直線</td><td style="text-align:right;padding:2px 12px 2px 0">27</td><td style="text-align:right;padding:2px 12px 2px 0">10</td><td style="text-align:right;padding:2px 12px 2px 0">37%</td></tr><tr><td style="padding:2px 12px 2px 0">需要: 角/方向</td><td style="padding:2px 12px 2px 0">有向角</td><td style="text-align:right;padding:2px 12px 2px 0">860</td><td style="text-align:right;padding:2px 12px 2px 0">98</td><td style="text-align:right;padding:2px 12px 2px 0">11%</td></tr><tr><td style="padding:2px 12px 2px 0">DefinedBy生成</td><td style="padding:2px 12px 2px 0">有向角</td><td style="text-align:right;padding:2px 12px 2px 0">1,193</td><td style="text-align:right;padding:2px 12px 2px 0">117</td><td style="text-align:right;padding:2px 12px 2px 0">10%</td></tr><tr><td style="padding:2px 12px 2px 0">定理の結論</td><td style="padding:2px 12px 2px 0">長さの二乗</td><td style="text-align:right;padding:2px 12px 2px 0">161</td><td style="text-align:right;padding:2px 12px 2px 0">14</td><td style="text-align:right;padding:2px 12px 2px 0">9%</td></tr><tr><td style="padding:2px 12px 2px 0">定理の結論</td><td style="padding:2px 12px 2px 0">積</td><td style="text-align:right;padding:2px 12px 2px 0">139</td><td style="text-align:right;padding:2px 12px 2px 0">0</td><td style="text-align:right;padding:2px 12px 2px 0"><b>0%</b></td></tr><tr><td style="padding:2px 12px 2px 0">DefinedBy生成</td><td style="padding:2px 12px 2px 0">長さの二乗</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">0</td><td style="text-align:right;padding:2px 12px 2px 0">0%</td></tr><tr><td style="padding:2px 12px 2px 0">目標駆動</td><td style="padding:2px 12px 2px 0">補助線・複比</td><td style="text-align:right;padding:2px 12px 2px 0">(44問で6)</td><td style="text-align:right;padding:2px 12px 2px 0">0</td><td style="text-align:right;padding:2px 12px 2px 0"><b>0%</b></td></tr></table>
+          <div class="desc">相関だけでは「無ければ解けなかった」とは言えないので、行き詰まり時の手を1つずつ外す <code>--skip-recovery</code> を足して全44問で測った:</div>
+          <table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0"><code>--skip-recovery=</code></th><th style="text-align:right;padding:2px 12px 2px 0">解けた数</th><th style="text-align:right;padding:2px 12px 2px 0">総仕事量</th><th style="text-align:left;padding:2px 12px 2px 0">変化</th></tr><tr><td style="padding:2px 12px 2px 0">(既定)</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">14,434,197</td><td style="padding:2px 12px 2px 0"></td></tr><tr><td style="padding:2px 12px 2px 0"><code>line</code> 補助線を外す</td><td style="text-align:right;padding:2px 12px 2px 0"><b>15</b></td><td style="text-align:right;padding:2px 12px 2px 0">—</td><td style="padding:2px 12px 2px 0">HAGeo-409で解けていた7問が全て落ちるほか、varignon・miquel・simson・orthocenter系など9問</td></tr><tr><td style="padding:2px 12px 2px 0"><code>point</code> 交点を外す</td><td style="text-align:right;padding:2px 12px 2px 0"><b>29</b></td><td style="text-align:right;padding:2px 12px 2px 0">—</td><td style="padding:2px 12px 2px 0">orthocenter・orthocenter_alt が落ちる</td></tr><tr><td style="padding:2px 12px 2px 0"><code>angle</code> 角/方向を外す</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">13,216,110 (-8.4%)</td><td style="padding:2px 12px 2px 0">同じ31問。ただし orthic_incenter +82%、bench_2010g1 +24%</td></tr><tr><td style="padding:2px 12px 2px 0"><code>target</code> 目標駆動を外す</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">14,086,803 (-2.4%)</td><td style="padding:2px 12px 2px 0">同じ31問。差は全て未解決の問題</td></tr></table>
+          <div class="evidence"><b>読み方の注意:</b> 出どころは<b>最初に作った側</b>に付く。角/方向の需要が先に作った有向角は、あとで DefinedBy が同じ定義を要求してもそちらに数えられる。この2つの割合は分け合っている分があり、「外しても31問解ける」が示す通り重複している。効いているかの判断は外した実測の方を見ること。<br><b>結論:</b> 需要駆動の補助線は解けている問題の約半分を支えていて、交点は数は少ないが当たる割合が最も高い。一方で有向角(DefinedBy生成と角の需要で合わせて2,053個)と定理の結論の積(139個、登場0)は量のわりに効いておらず、目標駆動の作図は一度もマージすら起こしていない。挙動は変えていない(既定の総仕事量 14,434,197 のまま)。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>有向角の総当たりを、補助線・交点の需要が尽きてから回す</h3><span class="pill shipped">c15cfec</span></div>
+          <div class="desc">上の実測で、<code>resolve_angle_demands</code>(各点を通る直線の全ペアの有向角を作る)は解けた31問で860個を作り、証明の手順に出るのは11%、外しても同じ31問が解けた。ただし完全に外すと orthic_incenter が +82% になる。そこで捨てずに、行き詰まったとき<b>補助線・交点の需要が何も作らなかった場合だけ</b>回す順にした(狙いの定まった手から試し、尽きてから広げる):</div>
+          <table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">有向角の総当たり</th><th style="text-align:right;padding:2px 12px 2px 0">解けた数</th><th style="text-align:right;padding:2px 12px 2px 0">解けた31問の仕事量</th><th style="text-align:right;padding:2px 12px 2px 0">全44問の仕事量</th></tr><tr><td style="padding:2px 12px 2px 0">既定(毎回の行き詰まりで回す)</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">3,698,868</td><td style="text-align:right;padding:2px 12px 2px 0">14,434,197</td></tr><tr><td style="padding:2px 12px 2px 0">完全に外す</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">3,434,613 (-7.1%)</td><td style="text-align:right;padding:2px 12px 2px 0">13,216,110 (-8.4%)</td></tr><tr><td style="padding:2px 12px 2px 0"><b>他の需要が尽きてから回す(採用)</b></td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0"><b>3,263,861 (-11.8%)</b></td><td style="text-align:right;padding:2px 12px 2px 0">16,869,193 (+16.9%)</td></tr></table>
+          <div class="evidence"><b>全体の +16.9% について:</b> 増えた分は全て未解決の13問で、諦めるまでに試す手が増えたもの(予算800万に達した問題は無い)。解ける問題の速さと、未解決の問題の粘り強さの両方を悪くしない選択は、完全に外すより後回しの方だった。<br><b>あわせて試して採らなかったもの:</b> 補助線の需要を1回の行き詰まりあたり3本→5本にすると、残った30問は -17.8% だが bench_2011armog10p6 が解けなくなり、問題ごとの振れも極端(bench_2012egmop1 -83%、bench_2019g1 +592%)。固定値では両立しないので戻し、§05に「行き詰まりに応じて広げる」案として残した。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -729,6 +753,47 @@ flowchart TD
     <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(§04)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 
     <div class="backlog-list">
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>交点の需要は当たる割合が最も高い(82%)のに、44問で30個しか作っていない ― 候補の出どころを広げる</h3>
+          <div class="desc"><code>--origins</code>(§04)で、<code>resolve_point_demands</code> が作った交点は解けた問題で17個中14個が証明の手順に出ており、外すと orthocenter・orthocenter_alt が落ちる。つまり<b>一番当たる手が一番動いていない</b>。候補の出どころは2つあるはずだが、実際に働いているのは(b)だけ:
+          <br>(a) <code>match_defined_by_fact</code> が「2直線はあるのに交点が無い」を需要として記録する経路 ― DefinedBy パターンで <code>Intersection</code> を問い合わせる定理が1つも無いので、<b>一度も発火しない</b>。定理は「2直線の上にある点」を <code>Connected(P,L1)</code>・<code>Connected(P,L2)</code> の2パターンで書いており、1パターンを見ている時点では「両方に乗る点が無い」ことが観測できない。
+          <br>(b) 垂線の足の能動的な走査 ― 候補は既存の垂線の本数(三角形なら3本)しか無い。
+          <br><b>次の一手:</b> (a)は Connected の2パターン目で「1パターン目で直線 L1 から取ってきた点が L2 に乗っていない」ときに L1∩L2 を需要として記録すれば、観測できるかもしれない(補助線の需要が DefinedBy の空振りで記録されるのと同じ形。ただし点が L1 以外のパターンで束縛された場合と区別する必要がある)。1回あたり2点・次数4以下という既存の絞り込みはそのまま使える。</div>
+          <div class="b-tags"><span class="tag">当たる割合82%・作った数30</span><span class="tag">DefinedBy経路は一度も発火せず</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>目標駆動の作図は一度も効いていない ― 「何を作図するか」を目標から逆算する手は、まだ無いのと同じ</h3>
+          <div class="desc">★の項目で「次に効くのはここ」とした <code>resolve_target_demands</code> / <code>resolve_cross_ratio_demands</code> を測ると、44問で動いたのは3問・作ったのは補助線4本と複比2個だけで、<b>その全てが一度もマージに関与していない</b>。外しても解けた問題の仕事量は1ステップも変わらない。今の実装は「目標に出てくる点のうち、まだ直線で結ばれていないペアを結ぶ」だけで、他の需要駆動の手が全部尽きた最後にしか回らないため、そもそも出番がほとんど無く、出ても目標点どうしを結ぶ直線は証明の筋に乗らない。
+          <br><b>含意:</b> 未解決13問の律速(作図のネタ切れ)に対して、目標から逆算する作図は実質まだ存在しない。今動いている需要駆動の手は全部「定理のマッチングが空振りした場所」から出ており、目標の側からは何も来ていない。</div>
+          <div class="b-tags"><span class="tag">マージ関与0</span><span class="tag">外しても差0</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>補助線の需要の本数は固定値では両立しない ― 行き詰まりが続くほど広げる</h3>
+          <div class="desc">補助線の需要は解けた問題で当たる割合61%、外すと31→15問で、最も効いている手。1回の行き詰まりで引く本数(現在3本)を5本にすると、残った30問の仕事量は -17.8% だが bench_2011armog10p6 が落ち、bench_2019g1 は +592%、bench_2012egmop1 は -83% と振れが極端(§04)。<code>fanout_heat_cap</code> と同じ形のトレードオフなので、同じ解き方 ― 3本から始め、引いた補助線が次の行き詰まりまでに1本もマージを生まなかったときだけ本数を増やす ― が筋。</div>
+          <div class="b-tags"><span class="tag">3→5本: -17.8%・1問落ち</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>DefinedBy のその場生成は有向角を2,517個作り、証明に出るのは1割 ― 定理の結論の積は139個で0</h3>
+          <div class="desc">全44問で DefinedBy のその場生成が作った図形の98%は有向角(2,517個)で、解けた問題で証明の手順に出るのは9.8%。長さの二乗も57個作って0。定理の結論テンプレートが作る積(方冪の定理・中心角の定理が作る <code>Product</code>)は解けた問題で139個作り、<b>1個も証明に出ていない</b>(ただし方冪を主題にする bench_2015apmop1 は未解決なので、「要らない」とはまだ言えない)。作られた図形は型インデックスの走査・熱の順位付けの母数を恒久的に増やすので、量そのものがコストになる。空振りの多い組み合わせを DefinedBy 側で先に弾けるか(親の次数・熱で)が次の問い。</div>
+          <div class="b-tags"><span class="tag">有向角2,517個で9.8%</span><span class="tag">積139個で0</span></div>
+        </div>
+      </div>
+
 
 
 
