@@ -167,6 +167,15 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
         // 🌟 垂直二等分線の距離の等価性の逆
         // ==========================================
         // B,Cから等距離にある点Pは、線分BCの垂直二等分線上にある(Connected)。
+        //
+        // 🌟 中点と垂直二等分線は前提ではなく結論側で作る。以前は Mid_BC・LineBC・
+        // PerpMid を DefinedBy で「既に図にあること」として要求していたので、
+        // 垂直二等分線がまだ無い線分では等距離が示されても一度も発火しなかった。
+        // diagnose(sketch.rs)で、bench_2016armog10p2 の「OaとObがDXの両端から
+        // 等距離 ⟹ OaOb ⊥ DX」と bench_2000usatstp2 の「MとNがEFの両端から
+        // 等距離 ⟹ MN ⊥ EF」が、まさにこの制約で止まっていると分かった。
+        // 2点が同じ垂直二等分線に乗れば、あとは直線の一意性で2点を結ぶ直線が
+        // その垂直二等分線そのものになる。
         TheoremDef {
             name: "垂直二等分線の距離の等価性の逆".to_string(),
             entities: entities(&[
@@ -175,15 +184,16 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_PB", EntityType::Scalar), ("Dist_PC", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["LineBC", "Mid_BC", "PerpMid"], Some("PerpendicularLine"), None, false, None),
                 fact_ext("DefinedBy", &["P", "B", "Dist_PB"], Some("LengthSq"), Some("Unordered"), false, None),
                 fact_ext("DefinedBy", &["P", "C", "Dist_PC"], Some("LengthSq"), Some("Unordered"), false, None),
                 fact_ext("Identical", &["Dist_PB", "Dist_PC"], Some("Scalar"), None, false, None),
                 distinct(&["B", "C", "P"]),
             ],
-            constructions: vec![],
+            constructions: vec![
+                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["B".to_string(), "C".to_string()], target_type: "Point".to_string(), bind_to: "Mid_BC".to_string() },
+                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["B".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "LineBC".to_string() },
+                ConstructTemplate { def_type: "PerpendicularLine".to_string(), args: vec!["LineBC".to_string(), "Mid_BC".to_string()], target_type: "Line".to_string(), bind_to: "PerpMid".to_string() },
+            ],
             conclusions: vec![
                 FactTemplate { fact_type: "Connected".to_string(), args: vec!["P".to_string(), "PerpMid".to_string()], target_type: Some("Line".to_string()), sub_type: None }
             ],
@@ -213,6 +223,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["DirBC".to_string(), "DirM1M2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
             ],
         },
+
 
         TheoremDef {
             name: "二等辺三角形の底角".to_string(),
@@ -811,6 +822,59 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             conclusions: vec![
                 FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_A".to_string(), "Ang90".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+            ],
+        },
+    ]
+}
+
+/// 🌟 長さを橋渡しする定理(既定の定理集合には入れていない。--length-theorems で入る)。
+///
+/// diagnose(sketch.rs)で、未解決の2問(bench_2012chnwesternmop5 / bench_2000usatstp2)の
+/// 詰まり所が「中点連結の長さ」だと分かり、実際にこの定理でその手順は自力で出るように
+/// なった。ただし44問では解けた問題が1問も増えず、解けた31問の仕事量が +66.1%
+/// (bench_2012egmop1 +513%、nine_point_full +98%)になった。定理そのものは数回しか
+/// 発火しない問題でも、増えた長さの事実に探索が引っ張られる。
+///
+/// 「無関係な問題への課税」を問題ごとの opt-in で逃がすのは方針に反する(新しい問題では
+/// 効かない)ので、問題名のリストは持たない。既定に入れるかどうかは、課税をスケジューラ側で
+/// 自動的に抑えられるようになってから決める。それまでは全問題一律のスイッチで試せるようにする。
+pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
+    vec![
+        // ==========================================
+        // 🌟 中点連結定理(長さ版)
+        // ==========================================
+        // 三角形ABCの3辺の中点 Mab, Mac, Mbc について、Mab–Mac の長さは BC の半分、
+        // つまり B–Mbc(= Mbc–C)に等しい。上の「中点連結定理」は平行しか結論しない。
+        //
+        // diagnose(sketch.rs)で、長さを橋渡しする手順が2問の詰まり所として出た:
+        //   bench_2012chnwesternmop5 の NK = AF(三角形HAOの中点 K, N, F)
+        //   bench_2000usatstp2 の MX = YP、MY = XP(三角形PADの中点 X, Y, M)
+        // どちらも3辺の中点がそろった三角形で、この形そのもの。
+        //
+        // 3つの中点が既に図にあることを要求する(作らない)。中点は数が少ないので
+        // マッチングは安く、無関係な問題に中点を撒くこともない(中点を補う需要は
+        // bench_2012egmop1 を落とすので既定では使っていない)。長さは平方のまま
+        // 比べる(このエンジンの計量の語彙)。1回の発火で1辺ぶんを結論し、残りの
+        // 2辺は A,B,C の取り方の違いとして別の発火が出す。
+        TheoremDef {
+            name: "中点連結定理(長さ)".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point),
+                ("Mab", EntityType::Point), ("Mac", EntityType::Point), ("Mbc", EntityType::Point),
+                ("LenMid", EntityType::Scalar), ("LenHalf", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                fact_ext("DefinedBy", &["A", "B", "Mab"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["A", "C", "Mac"], Some("Midpoint"), Some("Unordered"), false, None),
+                fact_ext("DefinedBy", &["B", "C", "Mbc"], Some("Midpoint"), Some("Unordered"), false, None),
+                distinct(&["A", "B", "C", "Mab", "Mac", "Mbc"]),
+            ],
+            constructions: vec![
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mab".to_string(), "Mac".to_string()], target_type: "Scalar".to_string(), bind_to: "LenMid".to_string() },
+                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["B".to_string(), "Mbc".to_string()], target_type: "Scalar".to_string(), bind_to: "LenHalf".to_string() },
+            ],
+            conclusions: vec![
+                FactTemplate { fact_type: "Identical".to_string(), args: vec!["LenMid".to_string(), "LenHalf".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
             ],
         },
     ]

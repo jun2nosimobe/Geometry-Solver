@@ -782,6 +782,8 @@ pub enum EntityOrigin {
     PointDemand,
     /// 需要駆動の中点 (resolve_midpoint_demands)。
     MidDemand,
+    /// 直線と円・円と円のもう一方の交点 (resolve_second_intersection_demands)。
+    SecondDemand,
     /// 需要駆動の角・方向 (resolve_angle_demands)。
     AngleDemand,
     /// 目標駆動の補助線・複比 (resolve_target_demands / resolve_cross_ratio_demands)。
@@ -802,6 +804,7 @@ impl EntityOrigin {
             EntityOrigin::LineDemand => "需要:補助線",
             EntityOrigin::PointDemand => "需要:交点",
             EntityOrigin::MidDemand => "需要:中点",
+            EntityOrigin::SecondDemand => "需要:もう一方の交点",
             EntityOrigin::AngleDemand => "需要:角/方向",
             EntityOrigin::TargetDemand => "目標駆動",
             EntityOrigin::Mcts => "MCTS",
@@ -812,7 +815,7 @@ impl EntityOrigin {
     /// 報告で並べる順。
     pub const ALL: &'static [EntityOrigin] = &[
         EntityOrigin::Given, EntityOrigin::DefinedBy, EntityOrigin::Construct,
-        EntityOrigin::LineDemand, EntityOrigin::PointDemand, EntityOrigin::MidDemand,
+        EntityOrigin::LineDemand, EntityOrigin::PointDemand, EntityOrigin::SecondDemand, EntityOrigin::MidDemand,
         EntityOrigin::AngleDemand, EntityOrigin::TargetDemand, EntityOrigin::Mcts,
         EntityOrigin::Harmonic,
     ];

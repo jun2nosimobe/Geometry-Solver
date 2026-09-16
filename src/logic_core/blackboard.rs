@@ -829,6 +829,129 @@ impl BlackboardEngine {
         applied
     }
 
+    /// 🌟 直線と円、円と円のうち「片方の交点は図にあるのに、もう一方が無い」組の、
+    /// もう一方の交点を作る。
+    ///
+    /// ユーザー提案「直線と円、円と円で一つの交点がよくわかっていたらもう一個の交点も
+    /// 作図してしまう」。円が絡む問題の補助点は「この直線(円)が円と再び交わる点」で
+    /// 定義されることが多い(bench_2015apmop1 の V, W、2005usamop3 など)。
+    /// 垂線の足の需要(resolve_point_demands)と同じく、図にある作図から自然に決まる
+    /// 候補だけを見るので、無関係な組み合わせを撒くことにはならない。
+    ///
+    /// 候補:
+    ///   点P が直線L と円C の両方に乗り、L と C が P 以外に共有点を持たない
+    ///     → SecondIntersectionOfLineAndConic(P, L, C)。接線は除く。
+    ///   点P が円C1 と円C2 の両方に乗り、2円が P 以外に(円周点 I, J を除いて)
+    ///     共有点を持たない → SecondIntersectionOfCircles(P, C1, C2)
+    /// 並べ方は P と2曲線の熱の合計の降順。一度に作るのは2点まで(垂線の足と同じ理由)。
+    pub fn resolve_second_intersection_demands(&mut self) -> bool {
+        let eg = &self.prover.egraph;
+        let linf = eg.line_infinity;
+        let finite_points_on = |id: ClassId| -> std::collections::HashSet<ClassId> {
+            eg.entities[id.0].components.iter()
+                .flat_map(|c| c.subobjects.iter())
+                .map(|&s| eg.get_rep(s))
+                .filter(|&s| eg.entities[s.0].entity_type == EntityType::Point && !eg.is_connected(s, linf))
+                .collect()
+        };
+        let is_circle = |id: ClassId| eg.is_connected(id, eg.circ_i) && eg.is_connected(id, eg.circ_j);
+
+        // 🐛 連鎖の禁止(実測で判明): 作ったもう一方の交点がまた別の円・直線に乗り、
+        // その交点の「もう一方の交点」を作る…が際限なく続いた(nine_point で42個、
+        // 名前が入れ子で伸び続けた)。この手で作ったもの、およびそれを材料にして
+        // 作られたもの(外接円など)だけでできている同値類は、起点にも曲線にも使わない。
+        // 同値類に1つでも別の出どころの実体が入っていれば(=既存の点と一致した)使ってよい。
+        let mut tainted = vec![false; eg.entities.len()];
+        for (i, e) in eg.entities.iter().enumerate() {
+            tainted[i] = e.origin == EntityOrigin::SecondDemand
+                || e.original_definition.get_parents().iter().any(|q| q.0 < i && tainted[q.0]);
+        }
+        let clean: std::collections::HashSet<ClassId> = (0..eg.entities.len())
+            .filter(|&i| !tainted[i]).map(|i| eg.get_rep(ClassId(i))).collect();
+        // 🐛 候補の絞り込み(実測で判明): 連鎖を止めても、定理の結論として作られた
+        // 外接円(円周角の定理の逆など)と中点を通る直線の組が大量に候補になり、
+        // nine_point では行き詰まるたびに2点ずつ作り続けて一向に尽きなかった。
+        // ユーザーの言う「一つの交点がよくわかっていたら」に沿って、曲線は
+        // 問題文にあるもの、または補助線・交点の需要で引いたもの(=図の骨格)に限る。
+        let established: std::collections::HashSet<ClassId> = eg.entities.iter().enumerate()
+            .filter(|(_, e)| matches!(e.origin, EntityOrigin::Given | EntityOrigin::LineDemand | EntityOrigin::PointDemand))
+            .map(|(i, _)| eg.get_rep(ClassId(i))).collect();
+
+        let mut cands: Vec<(Definition, f64)> = Vec::new();
+        for i in 0..eg.entities.len() {
+            let p = ClassId(i);
+            if eg.get_rep(p) != p || eg.entities[i].entity_type != EntityType::Point { continue; }
+            if !eg.entities[i].is_active() || eg.is_connected(p, linf) || !clean.contains(&p) { continue; }
+            let mut lines = Vec::new();
+            let mut circles = Vec::new();
+            for &s in eg.entities[i].components.iter().flat_map(|c| c.subobjects.iter()) {
+                let r = eg.get_rep(s);
+                if !clean.contains(&r) || !established.contains(&r) { continue; }
+                match eg.entities[r.0].entity_type {
+                    EntityType::Line if r != linf => lines.push(r),
+                    EntityType::Conic if is_circle(r) => circles.push(r),
+                    _ => {}
+                }
+            }
+            lines.sort_unstable_by_key(|x| x.0); lines.dedup();
+            circles.sort_unstable_by_key(|x| x.0); circles.dedup();
+            if circles.is_empty() { continue; }
+            let heat_p = eg.entities[i].heat();
+
+            for &c in &circles {
+                let on_c = finite_points_on(c);
+                for &l in &lines {
+                    let tangent = eg.entities[l.0].components.iter().flat_map(|k| k.definitions.iter())
+                        .any(|d| matches!(d, Definition::TangentLine(..)));
+                    if tangent { continue; }
+                    if finite_points_on(l).iter().any(|q| *q != p && on_c.contains(q)) { continue; }
+                    let def = eg.normalize_definition(&Definition::SecondIntersectionOfLineAndConic(p, l, c));
+                    if eg.memo.contains_key(&def) { continue; }
+                    cands.push((def, heat_p + eg.entities[l.0].heat() + eg.entities[c.0].heat()));
+                }
+            }
+            for a in 0..circles.len() {
+                for b in (a + 1)..circles.len() {
+                    let (c1, c2) = (circles[a], circles[b]);
+                    let on2 = finite_points_on(c2);
+                    if finite_points_on(c1).iter().any(|q| *q != p && on2.contains(q)) { continue; }
+                    let def = eg.normalize_definition(&Definition::SecondIntersectionOfCircles(p, c1, c2));
+                    if eg.memo.contains_key(&def) { continue; }
+                    cands.push((def, heat_p + eg.entities[c1.0].heat() + eg.entities[c2.0].heat()));
+                }
+            }
+        }
+        if cands.is_empty() { return false; }
+        cands.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| format!("{:?}", x.0).cmp(&format!("{:?}", y.0))));
+
+        let mut applied = false;
+        for (def, heat) in cands.into_iter().take(2) {
+            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let name = {
+                let eg = &self.prover.egraph;
+                let n = |id: &ClassId| eg.entities[id.0].name.clone();
+                match &def {
+                    Definition::SecondIntersectionOfLineAndConic(p, l, c) => format!("Second_{}_{}_{}_(Demand)", n(p), n(l), n(c)),
+                    Definition::SecondIntersectionOfCircles(p, a, b) => format!("Second_{}_{}_{}_(Demand)", n(p), n(a), n(b)),
+                    _ => continue,
+                }
+            };
+            println!("  💡 [オンデマンド作図] 要請により {} (もう一方の交点)を生成 (熱: {:.1})", name, heat);
+            let prev = self.prover.egraph.set_origin(EntityOrigin::SecondDemand);
+            let new_id = self.prover.egraph.create_entity(name, def.clone(), EntityType::Point);
+            self.prover.egraph.entities[new_id.0].base_importance = 0.5;
+            self.prover.egraph.apply_trivial_relations(new_id, &def);
+            self.prover.egraph.set_origin(prev);
+            applied = true;
+        }
+        if applied {
+            self.prover.egraph.apply_congruence_closure();
+            self.schedule_full_sweep();
+        }
+        applied
+    }
+
     /// 🌟 需要駆動の中点作図。
     ///
     /// ユーザー報告「まだ証明のパワーが弱い」の実測から入れた回復手段。

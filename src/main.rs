@@ -392,6 +392,10 @@ fn main() {
     // だけに追加する。
     // 🌟 --central-angle で全問題に入れられる(A/B比較用)。既定は
     // bench_2012egmop1 だけ、という従来の挙動のまま。
+    // 🌟 長さを橋渡しする定理(theorems::get_length_bridge_theorems のドキュメント参照)。
+    if args.iter().any(|a| a == "--length-theorems") {
+        all_theorems.extend(theorems::get_length_bridge_theorems());
+    }
     if problem_name == "bench_2012egmop1" || args.iter().any(|a| a == "--central-angle") {
         all_theorems.extend(theorems::get_central_angle_theorem());
     }
@@ -644,6 +648,16 @@ fn main() {
             // (完全に外すと -7.1%)。未解決の問題は諦めるまでに試す手が
             // 増えるので、全体では +16.9%。
             if !skipped("angle") && !recovered && engine.resolve_angle_demands() {
+                recovered = true;
+            }
+            // 🌟 直線と円・円と円のもう一方の交点
+            // (BlackboardEngine::resolve_second_intersection_demands のドキュメント参照)。
+            // 毎回の行き詰まりで回すと、解けた問題で作った25個のうち11個が証明に出る
+            // (当たる手)一方、それまで要らずに解けていた問題まで遠回りさせて
+            // 解けた31問の仕事量が +77% になった。狙いの定まった手が尽きてから使う
+            // ようにすると、解けた31問の仕事量は1ステップも変わらない(未解決の4問で
+            // 26個作って、どれも証明には出ていない ― 今の44問では効き目は未確認)。
+            if !skipped("second") && !recovered && engine.resolve_second_intersection_demands() {
                 recovered = true;
             }
             // 🌟 需要駆動の中点作図(BlackboardEngine::resolve_midpoint_demandsの
