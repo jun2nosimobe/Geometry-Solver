@@ -607,7 +607,16 @@ fn main() {
             if !skipped("point") && engine.resolve_point_demands() {
                 recovered = true;
             }
-            if !skipped("angle") && engine.resolve_angle_demands() {
+            // 🌟 有向角の総当たり(各点を通る直線の全ペア)は、補助線・交点の需要が
+            // 何も出さなかったときだけ回す。--origins の実測で、この手が作る
+            // 有向角は解けた31問で860個・証明の手順に出るのは11%で、同じ角は
+            // DefinedBy のその場生成も作っている(外しても31問のまま解ける)。
+            // 一方で完全に外すと orthic_incenter が +82% になるので、捨てずに
+            // 「狙いの定まった手が尽きてから広げる」順にする。
+            // 44問の実測: 解けた31問は変わらず、その仕事量は -11.8%
+            // (完全に外すと -7.1%)。未解決の問題は諦めるまでに試す手が
+            // 増えるので、全体では +16.9%。
+            if !skipped("angle") && !recovered && engine.resolve_angle_demands() {
                 recovered = true;
             }
             // 🌟 需要駆動の中点作図(BlackboardEngine::resolve_midpoint_demandsの
