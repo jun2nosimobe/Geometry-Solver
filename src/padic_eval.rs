@@ -261,7 +261,22 @@ impl<'a> DegenEvaluator<'a> {
                     let mut stack: std::collections::HashSet<usize> = std::collections::HashSet::new();
                     !self.egraph.evaluation_requires_point(rep, s, &mut stack, &mut memo)
                 })
-                .collect())
+                .collect::<Vec<_>>())
+            .map(|mut v| {
+                // 🐛 代表元に直した後の重複を落とす。subobjects には
+                // もともと別々の実体だったものが並んでおり、後から
+                // マージされると同じ rep が2回現れる。
+                //
+                // 実際に踏んだ例(ユーザ報告): 「x3 上の自由点E」は、直線の
+                // 一意性伝播で x3 と Line(A,E) が結合した後、E の接続先が
+                // ["x3", "x3"] になる。すると下の分岐が「2直線に乗る自由点は
+                // その交点」を選んで x3 と x3 の交点を計算し、退化して評価不能になる。
+                // その点に依存する図形が全部評価不能になるので、発見が1件も
+                // 出なくなっていた(実測: 直睚11本中2本しか評価できていなかった)。
+                v.sort_unstable_by_key(|c| c.0);
+                v.dedup();
+                v
+            })
             .unwrap_or_default()
     }
 
@@ -1135,6 +1150,7 @@ pub fn find_generic_concurrent_lines(egraph: &EGraph, seeds: &[u64], max_lines: 
         let coords: Vec<Option<Triple>> = ids.iter()
             .map(|&id| match ev.eval(id) { Some(DegenShape::Line(t)) => Some(t), _ => None })
             .collect();
+
         for i in 0..ids.len() {
             let Some(li) = coords[i] else { continue };
             for j in (i + 1)..ids.len() {
