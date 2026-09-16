@@ -718,6 +718,22 @@ fn main() {
             p.seeded_pops, p.seeded_dfs_calls, calls_pct(p.seeded_dfs_calls));
         println!("  シードなしタスク      : {:>8}回ポップ / dfs_call計 {:>10} ({:>5.1}%)",
             p.unseeded_pops, p.unseeded_dfs_calls, calls_pct(p.unseeded_dfs_calls));
+        println!("  --- 枝の出どころ(どのパターンの結合が探索を吐いているか) ---");
+        const BRANCH_LABELS: [&str; 12] = [
+            "制約(Order/Distinct/Not)", "Identical 両方束縛済み", "Identical 片方束縛済み",
+            "Identical 自己束縛(両方未束縛)", "Connected 両方束縛済み", "Connected 親のみ束縛",
+            "Connected 子のみ束縛", "Connected 局所スキャン", "Connected 局所スキャン2",
+            "Connected 両方未束縛ジョイン", "DefinedBy", "汎用Fact",
+        ];
+        let branch_total: u64 = p.branch_counts.iter().sum();
+        let mut rows: Vec<(usize, u64)> = p.branch_counts.iter().copied().enumerate().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        for (i, n) in rows {
+            if n == 0 { continue; }
+            println!("  {:>10} ({:>5.1}%)  {}", n,
+                if branch_total > 0 { 100.0 * n as f64 / branch_total as f64 } else { 0.0 },
+                BRANCH_LABELS[i]);
+        }
         println!("=============================\n");
     }
 }

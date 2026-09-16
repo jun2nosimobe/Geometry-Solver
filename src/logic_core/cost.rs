@@ -84,7 +84,30 @@ impl ProverEngine {
                 let base_cost = if def.fact_type == "Identical" {
                     if unbound_count == 1 { 1.0 } else { 15.0 }
                 } else if def.fact_type == "Connected" {
-                    if unbound_count == 1 { 5.0 } else {
+                    if unbound_count == 1 {
+                        // 🌟 以前はここが固定の 5.0 だった。2本の直線しか通っていない
+                        // 点も、12本通っている「ハブ」の点も、同じ見積もりになる。
+                        // --profile の「枝の出どころ」計測で、全dfs呼び出しの
+                        // 56〜76%がこの分岐から伸びていると分かった
+                        // (bench_2012egmop1 で 75.6%)。安く見えるせいでDFSが
+                        // 分岐の大きいConnectedを先に選んでしまうのが原因。
+                        //
+                        // 束縛済み側の接続先を求める型で絞って数えれば、この
+                        // 見積もりは実際の分岐数そのものになる。subobjects は
+                        // 局所的で短いので、毎回数えても安い。
+                        let (bound_var, free_var) = if bind.contains_key(&def.args[0]) {
+                            (&def.args[0], &def.args[1])
+                        } else {
+                            (&def.args[1], &def.args[0])
+                        };
+                        match (bind.get(bound_var), theorem.entities.get(free_var)) {
+                            (Some(&id), Some(&want)) => {
+                                self.egraph.count_neighbors_of_type(id, want) as f64 + 1.0
+                            }
+                            // 型が分からないときだけ従来の固定値に戻す。
+                            _ => 5.0,
+                        }
+                    } else {
                         // 🐛 FIX: 以前は両方未束縛のConnectedを「(None,None)は何もしない」
                         // 前提でコスト10000(=事実上最後回し)にしていたが、(None,None)を
                         // きちんと実装した今は「親の型で絞り込んだ局所探索」でしかない。
@@ -131,7 +154,14 @@ impl ProverEngine {
                     }
                 }
                 
-                (base_cost - heat).max(0.1) // 完全に0にはせず僅かなコストを残す[cite: 5]
+                // 🐛 以前は (base_cost - heat) だったが、heat_with_degree は容易に
+                // 10を超えるので、熱い実体が束縛されているとどんなパターンも
+                // 下限 0.1 に張り付いてしまい、分岐数の差が消えていた
+                // (UCB1の優先度が clamp で飽和していたのと同じ形)。
+                // 割引は基本コストの半分までにする ― 熱いものを先に見るという
+                // 性質は残しつつ、「40分岐のパターンが2分岐のパターンより安く見える」
+                // ことは起きない。
+                (base_cost - heat.min(base_cost * 0.5)).max(0.1)
             }
             Pattern::Order(vars) | Pattern::Distinct(vars) | Pattern::OrderNonStrict(vars) => {
                 if vars.iter().any(|v| !bind.contains_key(v)) { std::f64::INFINITY } else { 0.0 }

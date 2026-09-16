@@ -4,6 +4,32 @@
 use super::{ClassId, Definition, EntityType, EGraph};
 
 impl EGraph {
+    /// 🌟 id に接続している実体のうち、型が ty のものの数(代表元で重複除去)。
+    ///
+    /// logic_core/cost.rs の estimate_cost が「片側だけ束縛された Connected」の
+    /// 分岐数を見積もるために使う。以前そこは固定値だったため、接続先が2つの
+    /// 点と12の点を区別できず、分岐の大きい Connected を安いものとして先に
+    /// 選んでしまっていた(--profile の「枝の出どころ」で、全dfs呼び出しの
+    /// 56〜76%がこの分岐から伸びていると判明)。
+    ///
+    /// matcher.rs の列挙と同じく subobjects を rep 化して数えるが、
+    /// accept_point の Direction/Circle の特別扱いまでは見ない ― 見積もりは
+    /// 並べ替えの順序さえ合っていればよく、厳密な一致は要らない。
+    pub fn count_neighbors_of_type(&self, id: ClassId, ty: EntityType) -> usize {
+        let rep = self.get_rep(id);
+        let mut seen = rustc_hash::FxHashSet::default();
+        for comp in &self.entities[rep.0].components {
+            for &sub in &comp.subobjects {
+                let s = self.get_rep(sub);
+                if s == rep { continue; }
+                if self.entities[s.0].entity_type != ty { continue; }
+                if !self.entities[s.0].is_active() { continue; }
+                seen.insert(s.0);
+            }
+        }
+        seen.len()
+    }
+
     /// 🌟 現在アクティブな(=自身が代表元である)エンティティの数。マージが
     /// 実際にいくつ起きたかの粗い指標として使う(MCTSの報酬評価、予想候補の
     /// 価値推定(eval.rs::estimate_conjecture_value)などで共有する)。

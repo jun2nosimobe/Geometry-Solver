@@ -35,6 +35,8 @@ impl ProverEngine {
         on_match: &mut dyn FnMut(&Bind, &FlipStates)
     ) {
         self.dfs_calls += 1;
+        // 🌟 枝の出どころの計測(branch_tag のドキュメント参照)。
+        self.profile.branch_counts[self.branch_tag as usize] += 1;
         if self.dfs_calls > self.dfs_cap { return; }
 
         // 🌟 失敗パスのキャッシュチェック
@@ -178,6 +180,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 >= self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
+                self.branch_tag = 0;
                 if is_ordered { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             // 🌟 Pattern::OrderNonStrictのドキュメント参照。Orderとの違いは
@@ -189,6 +192,7 @@ impl ProverEngine {
                         if self.egraph.get_rep(*id1).0 > self.egraph.get_rep(*id2).0 { is_ordered = false; break; }
                     }
                 }
+                self.branch_tag = 0;
                 if is_ordered { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Distinct(vars) => {
@@ -200,6 +204,7 @@ impl ProverEngine {
                         if !unique_ids.insert(rep_id.0) { is_distinct = false; break; }
                     }
                 }
+                self.branch_tag = 0;
                 if is_distinct { self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match); }
             }
             Pattern::Fact(def) => {
@@ -209,10 +214,12 @@ impl ProverEngine {
                 let mut inner_matched = false;
                 // 内側は「そのパターン1本だけ」を別のスライスとして評価する。
                 let inner = [(**inner_pat).clone()];
+                self.branch_tag = 0;
                 self.dfs_match(theorem, &inner, 1, bind.clone(), flip_states.clone(), failed_paths, &mut my_mask, &mut |_, _| {
                     inner_matched = true;
                 });
                 if !inner_matched {
+                    self.branch_tag = 0;
                     self.dfs_match(theorem, patterns, next_active, bind, flip_states, failed_paths, &mut my_mask, &mut wrapped_on_match);
                 }
             }
@@ -283,6 +290,7 @@ impl ProverEngine {
             // (=dep_maskをそのまま子に渡す、new my_maskを作らない)。
             (Some(id1), Some(id2)) => {
                 if self.egraph.get_rep(id1) == self.egraph.get_rep(id2) {
+                    self.branch_tag = 1;
                     self.dfs_match(theorem, patterns, active, bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
@@ -290,6 +298,7 @@ impl ProverEngine {
                 let unbound_var = if bind.get(v1).is_none() { v1 } else { v2 };
                 let mut next_bind = bind.clone();
                 next_bind.insert(unbound_var.clone(), self.egraph.get_rep(id));
+                self.branch_tag = 2;
                 self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
             }
             (None, None) => {
@@ -433,6 +442,7 @@ impl ProverEngine {
                     let mut next_bind = bind.clone();
                     next_bind.insert(v1.clone(), rep);
                     next_bind.insert(v2.clone(), rep);
+                    self.branch_tag = 3;
                     self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
@@ -519,6 +529,7 @@ impl ProverEngine {
                 *dep_mask |= entity_type_bit(c_type) | entity_type_bit(p_type);
                 // 🌟 FIX
                 if self.egraph.is_connected(c_id, p_id) {
+                    self.branch_tag = 4;
                     self.dfs_match(theorem, patterns, active, bind.clone(), flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
@@ -565,6 +576,7 @@ impl ProverEngine {
                 for p_rep in self.heat_capped_connected_candidates(candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(parent_var.clone(), p_rep);
+                    self.branch_tag = 5;
                     self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
@@ -589,6 +601,7 @@ impl ProverEngine {
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
                     next_bind.insert(child_var.clone(), c_rep);
+                    self.branch_tag = 6;
                     self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                 }
             }
@@ -650,6 +663,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
+                            self.branch_tag = 7;
                             self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     } else {
@@ -665,6 +679,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
+                            self.branch_tag = 8;
                             self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
@@ -704,6 +719,7 @@ impl ProverEngine {
                             let mut next_bind = bind.clone();
                             next_bind.insert(child_var.clone(), c_rep);
                             next_bind.insert(parent_var.clone(), p_rep);
+                            self.branch_tag = 9;
                             self.dfs_match(theorem, patterns, active, next_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
                         }
                     }
@@ -844,6 +860,7 @@ impl ProverEngine {
             format!("{:?}", keys)
         });
         for (new_bind, new_flip) in matches {
+            self.branch_tag = 10;
             self.dfs_match(theorem, patterns, active, new_bind, new_flip, failed_paths, dep_mask, on_match);
         }
     }
@@ -1204,6 +1221,7 @@ impl ProverEngine {
         });
 
         for new_bind in matches {
+            self.branch_tag = 11;
             self.dfs_match(theorem, patterns, active, new_bind, flip_states.clone(), failed_paths, dep_mask, on_match);
         }
     }

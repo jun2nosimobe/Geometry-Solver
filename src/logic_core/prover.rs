@@ -145,6 +145,12 @@ pub struct ProverEngine {
     // フェーズ・MCTS)の実行時間を計測してここに積み上げ、--profileで
     // 終了時に集計を表示する(ProfileStatsのドキュメント参照)。
     pub profile: ProfileStats,
+    /// 🌟 いま伸ばそうとしている枝が、どの種類のパターンから出たか。
+    /// dfs_match の呼び出しには必ず1つの親の枝があるので、呼ぶ直前に
+    /// ここへ種類を控えておき、dfs_match の入口で数える。これで二重計上
+    /// なしに「どの結合が探索を吐いているか」が分かる ― 部分マッチ共有を
+    /// どこに作るべきかを、当て推量ではなく実測で決めるための計測。
+    pub branch_tag: u8,
     // 🌟 --trace 診断の発火ログ(trace.rs 参照)。None が既定で、
     // その場合は apply_conclusions が発火を一切記録しないので
     // 診断を使わない実行にはコストが無い。
@@ -176,6 +182,8 @@ pub struct ProfileStats {
     pub seeded_dfs_calls: u64,
     pub unseeded_pops: u64,
     pub unseeded_dfs_calls: u64,
+    /// 🌟 ProverEngine::branch_tag のドキュメント参照。種類ごとの枝の本数。
+    pub branch_counts: [u64; 12],
 }
 
 impl ProverEngine {
@@ -211,6 +219,7 @@ impl ProverEngine {
             defined_by_full_scan_cache: FxHashMap::default(),
             global_failed_paths: Vec::new(),
             profile: ProfileStats::default(),
+            branch_tag: 0,
             trace: None,
         }
     }
