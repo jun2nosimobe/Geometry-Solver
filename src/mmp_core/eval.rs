@@ -1108,7 +1108,12 @@ impl EGraph {
             let v1 = self.evaluate_node(l1, &vars, &mut cache)?;
             let v2 = self.evaluate_node(l2, &vars, &mut cache)?;
             let p = mmp_calculators::calc_intersection(&v1, &v2);
-            if p.len() < 3 || p.iter().all(|x| x.0 == 0) { return None; }
+            // 🐛 2直線が(この標本で)平行だと交点は無限遠(z=0)にあり、下の
+            // x/z で ModInt の 0 除算になってプロセスごと落ちる。交点の需要の候補が
+            // 「垂線とその足の直線」だけだと平行になり得ないので表に出ていなかったが、
+            // 候補を定理のパターンから広げる実験(atlas §05)で7問が落ちて発覚した。
+            // 有限の交点が無いなら次数は測れない。
+            if p.len() < 3 || p[2].0 == 0 { return None; }
             t_vals.push(t);
             x_vals.push(p[0] / p[2]);
             y_vals.push(p[1] / p[2]);
