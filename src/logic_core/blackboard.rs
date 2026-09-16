@@ -14,9 +14,10 @@ pub struct BlackboardEngine {
     pub prover: ProverEngine,
     pub task_queue: BinaryHeap<MatchTask>,
     pub event_queue: VecDeque<Event>,
-    // 🌟 UCB1バンディットの効果測定用のA/Bスイッチ。false にすると
-    // schedule_full_sweep がシードなしタスクの優先度を常に0固定にする
-    // (バンディット導入前の挙動に戻す)。既定は有効(true)。
+    // 🌟 UCB1バンディットを使うか。false だと schedule_full_sweep が
+    // シードなしタスクの優先度を常に0固定にする(バンディット導入前の挙動)。
+    // 実測で有効時の方が全体の消費仕事量が20%多かったため、既定は false
+    // (main.rs の --bandit のところに測定結果を書いてある)。
     pub bandit_enabled: bool,
     // 🌟 シード付き再マッチング(schedule_matcher_task)を使うか。
     // run_step の Event::FactProven の腕に実測結果を書いてある通り、
@@ -31,7 +32,7 @@ impl BlackboardEngine {
             prover,
             task_queue: BinaryHeap::new(),
             event_queue: VecDeque::new(),
-            bandit_enabled: true,
+            bandit_enabled: false,
             seeded_rematch_enabled: false,
         }
     }
@@ -196,7 +197,7 @@ impl BlackboardEngine {
 
                             // シード済みリーチフォーマットとしてタスクを積む
                             self.task_queue.push(MatchTask {
-                                priority: 10,
+                                priority: 100,
                                 theorem_idx: idx,
                                 bind,
                                 flip_states: FlipStates::default(),
@@ -359,8 +360,8 @@ impl BlackboardEngine {
                 // 場合のみ再キューし、無い場合はその場で諦めてリカバリーフェーズに委ねる。
                 if self.prover.dfs_calls >= self.prover.dfs_cap {
                     if !self.task_queue.is_empty() {
-                        task.priority -= 5;
-                        if task.priority >= -20 { // 諦める閾値
+                        task.priority -= 50;
+                        if task.priority >= -200 { // 諦める閾値
                             // 🌟 failed_pathsは既にglobal_failed_pathsへ書き戻し
                             // 済み(このタスク固有の状態としてではなく、この
                             // 定理全体で共有される状態として)なので、ここでは

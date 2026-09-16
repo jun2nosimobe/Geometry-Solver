@@ -264,8 +264,13 @@ impl ProverEngine {
         if idx >= self.theorem_stats.len() { return 0; }
         let total: u64 = self.theorem_stats.iter().map(|s| s.attempts).sum();
         let score = self.theorem_stats[idx].ucb1_score(total, 1.0);
-        if !score.is_finite() { return 5; } // 未試行の定理は最優先で一度試す
-        ((score * 5.0).round() as i32).clamp(-5, 5)
+        // 🌟 尺度を 5 倍から 50 倍に広げた。以前は clamp(-5, 5) だったため、
+        // ucb1_score が 1.0 を超えるだけで上限に張り付き、ほぼ全ての定理が
+        // 優先度 +5 になっていた(--trace で確認: 発火した定理の平均優先度が
+        // どれも +5.0 付近)。つまりバンディットの学習結果が並べ替えに
+        // 一切反映されていなかった。飽和を解けば実際に順序がつく。
+        if !score.is_finite() { return 50; } // 未試行の定理は最優先で一度試す
+        ((score * 50.0).round() as i32).clamp(-50, 50)
     }
 
     /// 🌟 schedule_full_sweep由来のシードなしタスクを実際にdfs_matchまで
