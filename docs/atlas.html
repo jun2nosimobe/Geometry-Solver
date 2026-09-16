@@ -228,13 +228,13 @@
     <p class="subtitle">e-graph上の合同閉包 + 定理マッチングによる幾何定理自動証明エンジンの、現在の構造と最適化の来歴。次に何へ着手するかを判断するための一枚。</p>
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/main.rs(全体像は§01)</span>
-      <span><b>ベンチ</b> 37問(単体検証14 + 古典幾何15 + HAGeo-409由来8)</span>
+      <span><b>ベンチ</b> 39問(単体検証14 + 古典幾何15 + HAGeo-409由来10)</span>
       <span><b>最新コミット</b> cb106e0</span>
     </div>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="n">29/37</div><div class="l">既定設定の掃引(約50秒)。仕事量予算なので何度流しても同じ結果になる</div></div>
+    <div class="stat"><div class="n">30/39</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
     <div class="stat"><div class="n">22</div><div class="l">既定で有効な定理(基本17 + 射影5)。中心角の定理はopt-in</div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
@@ -302,7 +302,7 @@
       <div class="gterm"><b>logic_core/matcher.rs</b><p>深さ優先探索の本体(<code>dfs_match</code>)と、fact_typeごとの候補の展開。どれを選ぶかの方針はcost.rsに分離済み。</p></div>
       <div class="gterm"><b>logic_core/blackboard.rs</b><p>探索の司令塔。タスク待ち行列を回し、行き詰まったときの需要駆動の補助作図(<code>resolve_*_demands</code>)で図を伸ばす。</p></div>
       <div class="gterm"><b>src/theorems.rs</b><p>定理の定義(23件)。<code>get_all_theorems</code>17件 + <code>get_projective_theorems</code>5件(既定で有効) + 中心角の定理1件(opt-in)。</p></div>
-      <div class="gterm"><b>src/problems/</b><p>ベンチ37問。単体検証(<code>test_*</code>)・古典幾何・HAGeo-409由来(<code>bench_*</code>)。<code>mod.rs</code>に「目標が数値的にも本当に成り立つか」の検査を置いてある。</p></div>
+      <div class="gterm"><b>src/problems/</b><p>ベンチ39問。単体検証(<code>test_*</code>)・古典幾何・HAGeo-409由来(<code>bench_*</code>)。<code>mod.rs</code>に「目標が数値的にも本当に成り立つか」の検査を置いてある。</p></div>
       <div class="gterm"><b>src/trace.rs</b><p>診断(<code>--trace</code>)。使った仕事のうちどれが証明に残ったかを、発火の記録と証明の遡りを突き合わせて測る(§05)。</p></div>
       <div class="gterm"><b>action_space.rs / mcts.rs</b><p>補助構成の行動空間と、それを探索するMCTS。需要駆動の回復も尽きたときの最後の手段(既定は無効)。</p></div>
       <div class="gterm"><b>padic.rs / padic_eval.rs</b><p>図形を退化させたときの振る舞いの解析。どの実体どうしが「一緒に潰れる」かを観測し、熱のボーナス伝播に使う(<code>--degen-heat</code>)。</p></div>
@@ -701,6 +701,16 @@ flowchart TD
         </div>
       </div>
 
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>方冪の定理を主題とするHAGeo-409の2問を追加</h3><span class="pill shipped">23ef0ce</span></div>
+          <div class="desc">データセット(huggingface: <code>HAGeo-IMO/HAGeo-409</code>)を取得し、実装済み8問の難易度帯(1.3〜1.8)から方冪を主題とする2問を選んだ。<b>bench_2019g1</b>(difficulty 1.2、2019 ISL G1): Aを通る円ΓがAB,ACと再びD,Eで、BCとF,Gで交わり、円BDFのFでの接線と円CEGのGでの接線の交点をTとしてAT∥BCを示す ― 人間の標準解も方冪(BF·BG=BD·BA)と接弦定理を使う。<b>bench_2015apmop1</b>(difficulty 1.7、2015 APMO P1): 2円の交点Zを経由する方冪でAB=VWを示す。</div>
+          <div class="evidence"><b>結果:</b> bench_2019g1 は<b>既定設定でそのまま解けた</b>(478,551ステップ)。bench_2015apmop1 は未解決(1,575,325ステップで需要が尽きて打ち切り)。掃引は 30/39。<b>写し取りの検算:</b> どちらも <code>problems::tests::identical_targets_actually_hold_numerically</code> を通っている(乱数座標で目標が実際に成り立つ)。作図で1点だけ原題と形を変えている ― 「Aを通る円Γ」は中心が自由な円だが、このエンジンには「中心と1点で決まる円」のDefinitionが無いので、Γ上の点2つ(D: AB上、F: BC上)を自由点に置いて <code>Circumcircle(A, D, F)</code> と書いた(自由度は同じ)。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -710,6 +720,27 @@ flowchart TD
 
     <div class="backlog-list">
 
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>重い定理を頻度で間引く案は不発 ― 間引くほど遅くなる(理由も分かった)</h3>
+          <div class="desc">ユーザー提案:「射影幾何の定理や中心角の定理など重い定理と、angle chase関連など探索の軽い定理があるから、そこでマッチングの方針やスケジュールを変えるべきかもしれない。軽い定理はたくさん回すが、重い定理は行き詰まったり、ここで使えそうというフラグが立った時に優先的に動かす。<b>できればopt inとして扱うのは避けたい(新しい問題に出会ったときにopt inは有効ではない)</b>」。
+          <br><br>実測の裏付けはあった: 1試行あたりの平均<code>dfs_call</code>は接弦定理の1から「スパイラル相似の中点対応」の58,741まで4桁に広がる。そこで問題名のリストを一切使わず、実行中に測った値だけで決める間引きを実装した ― 平均コストが中央値の数倍を超え、かつ連続で何も適用できていない定理だけを指数的に間引き、(a)待ち回数が尽きる (b)その定理が要求する型に動きがある (c)探索が行き詰まる、のいずれかで解除する。
+          <br><br>結果は<b>どの調整でも悪化</b>した(37問の消費仕事量の合計、基準は間引きなしの6,740,492):</div>
+          <table style="margin:10px 0;border-collapse:collapse;font-size:13px">
+          <tr><th style="text-align:left;padding:2px 12px 2px 0">調整</th><th style="text-align:right;padding:2px 12px 2px 0">合計仕事量</th><th style="text-align:right">solved</th></tr>
+          <tr><td style="padding:2px 12px 2px 0">1回失敗で即・4倍・上限16</td><td style="text-align:right;padding:2px 12px 2px 0">7,474,090+</td><td style="text-align:right">28/37</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">3回失敗・8倍・上限4・型フラグあり</td><td style="text-align:right;padding:2px 12px 2px 0">6,841,222</td><td style="text-align:right">29/37</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">2回失敗・8倍・上限16・型フラグなし</td><td style="text-align:right;padding:2px 12px 2px 0">8,865,099</td><td style="text-align:right">29/37</td></tr>
+          <tr><td style="padding:2px 12px 2px 0">同上 + 射影定理を全問題に</td><td style="text-align:right;padding:2px 12px 2px 0">11,395,428</td><td style="text-align:right">29/37</td></tr>
+          </table>
+          <div class="desc"><b>なぜ逆になるのか。</b> <code>global_failed_paths</code>(定理ごとの永続キャッシュ)のおかげで、失敗する重い定理を<b>毎回回すのは既に安い</b> ― 前回の失敗状態がそのまま再利用される。間引いてsweepを飛ばすと、その間にキャッシュのエントリが型世代の変化で無効になり、しかも次に回るときにはe-graphが大きくなっているので、同じ探索がより高くつく。<b>小さい図で何度も失敗させる方が、大きくなってから1回失敗させるより安い。</b>「型に動きがあったら解除」というフラグを外すと更に悪化した(8,865,099)のも同じ理由で、あのフラグは実質「毎回回す」に近く、それが一番安かったということ。
+          <br><br><b>opt-inを置き換えるには至らなかった。</b> 射影5定理を全問題に戻して間引きで抑える、という本命の形(§05-#11の自動版)は11,395,428で、opt-inの6,841,222の1.7倍。現状のハードコードされた問題名リストは、ユーザーの言う通り新しい問題には効かない弱い解だが、これより良い自動解はまだ無い。
+          <br><br><b>残る筋:</b> 頻度ではなく<b>1回あたりのコスト</b>を抑える方向(定理ごとの<code>dfs_cap</code>)。ただし現状<code>cap_hits</code>は全定理で0なので、下げれば必ず探索を切ることになり、証明を落とす危険がある。より本命なのは「重い定理が失敗するのを安くする」側 ― §05-#10の部分マッチ共有。</div>
+          <div class="b-tags"><span class="tag">4通り実測・全部悪化</span><span class="tag">機構は特定済み(失敗キャッシュの温度)</span></div>
+        </div>
+      </div>
       <div class="b-item">
         <div class="b-rank">1</div>
         <div>
