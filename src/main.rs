@@ -333,40 +333,42 @@ fn main() {
     if problem_name == "bench_2012egmop1" || args.iter().any(|a| a == "--central-angle") {
         all_theorems.extend(theorems::get_central_angle_theorem());
     }
-    // 🌟 複比の透視射影不変性/シュタイナーの定理群(get_projective_theorems)は
-    // 「点→線束→点」の2定理分解によりシード自体は軽くなったが、その後
-    // シュタイナー系3定理(順方向・接線版・逆)が追加されたことで、実際には
-    // 依然として全問題共通のデフォルト集合に混ぜると無視できないコストに
-    // なっていた。ユーザー指示(「射影幾何のタスクを一旦無視して最適化した
-    // らどうなるか」)に基づき実測した結果、この5定理を全問題共通から
-    // 外すだけで、bench_2011armog10p6・bench_2010g1・nine_point_full・
-    // orthocenter・orthocenter_alt・miquel_quadrilateralが軒並み(3回集計で
-    // 一度も落ちない)安定してパスするようになった――つまりこれらの問題は
-    // この5定理を全く必要としておらず、単に探索予算を奪われて不安定に
-    // なっていただけだった。この5定理を本当に必要とするのは、それ自体を
-    // 検証するために書かれたtest_*問題(cross_ratio/steiner/involution系)
-    // だけなので、opt-in(元々の設計方針に戻す)にする: 問題名で判定し、
-    // 該当する場合だけ追加する。
-    // 🌟 既定で全問題に入れる。
+    // 🌟 複比の透視射影不変性/シュタイナーの定理群(get_projective_theorems)を
+    // どの問題に入れるか。中心角の定理と同じく「必要な問題だけ」に戻してある。
     //
-    // 🐛 この定理群を「全問題共通から外してopt-inに戻す」判断は、探索の予算が
-    // まだ壁時計(--time=5等)だった頃に下したものだった。当時は「外すと
-    // bench_2011armog10p6・bench_2010g1・nine_point_full・orthocenter・
-    // orthocenter_alt・miquel_quadrilateralが軒並み安定してパスするように
-    // なった」と記録されているが、あの頃のベンチマークは machine の混み具合で
-    // 24/32〜29/32 まで動いていた(logic_core.rs::work_done のドキュメント参照)
-    // ので、「不安定になった」の中身の相当部分は単に測定のぶれだった可能性が高い。
+    // 経緯: 元々opt-inだったものを、仕事量予算に移した直後の測定
+    // (+射影で30/32、bench_2018chnwesternmop5 が新たに解ける)を根拠に
+    // 全問題共通の既定へ変えた。しかしその「+1問」は後に図の崩壊による
+    // 偽陽性だと判明し(EGraph::merged_free_points 参照)、既定化の根拠は
+    // 消えていた。
     //
-    // 仕事量予算にして測り直したところ、全問題に入れた方が明確に良い:
-    //   既定のまま                 29/32  74.0秒
-    //   +射影                      30/32  94.3秒   ← 3回流して同じ
-    //   +中心角                    28/32  72.5秒   (nine_pointを落とす)
-    //   +射影+中心角               29/32  95.6秒
-    // 落ちる問題は1つも無く、bench_2018chnwesternmop5 が新たに解けるように
-    // なる(この問題は予算不足ではなく、射影の定理そのものが必要だった:
-    // 無しだと188万ステップで探索が尽き、有りだと182万ステップで証明に至る)。
-    // 代償は全体の壁時計が約27%増えること。--no-projective で元に戻せる。
-    let use_projective = !args.iter().any(|a| a == "--no-projective");
+    // 🌟 そのうえで、この5定理が無関係な問題に課している負担を仕事量で
+    // 測り直した。これらを一切使わない問題の消費仕事量は:
+    //   varignon         4,020 → 2,706  (+48.6%)
+    //   simson          97,276 → 60,754 (+60.1%)
+    //   nine_point_full 476,779 → 335,320 (+42.2%)
+    //   circumcenter     2,840 → 2,359  (+20.4%)
+    //   thales           2,599 → 2,323  (+11.9%)
+    //   miquel          19,379 → 17,352 (+11.7%)
+    //   orthocenter    200,677 → 185,950 (+7.9%)
+    // 型シグネチャ事前フィルタを通した後でも平均+29%。一方この5定理が
+    // 買っているのは、それ自体を検証するために書かれたtest_*問題5つだけで、
+    // 古典幾何・HAGeo由来の問題は1問も増減しない(--no-projective の掃引は
+    // 24/37 で、落ちるのはちょうどその5問)。
+    //
+    // 射影幾何そのものを主題とする古典問題(pappus/pascal/desargues/
+    // newton_gauss)は現状どれも未解決だが、これらに取り組むときに
+    // 定理が入っていないと話にならないので一緒に入れておく。
+    // --projective で全問題に入れられる(A/B比較用)、--no-projective で
+    // 全問題から外せる。
+    const PROJECTIVE_PROBLEMS: &[&str] = &[
+        "test_cross_ratio", "test_steiner", "test_steiner_tangent",
+        "test_involution", "test_steiner_converse",
+        "pappus", "pascal", "desargues", "newton_gauss",
+    ];
+    let use_projective = !args.iter().any(|a| a == "--no-projective")
+        && (args.iter().any(|a| a == "--projective")
+            || PROJECTIVE_PROBLEMS.contains(&problem_name));
     if use_projective {
         all_theorems.extend(theorems::get_projective_theorems());
     }
