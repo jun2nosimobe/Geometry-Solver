@@ -16,6 +16,7 @@ mod padic;
 mod padic_eval;
 mod discover_degenerate;
 mod trace;
+mod sketch;
 
 use mmp_core::{EGraph, RawProof};
 use logic_core::{ProverEngine, BlackboardEngine};
@@ -162,6 +163,11 @@ fn main() {
         serve::run(&args);
         return;
     }
+    // 🌟 解けない問題が人間の証明のどの手順で詰まるかを調べる(sketch.rs 参照)。
+    if args[1] == "diagnose" {
+        sketch::diagnose(&args);
+        return;
+    }
     if args.len() > 1 && args[1] == "extract-proof" {
         run_extract_proof(&args);
         return;
@@ -244,6 +250,14 @@ fn main() {
         .filter(|s| !s.is_empty())
         .collect();
     let skipped = |name: &str| skip_recovery.iter().any(|s| s == name);
+    // 🌟 証明の筋書きの梯子の段(sketch.rs 参照)。diagnose が子プロセスに渡す。
+    let sketch_rung: Option<sketch::Rung> = match args.iter().find_map(|a| a.strip_prefix("--sketch=")) {
+        None => None,
+        Some(v) => match sketch::Rung::parse(v) {
+            Some(r) => Some(r),
+            None => { println!("⚠️ --sketch は pure / aux / 前提にする手順の数 のどれかです: {}", v); return; }
+        },
+    };
     // 🌟 探索の時間予算をCLIから調整できるようにする(--time=<秒>)。
     // 既定の12問題はどれも5秒以内に解けるため今まで固定値で十分だったが、
     // nine_point_full のようなより長時間かかる問題を実際に解き切らせて
@@ -342,6 +356,19 @@ fn main() {
 
     // コマンドライン引数で問題を動的にロード
     let problem = problems::load_problem(problem_name, &mut egraph);
+    let sketch_ctx = match sketch_rung {
+        None => None,
+        Some(rung) => {
+            let Some(text) = problems::sketch_for(problem_name) else {
+                println!("⚠️ 「{}」には証明の筋書き(SKETCH)がまだありません。", problem_name);
+                return;
+            };
+            match sketch::prepare(&mut egraph, text, rung) {
+                Ok(p) => { sketch::check_before_search(&egraph, &p); Some(p) }
+                Err(e) => { println!("⚠️ {}", e); return; }
+            }
+        }
+    };
 
     if use_degen_heat {
         let start = std::time::Instant::now();
@@ -691,6 +718,9 @@ fn main() {
 
     if show_origins {
         trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);
+    }
+    if let Some(p) = &sketch_ctx {
+        sketch::report(&engine.prover.egraph, p);
     }
 
     if show_stats {

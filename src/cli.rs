@@ -122,6 +122,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に「どの出どころで作られた図形(オンデマンド作図・DefinedBy生成・MCTS等)が、実際に証明へ残ったか」を集計する" },
     Opt { name: "--skip-recovery", arg: Value("line,point,mid,angle,target"), default: "どれも外さない", mode: Solve,
           help: "行き詰まったときの手を個別に外す(A/B用)。line=補助線, point=交点, mid=中点, angle=角/方向, target=目標駆動の補助線と複比" },
+    Opt { name: "--sketch", arg: Value("pure|aux|N"), default: "使わない", mode: Solve,
+          help: "証明の筋書きの段で解く。aux=補助作図を与える、N=補助作図と手順1..Nを前提にする(diagnose が使う)" },
     Opt { name: "--seeded-rematch", arg: Switch, default: "無効", mode: Solve,
           help: "証明された事実から定理をシードして再マッチングする(実測で掛け合わせが悪化するため既定無効)" },
 
@@ -195,6 +197,7 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[
     ("discover-degenerate", "図形を退化させて関連の深い図形の組を探す"),
     ("serve", "ブラウザで作図して定理を発見する(GeoGebra風の画面)"),
     ("sweep", "オプションを振って解けた数と時間を比べる"),
+    ("diagnose", "証明の筋書きに沿って、解けない問題がどの手順で詰まるかを調べる"),
     ("list", "問題名・プリセット名の一覧を出す"),
     ("extract-proof", "raw_proofファイルから2実体が等しい理由を抜き出す"),
     ("help", "このヘルプ"),

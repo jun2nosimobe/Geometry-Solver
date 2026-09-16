@@ -232,74 +232,7 @@ fn build_egraph(script: &str) -> Result<(EGraph, Vec<(String, ClassId)>), String
             facts.push((lineno, t[1].to_string(), t[2..].iter().map(|x| x.to_string()).collect()));
             continue;
         }
-        if t.len() < 3 { return Err(err(format!("項目が足りません: 「{}」", line))); }
-        let (kind, name, op) = (t[0], t[1].to_string(), t[2]);
-        if env.contains_key(&name) { return Err(err(format!("名前「{}」が重複しています", name))); }
-
-        let lookup = |n: &str, want: EntityType| -> Result<ClassId, String> {
-            let id = *env.get(n).ok_or_else(|| err(format!("「{}」がまだ作図されていません", n)))?;
-            let got = egraph.entities[egraph.get_rep(id).0].entity_type;
-            if got != want {
-                return Err(err(format!("「{}」の種類が違います(必要: {:?}、実際: {:?})", n, want, got)));
-            }
-            Ok(id)
-        };
-        let need = |i: usize| -> Result<&str, String> {
-            t.get(i).copied().ok_or_else(|| err(format!("引数が足りません: 「{}」", line)))
-        };
-
-        let (def, ty, extra_incidence): (Definition, EntityType, Option<ClassId>) = match (kind, op) {
-            ("point", "free") => (Definition::FreePoint, EntityType::Point, None),
-            ("point", "on") => {
-                let curve_name = need(3)?;
-                let curve = *env.get(curve_name)
-                    .ok_or_else(|| err(format!("「{}」がまだ作図されていません", curve_name)))?;
-                let ty = egraph.entities[egraph.get_rep(curve).0].entity_type;
-                if !matches!(ty, EntityType::Line | EntityType::Conic) {
-                    return Err(err(format!("「{}」は直線でも円でもないので、その上に点は置けません", curve_name)));
-                }
-                (Definition::FreePoint, EntityType::Point, Some(curve))
-            }
-            ("point", "inter") => (Definition::Intersection(
-                lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Line)?),
-                EntityType::Point, None),
-            ("point", "mid") => (Definition::Midpoint(
-                lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?),
-                EntityType::Point, None),
-            ("point", "second_lc") => (Definition::SecondIntersectionOfLineAndConic(
-                lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Line)?,
-                lookup(need(5)?, EntityType::Conic)?), EntityType::Point, None),
-            ("point", "second_cc") => (Definition::SecondIntersectionOfCircles(
-                lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Conic)?,
-                lookup(need(5)?, EntityType::Conic)?), EntityType::Point, None),
-            ("line", "through") => (Definition::new_line(
-                lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?),
-                EntityType::Line, None),
-            ("line", "perp") => (Definition::PerpendicularLine(
-                lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Point)?),
-                EntityType::Line, None),
-            ("line", "para") => (Definition::ParallelLine(
-                lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Point)?),
-                EntityType::Line, None),
-            ("line", "tangent") => (Definition::TangentLine(
-                lookup(need(3)?, EntityType::Conic)?, lookup(need(4)?, EntityType::Point)?),
-                EntityType::Line, None),
-            ("line", "radical") => (Definition::RadicalAxis(
-                lookup(need(3)?, EntityType::Conic)?, lookup(need(4)?, EntityType::Conic)?),
-                EntityType::Line, None),
-            ("circle", "through") => (Definition::Circumcircle(
-                lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?,
-                lookup(need(5)?, EntityType::Point)?), EntityType::Conic, None),
-            _ => return Err(err(format!("知らない作図です: 「{} … {}」", kind, op))),
-        };
-
-        let id = egraph.create_entity(name.clone(), def, ty);
-        if let Some(curve) = extra_incidence {
-            egraph.link_logical_incidence_justified(id, curve,
-                crate::mmp_core::Justification::Given);
-        }
-        env.insert(name.clone(), id);
-        order.push((name, id));
+        order.push(apply_construction(&mut egraph, &mut env, lineno, line)?);
     }
     if order.is_empty() { return Err("作図が空です".to_string()); }
     egraph.apply_congruence_closure();
@@ -316,6 +249,86 @@ fn build_egraph(script: &str) -> Result<(EGraph, Vec<(String, ClassId)>), String
         egraph.apply_congruence_closure();
     }
     Ok((egraph, order))
+}
+
+
+/// 🌟 作図の1行(`point X inter L1 L2` など)を既存の図に足す。
+///
+/// 元は build_egraph のループの中身だった。証明の筋書き(sketch.rs)が、
+/// 問題ファイルで作った図に人間の証明の補助作図を同じ書き方で足せるように
+/// 切り出した。名前は env で引き、作った図形も env に登録する。
+pub(crate) fn apply_construction(egraph: &mut EGraph, env: &mut HashMap<String, ClassId>,
+                                 lineno: usize, line: &str) -> Result<(String, ClassId), String> {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    let err = |m: String| format!("{}行目: {}", lineno + 1, m);
+    if t.len() < 3 { return Err(err(format!("項目が足りません: 「{}」", line))); }
+    let (kind, name, op) = (t[0], t[1].to_string(), t[2]);
+    if env.contains_key(&name) { return Err(err(format!("名前「{}」が重複しています", name))); }
+
+    let lookup = |n: &str, want: EntityType| -> Result<ClassId, String> {
+        let id = *env.get(n).ok_or_else(|| err(format!("「{}」がまだ作図されていません", n)))?;
+        let got = egraph.entities[egraph.get_rep(id).0].entity_type;
+        if got != want {
+            return Err(err(format!("「{}」の種類が違います(必要: {:?}、実際: {:?})", n, want, got)));
+        }
+        Ok(id)
+    };
+    let need = |i: usize| -> Result<&str, String> {
+        t.get(i).copied().ok_or_else(|| err(format!("引数が足りません: 「{}」", line)))
+    };
+
+    let (def, ty, extra_incidence): (Definition, EntityType, Option<ClassId>) = match (kind, op) {
+        ("point", "free") => (Definition::FreePoint, EntityType::Point, None),
+        ("point", "on") => {
+            let curve_name = need(3)?;
+            let curve = *env.get(curve_name)
+                .ok_or_else(|| err(format!("「{}」がまだ作図されていません", curve_name)))?;
+            let ty = egraph.entities[egraph.get_rep(curve).0].entity_type;
+            if !matches!(ty, EntityType::Line | EntityType::Conic) {
+                return Err(err(format!("「{}」は直線でも円でもないので、その上に点は置けません", curve_name)));
+            }
+            (Definition::FreePoint, EntityType::Point, Some(curve))
+        }
+        ("point", "inter") => (Definition::Intersection(
+            lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Line)?),
+            EntityType::Point, None),
+        ("point", "mid") => (Definition::Midpoint(
+            lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?),
+            EntityType::Point, None),
+        ("point", "second_lc") => (Definition::SecondIntersectionOfLineAndConic(
+            lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Line)?,
+            lookup(need(5)?, EntityType::Conic)?), EntityType::Point, None),
+        ("point", "second_cc") => (Definition::SecondIntersectionOfCircles(
+            lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Conic)?,
+            lookup(need(5)?, EntityType::Conic)?), EntityType::Point, None),
+        ("line", "through") => (Definition::new_line(
+            lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?),
+            EntityType::Line, None),
+        ("line", "perp") => (Definition::PerpendicularLine(
+            lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Point)?),
+            EntityType::Line, None),
+        ("line", "para") => (Definition::ParallelLine(
+            lookup(need(3)?, EntityType::Line)?, lookup(need(4)?, EntityType::Point)?),
+            EntityType::Line, None),
+        ("line", "tangent") => (Definition::TangentLine(
+            lookup(need(3)?, EntityType::Conic)?, lookup(need(4)?, EntityType::Point)?),
+            EntityType::Line, None),
+        ("line", "radical") => (Definition::RadicalAxis(
+            lookup(need(3)?, EntityType::Conic)?, lookup(need(4)?, EntityType::Conic)?),
+            EntityType::Line, None),
+        ("circle", "through") => (Definition::Circumcircle(
+            lookup(need(3)?, EntityType::Point)?, lookup(need(4)?, EntityType::Point)?,
+            lookup(need(5)?, EntityType::Point)?), EntityType::Conic, None),
+        _ => return Err(err(format!("知らない作図です: 「{} … {}」", kind, op))),
+    };
+
+    let id = egraph.create_entity(name.clone(), def, ty);
+    if let Some(curve) = extra_incidence {
+        egraph.link_logical_incidence_justified(id, curve,
+            crate::mmp_core::Justification::Given);
+    }
+    env.insert(name.clone(), id);
+    Ok((name, id))
 }
 
 // ============================================================
@@ -707,7 +720,7 @@ fn proof_figure(user_script: &str, aux: &[String], ids: &[String])
 /// 人間が補題を1つ認めて先へ進むのと同じことを、画面の上でできるようにする。
 /// 与えた根拠は Justification::Given なので、あとから証明を辿れば
 /// 「ここは前提として置いた」と分かる。
-fn assert_fact(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize) -> Option<()> {
+pub(crate) fn assert_fact(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize) -> Option<()> {
     let (goal_kind, args) = goal_for(egraph, kind, r, tag)?;
     let given = crate::mmp_core::Justification::Given;
     match goal_kind.as_str() {
@@ -727,7 +740,7 @@ fn assert_fact(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize) -> Op
 
 /// 主張の形ごとに、既存の証明目標(Identical / Connected / Concyclic)へ翻訳する。
 /// 共線・共点は目標用の実体(2直線・2交点)をその図の上に作る。
-fn goal_for(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize)
+pub(crate) fn goal_for(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize)
     -> Option<(String, Vec<ClassId>)>
 {
     Some(match kind {
@@ -769,13 +782,58 @@ fn goal_for(egraph: &mut EGraph, kind: &str, r: &[ClassId], tag: usize)
                 Definition::Intersection(r[0], r[2]), EntityType::Point);
             ("Identical".to_string(), vec![p1, p2])
         }
+        // 🌟 証明の筋書き(sketch.rs)で人間の証明の手順を書くための語彙。
+        // 直線は「直線2本」でも「点4つ(AB と CD)」でも書ける。
+        "parallel" => {
+            let (l1, l2) = two_lines(egraph, r, tag)?;
+            let d1 = egraph.create_entity(format!("Goal{}_D1", tag), Definition::DirectionOf(l1), EntityType::Point);
+            let d2 = egraph.create_entity(format!("Goal{}_D2", tag), Definition::DirectionOf(l2), EntityType::Point);
+            ("Identical".to_string(), vec![d1, d2])
+        }
+        "perpendicular" => {
+            let (l1, l2) = two_lines(egraph, r, tag)?;
+            let d1 = egraph.create_entity(format!("Goal{}_D1", tag), Definition::DirectionOf(l1), EntityType::Point);
+            let d2 = egraph.create_entity(format!("Goal{}_D2", tag), Definition::DirectionOf(l2), EntityType::Point);
+            let ang = egraph.create_entity(format!("Goal{}_A", tag), Definition::AnglePair(d1, d2), EntityType::Scalar);
+            ("Identical".to_string(), vec![ang, egraph.ang90])
+        }
+        // 有向角 ∠(AB,CD) = ∠(EF,GH)。点8つか直線4本で書く。
+        "equal_angle" => {
+            let lines: Vec<ClassId> = if r.len() == 4 && r.iter().all(|&x| egraph.entities[egraph.get_rep(x).0].entity_type == EntityType::Line) {
+                r.to_vec()
+            } else if r.len() == 8 {
+                (0..4).map(|i| egraph.create_entity(format!("Goal{}_L{}", tag, i),
+                    Definition::new_line(r[2 * i], r[2 * i + 1]), EntityType::Line)).collect()
+            } else {
+                return None;
+            };
+            let d: Vec<ClassId> = lines.iter().enumerate().map(|(i, &l)| egraph.create_entity(
+                format!("Goal{}_D{}", tag, i), Definition::DirectionOf(l), EntityType::Point)).collect();
+            let a1 = egraph.create_entity(format!("Goal{}_A1", tag), Definition::AnglePair(d[0], d[1]), EntityType::Scalar);
+            let a2 = egraph.create_entity(format!("Goal{}_A2", tag), Definition::AnglePair(d[2], d[3]), EntityType::Scalar);
+            ("Identical".to_string(), vec![a1, a2])
+        }
         // 3円共点はまだ証明目標の語彙に無い。
         _ => return None,
     })
 }
 
+/// 「直線2本」か「点4つ(AB と CD)」を2本の直線にする。
+fn two_lines(egraph: &mut EGraph, r: &[ClassId], tag: usize) -> Option<(ClassId, ClassId)> {
+    let is = |eg: &EGraph, x: ClassId, ty: EntityType| eg.entities[eg.get_rep(x).0].entity_type == ty;
+    if r.len() == 2 && is(egraph, r[0], EntityType::Line) && is(egraph, r[1], EntityType::Line) {
+        return Some((r[0], r[1]));
+    }
+    if r.len() == 4 && r.iter().all(|&x| is(egraph, x, EntityType::Point)) {
+        let l1 = egraph.create_entity(format!("Goal{}_L1", tag), Definition::new_line(r[0], r[1]), EntityType::Line);
+        let l2 = egraph.create_entity(format!("Goal{}_L2", tag), Definition::new_line(r[2], r[3]), EntityType::Line);
+        return Some((l1, l2));
+    }
+    None
+}
+
 /// その目標が今の図で成り立っているか。
-fn goal_met(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
+pub(crate) fn goal_met(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
     match t.0.as_str() {
         "Identical" => eg.get_rep(t.1[0]) == eg.get_rep(t.1[1]),
         "Connected" => eg.is_connected(eg.get_rep(t.1[0]), eg.get_rep(t.1[1])),

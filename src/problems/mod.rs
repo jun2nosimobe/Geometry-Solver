@@ -102,6 +102,25 @@ pub const ALL_PROBLEMS: &[&str] = &[
     "newton_gauss",
 ];
 
+/// 🌟 証明の筋書き(sketch.rs)を持つ問題。diagnose の対象。
+pub const PROBLEMS_WITH_SKETCH: &[&str] = &[
+    "bench_2012chnwesternmop5",
+    "bench_2016armog10p2",
+    "bench_2008armog10p6",
+    "bench_2000usatstp2",
+];
+
+/// 問題の証明の筋書き(人間の証明の補助作図と手順)。sketch.rs のドキュメント参照。
+pub fn sketch_for(name: &str) -> Option<&'static str> {
+    match name {
+        "bench_2012chnwesternmop5" => Some(bench_2012chnwesternmop5::SKETCH),
+        "bench_2016armog10p2" => Some(bench_2016armog10p2::SKETCH),
+        "bench_2008armog10p6" => Some(bench_2008armog10p6::SKETCH),
+        "bench_2000usatstp2" => Some(bench_2000usatstp2::SKETCH),
+        _ => None,
+    }
+}
+
 pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
     match name {
         "cyclic_quad" => cyclic_quad::setup(egraph),
@@ -244,6 +263,26 @@ mod tests {
             }
         }
         assert!(checked >= 2, "検算できた問題が少なすぎる({}件)。", checked);
+    }
+
+    /// 🌟 証明の筋書きが正しく書けているか。書き間違いの筋書きで「この手順で
+    /// 詰まっている」と結論してしまわないよう、補助作図を与えた図で各手順が
+    /// 乱数座標で成り立ち、名前が全部引けることを確かめる。
+    #[test]
+    fn every_sketch_step_holds_numerically() {
+        use crate::sketch::{prepare, status_of, Rung, Status};
+        for name in PROBLEMS_WITH_SKETCH {
+            assert!(sketch_for(name).is_some(), "「{}」は一覧にあるのに筋書きが引けない", name);
+            let mut egraph = EGraph::new();
+            let _ = load_problem(name, &mut egraph);
+            let p = prepare(&mut egraph, sketch_for(name).unwrap(), Rung::Assume(0))
+                .unwrap_or_else(|e| panic!("「{}」の筋書きを適用できない: {}", name, e));
+            for (i, step) in p.sketch.steps.iter().enumerate() {
+                let st = status_of(&egraph, &p.env, step, i);
+                assert!(matches!(st, Status::Reached | Status::NotReached),
+                    "「{}」の手順{}「{} {}」: {:?}", name, i + 1, step.kind, step.names.join(" "), st);
+            }
+        }
     }
 
     #[test]

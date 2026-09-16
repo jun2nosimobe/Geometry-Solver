@@ -43,3 +43,16 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。F = AOの中点(Mid_AO)、K = AHの中点とする。
+/// AEは円ADEの直径(∠ADE = 90°)で、EF ⊥ AO なので F もこの円に乗る。
+/// だから「N が円ADF に乗る」を示せばよく、ADFN は AD ∥ FN・DN = AF の
+/// 等脚台形になっている(DN は九点円の半径 = R/2、AF = R/2)。
+pub const SKETCH: &str = r#"
+aux point K mid A H
+step parallel Mid_AO N A Foot_D        | 三角形OAHの中点連結: FN ∥ AH(= AD)
+step equal_length N K A Mid_AO         | 三角形HAOの中点連結: NK = AO/2 = AF
+step equal_length N Foot_D N K         | Nは九点円の中心で、DとKは九点円上
+step concyclic A Foot_D Mid_AO N       | AD ∥ FN かつ DN = AF の等脚台形
+step concyclic A Foot_D E Mid_AO       | ∠ADE = ∠AFE = 90°(AEが直径)
+"#;

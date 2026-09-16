@@ -45,3 +45,17 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。M が E と F から等距離、N も同様なら MN は EF の
+/// 垂直二等分線になる。X, Y を PA, PD の中点とすると XE = XP = MY、
+/// YF = YP = MX で、三角形MXE と FYM が二辺夾角で合同になる。
+pub const SKETCH: &str = r#"
+aux point X mid P A
+aux point Y mid P D
+step equal_length X Foot_E X P          | 直角三角形PEAの斜辺の中線
+step equal_length Y Foot_F Y P          | 直角三角形PFDの斜辺の中線
+step equal_length M X Y P               | 三角形APDの中点連結: MX = PD/2
+step equal_length M Y X P               | 三角形APDの中点連結: MY = PA/2
+step equal_length M Foot_E M Foot_F     | 三角形MXEとFYMは二辺夾角で合同
+step equal_length N Foot_E N Foot_F     | 同様(PB, PCの中点で)
+"#;

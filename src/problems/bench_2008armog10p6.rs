@@ -50,3 +50,19 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。T = AC ∩ A1C1 とする。BH ⊥ AC(= TP)、
+/// BO ⊥ A1C1(= TQ)なので B は三角形TPQ の垂心で、PQ ⊥ BT。一方
+/// A, C, A1, C1 は B0 を中心とする円に乗り、H = AA1∩CC1、B = AC1∩CA1、
+/// T = AC∩A1C1 なので、ブロカールの定理から B0H ⊥ BT。
+pub const SKETCH: &str = r#"
+aux line LAC through A C
+aux line LA1C1 through Foot_A1 Foot_C1
+aux point T inter LAC LA1C1
+aux point MAC mid A C                  # = B0(名前は外心の補助作図に先に取られている)
+step concyclic A C Foot_A1 Foot_C1     | ∠AA1C = ∠AC1C = 90°(ACが直径)
+step perpendicular B H A C             | 垂心の性質(3本目の高さ)
+step perpendicular B P Foot_A1 Foot_C1 | A1C1はACの反平行で、外心への線BOはそれに垂直
+step perpendicular T B P Q             | BQ⊥TP、BP⊥TQ なので B は三角形TPQの垂心
+step perpendicular MAC H B T            | ブロカールの定理(円ACA1C1の中心B0)
+"#;

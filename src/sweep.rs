@@ -100,6 +100,13 @@ pub fn run(args: &[String]) {
 /// Rustの標準ライブラリにはプロセスのタイムアウトが無いので、
 /// try_waitで様子を見ながら待ち、超過したらkillする。
 fn run_once(exe: &std::path::Path, argv: &[String], timeout_secs: u64) -> (bool, f64) {
+    let (solved, secs, _) = run_capture(exe, argv, timeout_secs);
+    (solved, secs)
+}
+
+/// run_once と同じだが、子プロセスの標準出力も返す(sketch::diagnose が
+/// 筋書きの各手順の到達状況を拾うのに使う)。
+pub(crate) fn run_capture(exe: &std::path::Path, argv: &[String], timeout_secs: u64) -> (bool, f64, String) {
     let start = Instant::now();
     let child = Command::new(exe)
         .args(argv)
@@ -108,7 +115,7 @@ fn run_once(exe: &std::path::Path, argv: &[String], timeout_secs: u64) -> (bool,
         .spawn();
     let mut child = match child {
         Ok(c) => c,
-        Err(e) => { println!("⚠️ 子プロセスを起動できませんでした: {}", e); return (false, 0.0); }
+        Err(e) => { println!("⚠️ 子プロセスを起動できませんでした: {}", e); return (false, 0.0, String::new()); }
     };
     // 🐛 FIX(実測で判明): 最初はwaitし終えてからstdoutを読んでいたが、
     // パイプのバッファ(64KB程度)が埋まると子プロセスは書き込みでブロックし、
@@ -145,7 +152,7 @@ fn run_once(exe: &std::path::Path, argv: &[String], timeout_secs: u64) -> (bool,
     // killするとパイプが閉じるので、読み取りスレッドはここで必ず終わる。
     let out = reader.join().unwrap_or_default();
     let solved = !timed_out && out.contains(SUCCESS_MARK);
-    (solved, start.elapsed().as_secs_f64())
+    (solved, start.elapsed().as_secs_f64(), out)
 }
 
 fn resolve_problems(args: &[String]) -> Option<Vec<String>> {

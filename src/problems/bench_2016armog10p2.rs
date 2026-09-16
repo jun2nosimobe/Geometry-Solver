@@ -42,3 +42,17 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。X を「D を通り AD に垂直な直線」と PQ の交点と
+/// する。AX は円APD の直径になり(∠APX = ∠ADX = 90°)、X は円BQD にも乗る。
+/// すると DX は2円の共通弦で、中心を結ぶ OaOb は DX に垂直、AD も DX に垂直。
+pub const SKETCH: &str = r#"
+aux line LAD through A D
+aux line PerpD perp LAD D
+aux point X inter PerpD Perp_P_AC
+step concyclic A P D X                                  | ∠APX = ∠ADX = 90°(AXは円APDの直径)
+step concyclic B Q D X                                  | ∠(QX,QB) = 90°+∠(CA,CB) = ∠(DX,DB)
+step equal_length Circumcenter_Oa D Circumcenter_Oa X   | Xは円APD上
+step equal_length Circumcenter_Ob D Circumcenter_Ob X   | Xは円BQD上
+step perpendicular Circumcenter_Oa Circumcenter_Ob D X  | OaもObもDXの垂直二等分線上
+"#;
