@@ -682,6 +682,25 @@ flowchart TD
         </div>
       </div>
 
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>射影5定理を必要な問題だけに戻す</h3><span class="pill shipped">25431bd</span></div>
+          <div class="desc">§05-#11で数値化した課税をそのまま回収した。この5定理を一切使わない問題の消費仕事量が、外すと軒並み下がる(simson −37.5% / varignon −32.7% / nine_point_full −29.7% / circumcenter −16.9% / thales −10.6% / miquel −10.5% / orthocenter −7.3%)。一方この5定理が買っているのは、それ自体を検証するために書かれた<code>test_*</code>問題5つだけで、古典幾何・HAGeo由来は1問も増減しない。中心角の定理と同じ形(必要な9問だけ、<code>--projective</code>で全問題)に戻した。</div>
+          <div class="evidence"><b>検証:</b> 掃引29/37で解けない8問の顔ぶれも不変。cargo test 83件。元々opt-inだったものを既定に変えた根拠(bench_2018chnwesternmop5が解けるようになる)は、後にその+1問が図の崩壊による偽陽性だと判明していたので、そもそも消えていた。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>UCB1バンディットを既定で無効にする</h3><span class="pill shipped">811adbf</span></div>
+          <div class="desc">§05-#2を追いかけた結果。まず原因が分かった: <code>theorem_priority_bonus</code>が<code>clamp(score*5, -5, 5)</code>で、<code>ucb1_score</code>が1.0を超えるだけで上限に張り付く。<code>--trace</code>で見えていた「発火した定理の平均優先度がどれも+5.0付近」はこれで、学習結果が並べ替えに一切反映されていなかった。尺度を50倍に広げて飽和を解いたうえで、全37問の消費仕事量を合計して比べた。</div>
+          <div class="evidence"><b>検証:</b> 有効(飽和したまま) 8,088,733 / 飽和を解いた版 7,954,186 / 無効 <b>6,740,492</b>。solvedはどれも29/37。<b>飽和を解いても改善は1.7%どまり</b>で、無効が20%少ない。さらに有効時に消費が変わる問題は37問中4問だけ(残り33問は1ステップも変わらない=並べ替えが起きていない)で、その4問すべてが悪化側だった(bench_2012egmop1が682,107→1,914,519の2.8倍で最悪)。つまり問題は尺度ではなく<b>報酬の定義そのもの</b>にある ― 報酬は「このタスクが結論を適用できたか」で測っているが、<code>--trace</code>が示したのは「発火しても証明に残らない方が普通」(証明に残る発火は全体の1〜10%)ということで、代理指標として機能していない。尺度の修正は残したので、報酬を作り直す実験は<code>--bandit</code>を付けるだけで再開できる(飽和したままの版を「バンディット」だと思って測る事故も防げる)。</div>
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -696,7 +715,8 @@ flowchart TD
         <div>
           <h3>仕事量の75〜79%が「一度も結論を適用できないタスク」に消えている</h3>
           <div class="desc"><code>--trace</code>で6問を実測した結果、問題の難易度によらずこの比率がほぼ一定だった。さらに、発火したタスクの中で<b>実際に証明へ残るのはごく一部</b>で、証明そのものが要した仕事は全体の5〜28%にすぎない(thales 4.8% / orthocenter 7.7% / nine_point_full 7.4% / bench_2012egmop1 8.6% / miquel 20.5% / simson 27.5%。いずれも合流履歴まで含めた上界)。つまり探索の効率を上げる余地は<b>まだ一桁ある</b>。どこを削るかはこの数字を見ながら決められるようになった。</div>
-          <div class="b-tags"><span class="tag">--traceで6問実測</span><span class="tag">伸びしろは一桁</span></div>
+<div class="evidence" style="margin-top:10px"><b>2026-09-16 着手:</b> この「空振り」を減らす最初の一手として、<b>タスク単位のメモ化</b>を試した ― <code>dfs_match</code>が既に集めている型別の依存マスク(<code>dep_mask</code>、failed_pathsの無効化に使っているもの)を使い、「dfs_capに当たらず完走して何も適用できなかった」タスクを記録して、その依存型の世代が1つも動いていない限り<code>schedule_full_sweep</code>で積まない、という仕組み。結果は<b>37問合計 6,741,258 対 6,740,492 で実質ゼロ</b>(solvedは29/37のまま)、撤回した。理由は明快で、<b>空の束縛から始まる全探索はほぼ必ず4つの型すべてに依存する</b>ため、どんな変化でもマスクが当たって無効化される。つまりこの75〜79%は「同じ探索の繰り返し」ではなく、毎回本当に変わった状態での探索。削るなら、状態が変わっても再利用できる形 ― 部分マッチの共有(§05-#10)の側で考える必要がある。</div>
+          <div class="b-tags"><span class="tag">タスク単位のメモ化は不発(撤回)</span><span class="tag">同じ探索の繰り返しではない</span></div>
         </div>
       </div>
 
@@ -723,7 +743,8 @@ flowchart TD
         <div>
           <h3>fanout_heat_cap=5 は証明に要る実体をかなり外している</h3>
           <div class="desc">証明に登場した実体が熱の降順で何位にいるかを測ると、nine_point_fullでは点23個中20個・直線12個中9個が順位5の外、miquelでも点10個中7個が外にいた。一方<code>heat_cap=40</code>の外に出るものは全問題で0個。段階的な拡張(§04)が効いているのはこのためで、逆に<code>heat_cap</code>側は緩すぎて絞りとして機能していない可能性がある。<b>次の一手は「capの値」ではなく「並べ方」</b>だが、下記の通り単純な式の差し替えは実測で否定済み。</div>
-          <div class="b-tags"><span class="tag">cap5の外: 点20/23(9pt)</span><span class="tag">cap40は実質無制限</span></div>
+<div class="evidence" style="margin-top:10px"><b>2026-09-16 着手:</b> 「証明に要る実体がcapの外にいる」なら広げれば届くはず、という含意を実測で確かめた。全37問の消費仕事量の合計は <code>cap=1</code> 6,161,242(ただし<b>27/37</b>、thalesとorthocenter_altを落とす) / <code>cap=2</code> 6,852,238 / <code>cap=3</code> <b>6,499,428</b> / <code>cap=4</code> 7,442,062 / <code>cap=5</code>(既定) 6,740,492 / <code>cap=10</code> 10,521,685 / <code>cap=20</code> 15,857,864。<b>広げる方向は明確に逆効果</b>(10で+56%、20で+135%)で、solvedはcap=1以外どれも29/37のまま増えない。つまり「capの外にいる実体」は、広げて拾っても証明を早めない ― 拾うコストの方がはるかに大きい。狭い方はcap=3が既定より3.6%安いが、2〜5の間で単調ですらない(2と4は5より高い)ので、探索の軌跡のぶれの範囲と見て既定は5のまま据え置いた。<b>この項目の含意は否定された</b>が、「狭く始めて手詰まりのときだけ広げる」という適応的な設計(§04)が正しい形であることの裏付けにはなった。</div>
+          <div class="b-tags"><span class="tag">広げる案は反証(10で+56%/20で+135%)</span><span class="tag">既定5は据え置き</span></div>
         </div>
       </div>
 
