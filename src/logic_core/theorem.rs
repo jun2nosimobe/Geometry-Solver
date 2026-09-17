@@ -62,6 +62,8 @@ pub enum Pattern {
     /// 代表元IDの非厳密な昇順("<=")。2組の役割を丸ごと入れ替えても同じ結論になる
     /// 対称性だけを間引く(等しい割り当ては残す)。
     OrderNonStrict(Vec<String>),
+    /// 中身が成り立たないこと(中の変数が全部束縛されてから評価する)。今の定理は使っていない。
+    #[allow(dead_code)]
     Not(Box<Pattern>),
 }
 

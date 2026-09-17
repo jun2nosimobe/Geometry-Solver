@@ -71,10 +71,6 @@ fn order_le(args: &[&str]) -> Pattern {
     Pattern::OrderNonStrict(strings(args))
 }
 
-fn not(pat: Pattern) -> Pattern {
-    Pattern::Not(Box::new(pat))
-}
-
 /// 作図: parents から kind で作った図形を bind_to に束縛する。
 fn build(kind: DefKind, parents: &[&str], bind_to: &str) -> Construction {
     Construction { kind, args: strings(parents), bind_to: bind_to.to_string() }
@@ -1146,28 +1142,30 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             name: "複比の透視射影不変性(線束→点)".to_string(),
             entities: entities(&[
                 ("L1", EntityType::Line), ("L2", EntityType::Line), ("L3", EntityType::Line), ("L4", EntityType::Line),
+                ("O", EntityType::Point), ("T", EntityType::Line),
                 ("Ap", EntityType::Point), ("Bp", EntityType::Point), ("Cp", EntityType::Point), ("Dp", EntityType::Point),
                 ("CRL", EntityType::Scalar), ("CR2", EntityType::Scalar),
             ]),
             patterns: vec![
-                // 🌟 シード: 定理A(点→線束)がCrossRatioOfLines(L1..L4)を新しく
-                // 証明した直後、その事実からL1..L4とCRLを直接束縛できる
-                // (全件スキャン不要)。
+                // 前提は2つ: L1..L4 が1点 O で交わる(線束である)こと、Ap..Dp が同じ直線 T の上で
+                // それぞれ L1..L4 と交わること。どちらが欠けても線束の複比と点の複比は一致しない
+                // (DefinedBy は線束の複比を任意の4直線に対してその場で作るので、共点は明示が要る)。
                 def_by(DefKind::CrossRatioOfLines, &["L1", "L2", "L3", "L4", "CRL"]),
-                // 各直線について「Lとは別の(=線束の中心Oではない)、その直線上の
-                // 点」を局所スキャンで見つける。中心Oは4直線全てに繋がっている
-                // 唯一の点なので、「他の1本には繋がっていない」ことで確実に除外できる。
-                // 🌟 定理A側と同じ理由(実測に基づくFIX)で、各点が束縛される
-                // たびにdistinctを挟み、早期に枝刈りする。
+                distinct(&["L1", "L2", "L3", "L4"]),
+                on("O", "L1"),
+                on("O", "L2"),
+                on("O", "L3"),
+                on("O", "L4"),
                 on("Ap", "L1"),
-                not(on("Ap", "L2")),
+                on("Ap", "T"),
                 on("Bp", "L2"),
-                not(on("Bp", "L1")),
+                on("Bp", "T"),
                 on("Cp", "L3"),
-                not(on("Cp", "L1")),
+                on("Cp", "T"),
                 on("Dp", "L4"),
-                not(on("Dp", "L1")),
-                distinct(&["Ap", "Bp", "Cp", "Dp"]),
+                on("Dp", "T"),
+                // 交点が中心 O そのものなら T は O を通っていて、複比は定まらない。
+                distinct(&["O", "Ap", "Bp", "Cp", "Dp"]),
             ],
             constructions: vec![
                 build(DefKind::CrossRatio, &["Ap", "Bp", "Cp", "Dp"], "CR2"),
