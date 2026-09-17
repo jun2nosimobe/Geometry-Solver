@@ -1,4 +1,6 @@
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, GeoEntity};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rustc_hash::FxHashSet;
 
 /// 🌟 MCTSが1手として選べる「作図アクション」。
@@ -15,6 +17,8 @@ pub struct ActionGenerator {
     // 名前ではなく「定義」で重複を完全に防ぐ
     pub historical_defs: FxHashSet<Definition>,
     pub historical_harmonic: FxHashSet<(ClassId, ClassId, ClassId)>,
+    /// 候補の重み付き抽選に使う。シード固定なので --mcts の実行も再現する。
+    rng: StdRng,
 }
 
 impl ActionGenerator {
@@ -22,6 +26,7 @@ impl ActionGenerator {
         Self {
             historical_defs: FxHashSet::default(),
             historical_harmonic: FxHashSet::default(),
+            rng: StdRng::seed_from_u64(0xAC71_0115),
         }
     }
 
@@ -57,7 +62,7 @@ impl ActionGenerator {
         bonus
     }
 
-    fn weighted_pick(&self, candidates: &[ClassId], egraph: &EGraph, n: usize, target: &Option<(String, Vec<ClassId>)>) -> Vec<ClassId> {
+    fn weighted_pick(&mut self, candidates: &[ClassId], egraph: &EGraph, n: usize, target: &Option<(String, Vec<ClassId>)>) -> Vec<ClassId> {
         if candidates.len() <= n {
             return candidates.to_vec();
         }
@@ -69,7 +74,7 @@ impl ActionGenerator {
         for _ in 0..n {
             if pool.is_empty() { break; }
             let total: f64 = pool.iter().map(|(_, w)| w).sum();
-            let mut r = rand::random::<f64>() * total;
+            let mut r = self.rng.r#gen::<f64>() * total;
             let mut idx = 0;
             for (i, (_, w)) in pool.iter().enumerate() {
                 r -= w;

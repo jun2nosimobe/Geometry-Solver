@@ -18,6 +18,9 @@ pub struct BlackboardEngine {
     pub bandit_enabled: bool,
     /// 証明された事実で変数を固定したタスクを積むか(既定は無効: 積む量が多すぎて全体が悪化する)。
     pub seeded_rematch_enabled: bool,
+    /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
+    /// 1回の run_step の途中でも予算を使い切ったら止まる。
+    pub work_limit: u64,
 }
 
 impl BlackboardEngine {
@@ -28,6 +31,7 @@ impl BlackboardEngine {
             event_queue: VecDeque::new(),
             bandit_enabled: false,
             seeded_rematch_enabled: false,
+            work_limit: u64::MAX,
         }
     }
 
@@ -147,12 +151,13 @@ impl BlackboardEngine {
         self.event_queue.push_back(event);
     }
 
-    /// タスクを最大 budget 個処理する。何か結論を適用できたら true。
+    /// タスクを最大 budget 個(仕事量が work_limit に達したらそこまで)処理する。
+    /// 何か結論を適用できたら true。
     pub fn run_step(&mut self, budget: usize) -> bool {
         let mut applied_anything = false;
         let mut calls = 0;
 
-        while calls < budget {
+        while calls < budget && self.prover.work_done() < self.work_limit {
             while let Some(event) = self.event_queue.pop_front() {
                 match event {
                     Event::NodeMerged => {

@@ -822,13 +822,13 @@ impl EGraph {
     }
 
     /// 🌟 直線の係数(a,b,c: a*x+b*y+c=0)を満たすランダムな点(x,y)を1つ選ぶ。
-    fn sample_point_on_line_coeffs(a: ModInt, b: ModInt, c: ModInt) -> Option<(ModInt, ModInt)> {
+    fn sample_point_on_line_coeffs(&self, a: ModInt, b: ModInt, c: ModInt) -> Option<(ModInt, ModInt)> {
         if b.0 != 0 {
-            let x = ModInt::new(rand::random::<i64>());
+            let x = self.random_modint();
             let y = -(a * x + c) / b;
             Some((x, y))
         } else if a.0 != 0 {
-            let y = ModInt::new(rand::random::<i64>());
+            let y = self.random_modint();
             let x = -c / a;
             Some((x, y))
         } else {
@@ -843,7 +843,7 @@ impl EGraph {
         if !self.free_point_ancestors_ready(line, vars) { return None; }
         let coeffs = self.evaluate_node(line, vars, cache)?;
         if coeffs.len() < 3 { return None; }
-        Self::sample_point_on_line_coeffs(coeffs[0], coeffs[1], coeffs[2])
+        self.sample_point_on_line_coeffs(coeffs[0], coeffs[1], coeffs[2])
     }
 
     /// 🌟 EntityType::Circle撤廃(円もConic)により、以前ここにあった
@@ -899,8 +899,8 @@ impl EGraph {
 
         let two = ModInt::new(2);
         for _ in 0..8 {
-            let dx = ModInt::new(rand::random::<i64>());
-            let dy = ModInt::new(rand::random::<i64>());
+            let dx = self.random_modint();
+            let dy = self.random_modint();
             let alpha = a * dx * dx + b * dx * dy + c * dy * dy;
             if alpha.0 == 0 { continue; } // 縮退方向(漸近方向、理論上ごく低確率)。引き直す
             let beta = two * a * x1 * dx + b * (x1 * dy + y1 * dx) + two * c * y1 * dy + d * dx + e * dy;
@@ -991,8 +991,8 @@ impl EGraph {
                 pending.push(fp);
             } else {
                 let name = self.entities[fp.0].name.clone();
-                vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
-                vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
+                vars.insert(format!("{}_x", name), self.random_modint());
+                vars.insert(format!("{}_y", name), self.random_modint());
             }
         }
 
@@ -1043,8 +1043,8 @@ impl EGraph {
                 match pick {
                     Some(fp) => {
                         let name = self.entities[fp.0].name.clone();
-                        vars.insert(format!("{}_x", name), ModInt::new(rand::random::<i64>()));
-                        vars.insert(format!("{}_y", name), ModInt::new(rand::random::<i64>()));
+                        vars.insert(format!("{}_x", name), self.random_modint());
+                        vars.insert(format!("{}_y", name), self.random_modint());
                         pending.retain(|&q| q != fp);
                     }
                     None => return false,
@@ -1148,7 +1148,7 @@ impl EGraph {
         let mover_name = self.entities[mover.0].name.clone();
 
         let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let (x0, y0, dx, dy) = self.random_mover_line();
         let mut t_vals = Vec::with_capacity(k);
         let mut x_vals = Vec::with_capacity(k);
         let mut y_vals = Vec::with_capacity(k);
@@ -1207,7 +1207,7 @@ impl EGraph {
         let mover_name = self.entities[mover.0].name.clone();
 
         let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let (x0, y0, dx, dy) = self.random_mover_line();
         let mut t_vals = Vec::with_capacity(k);
         let mut x_vals = Vec::with_capacity(k);
         let mut y_vals = Vec::with_capacity(k);
@@ -1290,7 +1290,7 @@ impl EGraph {
         let mover_name = self.entities[mover.0].name.clone();
 
         let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = Self::random_mover_line();
+        let (x0, y0, dx, dy) = self.random_mover_line();
         let mut t_vals = Vec::with_capacity(k);
         let mut parent_samples: Vec<Vec<Vec<ModInt>>> = vec![Vec::with_capacity(k); parents.len()];
         let mut combined_samples: Vec<Vec<ModInt>> = Vec::with_capacity(k);
@@ -1426,14 +1426,24 @@ impl EGraph {
         Some((mover, base_vars))
     }
 
+    /// 数値検証・次数測定の乱数(SplitMix64)。rand::random だと実行ごとに座標が変わり、
+    /// ごく低い確率とはいえ同じ問題で判定が変わりうる。
+    pub(crate) fn random_modint(&self) -> ModInt {
+        let mut z = self.rng_state.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.rng_state.set(z);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ModInt::new((z ^ (z >> 31)) as i64)
+    }
+
     /// 🌟 moverが動く先の「一般の位置にある直線」: 基点(x0,y0)と方向(dx,dy)を
     /// 無作為に選ぶ(moverの座標はx0+t*dx, y0+t*dyとしてtでパラメータ化される)。
-    fn random_mover_line() -> (ModInt, ModInt, ModInt, ModInt) {
+    fn random_mover_line(&self) -> (ModInt, ModInt, ModInt, ModInt) {
         (
-            ModInt::new(rand::random::<i64>()),
-            ModInt::new(rand::random::<i64>()),
-            ModInt::new(rand::random::<i64>()),
-            ModInt::new(rand::random::<i64>()),
+            self.random_modint(),
+            self.random_modint(),
+            self.random_modint(),
+            self.random_modint(),
         )
     }
 }

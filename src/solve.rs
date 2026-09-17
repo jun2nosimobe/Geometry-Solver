@@ -333,6 +333,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
     engine.seeded_rematch_enabled = opts.seeded_rematch;
+    engine.work_limit = opts.step_budget;
     if opts.show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
 
     let mut mcts = MCTSSearchEngine::new();

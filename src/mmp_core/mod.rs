@@ -483,6 +483,9 @@ pub struct EGraph {
     // しても結果が変わりようがないので、merge_generationが前回の却下時点から
     // 変わっていなければ即座にスキップする。
     pub rejected_conic_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
+    /// 数値検証・次数測定に使う乱数の状態(EGraph::random_modint)。シード固定なので、
+    /// 同じ問題は毎回同じ座標で検算する。
+    rng_state: Cell<u64>,
     // 🌟 ユーザー提案(定理マッチングの最適化)への対応その1: EntityTypeごとの
     // 生成済みエンティティID一覧のインデックス。create_entity内で追記するだけの
     // 単調増加リストで、union-findのマージでは更新しない(吸収された側の
@@ -643,6 +646,7 @@ impl EGraph {
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
+            rng_state: Cell::new(0x5EED_6E0_5017_E5),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
             type_counts: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),

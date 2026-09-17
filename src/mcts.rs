@@ -1,5 +1,7 @@
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use crate::action_space::{Action, ActionGenerator};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// 🌟 MCTS本体。
 ///
@@ -50,6 +52,8 @@ pub struct MCTSSearchEngine {
     // targetの代わりにNoneを渡し、導入前(entity_weightのみによる完全に
     // 目標非依存のサンプリング)の挙動に戻す。既定は有効(true)。
     pub target_bias_enabled: bool,
+    /// 未試行の行動・ロールアウトの行動の選択に使う。シード固定なので --mcts の実行も再現する。
+    rng: StdRng,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -72,6 +76,7 @@ impl MCTSSearchEngine {
             nodes: Vec::new(),
             action_gen: ActionGenerator::new(),
             target_bias_enabled: true,
+            rng: StdRng::seed_from_u64(0x3C75_5EED),
         }
     }
 
@@ -340,7 +345,7 @@ impl MCTSSearchEngine {
 
             // 2. Expansion + 3. Playout(浅いロールアウト) + 4. Backpropagation
             if !self.nodes[curr].untried_actions.is_empty() {
-                let idx = (rand::random::<u32>() as usize) % self.nodes[curr].untried_actions.len();
+                let idx = (self.rng.r#gen::<u32>() as usize) % self.nodes[curr].untried_actions.len();
                 let action = self.nodes[curr].untried_actions.remove(idx);
 
                 let classes_before = sim_egraph.count_active_classes();
@@ -373,7 +378,7 @@ impl MCTSSearchEngine {
                 while !found_target && d < MAX_DEPTH {
                     let acts = self.action_gen.get_possible_actions(&sim_egraph, true, gen_target);
                     if acts.is_empty() { break; }
-                    let pick = (rand::random::<u32>() as usize) % acts.len();
+                    let pick = (self.rng.r#gen::<u32>() as usize) % acts.len();
                     let a = acts[pick].clone();
                     let cb = sim_egraph.count_active_classes();
                     let nid = Self::apply_action(&mut sim_egraph, &a);
