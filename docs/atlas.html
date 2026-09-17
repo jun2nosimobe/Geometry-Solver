@@ -16,7 +16,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> 0870d7d</span>
+      <span><b>最新コミット</b> 2dd4eb0</span>
     </div>
   </div>
   <div class="stats">
@@ -29,34 +29,34 @@
   <div class="cards"><a class="card" href="ledger.html"><b>§04 来歴</b><span>試した最適化と修正を、新しい順に折り畳みで</span></a><a class="card" href="backlog.html"><b>§05 改善候補</b><span>未着手の項目と、解決・不発になった項目</span></a><a class="card" href="notes/README.md"><b>設計ノート</b><span>ソースのコメントから移した経緯と設計判断</span></a></div>
   <section id="tracks">
 <div class="section-head"><span class="section-num">00</span><h2>今、並行して走っている4つの方針</h2></div>
-<p class="section-note">ユーザー指示「マッチングの高速化と射影幾何への移行のタスクをきちんと分けないと両方中途半端になってしまいそう」を受けて新設した節。それぞれ独立にscopeし、混ぜて着手しないための一覧。詳細な来歴は<a class="secref" href="ledger.html">§04</a>、個別の未着手項目は<a class="secref" href="backlog.html">§05</a>を参照。</p>
+<p class="section-note">性質の違う作業を混ぜて着手しないための一覧(2026-09-17 時点の状態に書き直した)。数字は既定設定・44問・仕事量予算8,000,000での値。変更ごとの詳細は<a class="secref" href="ledger.html">§04</a>、未着手の項目は<a class="secref" href="backlog.html">§05</a>。</p>
 <div class="items">
 <details class="item" id="track-1" data-status="shipped">
-  <summary><span class="idx">方針A</span><span class="t">特殊ケースを型タグでなくincidenceで表現する統一</span><span class="pill shipped">主要3種は完了</span></summary>
+  <summary><span class="idx">方針A</span><span class="t">射影幾何への移行と、定理の健全性</span><span class="pill shipped">型の統一は完了・射影の定理は既定</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針A 射影幾何</b></div><div class="desc">原則(メモリ済み): 「本質的には普通のオブジェクトの特殊ケース」は専用<code>EntityType</code>を作らず、標準の型+基準点へのincidenceで表す。<code>Direction→Point</code>(<code>line_infinity</code>との接続)、<code>Circle→Conic</code>(円周点I,Jとの接続)、<code>Angle→Scalar</code>(AnglePairは元々複比として実装済みだった)の3種を撤廃済み。次点はユーザー明示の優先順位: <b>方冪 → 直角三角形 → 二等辺三角形</b>関連定理の射影形移植(トロメイの定理は汎用性が低いため明示的に後回し)。<b>未着手。</b></div>
+<div class="desc" style="margin-bottom:6px"><b>方針A 射影幾何</b></div><div class="desc">原則: 「本質的には普通の図形の特殊ケース」には専用の<code>EntityType</code>を作らず、標準の型と基準の実体への接続で表す。<code>Direction→Point</code>(無限遠直線への接続)、<code>Circle→Conic</code>(円周点I,Jへの接続)、<code>Angle→Scalar</code>(無限遠直線上の複比)の3種は撤廃済み。射影の定理5つ(複比の透視射影不変性2つ・シュタイナーの定理3つ)は全問題で既定になった(<code>--no-projective</code>で外せる)。<br><b>現状の課題:</b> 定理の書き方の誤りは、結論のマージを数値で監査するまで見えない。線束→点(偽の等式3,525件)と共点二弦の相似(偽6件)は、どちらも一時的な監査で初めて見つかった ― 監査を常設する案が<a class="secref" href="backlog.html">§05</a>にある。方冪・直角三角形・二等辺三角形の定理を射影の形に移す作業は、記録上まだ手を付けていない。</div>
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
-  <summary><span class="idx">方針B</span><span class="t">型統合が暗黙にキャッシュ粒度も粗くする問題への対処</span><span class="pill shipped">82/96まで到達</span></summary>
+  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">32/44・決定的</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針B マッチング高速化</b></div><div class="desc">方針Aの副作用として、型統合のたびに共有キャッシュ(<code>type_generation</code>系)の無効化粒度が粗くなり性能回帰を起こすことが判明(Angle統合で69/96→57/96)。<code>angle_generation</code>/<code>plain_scalar_generation</code>という独立カウンタへの分離で解消し、73/96→76/96まで回復・改善。射影定理5種を全問題共通のデフォルトから外しopt-in化したのも実質この路線の成果。ユーザー提案「接続の弱いfailed pathは型に関わらず保持できるはず」を受け、<code>MatchTask::cached_failed_paths</code>の無効化を「定理単位で1つでも型が変われば全滅」から「個々の失敗状態ごとの依存マスク(<code>entity_type_bit</code>)」に細分化し、さらにタスクをまたいだ永続グローバルキャッシュへ昇格させて76/96→78/96(3回とも完全に同一の結果、従来揺れていたnine_point_full/orthocenterが一度も落ちなくなった)に到達。続けてユーザー提案「熱cap関連のパラメータを調整できないか、行き詰まったら幅を広げる」に基づき、狭い(=速い)<code>fanout_heat_cap</code>から始め手詰まり時だけ段階的に広げる適応的な探索を実装し、<b>82/96</b>まで更新した(<a class="secref" href="ledger.html">§04</a>参照)。<b>今後の教訓</b>: 型を統合するたびに「候補プールの汚染」だけでなく「キャッシュ無効化粒度の粗大化」も点検すること(メモリ済み)。単一の固定パラメータで複数の問題を同時に最適化しようとすると綱引きが起きる場合、適応的な段階拡張が有効な解決策になりうる。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針B マッチングと探索の制御</b></div><div class="desc">予算は壁時計の秒ではなく仕事量(<code>dfs_match</code>の呼び出し回数)で測り、数値検証とMCTSの乱数もシード固定にしたので、同じ設定なら何度流しても結果が1ステップも変わらない。失敗キャッシュは個々の失敗状態ごとの依存マスクを持つ定理単位の永続キャッシュ、候補capは狭い値(5)から始めて手詰まりのときだけ広げる。型をまとめるときは、候補プールの混ざり方だけでなくキャッシュの無効化の粒度(<code>angle_generation</code>)も点検すること。<br><b>現状の課題:</b> 探索が定理を試す順序に大きく左右される(登録順を変えるだけで仕事量が±15%、1問が解けたり解けなかったりする)。筋の通った並べ方はどれも登録順に勝たなかったので、順序に鈍感な探索にする方が本筋(<a class="secref" href="backlog.html">§05</a>)。未解決12問のうち5問は予算を使い切って止まる。</div>
   </div>
 </details>
 <details class="item" id="track-3" data-status="open">
-  <summary><span class="idx">方針C</span><span class="t">個別定理の追加より、汎用の補助構成ヒューリスティックを優先</span><span class="pill open">実験継続中</span></summary>
+  <summary><span class="idx">方針C</span><span class="t">個別の定理より、汎用の補助作図を優先</span><span class="pill open">需要駆動の作図が主力</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針C MCTS/補助構成</b></div><div class="desc">ユーザー指示「無闇に定理を追加してもノイズが増えるだけ、ondemand作図やmctsの補助点作図を改善すべき」に基づく路線。<code>SecondIntersectionOfLineAndConic</code>(直線と二次曲線のもう一方の交点)を汎用プリミティブとして追加したが、A/B検証の結果これ自体が決め手だった例はまだ無い。より大きな発見: <b>既定実行は<code>--mcts</code>を無効にしており、需要駆動の補助構成が尽きると探索を完全に打ち切る</b>(main.rsのリカバリーフェーズ)。<code>bench_2018silkroadp1</code>/<code>bench_2005ctstp1</code>は<code>--mcts --time=30</code>なら解けることを確認済み――既定の5秒予算では時間が足りないだけで、定理不足ではない。MCTSを既定で有効化する実験は既定5秒予算のままだと75/96とほぼ横ばい(nine_point_full/orthocenterの安定性とのトレードオフ)で、時間予算を上げる/MCTSの健全性チェックを強化するところまで踏み込まないと純増にならない。<br><b>2026-09-16 の実測(<a class="secref" href="ledger.html">§04</a> --origins):</b> 需要駆動の補助線を外すと31→15問、交点を外すと31→29問 ― 解けている問題の約半分はこの路線の手で支えられている。一方で目標から逆算する作図は一度も効いておらず、MCTSは既定で無効なので、「何を作図するか」を目標側から決める手はまだ実質無い(<a class="secref" href="backlog.html">§05</a>)。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針C 補助作図</b></div><div class="desc">行き詰まったときの手は需要駆動の作図(補助線 → 交点 → 有向角 → もう一方の交点 → 中点 → 目標からの逆算)で、尽きたら候補capを広げる。この手順は solve・作図画面(serve)・discover の証明試行で共通の<code>BlackboardEngine::recover</code>に1本化した(以前は3か所が別々に持っていて、serve だけ射影の定理を使わない・回復を打ち切るといった食い違いがあった)。需要駆動の補助線を外すと31→15問、交点を外すと31→29問で、解けている問題の約半分はこの路線が支えている。中点の需要は solve では既定で切っている(bench_2012egmop1 が落ちる)が、作図画面と discover では使う。<br><b>現状の課題:</b> 目標から逆算する作図は一度も効いておらず、「何を作図するか」を目標側から決める手が実質無い。MCTS は既定で無効 ― 予算を仕事量にした後で測り直すと、解ける問題は1問も増えずに時間が12倍になった。</div>
   </div>
 </details>
 <details class="item" id="track-4" data-status="backlog">
-  <summary><span class="idx">方針D</span><span class="t">個別問題向けの専用定理は最小限に</span><span class="pill backlog">具体案は<a class="secref" href="backlog.html">§05</a>に温存</span></summary>
+  <summary><span class="idx">方針D</span><span class="t">定理の追加は最小限に、問題ごとの opt-in はしない</span><span class="pill backlog">診断で詰まり所を名指し済み</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">ユーザー方針: 定理を無闇に増やすとノイズ(UCB1バンディットの試行対象が増え、無関係な問題まで「一度は試す」コストを払う<a class="secref" href="backlog.html">§05</a>-#10)が増えるだけなので、本当に汎用性のある定理・作図プリミティブでなければ追加しない。ただし旧atlas診断(<a class="secref" href="backlog.html">§05</a>-#11, #12)で「新定理が必要」と特定済みの具体的なギャップ(bench_2011balkanmop1が要求する2直線版スパイラル相似、bench_2012egmop1/2018chnwesternmop5/2005usamop3固有の中間補題)は、方針Cで届かなければ最終手段として温存する。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 例外は暫定の中心角の定理(<code>CENTRAL_ANGLE_PROBLEMS</code>)だけで、長さを橋渡しする定理は全問題一律のスイッチ(<code>--length-theorems</code>)にしてある。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。足りないのは作図より「長さ・中心・垂直二等分線」の橋渡しで、これを課税なしに既定へ入れる方法がまだ無い(<a class="secref" href="backlog.html">§05</a>)。</div>
   </div>
 </details>
 </div>
-  </section>
+</section>
   <section id="layout">
     <div class="section-head"><span class="section-num">01</span><h2>ファイル構成と入口</h2></div>
     <p class="section-note">1つのRustバイナリ(<code>geom_solver</code>)に、証明・発見・退化解析・ベンチ掃引・Web配信の入口が同居している。<code>src/mmp_core/</code>が図形の表現(e-graph)、<code>src/logic_core/</code>がその上を探索する証明器、という二層が骨格。</p>
@@ -67,7 +67,8 @@
       <div class="gterm"><b>src/cli.rs</b><p>オプションの一覧表と<code>help</code>/<code>list</code>。知らないフラグは黙って無視せずエラーにする(「変えたつもりで既定値のまま走る」事故を止めるため)。</p></div>
       <div class="gterm"><b>src/mmp_core/mod.rs</b><p><code>EGraph</code>・<code>GeoEntity</code>・<code>Definition</code>・<code>EntityType</code>・<code>Fact</code>・<code>Justification</code>。生の構造を書き換える4ゲートウェイもここ(<a class="secref" href="atlas.html#matching">§03</a>)。</p></div>
       <div class="gterm"><b>mmp_core/congruence.rs</b><p><code>apply_congruence_closure</code>と、直線・二次曲線・交点の一意性の局所伝播。マージの実行(<code>merge_entities_justified</code>)もここ。</p></div>
-      <div class="gterm"><b>mmp_core/eval.rs</b><p>有限体上の数値評価。<code>numeric_plausibility_check</code>(マージ前の裏付け)と<code>cached_degree</code>(動点法の代数的次数)。</p></div>
+      <div class="gterm"><b>mmp_core/eval.rs</b><p>有限体上の数値評価。<code>numeric_plausibility_check</code>(マージ前と目標到達時の裏付け)と<code>cached_degree</code>(動点法の代数的次数)。</p></div>
+      <div class="gterm"><b>mmp_core/coords.rs</b><p>数の表現によらない評価の骨組み: 同値類の評価(同居する定義を順に試す・循環の検出)と、自由点の置き方(前提の曲線の上に置く・循環の解消・最後の検証)。有限体(eval.rs)・p進(padic_eval.rs)・実数(discover_viz.rs)の3つが共有する。</p></div>
       <div class="gterm"><b>mmp_core/proof.rs</b><p><code>explain_identical</code>: なぜ2つが同じ同値類に入ったかを「証明の森」から復元する。人間向けの<code>generate_proof</code>も。</p></div>
       <div class="gterm"><b>mmp_core/raw_proof.rs</b><p>全マージ履歴のダンプと、その再帰的な検証(<code>verify_identical</code>)。<code>extract-proof</code>サブコマンドの実体で、合流履歴を前向き・逆向きの両方に辿る。</p></div>
       <div class="gterm"><b>mmp_core/query.rs</b><p>図の状態を問い合わせる述語。<code>merged_free_points</code>(図の崩壊検出)はここ。</p></div>
@@ -75,8 +76,8 @@
       <div class="gterm"><b>logic_core/prover.rs</b><p><code>ProverEngine</code>の状態(e-graph・既知の事実・バンディット統計・失敗パスの永続キャッシュ)と、マッチ成立後の作図・結論の適用。</p></div>
       <div class="gterm"><b>logic_core/cost.rs</b><p>「次にどのパターンを見ると安いか」(<code>estimate_cost</code>)と「候補が多いときどこまで絞るか」(熱capまわり)。<b>見積もりと枝刈りの方針だけ</b>をここに集めてある。</p></div>
       <div class="gterm"><b>logic_core/matcher.rs</b><p>深さ優先探索の本体(<code>dfs_match</code>)と、fact_typeごとの候補の展開。どれを選ぶかの方針はcost.rsに分離済み。</p></div>
-      <div class="gterm"><b>logic_core/blackboard.rs</b><p>探索の司令塔。タスク待ち行列を回し、行き詰まったときの需要駆動の補助作図(<code>resolve_*_demands</code>)で図を伸ばす。</p></div>
-      <div class="gterm"><b>src/theorems.rs</b><p>定理の定義(23件)。<code>get_all_theorems</code>17件 + <code>get_projective_theorems</code>5件(既定で有効) + 中心角の定理1件(opt-in)。</p></div>
+      <div class="gterm"><b>logic_core/blackboard.rs</b><p>探索の司令塔。タスク待ち行列を回し、行き詰まったときは<code>recover</code>(需要駆動の補助作図 → 候補capの拡大)で図を伸ばす。solve・serve・discover が同じ手順を使う。</p></div>
+      <div class="gterm"><b>src/theorems.rs</b><p>定理の定義(23件)。<code>get_all_theorems</code>17件 + <code>get_projective_theorems</code>5件(既定で有効) + 中心角の定理1件(opt-in)。定理集合の組み立ては<code>theorem_set</code>に1本化。</p></div>
       <div class="gterm"><b>src/problems/</b><p>ベンチ44問。単体検証(<code>test_*</code>)・古典幾何・HAGeo-409由来(<code>bench_*</code>)。<code>mod.rs</code>に「目標が数値的にも本当に成り立つか」の検査を置いてある。</p></div>
       <div class="gterm"><b>src/trace.rs</b><p>診断(<code>--trace</code>)。使った仕事のうちどれが証明に残ったかを、発火の記録と証明の遡りを突き合わせて測る(<a class="secref" href="backlog.html">§05</a>)。</p></div>
       <div class="gterm"><b>action_space.rs / mcts.rs</b><p>補助構成の行動空間と、それを探索するMCTS。需要駆動の回復も尽きたときの最後の手段(既定は無効)。</p></div>
@@ -84,13 +85,13 @@
       <div class="gterm"><b>discover*.rs</b><p>目標を持たない自由作図モード。作図を伸ばしながら非自明な一致を探し、見つけたものを証明しにいく。</p></div>
       <div class="gterm"><b>serve.rs + web/</b><p>ブラウザUI。発見結果を1件ずつ流し、面白さ順に並べ替えて証明の成否まで見せる。</p></div>
       <div class="gterm"><b>sweep.rs</b><p>全問題×パラメータ組み合わせの掃引。仕事量予算なので結果は機械の混み具合に左右されない。</p></div>
-      <div class="gterm"><b>mmp_math / mmp_calculators / mmp_tester</b><p>法998244353の有限体演算、各<code>Definition</code>の具体的な計算、最終的な数値サニティチェック。</p></div>
+      <div class="gterm"><b>mmp_math / mmp_calculators</b><p>法998244353の有限体演算と、各<code>Definition</code>の具体的な計算。</p></div>
     </div>
 
     <p class="section-note" style="margin-top:20px">入口(サブコマンド)は次の通り。いずれも <code>geom_solver help</code> に一覧が出る。</p>
     <div class="gloss">
       <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定800万)が本当の予算で、<code>--time</code>(既定600秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>(作図の出どころ別の効き)。行き詰まり時の手を個別に外すA/Bは<code>--skip-recovery=line,point,second,mid,angle,target</code>。長さを橋渡しする定理は<code>--length-theorems</code>。</p></div>
-      <div class="gterm"><b>geom_solver sweep</b><p>全37問を順に解いて成否と所要時間を集計する。<code>--vary</code>でパラメータを振れる。</p></div>
+      <div class="gterm"><b>geom_solver sweep</b><p>全44問を順に解いて成否と所要時間を集計する。<code>--vary</code>でパラメータを振れる。</p></div>
       <div class="gterm"><b>geom_solver diagnose</b><p>問題ファイルに書いた人間の証明の筋書き(<code>SKETCH</code>)に沿って、補助作図と手順1..kを順に前提として与え、各手順が自力で出るかを表にする。解けない問題がどの手順で詰まるかを名指しする。</p></div>
       <div class="gterm"><b>geom_solver discover</b><p>目標なしの自由作図から非自明な性質を探す。<code>--prove</code>で見つけた性質の証明まで試す。</p></div>
       <div class="gterm"><b>geom_solver discover-degenerate</b><p>図を退化させて「一緒に潰れる」実体の組を観測する。</p></div>
@@ -146,13 +147,13 @@ flowchart TD
       <div class="gterm"><b>failed_paths</b><p>「この束縛状態はもう行き止まり」の記憶。<b>定理ごとの永続マップ</b>で、タスクをまたいで共有される。無効化は型別の依存マスクで個別に判定する。</p></div>
       <div class="gterm"><b>パターンのビットマスク</b><p>「まだ消費していないパターン」は<code>u64</code>のビットで持つ。定理のパターン列は不変なので実体は借りるだけで、分岐のたびのヒープ確保が要らない。</p></div>
       <div class="gterm"><b>順序/相異の前倒し</b><p><code>Order</code>/<code>Distinct</code>は全変数が揃うまで<code>estimate_cost</code>が無限大を返すので最後まで選ばれない。束縛済みの範囲だけで毎回検査し、最も早い時点で枝を切る。</p></div>
-      <div class="gterm"><b>UCB1バンディット</b><p>シードなし全探索タスクの優先度を、定理ごとの過去の成功率+探索ボーナスで決める。未試行の定理は常に一度は試す。</p></div>
+      <div class="gterm"><b>UCB1バンディット</b><p>シードなし全探索タスクの優先度を、定理ごとの過去の成功率+探索ボーナスで決める(<code>--bandit</code>、既定は無効)。未試行の定理は常に一度は試す。</p></div>
       <div class="gterm"><b>4つのゲートウェイ</b><p><code>create_entity</code> / <code>merge_entities</code> / <code>link_logical_incidence</code> / <code>insert_memo</code>。e-graphの生の構造を書き換える経路をここに集約し、<code>type_generation</code> の更新漏れを構造的に防いでいる。</p></div>
     </div>
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 定理の型付け・Not と射影の定理の健全性修正・射影の既定化まで(0870d7d)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
   </footer>
 </div>
 <script src="atlas.js"></script>

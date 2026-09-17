@@ -13,7 +13,14 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">未着手 · 18件</div>
+<div class="group"><div class="group-title">未着手 · 19件</div>
+<details class="item" id="b25" data-status="open">
+  <summary><span class="idx"></span><span class="t">「その点なしで曲線を評価できるか」の判定が、辿る順序で変わる</span></summary>
+  <div class="body">
+<div class="desc"><code>evaluation_requires_point</code> は循環に当たった節点そのものはメモしないが、その結果(「不可欠」と倒した値)を使った親の結果はメモする。同じ memo で別の曲線から辿り直すと答えが変わる。数値評価器を1つにまとめたとき(<a class="secref" href="ledger.html">§04</a>)に表に出た: p進の評価器は点ごとに memo を使い回し、有限体の評価器は曲線ごとに作り直していたので、同じ図で2つの評価器の判定が食い違っていた。使い回す方に揃えると <code>--skip-recovery=angle,target</code> で bench_2018chnwesternmop5 の二次曲線の結合の判定が変わり、解けない→解けるになった(証明は extract_proof で厳密)。今は作り直す方に揃えて挙動を変えていない。循環の影響を受けた結果を親にも伝えてメモしないようにすれば順序によらない判定になるが、循環の多い図でメモが効かず遅くなる恐れがあるので、速度と結果の両方を測ってから入れる。</div>
+    <div class="b-tags"><span class="tag">健全性チェックの判定が順序依存</span><span class="tag">直すと solve の結果が変わりうる</span></div>
+  </div>
+</details>
 <details class="item" id="b1" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 探索が定理を試す順序に大きく左右される ― 解けるかどうかが順序の運に依存している</span></summary>
   <div class="body">
@@ -255,7 +262,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 定理の型付け・Not と射影の定理の健全性修正・射影の既定化まで(0870d7d)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
   </footer>
 </div>
 <script src="atlas.js"></script>

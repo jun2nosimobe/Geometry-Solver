@@ -15,6 +15,20 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l48" data-status="shipped">
+  <summary><span class="idx">#48</span><span class="t">3つの数値評価器の「評価の仕方」と「自由点の置き方」を1つにする</span><span class="pill shipped">2dd4eb0</span></summary>
+  <div class="body">
+<div class="desc">有限体(<code>eval.rs</code>、健全性チェック)・p進(<code>padic_eval.rs</code>、退化による発見)・実数(<code>discover_viz.rs</code>、図示)の評価器が、同値類の評価と自由点の置き方を別々に書いていて、同じバグを別々に直していた(定義の同居・自然な接続の判定・subobjects の重複)。しかも残っていた差があった: 実数版は <code>original_definition</code> しか見ず、前提(「Dは辺BC上」)を無視して点を置いていた。p進版には循環の解消(bench_2016armog10p2 で入れたもの)が無かった。目標到達時の検算(<code>mmp_tester::sanity_check_identical</code>)は全自由点をばらばらの乱数に置き、前提を無視していた。<br>数の表現によらない部分を <code>mmp_core/coords.rs</code>(<code>Geometry</code> / <code>Placement</code> と、<code>evaluate</code> / <code>place_free_points</code>)に置き、3つの評価器は計算式と乱数だけを持つ。目標到達時の検算は <code>numeric_plausibility_check</code> に揃え、<code>mmp_tester.rs</code> は削除した。あわせて、使われていなかった4係数の円の経路(<code>calc_tangent_line</code>、<code>calc_radical_axis</code> の4係数入力)を消し、自由点を置く曲線は「今評価できる最初の直線、無ければ二次曲線」で選ぶようにした(以前は subobjects の並びで最初の曲線を、評価できるかに関わらず選んでいた)。</div>
+          <div class="evidence"><b>solve:</b> #47 と同じ3設定×44問で完全に一致。<br><b>途中で見つかったこと:</b> 依存判定(<code>evaluation_requires_point</code>)のメモを曲線をまたいで使い回す(p進版がしていた)と、<code>--skip-recovery</code> 設定で bench_2018chnwesternmop5 の二次曲線の結合の判定が変わり、解けない→解けるになった。メモは循環に当たった経路の結果を親に持ち込むので、辿る順序で答えが変わる ― 有限体版に揃えて曲線ごとに作り直し、順序依存そのものは <a class="secref" href="backlog.html">§05</a> に記録した。<br><b>テスト:</b> 92件すべて通過。</div>
+  </div>
+</details>
+<details class="item" id="l47" data-status="shipped">
+  <summary><span class="idx">#47</span><span class="t">証明を回す3つの入口で、定理集合と行き詰まったときの手を共通にする</span><span class="pill shipped">2dd4eb0</span></summary>
+  <div class="body">
+<div class="desc">solve・作図画面(serve)・<code>discover --prove</code> がそれぞれ定理集合と回復の手順を持っていて、中身が食い違っていた: serve は射影の定理を使わず有向角の需要を毎回回し、discover は第2交点・中点・候補capの拡大を持たなかった。定理集合を <code>theorems::theorem_set</code>(登録順は 基本 → 長さ → 中心角 → 射影 のまま)、回復を <code>BlackboardEngine::recover</code>(補助線・交点 → 有向角 → 第2交点 → 中点 → 目標からの逆算 → 候補capの拡大)にまとめ、3か所から呼ぶ。中点の需要は solve では既定で切り、serve と discover では使う(設定で渡す)。</div>
+          <div class="evidence"><b>solve:</b> 既定 / <code>--length-theorems --central-angle --midpoint-demands</code> / <code>--skip-recovery=angle,target</code> の3設定×44問で、解けた問題・仕事量・推論ログが変更前と完全に一致。<br><b>serve(4つの図・自由作図1ラウンド・1件5秒):</b> 垂心 27/30・中点 7/9・直線の束 2/2 は変わらず、円の図だけ 2→1/14。切り分けると回復の共通化ではなく射影の定理を足したことによるもので、1件15秒にしても 1 のまま(時間切れではなく、定理が増えて探索の進み方が変わる ― <a class="secref" href="backlog.html">§05</a> の順序依存と同種)。入口ごとに定理集合を出し分けない方針を優先して、既定の集合に揃えた。</div>
+  </div>
+</details>
 <details class="item" id="l46" data-status="shipped">
   <summary><span class="idx">#46</span><span class="t">共点二弦の相似の円周角を正しい向きで書き、スパイラル相似と共に向きをそろえて読む</span><span class="pill shipped">0870d7d</span></summary>
   <div class="body">
@@ -355,7 +369,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 定理の型付け・Not と射影の定理の健全性修正・射影の既定化まで(0870d7d)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
   </footer>
 </div>
 <script src="atlas.js"></script>
