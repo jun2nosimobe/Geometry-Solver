@@ -200,10 +200,16 @@ pub struct MatchTask {
     pub is_seeded: bool,
 }
 
-impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.priority == other.priority } }
+// 優先度が同じタスクは定理の登録順に取り出す。優先度だけで比べると同順位の並びがヒープの内部構造で
+// 決まり、定理を1つ足しただけで既存の定理を試す順序まで入れ替わってしまう。
+impl PartialEq for MatchTask { fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal } }
 impl Eq for MatchTask {}
 impl PartialOrd for MatchTask { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
-impl Ord for MatchTask { fn cmp(&self, other: &Self) -> Ordering { self.priority.cmp(&other.priority) } }
+impl Ord for MatchTask {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority.cmp(&other.priority).then_with(|| other.theorem_idx.cmp(&self.theorem_idx))
+    }
+}
 
 /// 定理ごとの全探索タスクの実績(UCB1 バンディットと --stats 用)。
 #[derive(Debug, Clone, Copy, Default)]
