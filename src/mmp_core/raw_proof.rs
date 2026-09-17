@@ -1012,9 +1012,8 @@ impl DeepProof {
         }
         let mut child_refs: Vec<usize> = Vec::new();
         for c in &node.children {
-            if let Some(idx) = Self::flatten_step(c, seen, steps) {
-                if !child_refs.contains(&idx) { child_refs.push(idx); }
-            }
+            if let Some(idx) = Self::flatten_step(c, seen, steps)
+                && !child_refs.contains(&idx) { child_refs.push(idx); }
         }
         let headline = clean_label(&node.headline);
         let line = if node.is_gap {

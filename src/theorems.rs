@@ -1,71 +1,87 @@
-use crate::mmp_core::EntityType;
-use crate::logic_core::{
-    ConstructTemplate, FactPatternDef, FactTemplate, Pattern, TheoremDef,
-};
+use crate::mmp_core::{DefKind, EntityType};
+use crate::logic_core::{Conclusion, Construction, Flip, Pattern, Refinement, SelfBindPool, TheoremDef};
 use rustc_hash::FxHashMap;
 
-// --- 構文糖衣 (ヘルパー関数) ---
+// --- 定理を書くための補助 ---
+// 変数名は定理の中だけで通じる名前。型は entities で宣言する。
+
 fn entities(list: &[(&str, EntityType)]) -> FxHashMap<String, EntityType> {
     list.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
-// 定理のパターンを書くための補助。今の定理はどれも別の構成子を使っている。
-#[allow(dead_code)]
-fn fact(f_type: &str, args: &[&str]) -> Pattern {
-    Pattern::Fact(FactPatternDef {
-        fact_type: f_type.to_string(),
-        args: args.iter().map(|s| s.to_string()).collect(),
-        target_type: None, sub_type: None, allow_flip: false, flip_group: None,
-    })
+fn strings(xs: &[&str]) -> Vec<String> {
+    xs.iter().map(|s| s.to_string()).collect()
 }
 
-/// target_type/sub_typeは大半のfact_typeでは(記録目的だけの)未使用フィールド
-/// だが、fact_type=="Connected"に限っては logic_core.rs::match_connected_fact が
-/// 実際に読む: target_type=="Direction"ならparent側(args[1])、
-/// sub_type=="Direction"ならchild側(args[0])を「L∞上の点(=方向)」に限定して
-/// 列挙し、それ以外(既定)は逆に「L∞上に無い有限点」に限定する
-/// (EntityType::Direction撤廃により、方向はもう独立した型ではなくL∞への
-/// incidenceで判定するしかないため。以前は"Line"上の点を探すfact_ext呼び出しが
-/// 別に"Direction"上の点を探すfact_ext呼び出しと型で自然に区別されていたが、
-/// 今は両方ともEntityType::Pointなので、このマーカーで明示的に伝える必要がある)。
-/// 全く同じ理由でtarget_type/sub_type=="Circle"も使う: この場合はConic型の
-/// child/parentを「I,Jを両方通る(=本物の円)」に限定し、それ以外(既定)は
-/// 逆に「I,Jを通らない一般の二次曲線」に限定する(EntityType::Circle撤廃)。
-fn fact_ext(f_type: &str, args: &[&str], t_type: Option<&str>, s_type: Option<&str>, flip: bool, group: Option<&str>) -> Pattern {
-    Pattern::Fact(FactPatternDef {
-        fact_type: f_type.to_string(),
-        args: args.iter().map(|s| s.to_string()).collect(),
-        target_type: t_type.map(|s| s.to_string()),
-        sub_type: s_type.map(|s| s.to_string()),
-        allow_flip: flip,
-        flip_group: group.map(|s| s.to_string()),
-    })
+fn connected(child: &str, parent: &str, child_ref: Refinement, parent_ref: Refinement) -> Pattern {
+    Pattern::Connected { child: child.to_string(), parent: parent.to_string(), child_ref, parent_ref }
+}
+
+/// child が parent に乗っている(点なら有限点、二次曲線なら円でないもの)。
+fn on(child: &str, parent: &str) -> Pattern {
+    connected(child, parent, Refinement::Default, Refinement::Default)
+}
+
+/// 直線 line の方向(L∞上の点)が dir。
+fn has_direction(line: &str, dir: &str) -> Pattern {
+    connected(line, dir, Refinement::Default, Refinement::Direction)
+}
+
+/// 点 point が円 circle に乗っている。
+fn on_circle(point: &str, circle: &str) -> Pattern {
+    connected(point, circle, Refinement::Default, Refinement::Circle)
+}
+
+fn identical(a: &str, b: &str, pool: SelfBindPool) -> Pattern {
+    Pattern::Identical { a: a.to_string(), b: b.to_string(), pool }
+}
+
+fn same(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::Any) }
+fn same_angle(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::Angle) }
+fn same_cross_ratio_of_lines(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::CrossRatioOfLines) }
+
+fn defined_by(kind: DefKind, args: &[&str], flip: Flip) -> Pattern {
+    let (result, parents) = args.split_last().expect("DefinedBy には結果の変数が要る");
+    Pattern::DefinedBy { kind, parents: strings(parents), result: result.to_string(), flip }
+}
+
+/// args の最後が結果、それより前が親。
+fn def_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+
+/// 有向角 [D1, D2, Ang] を両方の向きで読む。
+fn angle_free(args: &[&str]) -> Pattern { defined_by(DefKind::AnglePair, args, Flip::Free) }
+
+/// 有向角 [D1, D2, Ang] を両方の向きで読むが、同じ group の角とは向きをそろえる。
+fn angle_grouped(args: &[&str], group: &str) -> Pattern {
+    defined_by(DefKind::AnglePair, args, Flip::Grouped(group.to_string()))
 }
 
 fn distinct(args: &[&str]) -> Pattern {
-    Pattern::Distinct(args.iter().map(|s| s.to_string()).collect())
+    Pattern::Distinct(strings(args))
 }
 
-// 🌟 厳密な順序("<")。distinct()と違い「代表元IDの昇順」という1つの
-// 正準形しか通さないため、複数の変数が同じ候補プール(例: 同じ直線上の点)
-// から選ばれる場合に、同じ集合の異なる並べ替え(4点ならN!通り)を
-// distinct()のように全て試すのではなく1通りに絞れる。使えるのは
-// 「変数の割り当て順序が結論の成立可否に影響しない」場合のみ
-// (順序に意味がある定理では使ってはいけない)。
+/// 代表元IDの厳密な昇順。同じ候補プールから選ぶ変数の並べ替えを1通りに絞る。
+/// 変数の割り当て順序が結論の成否に影響しない場合にだけ使うこと。
 fn order(args: &[&str]) -> Pattern {
-    Pattern::Order(args.iter().map(|s| s.to_string()).collect())
+    Pattern::Order(strings(args))
 }
 
-// 🌟 Pattern::OrderNonStrictのドキュメント参照(logic_core.rs)。「2つの役割
-// (方向トリプルの組など)を丸ごと入れ替えても同じ結論になる」定理の
-// 対称的な重複探索を、正当な解を一切失わずに約半分に間引くためのヘルパー。
+/// 代表元IDの非厳密な昇順。2組の役割を丸ごと入れ替えても同じ結論になる対称性を間引く。
 fn order_le(args: &[&str]) -> Pattern {
-    Pattern::OrderNonStrict(args.iter().map(|s| s.to_string()).collect())
+    Pattern::OrderNonStrict(strings(args))
 }
 
 fn not(pat: Pattern) -> Pattern {
     Pattern::Not(Box::new(pat))
 }
+
+/// 作図: parents から kind で作った図形を bind_to に束縛する。
+fn build(kind: DefKind, parents: &[&str], bind_to: &str) -> Construction {
+    Construction { kind, args: strings(parents), bind_to: bind_to.to_string() }
+}
+
+fn concl_same(a: &str, b: &str) -> Conclusion { Conclusion::Identical(a.to_string(), b.to_string()) }
+fn concl_on(child: &str, parent: &str) -> Conclusion { Conclusion::Connected(child.to_string(), parent.to_string()) }
 
 // --- 定理の定義 ---
 
@@ -93,37 +109,37 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 二次曲線と同じ型)なので、target_type="Circle"マーカーで
                 // 「I,Jを両方通る=本物の円」だけに絞る(マーカー無しだと
                 // シュタイナーの定理用の非円な二次曲線まで候補に混ざってしまう)。
-                fact_ext("Connected", &["Apex1", "Circ"], Some("Circle"), None, false, None),
-                fact_ext("Connected", &["Apex2", "Circ"], Some("Circle"), None, false, None),
-                fact_ext("Connected", &["Base1", "Circ"], Some("Circle"), None, false, None),
-                fact_ext("Connected", &["Base2", "Circ"], Some("Circle"), None, false, None),
+                on_circle("Apex1", "Circ"),
+                on_circle("Apex2", "Circ"),
+                on_circle("Base1", "Circ"),
+                on_circle("Base2", "Circ"),
                 distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
                 
                 // 🌟 FIX: Connected から DefinedBy に変更し、作図需要(Demand)を発生させる
-                fact_ext("DefinedBy", &["Apex1", "Base1", "L_A1_B1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["Apex1", "Base2", "L_A1_B2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["Apex1", "Base1", "L_A1_B1"]),
+                def_by(DefKind::LineThroughPoints, &["Apex1", "Base2", "L_A1_B2"]),
                 distinct(&["L_A1_B1", "L_A1_B2"]),
                 
-                fact_ext("DefinedBy", &["Apex2", "Base1", "L_A2_B1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["Apex2", "Base2", "L_A2_B2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["Apex2", "Base1", "L_A2_B1"]),
+                def_by(DefKind::LineThroughPoints, &["Apex2", "Base2", "L_A2_B2"]),
                 
-                fact_ext("Connected", &["Apex2", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base1", "L_A2_B1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Apex2", "L_A2_B2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Base2", "L_A2_B2"], Some("Line"), Some("Point"), false, None),
+                on("Apex2", "L_A2_B1"),
+                on("Base1", "L_A2_B1"),
+                on("Apex2", "L_A2_B2"),
+                on("Base2", "L_A2_B2"),
                 distinct(&["L_A2_B1", "L_A2_B2"]),
                 
-                fact_ext("DefinedBy", &["L_A1_B1", "Dir_A1_B1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A1_B2", "Dir_A1_B2"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A2_B1", "Dir_A2_B1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_A2_B2", "Dir_A2_B2"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::DirectionOf, &["L_A1_B1", "Dir_A1_B1"]),
+                def_by(DefKind::DirectionOf, &["L_A1_B2", "Dir_A1_B2"]),
+                def_by(DefKind::DirectionOf, &["L_A2_B1", "Dir_A2_B1"]),
+                def_by(DefKind::DirectionOf, &["L_A2_B2", "Dir_A2_B2"]),
                 
-                fact_ext("DefinedBy", &["Dir_A1_B1", "Dir_A1_B2", "Ang1"], Some("AnglePair"), None, true, Some("Cyclic")),
-                fact_ext("DefinedBy", &["Dir_A2_B1", "Dir_A2_B2", "Ang2"], Some("AnglePair"), None, true, Some("Cyclic")),
+                angle_grouped(&["Dir_A1_B1", "Dir_A1_B2", "Ang1"], "Cyclic"),
+                angle_grouped(&["Dir_A2_B1", "Dir_A2_B2", "Ang2"], "Cyclic"),
                 distinct(&["Ang1", "Ang2"]),
             ],
             constructions: vec![],
-            conclusions: vec![FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang1".to_string(), "Ang2".to_string()], target_type: Some("Angle".to_string()), sub_type: None }],
+            conclusions: vec![concl_same("Ang1", "Ang2")],
         },
 
         // 🌟 「直線の一致条件」(2直線が2点を共有、または1点+同方向を共有するなら
@@ -148,18 +164,18 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("LineBC", EntityType::Line), ("PerpMid", EntityType::Line), ("P", EntityType::Point),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["LineBC", "Mid_BC", "PerpMid"], Some("PerpendicularLine"), None, false, None),
-                fact_ext("Connected", &["P", "PerpMid"], None, None, false, None),
+                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                def_by(DefKind::PerpendicularLine, &["LineBC", "Mid_BC", "PerpMid"]),
+                on("P", "PerpMid"),
                 distinct(&["B", "C", "P"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_PB".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "C".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_PC".to_string() },
+                build(DefKind::LengthSq, &["P", "B"], "Dist_PB"),
+                build(DefKind::LengthSq, &["P", "C"], "Dist_PC"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_PB".to_string(), "Dist_PC".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("Dist_PB", "Dist_PC")
             ],
         },
 
@@ -184,18 +200,18 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_PB", EntityType::Scalar), ("Dist_PC", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["P", "B", "Dist_PB"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P", "C", "Dist_PC"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["Dist_PB", "Dist_PC"], Some("Scalar"), None, false, None),
+                def_by(DefKind::LengthSq, &["P", "B", "Dist_PB"]),
+                def_by(DefKind::LengthSq, &["P", "C", "Dist_PC"]),
+                same("Dist_PB", "Dist_PC"),
                 distinct(&["B", "C", "P"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["B".to_string(), "C".to_string()], target_type: "Point".to_string(), bind_to: "Mid_BC".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["B".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "LineBC".to_string() },
-                ConstructTemplate { def_type: "PerpendicularLine".to_string(), args: vec!["LineBC".to_string(), "Mid_BC".to_string()], target_type: "Line".to_string(), bind_to: "PerpMid".to_string() },
+                build(DefKind::Midpoint, &["B", "C"], "Mid_BC"),
+                build(DefKind::LineThroughPoints, &["B", "C"], "LineBC"),
+                build(DefKind::PerpendicularLine, &["LineBC", "Mid_BC"], "PerpMid"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Connected".to_string(), args: vec!["P".to_string(), "PerpMid".to_string()], target_type: Some("Line".to_string()), sub_type: None }
+                concl_on("P", "PerpMid")
             ],
         },
 
@@ -209,18 +225,18 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("DirBC", EntityType::Point), ("DirM1M2", EntityType::Point),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["A", "B", "M1"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "M2"], Some("Midpoint"), Some("Unordered"), false, None),
+                def_by(DefKind::Midpoint, &["A", "B", "M1"]),
+                def_by(DefKind::Midpoint, &["A", "C", "M2"]),
                 distinct(&["A", "B", "C", "M1", "M2"]),
                 
-                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["M1", "M2", "LineM1M2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineM1M2", "DirM1M2"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                def_by(DefKind::LineThroughPoints, &["M1", "M2", "LineM1M2"]),
+                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
+                def_by(DefKind::DirectionOf, &["LineM1M2", "DirM1M2"]),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["DirBC".to_string(), "DirM1M2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
+                concl_same("DirBC", "DirM1M2")
             ],
         },
 
@@ -235,32 +251,27 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang_B", EntityType::Scalar), ("Ang_C", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Dist_AB", "Dist_AC"], None, None, false, None),
-                fact_ext("DefinedBy", &["A", "B", "Dist_AB"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "Dist_AC"], Some("LengthSq"), Some("Unordered"), false, None),
+                same("Dist_AB", "Dist_AC"),
+                def_by(DefKind::LengthSq, &["A", "B", "Dist_AB"]),
+                def_by(DefKind::LengthSq, &["A", "C", "Dist_AC"]),
                 distinct(&["A", "B", "C"]),
                 
-                fact_ext("DefinedBy", &["A", "B", "LineAB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "LineAC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                def_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
+                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 
-                fact_ext("DefinedBy", &["LineAB", "DirAB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineAC", "DirAC"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
+                def_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
+                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
                 distinct(&["DirAB", "DirAC", "DirBC"]),
                 
                 // 🌟 フリップ同期グループ "Isosceles" を適用
-                fact_ext("DefinedBy", &["DirAB", "DirBC", "Ang_B"], Some("AnglePair"), None, true, Some("Isosceles")),
-                fact_ext("DefinedBy", &["DirBC", "DirAC", "Ang_C"], Some("AnglePair"), None, true, Some("Isosceles")),
+                angle_grouped(&["DirAB", "DirBC", "Ang_B"], "Isosceles"),
+                angle_grouped(&["DirBC", "DirAC", "Ang_C"], "Isosceles"),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate {
-                    fact_type: "Identical".to_string(),
-                    args: vec!["Ang_B".to_string(), "Ang_C".to_string()],
-                    target_type: Some("Angle".to_string()),
-                    sub_type: None,
-                }
+                concl_same("Ang_B", "Ang_C")
             ],
         },
 
@@ -289,31 +300,31 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 🌟 シード: Identical(Ang_B,Ang_C)(底角が等しいという前提)から
                 // 始めて、それぞれの定義からDirAB,DirBC,DirACを直接束縛する
                 // (全件スキャン不要。「二等辺三角形の底角」の逆順)。
-                fact_ext("Identical", &["Ang_B", "Ang_C"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["DirAB", "DirBC", "Ang_B"], Some("AnglePair"), None, true, Some("IsoscelesConv")),
-                fact_ext("DefinedBy", &["DirBC", "DirAC", "Ang_C"], Some("AnglePair"), None, true, Some("IsoscelesConv")),
+                same_angle("Ang_B", "Ang_C"),
+                angle_grouped(&["DirAB", "DirBC", "Ang_B"], "IsoscelesConv"),
+                angle_grouped(&["DirBC", "DirAC", "Ang_C"], "IsoscelesConv"),
                 distinct(&["DirAB", "DirAC", "DirBC"]),
 
-                fact_ext("Connected", &["LineAB", "DirAB"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineBC", "DirBC"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineAC", "DirAC"], Some("Direction"), Some("Line"), false, None),
+                has_direction("LineAB", "DirAB"),
+                has_direction("LineBC", "DirBC"),
+                has_direction("LineAC", "DirAC"),
                 distinct(&["LineAB", "LineBC", "LineAC"]),
 
                 // A = LineAB ∩ LineAC, B = LineAB ∩ LineBC, C = LineBC ∩ LineAC
-                fact_ext("Connected", &["A", "LineAB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["A", "LineAC"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "LineAB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "LineBC"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "LineBC"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "LineAC"], Some("Line"), Some("Point"), false, None),
+                on("A", "LineAB"),
+                on("A", "LineAC"),
+                on("B", "LineAB"),
+                on("B", "LineBC"),
+                on("C", "LineBC"),
+                on("C", "LineAC"),
                 distinct(&["A", "B", "C"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_AB".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["A".to_string(), "C".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_AC".to_string() },
+                build(DefKind::LengthSq, &["A", "B"], "Dist_AB"),
+                build(DefKind::LengthSq, &["A", "C"], "Dist_AC"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_AB".to_string(), "Dist_AC".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("Dist_AB", "Dist_AC")
             ],
         },
 
@@ -361,9 +372,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 試せなくなっていた。flip_groupをNone(=各自が独立に両方の
                 // 向きを試す)にすることで、2つの角が別々の定理由来でも
                 // 正しく噛み合う組み合わせを見つけられるようにした。
-                fact_ext("Identical", &["AngA", "AngC"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["DirAB", "DirAD", "AngA"], Some("AnglePair"), None, true, None),
-                fact_ext("DefinedBy", &["DirCD", "DirCB", "AngC"], Some("AnglePair"), None, true, None),
+                same_angle("AngA", "AngC"),
+                angle_free(&["DirAB", "DirAD", "AngA"]),
+                angle_free(&["DirCD", "DirCB", "AngC"]),
                 distinct(&["DirAB", "DirAD"]),
                 distinct(&["DirCD", "DirCB"]),
 
@@ -372,44 +383,44 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 挟むことで、間違った(=有向角のフリップや無関係な複比クラスに
                 // 由来する)直線の組み合わせを早期に打ち切る(「複比の透視射影
                 // 不変性」定理群のバグ修正と全く同じ理由)。
-                fact_ext("Connected", &["LineAB", "DirAB"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineAD", "DirAD"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineCD", "DirCD"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineCB", "DirCB"], Some("Direction"), Some("Line"), false, None),
+                has_direction("LineAB", "DirAB"),
+                has_direction("LineAD", "DirAD"),
+                has_direction("LineCD", "DirCD"),
+                has_direction("LineCB", "DirCB"),
                 distinct(&["LineAB", "LineAD", "LineCD", "LineCB"]),
 
                 // A = LineAB ∩ LineAD (∠Aの頂点)
-                fact_ext("Connected", &["A", "LineAB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["A", "LineAD"], Some("Line"), Some("Point"), false, None),
+                on("A", "LineAB"),
+                on("A", "LineAD"),
                 // C = LineCD ∩ LineCB (∠Cの頂点)
-                fact_ext("Connected", &["C", "LineCD"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "LineCB"], Some("Line"), Some("Point"), false, None),
+                on("C", "LineCD"),
+                on("C", "LineCB"),
                 // P = LineAB ∩ LineCD (2弦の交点)。A,Cが確定した直後に見つけて
                 // すぐdistinctで弾くことで、「PがAやCに化けた」まま後段の
                 // B,D探索まで持ち越してしまう無駄を防ぐ。
-                fact_ext("Connected", &["P", "LineAB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P", "LineCD"], Some("Line"), Some("Point"), false, None),
+                on("P", "LineAB"),
+                on("P", "LineCD"),
                 distinct(&["A", "C", "P"]),
                 // B = LineAB ∩ LineCB (弦ABのもう一端。LineCBの上にもある点として一意に特定)
-                fact_ext("Connected", &["B", "LineAB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "LineCB"], Some("Line"), Some("Point"), false, None),
+                on("B", "LineAB"),
+                on("B", "LineCB"),
                 distinct(&["A", "P", "B"]),
                 // D = LineCD ∩ LineAD (弦CDのもう一端)
-                fact_ext("Connected", &["D", "LineCD"], Some("Line"), Some("Point"), false, None),
+                on("D", "LineCD"),
                 distinct(&["C", "P", "D"]),
-                fact_ext("Connected", &["D", "LineAD"], Some("Line"), Some("Point"), false, None),
+                on("D", "LineAD"),
                 distinct(&["A", "B", "C", "D"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "A".to_string()], target_type: "Scalar".to_string(), bind_to: "LenPA".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "LenPB".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "C".to_string()], target_type: "Scalar".to_string(), bind_to: "LenPC".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["P".to_string(), "D".to_string()], target_type: "Scalar".to_string(), bind_to: "LenPD".to_string() },
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenPA".to_string(), "LenPB".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdAB".to_string() },
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenPC".to_string(), "LenPD".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdCD".to_string() },
+                build(DefKind::LengthSq, &["P", "A"], "LenPA"),
+                build(DefKind::LengthSq, &["P", "B"], "LenPB"),
+                build(DefKind::LengthSq, &["P", "C"], "LenPC"),
+                build(DefKind::LengthSq, &["P", "D"], "LenPD"),
+                build(DefKind::Product, &["LenPA", "LenPB"], "ProdAB"),
+                build(DefKind::Product, &["LenPC", "LenPD"], "ProdCD"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["ProdAB".to_string(), "ProdCD".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("ProdAB", "ProdCD")
             ],
         },
 
@@ -465,61 +476,61 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 別々の定理(円周角の定理など)が独自の向きで作成済みの角を
                 // 後から読み取るだけなので、共通flip_groupを使うと正しい
                 // 組み合わせが噛み合わなくなる)。
-                fact_ext("Identical", &["AngE_AB", "AngE_DC"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["DirEA", "DirEB", "AngE_AB"], Some("AnglePair"), None, true, None),
-                fact_ext("DefinedBy", &["DirED", "DirEC", "AngE_DC"], Some("AnglePair"), None, true, None),
+                same_angle("AngE_AB", "AngE_DC"),
+                angle_free(&["DirEA", "DirEB", "AngE_AB"]),
+                angle_free(&["DirED", "DirEC", "AngE_DC"]),
                 distinct(&["DirEA", "DirEB"]),
                 distinct(&["DirED", "DirEC"]),
 
-                fact_ext("Connected", &["LineEA", "DirEA"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineEB", "DirEB"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineED", "DirED"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["LineEC", "DirEC"], Some("Direction"), Some("Line"), false, None),
+                has_direction("LineEA", "DirEA"),
+                has_direction("LineEB", "DirEB"),
+                has_direction("LineED", "DirED"),
+                has_direction("LineEC", "DirEC"),
                 distinct(&["LineEA", "LineEB", "LineED", "LineEC"]),
 
                 // E = LineEA ∩ LineEB (∠AEBの頂点)であり、かつLineED,LineEC
                 // 両方の上にもある(=△EDCの頂点も同じE、というスパイラル
                 // 相似の前提そのもの)。
-                fact_ext("Connected", &["E", "LineEA"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["E", "LineEB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["E", "LineED"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["E", "LineEC"], Some("Line"), Some("Point"), false, None),
+                on("E", "LineEA"),
+                on("E", "LineEB"),
+                on("E", "LineED"),
+                on("E", "LineEC"),
 
                 // A,B,D,C = それぞれの直線上のEでない方の点
-                fact_ext("Connected", &["A", "LineEA"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "LineEB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["D", "LineED"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "LineEC"], Some("Line"), Some("Point"), false, None),
+                on("A", "LineEA"),
+                on("B", "LineEB"),
+                on("D", "LineED"),
+                on("C", "LineEC"),
                 distinct(&["E", "A", "B", "D", "C"]),
 
                 // 前提2: 比の一致 EA・EC=EB・ED (共点二弦の相似と同じ形)。
                 // E,A,B,D,Cはここまでで既に確定しているので、これは新規探索
                 // ではなく「本当にこの比が成り立っているか」の確認になる。
-                fact_ext("DefinedBy", &["E", "A", "LenSqEA"], Some("LengthSq"), None, true, None),
-                fact_ext("DefinedBy", &["E", "C", "LenSqEC"], Some("LengthSq"), None, true, None),
-                fact_ext("DefinedBy", &["LenSqEA", "LenSqEC", "ProdEAEC"], Some("Product"), None, true, None),
-                fact_ext("DefinedBy", &["E", "B", "LenSqEB"], Some("LengthSq"), None, true, None),
-                fact_ext("DefinedBy", &["E", "D", "LenSqED"], Some("LengthSq"), None, true, None),
-                fact_ext("DefinedBy", &["LenSqEB", "LenSqED", "ProdEBED"], Some("Product"), None, true, None),
-                fact_ext("Identical", &["ProdEAEC", "ProdEBED"], Some("Scalar"), None, false, None),
+                def_by(DefKind::LengthSq, &["E", "A", "LenSqEA"]),
+                def_by(DefKind::LengthSq, &["E", "C", "LenSqEC"]),
+                def_by(DefKind::Product, &["LenSqEA", "LenSqEC", "ProdEAEC"]),
+                def_by(DefKind::LengthSq, &["E", "B", "LenSqEB"]),
+                def_by(DefKind::LengthSq, &["E", "D", "LenSqED"]),
+                def_by(DefKind::Product, &["LenSqEB", "LenSqED", "ProdEBED"]),
+                same("ProdEAEC", "ProdEBED"),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Point".to_string(), bind_to: "M".to_string() },
-                ConstructTemplate { def_type: "Midpoint".to_string(), args: vec!["D".to_string(), "C".to_string()], target_type: "Point".to_string(), bind_to: "N".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Line".to_string(), bind_to: "LineEM".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["E".to_string(), "N".to_string()], target_type: "Line".to_string(), bind_to: "LineEN".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEM".to_string()], target_type: "Point".to_string(), bind_to: "DirEM".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["LineEN".to_string()], target_type: "Point".to_string(), bind_to: "DirEN".to_string() },
-                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirEA".to_string(), "DirEM".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_AM".to_string() },
-                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["DirED".to_string(), "DirEN".to_string()], target_type: "Angle".to_string(), bind_to: "AngE_DN".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["E".to_string(), "M".to_string()], target_type: "Scalar".to_string(), bind_to: "LenSqEM".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["E".to_string(), "N".to_string()], target_type: "Scalar".to_string(), bind_to: "LenSqEN".to_string() },
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenSqEA".to_string(), "LenSqEN".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdEAEN".to_string() },
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["LenSqEM".to_string(), "LenSqED".to_string()], target_type: "Scalar".to_string(), bind_to: "ProdEMED".to_string() },
+                build(DefKind::Midpoint, &["A", "B"], "M"),
+                build(DefKind::Midpoint, &["D", "C"], "N"),
+                build(DefKind::LineThroughPoints, &["E", "M"], "LineEM"),
+                build(DefKind::LineThroughPoints, &["E", "N"], "LineEN"),
+                build(DefKind::DirectionOf, &["LineEM"], "DirEM"),
+                build(DefKind::DirectionOf, &["LineEN"], "DirEN"),
+                build(DefKind::AnglePair, &["DirEA", "DirEM"], "AngE_AM"),
+                build(DefKind::AnglePair, &["DirED", "DirEN"], "AngE_DN"),
+                build(DefKind::LengthSq, &["E", "M"], "LenSqEM"),
+                build(DefKind::LengthSq, &["E", "N"], "LenSqEN"),
+                build(DefKind::Product, &["LenSqEA", "LenSqEN"], "ProdEAEN"),
+                build(DefKind::Product, &["LenSqEM", "LenSqED"], "ProdEMED"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngE_AM".to_string(), "AngE_DN".to_string()], target_type: Some("Angle".to_string()), sub_type: None },
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["ProdEAEN".to_string(), "ProdEMED".to_string()], target_type: Some("Scalar".to_string()), sub_type: None },
+                concl_same("AngE_AM", "AngE_DN"),
+                concl_same("ProdEAEN", "ProdEMED"),
             ],
         },
 
@@ -533,26 +544,26 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("AngTan", EntityType::Scalar), ("AngBCA", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["A", "B", "C", "Circ"], Some("Circumcircle"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["Circ", "A", "TanA"], Some("TangentLine"), None, false, None),
+                def_by(DefKind::Circumcircle, &["A", "B", "C", "Circ"]),
+                def_by(DefKind::TangentLine, &["Circ", "A", "TanA"]),
                 distinct(&["A", "B", "C"]),
                 
-                fact_ext("DefinedBy", &["A", "B", "LineAB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "LineAC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "C", "LineBC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                def_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
+                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 
-                fact_ext("DefinedBy", &["TanA", "DirTan"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineAB", "DirAB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineAC", "DirAC"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["LineBC", "DirBC"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::DirectionOf, &["TanA", "DirTan"]),
+                def_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
+                def_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
+                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
                 
                 // 接線とABのなす角 ≡ 弧ABに対する円周角(C)
-                fact_ext("DefinedBy", &["DirTan", "DirAB", "AngTan"], Some("AnglePair"), None, true, Some("TanGrp")),
-                fact_ext("DefinedBy", &["DirAC", "DirBC", "AngBCA"], Some("AnglePair"), None, true, Some("TanGrp")),
+                angle_grouped(&["DirTan", "DirAB", "AngTan"], "TanGrp"),
+                angle_grouped(&["DirAC", "DirBC", "AngBCA"], "TanGrp"),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngTan".to_string(), "AngBCA".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+                concl_same("AngTan", "AngBCA")
             ],
         },// ==========================================
         // 円周角の定理の逆[cite: 6]
@@ -569,33 +580,33 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Circ_New", EntityType::Conic),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["Dir_L1", "Dir_L2", "Ang1"], Some("AnglePair"), None, true, Some("ConvCyc")),
-                fact_ext("DefinedBy", &["Dir_L3", "Dir_L4", "Ang2"], Some("AnglePair"), None, true, Some("ConvCyc")),
+                same_angle("Ang1", "Ang2"),
+                angle_grouped(&["Dir_L1", "Dir_L2", "Ang1"], "ConvCyc"),
+                angle_grouped(&["Dir_L3", "Dir_L4", "Ang2"], "ConvCyc"),
                 
-                fact_ext("Connected", &["L1", "Dir_L1"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["L2", "Dir_L2"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["L3", "Dir_L3"], Some("Direction"), Some("Line"), false, None),
-                fact_ext("Connected", &["L4", "Dir_L4"], Some("Direction"), Some("Line"), false, None),
+                has_direction("L1", "Dir_L1"),
+                has_direction("L2", "Dir_L2"),
+                has_direction("L3", "Dir_L3"),
+                has_direction("L4", "Dir_L4"),
                 distinct(&["L1", "L2", "L3", "L4"]),
                 
-                fact_ext("Connected", &["P_Apex1", "L1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Apex1", "L2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Apex2", "L3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Apex2", "L4"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Base1", "L1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Base1", "L3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Base2", "L2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P_Base2", "L4"], Some("Line"), Some("Point"), false, None),
+                on("P_Apex1", "L1"),
+                on("P_Apex1", "L2"),
+                on("P_Apex2", "L3"),
+                on("P_Apex2", "L4"),
+                on("P_Base1", "L1"),
+                on("P_Base1", "L3"),
+                on("P_Base2", "L2"),
+                on("P_Base2", "L4"),
                 distinct(&["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"]),
             ],
             // 🌟 Concyclicという専用Factで結論するのをやめ、P_Apex1,P_Base1,P_Base2
             // を通る円を作図し、P_Apex2もその円にConnectedである、という形で結論する。
             // (4点は対称な関係なので、どの3点を作図に使っても良い)
             constructions: vec![
-                ConstructTemplate { def_type: "Circumcircle".to_string(), args: vec!["P_Apex1".to_string(), "P_Base1".to_string(), "P_Base2".to_string()], target_type: "Circle".to_string(), bind_to: "Circ_New".to_string() },
+                build(DefKind::Circumcircle, &["P_Apex1", "P_Base1", "P_Base2"], "Circ_New"),
             ],
-            conclusions: vec![FactTemplate { fact_type: "Connected".to_string(), args: vec!["P_Apex2".to_string(), "Circ_New".to_string()], target_type: Some("Circle".to_string()), sub_type: None }],
+            conclusions: vec![concl_on("P_Apex2", "Circ_New")],
         },
         // ==========================================
         // 同位角による平行判定 (右共通 / 左共通)[cite: 6]
@@ -607,14 +618,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["D1", "D3", "Ang1"], Some("AnglePair"), None, true, Some("P1")),
-                fact_ext("DefinedBy", &["D2", "D3", "Ang2"], Some("AnglePair"), None, true, Some("P1")),
+                same_angle("Ang1", "Ang2"),
+                angle_grouped(&["D1", "D3", "Ang1"], "P1"),
+                angle_grouped(&["D2", "D3", "Ang2"], "P1"),
                 distinct(&["D1", "D2", "D3"]),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
+                concl_same("D1", "D2")
             ],
         },
         TheoremDef {
@@ -624,14 +635,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang1", EntityType::Scalar), ("Ang2", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Ang1", "Ang2"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["D3", "D1", "Ang1"], Some("AnglePair"), None, true, Some("P2")),
-                fact_ext("DefinedBy", &["D3", "D2", "Ang2"], Some("AnglePair"), None, true, Some("P2")),
+                same_angle("Ang1", "Ang2"),
+                angle_grouped(&["D3", "D1", "Ang1"], "P2"),
+                angle_grouped(&["D3", "D2", "Ang2"], "P2"),
                 distinct(&["D1", "D2", "D3"]),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["D1".to_string(), "D2".to_string()], target_type: Some("Point".to_string()), sub_type: None }
+                concl_same("D1", "D2")
             ],
         },
         // ==========================================
@@ -647,14 +658,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang13", EntityType::Scalar), ("Ang46", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Ang12", "Ang45"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["D1", "D2", "Ang12"], Some("AnglePair"), None, true, Some("Add1")),
-                fact_ext("DefinedBy", &["D4", "D5", "Ang45"], Some("AnglePair"), None, true, Some("Add1")),
+                same_angle("Ang12", "Ang45"),
+                angle_grouped(&["D1", "D2", "Ang12"], "Add1"),
+                angle_grouped(&["D4", "D5", "Ang45"], "Add1"),
                 
                 // 爆速化: 一致した方向(D2, D5)を起点にピンポイント検索
-                fact_ext("DefinedBy", &["D2", "D3", "Ang23"], Some("AnglePair"), None, true, Some("Add2")),
-                fact_ext("DefinedBy", &["D5", "D6", "Ang56"], Some("AnglePair"), None, true, Some("Add2")),
-                fact_ext("Identical", &["Ang23", "Ang56"], Some("Angle"), None, false, None),
+                angle_grouped(&["D2", "D3", "Ang23"], "Add2"),
+                angle_grouped(&["D5", "D6", "Ang56"], "Add2"),
+                same_angle("Ang23", "Ang56"),
                 
                 distinct(&["D1", "D2", "D3"]),
                 distinct(&["D4", "D5", "D6"]),
@@ -670,12 +681,12 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 参照)対称な重複だけを間引く。
                 order_le(&["D1", "D4"]),
 
-                fact_ext("DefinedBy", &["D1", "D3", "Ang13"], Some("AnglePair"), None, true, Some("Add3")),
-                fact_ext("DefinedBy", &["D4", "D6", "Ang46"], Some("AnglePair"), None, true, Some("Add3")),
+                angle_grouped(&["D1", "D3", "Ang13"], "Add3"),
+                angle_grouped(&["D4", "D6", "Ang46"], "Add3"),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang13".to_string(), "Ang46".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+                concl_same("Ang13", "Ang46")
             ],
         },
 
@@ -691,17 +702,17 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Ang13", EntityType::Scalar), ("Ang24", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("Identical", &["Ang12", "Ang34"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["D1", "D2", "Ang12"], Some("AnglePair"), None, true, Some("Perm1")),
-                fact_ext("DefinedBy", &["D3", "D4", "Ang34"], Some("AnglePair"), None, true, Some("Perm1")),
+                same_angle("Ang12", "Ang34"),
+                angle_grouped(&["D1", "D2", "Ang12"], "Perm1"),
+                angle_grouped(&["D3", "D4", "Ang34"], "Perm1"),
                 distinct(&["D1", "D2", "D3", "D4"]),
                 
-                fact_ext("DefinedBy", &["D1", "D3", "Ang13"], Some("AnglePair"), None, true, Some("Perm2")),
-                fact_ext("DefinedBy", &["D2", "D4", "Ang24"], Some("AnglePair"), None, true, Some("Perm2")),
+                angle_grouped(&["D1", "D3", "Ang13"], "Perm2"),
+                angle_grouped(&["D2", "D4", "Ang24"], "Perm2"),
             ],
             constructions: vec![],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang13".to_string(), "Ang24".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+                concl_same("Ang13", "Ang24")
             ],
         },
         // ==========================================
@@ -717,34 +728,34 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ]),
             patterns: vec![
                 // 爆速化: まず中点を探す
-                fact_ext("DefinedBy", &["A", "C", "M"], Some("Midpoint"), None, false, None),
+                def_by(DefKind::Midpoint, &["A", "C", "M"]),
                 
-                fact_ext("Identical", &["Ang_AH_CH", "Ang90"], Some("Angle"), None, false, None),
-                fact_ext("DefinedBy", &["Dir_AH", "Dir_CH", "Ang_AH_CH"], Some("AnglePair"), None, false, None),
+                same_angle("Ang_AH_CH", "Ang90"),
+                def_by(DefKind::AnglePair, &["Dir_AH", "Dir_CH", "Ang_AH_CH"]),
                 
-                fact_ext("DefinedBy", &["L_AH", "Dir_AH"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_CH", "Dir_CH"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::DirectionOf, &["L_AH", "Dir_AH"]),
+                def_by(DefKind::DirectionOf, &["L_CH", "Dir_CH"]),
                 
                 // CommonEntity の代用: Hが両方の直線に乗っていること
-                fact_ext("Connected", &["H", "L_AH"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["H", "L_CH"], Some("Line"), Some("Point"), false, None),
+                on("H", "L_AH"),
+                on("H", "L_CH"),
                 
-                fact_ext("Connected", &["A", "L_AH"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "L_CH"], Some("Line"), Some("Point"), false, None),
+                on("A", "L_AH"),
+                on("C", "L_CH"),
                 
                 distinct(&["A", "C", "H", "M"]),
                 distinct(&["L_AH", "L_CH"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["M".to_string(), "H".to_string()], target_type: "Line".to_string(), bind_to: "L_MH".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["C".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "L_CA".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_MH".to_string()], target_type: "Point".to_string(), bind_to: "Dir_MH".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L_CA".to_string()], target_type: "Point".to_string(), bind_to: "Dir_CA".to_string() },
-                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_MH".to_string(), "Dir_CH".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_MH_CH".to_string() },
-                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir_CH".to_string(), "Dir_CA".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_CH_CA".to_string() },
+                build(DefKind::LineThroughPoints, &["M", "H"], "L_MH"),
+                build(DefKind::LineThroughPoints, &["C", "A"], "L_CA"),
+                build(DefKind::DirectionOf, &["L_MH"], "Dir_MH"),
+                build(DefKind::DirectionOf, &["L_CA"], "Dir_CA"),
+                build(DefKind::AnglePair, &["Dir_MH", "Dir_CH"], "Ang_MH_CH"),
+                build(DefKind::AnglePair, &["Dir_CH", "Dir_CA"], "Ang_CH_CA"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_MH_CH".to_string(), "Ang_CH_CA".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+                concl_same("Ang_MH_CH", "Ang_CH_CA")
             ],
         },
 
@@ -762,29 +773,29 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), None, false, None),
-                fact_ext("Identical", &["Ang_A", "Ang90"], Some("Angle"), None, false, None),
+                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                same_angle("Ang_A", "Ang90"),
                 // 🌟 allow_flip = true
-                fact_ext("DefinedBy", &["Dir1", "Dir2", "Ang_A"], Some("AnglePair"), None, true, None),
+                angle_free(&["Dir1", "Dir2", "Ang_A"]),
                 
-                fact_ext("DefinedBy", &["L1", "Dir1"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L2", "Dir2"], Some("DirectionOf"), None, false, None),
-                fact_ext("Connected", &["A", "L1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["A", "L2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "L1"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "L2"], Some("Line"), Some("Point"), false, None),
+                def_by(DefKind::DirectionOf, &["L1", "Dir1"]),
+                def_by(DefKind::DirectionOf, &["L2", "Dir2"]),
+                on("A", "L1"),
+                on("A", "L2"),
+                on("B", "L1"),
+                on("C", "L2"),
                 distinct(&["A", "B", "C"]),
             ],
             constructions: vec![
                 // 🌟 FIX: 直線と方向をE-Graphに物理的に作図し、他の定理への架け橋を作る
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Line".to_string(), bind_to: "Line_Median".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["Line_Median".to_string()], target_type: "Point".to_string(), bind_to: "Dir_Median".to_string() },
+                build(DefKind::LineThroughPoints, &["Mid_BC", "A"], "Line_Median"),
+                build(DefKind::DirectionOf, &["Line_Median"], "Dir_Median"),
                 
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "B".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MB".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mid_BC".to_string(), "A".to_string()], target_type: "Scalar".to_string(), bind_to: "Dist_MA".to_string() },
+                build(DefKind::LengthSq, &["Mid_BC", "B"], "Dist_MB"),
+                build(DefKind::LengthSq, &["Mid_BC", "A"], "Dist_MA"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Dist_MB".to_string(), "Dist_MA".to_string()], target_type: None, sub_type: None }
+                concl_same("Dist_MB", "Dist_MA")
             ],
         },
 
@@ -807,21 +818,21 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["B", "C", "Mid_BC"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["Mid_BC", "B", "Dist_MB"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["Mid_BC", "A", "Dist_MA"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["Dist_MB", "Dist_MA"], Some("Scalar"), None, false, None),
+                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                def_by(DefKind::LengthSq, &["Mid_BC", "B", "Dist_MB"]),
+                def_by(DefKind::LengthSq, &["Mid_BC", "A", "Dist_MA"]),
+                same("Dist_MB", "Dist_MA"),
                 distinct(&["A", "B", "C"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "B".to_string()], target_type: "Line".to_string(), bind_to: "L1".to_string() },
-                ConstructTemplate { def_type: "LineThroughPoints".to_string(), args: vec!["A".to_string(), "C".to_string()], target_type: "Line".to_string(), bind_to: "L2".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L1".to_string()], target_type: "Point".to_string(), bind_to: "Dir1".to_string() },
-                ConstructTemplate { def_type: "DirectionOf".to_string(), args: vec!["L2".to_string()], target_type: "Point".to_string(), bind_to: "Dir2".to_string() },
-                ConstructTemplate { def_type: "AnglePair".to_string(), args: vec!["Dir1".to_string(), "Dir2".to_string()], target_type: "Angle".to_string(), bind_to: "Ang_A".to_string() },
+                build(DefKind::LineThroughPoints, &["A", "B"], "L1"),
+                build(DefKind::LineThroughPoints, &["A", "C"], "L2"),
+                build(DefKind::DirectionOf, &["L1"], "Dir1"),
+                build(DefKind::DirectionOf, &["L2"], "Dir2"),
+                build(DefKind::AnglePair, &["Dir1", "Dir2"], "Ang_A"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["Ang_A".to_string(), "Ang90".to_string()], target_type: Some("Angle".to_string()), sub_type: None }
+                concl_same("Ang_A", "Ang90")
             ],
         },
     ]
@@ -864,17 +875,17 @@ pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
                 ("LenMid", EntityType::Scalar), ("LenHalf", EntityType::Scalar),
             ]),
             patterns: vec![
-                fact_ext("DefinedBy", &["A", "B", "Mab"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "Mac"], Some("Midpoint"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["B", "C", "Mbc"], Some("Midpoint"), Some("Unordered"), false, None),
+                def_by(DefKind::Midpoint, &["A", "B", "Mab"]),
+                def_by(DefKind::Midpoint, &["A", "C", "Mac"]),
+                def_by(DefKind::Midpoint, &["B", "C", "Mbc"]),
                 distinct(&["A", "B", "C", "Mab", "Mac", "Mbc"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["Mab".to_string(), "Mac".to_string()], target_type: "Scalar".to_string(), bind_to: "LenMid".to_string() },
-                ConstructTemplate { def_type: "LengthSq".to_string(), args: vec!["B".to_string(), "Mbc".to_string()], target_type: "Scalar".to_string(), bind_to: "LenHalf".to_string() },
+                build(DefKind::LengthSq, &["Mab", "Mac"], "LenMid"),
+                build(DefKind::LengthSq, &["B", "Mbc"], "LenHalf"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["LenMid".to_string(), "LenHalf".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("LenMid", "LenHalf")
             ],
         },
     ]
@@ -924,35 +935,35 @@ pub fn get_central_angle_theorem() -> Vec<TheoremDef> {
             ]),
             patterns: vec![
                 // 前提: OA=OB=OC (Oは外心)
-                fact_ext("DefinedBy", &["O", "A", "LenOA"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["O", "B", "LenOB"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["LenOA", "LenOB"], Some("Scalar"), None, false, None),
-                fact_ext("DefinedBy", &["O", "C", "LenOC"], Some("LengthSq"), Some("Unordered"), false, None),
-                fact_ext("Identical", &["LenOA", "LenOC"], Some("Scalar"), None, false, None),
+                def_by(DefKind::LengthSq, &["O", "A", "LenOA"]),
+                def_by(DefKind::LengthSq, &["O", "B", "LenOB"]),
+                same("LenOA", "LenOB"),
+                def_by(DefKind::LengthSq, &["O", "C", "LenOC"]),
+                same("LenOA", "LenOC"),
                 distinct(&["O", "A", "B", "C"]),
 
                 // 円周角∠BAC(A→B, A→C)と中心角∠BOC(O→B, O→C)を同じ
                 // 向き(B側→C側)で構成する。
-                fact_ext("DefinedBy", &["A", "B", "L_AB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["A", "C", "L_AC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["A", "B", "L_AB"]),
+                def_by(DefKind::LineThroughPoints, &["A", "C", "L_AC"]),
                 distinct(&["L_AB", "L_AC"]),
-                fact_ext("DefinedBy", &["O", "B", "L_OB"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["O", "C", "L_OC"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["O", "B", "L_OB"]),
+                def_by(DefKind::LineThroughPoints, &["O", "C", "L_OC"]),
                 distinct(&["L_OB", "L_OC"]),
 
-                fact_ext("DefinedBy", &["L_AB", "Dir_AB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_AC", "Dir_AC"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_OB", "Dir_OB"], Some("DirectionOf"), None, false, None),
-                fact_ext("DefinedBy", &["L_OC", "Dir_OC"], Some("DirectionOf"), None, false, None),
+                def_by(DefKind::DirectionOf, &["L_AB", "Dir_AB"]),
+                def_by(DefKind::DirectionOf, &["L_AC", "Dir_AC"]),
+                def_by(DefKind::DirectionOf, &["L_OB", "Dir_OB"]),
+                def_by(DefKind::DirectionOf, &["L_OC", "Dir_OC"]),
 
-                fact_ext("DefinedBy", &["Dir_AB", "Dir_AC", "AngBAC"], Some("AnglePair"), None, false, None),
-                fact_ext("DefinedBy", &["Dir_OB", "Dir_OC", "AngBOC"], Some("AnglePair"), None, false, None),
+                def_by(DefKind::AnglePair, &["Dir_AB", "Dir_AC", "AngBAC"]),
+                def_by(DefKind::AnglePair, &["Dir_OB", "Dir_OC", "AngBOC"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "Product".to_string(), args: vec!["AngBAC".to_string(), "AngBAC".to_string()], target_type: "Scalar".to_string(), bind_to: "AngBAC_Sq".to_string() },
+                build(DefKind::Product, &["AngBAC", "AngBAC"], "AngBAC_Sq"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["AngBOC".to_string(), "AngBAC_Sq".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("AngBOC", "AngBAC_Sq")
             ],
         },
     ]
@@ -1050,8 +1061,8 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // (Distinctは「必要な変数が全て束縛済みならコスト0」という
                 // 既存の見積もりに従い)estimate_costが最短経路でそれを選び、
                 // 無駄な組み合わせを即座に打ち切れるようにする。
-                fact_ext("Connected", &["A", "L"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "L"], Some("Line"), Some("Point"), false, None),
+                on("A", "L"),
+                on("B", "L"),
                 // 🐛 実験的変更(要検証): distinct(&["A","B"]) 等だったのを
                 // order(&["A","B"]) 等に変更した。同じ直線L上のN点から
                 // A,B,C,Dを選ぶ際、distinctだけだと同じ4点集合のN!通りの
@@ -1094,20 +1105,20 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 次に手を入れるならここ(パターンの評価順と cap の側)で、
                 // 定理を増やす話ではない。
                 order(&["A", "B"]),
-                fact_ext("Connected", &["C", "L"], Some("Line"), Some("Point"), false, None),
+                on("C", "L"),
                 order(&["B", "C"]),
-                fact_ext("Connected", &["D", "L"], Some("Line"), Some("Point"), false, None),
+                on("D", "L"),
                 order(&["C", "D"]),
                 // A,B,C,Dそれぞれについて「Lとは別の、Oを通る直線」を局所
                 // スキャンで見つける(A自身の既知の直線のうち、Lではない方)。
-                fact_ext("Connected", &["A", "LOA"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "LOA"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["B", "LOB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "LOB"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["C", "LOC"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "LOC"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["D", "LOD"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["O", "LOD"], Some("Line"), Some("Point"), false, None),
+                on("A", "LOA"),
+                on("O", "LOA"),
+                on("B", "LOB"),
+                on("O", "LOB"),
+                on("C", "LOC"),
+                on("O", "LOC"),
+                on("D", "LOD"),
+                on("O", "LOD"),
                 distinct(&["LOA", "LOB", "LOC", "LOD"]),
                 // 🐛 実測に基づくFIX: 当初は「OがL上にある退化を弾く」安全策
                 // として not(Connected(O, L)) を末尾に置いていたが、Oがまだ
@@ -1124,11 +1135,11 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 次数ゲートが弾く)ため、単純に削除した。
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()], target_type: "Scalar".to_string(), bind_to: "CR1".to_string() },
-                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["LOA".to_string(), "LOB".to_string(), "LOC".to_string(), "LOD".to_string()], target_type: "Scalar".to_string(), bind_to: "CRL".to_string() },
+                build(DefKind::CrossRatio, &["A", "B", "C", "D"], "CR1"),
+                build(DefKind::CrossRatioOfLines, &["LOA", "LOB", "LOC", "LOD"], "CRL"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR1".to_string(), "CRL".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("CR1", "CRL")
             ],
         },
         TheoremDef {
@@ -1142,27 +1153,27 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 🌟 シード: 定理A(点→線束)がCrossRatioOfLines(L1..L4)を新しく
                 // 証明した直後、その事実からL1..L4とCRLを直接束縛できる
                 // (全件スキャン不要)。
-                fact_ext("DefinedBy", &["L1", "L2", "L3", "L4", "CRL"], Some("CrossRatioOfLines"), None, false, None),
+                def_by(DefKind::CrossRatioOfLines, &["L1", "L2", "L3", "L4", "CRL"]),
                 // 各直線について「Lとは別の(=線束の中心Oではない)、その直線上の
                 // 点」を局所スキャンで見つける。中心Oは4直線全てに繋がっている
                 // 唯一の点なので、「他の1本には繋がっていない」ことで確実に除外できる。
                 // 🌟 定理A側と同じ理由(実測に基づくFIX)で、各点が束縛される
                 // たびにdistinctを挟み、早期に枝刈りする。
-                fact_ext("Connected", &["Ap", "L1"], Some("Line"), Some("Point"), false, None),
-                not(fact_ext("Connected", &["Ap", "L2"], Some("Line"), Some("Point"), false, None)),
-                fact_ext("Connected", &["Bp", "L2"], Some("Line"), Some("Point"), false, None),
-                not(fact_ext("Connected", &["Bp", "L1"], Some("Line"), Some("Point"), false, None)),
-                fact_ext("Connected", &["Cp", "L3"], Some("Line"), Some("Point"), false, None),
-                not(fact_ext("Connected", &["Cp", "L1"], Some("Line"), Some("Point"), false, None)),
-                fact_ext("Connected", &["Dp", "L4"], Some("Line"), Some("Point"), false, None),
-                not(fact_ext("Connected", &["Dp", "L1"], Some("Line"), Some("Point"), false, None)),
+                on("Ap", "L1"),
+                not(on("Ap", "L2")),
+                on("Bp", "L2"),
+                not(on("Bp", "L1")),
+                on("Cp", "L3"),
+                not(on("Cp", "L1")),
+                on("Dp", "L4"),
+                not(on("Dp", "L1")),
                 distinct(&["Ap", "Bp", "Cp", "Dp"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "CrossRatio".to_string(), args: vec!["Ap".to_string(), "Bp".to_string(), "Cp".to_string(), "Dp".to_string()], target_type: "Scalar".to_string(), bind_to: "CR2".to_string() },
+                build(DefKind::CrossRatio, &["Ap", "Bp", "Cp", "Dp"], "CR2"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CRL".to_string(), "CR2".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("CRL", "CR2")
             ],
         },
         // ==========================================
@@ -1200,31 +1211,31 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 🌟 シード: 既存の二次曲線自身の定義からP1..P5とConicを直接
                 // 束縛する(「複比の透視射影不変性(線束→点)」がCrossRatioOfLines
                 // からL1..L4を直接束縛するのと全く同じ発想)。
-                fact_ext("DefinedBy", &["P1", "P2", "P3", "P4", "P5", "Conic"], Some("ConicThrough5Points"), None, false, None),
+                def_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
                 // 二次曲線上のもう1点Qを局所スキャンで見つける(唯一の
                 // 「新規に探す」変数)。
-                fact_ext("Connected", &["Q", "Conic"], None, None, false, None),
+                on("Q", "Conic"),
                 distinct(&["P1", "P2", "P3", "P4", "P5", "Q"]),
                 // P1から見たP2,P3,P4,Qへの4直線(既存のものが無ければ
                 // 円周角の定理のL_A1_B1等と同じ「DefinedBy+作図需要」で作る)。
-                fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P1", "Q", "L1_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
+                def_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
+                def_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
+                def_by(DefKind::LineThroughPoints, &["P1", "Q", "L1_Q"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
                 // P5から見た同じP2,P3,P4,Qへの4直線。
-                fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "Q", "L5_Q"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "Q", "L5_Q"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L1_P2".to_string(), "L1_P3".to_string(), "L1_P4".to_string(), "L1_Q".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P1".to_string() },
-                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L5_P2".to_string(), "L5_P3".to_string(), "L5_P4".to_string(), "L5_Q".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P5".to_string() },
+                build(DefKind::CrossRatioOfLines, &["L1_P2", "L1_P3", "L1_P4", "L1_Q"], "CR_P1"),
+                build(DefKind::CrossRatioOfLines, &["L5_P2", "L5_P3", "L5_P4", "L5_Q"], "CR_P5"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR_P1".to_string(), "CR_P5".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("CR_P1", "CR_P5")
             ],
         },
         // ==========================================
@@ -1261,33 +1272,33 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             patterns: vec![
                 // 🌟 シード: シュタイナーの定理と全く同じ発想で、二次曲線自身の
                 // 定義からP1..P5とConicを直接束縛する(全件スキャン不要)。
-                fact_ext("DefinedBy", &["P1", "P2", "P3", "P4", "P5", "Conic"], Some("ConicThrough5Points"), None, false, None),
+                def_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
                 distinct(&["P1", "P2", "P3", "P4", "P5"]),
 
                 // P1における接線T1(円周角の定理の逆の"TanA"と同じ発想の
                 // DefinedBy+作図需要)。
-                fact_ext("DefinedBy", &["Conic", "P1", "T1"], Some("TangentLine"), None, false, None),
+                def_by(DefKind::TangentLine, &["Conic", "P1", "T1"]),
 
                 // P1から見たP2,P3,P4への3直線。
-                fact_ext("DefinedBy", &["P1", "P2", "L1_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P1", "P3", "L1_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P1", "P4", "L1_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
+                def_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
+                def_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4"]),
 
                 // P5から見たP2,P3,P4,P1への4直線(P1は接点ではなく"ただの弦"
                 // として、シュタイナーの定理のQと同じ役割で扱う)。
-                fact_ext("DefinedBy", &["P5", "P2", "L5_P2"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "P3", "L5_P3"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "P4", "L5_P4"], Some("LineThroughPoints"), Some("Unordered"), false, None),
-                fact_ext("DefinedBy", &["P5", "P1", "L5_P1"], Some("LineThroughPoints"), Some("Unordered"), false, None),
+                def_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
+                def_by(DefKind::LineThroughPoints, &["P5", "P1", "L5_P1"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_P1"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L1_P2".to_string(), "L1_P3".to_string(), "L1_P4".to_string(), "T1".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P1".to_string() },
-                ConstructTemplate { def_type: "CrossRatioOfLines".to_string(), args: vec!["L5_P2".to_string(), "L5_P3".to_string(), "L5_P4".to_string(), "L5_P1".to_string()], target_type: "Scalar".to_string(), bind_to: "CR_P5".to_string() },
+                build(DefKind::CrossRatioOfLines, &["L1_P2", "L1_P3", "L1_P4", "T1"], "CR_P1"),
+                build(DefKind::CrossRatioOfLines, &["L5_P2", "L5_P3", "L5_P4", "L5_P1"], "CR_P5"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Identical".to_string(), args: vec!["CR_P1".to_string(), "CR_P5".to_string()], target_type: Some("Scalar".to_string()), sub_type: None }
+                concl_same("CR_P1", "CR_P5")
             ],
         },
         // ==========================================
@@ -1325,38 +1336,38 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // CrossRatioOfLines由来のScalarだけに絞ってよい(長さ・積・
                 // 点の複比まで無差別に含む自己束縛プールに埋もれて無関係な
                 // 値ばかり試す性能問題への対処、miquel_quadrilateralで観測)。
-                fact_ext("Identical", &["CR_P1", "CR_P5"], Some("Scalar"), Some("CrossRatioOfLines"), false, None),
-                fact_ext("DefinedBy", &["L1_P2", "L1_P3", "L1_P4", "L1_Q", "CR_P1"], Some("CrossRatioOfLines"), None, false, None),
-                fact_ext("DefinedBy", &["L5_P2", "L5_P3", "L5_P4", "L5_Q", "CR_P5"], Some("CrossRatioOfLines"), None, false, None),
+                same_cross_ratio_of_lines("CR_P1", "CR_P5"),
+                def_by(DefKind::CrossRatioOfLines, &["L1_P2", "L1_P3", "L1_P4", "L1_Q", "CR_P1"]),
+                def_by(DefKind::CrossRatioOfLines, &["L5_P2", "L5_P3", "L5_P4", "L5_Q", "CR_P5"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
 
                 // P1 = L1側4直線に共通の点(視点)。P5も同様。
-                fact_ext("Connected", &["P1", "L1_P2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P1", "L1_P3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P1", "L1_P4"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P1", "L1_Q"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P5", "L5_P2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P5", "L5_P3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P5", "L5_P4"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P5", "L5_Q"], Some("Line"), Some("Point"), false, None),
+                on("P1", "L1_P2"),
+                on("P1", "L1_P3"),
+                on("P1", "L1_P4"),
+                on("P1", "L1_Q"),
+                on("P5", "L5_P2"),
+                on("P5", "L5_P3"),
+                on("P5", "L5_P4"),
+                on("P5", "L5_Q"),
 
                 // P2 = L1_P2とL5_P2に共通の点(視点P1,P5以外)。P3,P4,Qも同様。
-                fact_ext("Connected", &["P2", "L1_P2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P2", "L5_P2"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P3", "L1_P3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P3", "L5_P3"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P4", "L1_P4"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["P4", "L5_P4"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Q", "L1_Q"], Some("Line"), Some("Point"), false, None),
-                fact_ext("Connected", &["Q", "L5_Q"], Some("Line"), Some("Point"), false, None),
+                on("P2", "L1_P2"),
+                on("P2", "L5_P2"),
+                on("P3", "L1_P3"),
+                on("P3", "L5_P3"),
+                on("P4", "L1_P4"),
+                on("P4", "L5_P4"),
+                on("Q", "L1_Q"),
+                on("Q", "L5_Q"),
                 distinct(&["P1", "P5", "P2", "P3", "P4", "Q"]),
             ],
             constructions: vec![
-                ConstructTemplate { def_type: "ConicThrough5Points".to_string(), args: vec!["P1".to_string(), "P2".to_string(), "P3".to_string(), "P4".to_string(), "P5".to_string()], target_type: "Conic".to_string(), bind_to: "Conic_New".to_string() },
+                build(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5"], "Conic_New"),
             ],
             conclusions: vec![
-                FactTemplate { fact_type: "Connected".to_string(), args: vec!["Q".to_string(), "Conic_New".to_string()], target_type: Some("Conic".to_string()), sub_type: None }
+                concl_on("Q", "Conic_New")
             ],
         },
     ]
@@ -1365,43 +1376,36 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
 mod tests {
     use super::*;
 
-    /// 🐛 Order / Distinct に出てくる変数が、Factパターンのどれかにも
-    /// 出てくること。
+    fn every_theorem() -> Vec<TheoremDef> {
+        let mut all = get_all_theorems();
+        all.extend(get_projective_theorems());
+        all.extend(get_central_angle_theorem());
+        all.extend(get_length_bridge_theorems());
+        all
+    }
+
+    /// Order / Distinct に出てくる変数が、事実パターンのどれかにも出てくること。
     ///
-    /// dfs_match は estimate_cost が一番安いパターンを選んで消費するが、
-    /// Order / Distinct は「全変数が束縛されるまで INFINITY」を返す。
-    /// 生きているパターンが全部 INFINITY だった場合、best_cost の比較
-    /// (cost < best_cost)は一度も真にならず、best_idx は初期値のまま
-    /// 一番若い添字が選ばれる――つまり **変数が未束縛のままの Order /
-    /// Distinct が消費されうる**。そのとき検査されるのは束縛済みの変数だけ
-    /// なので、未束縛の変数についての制約は永久に検査されない。
-    ///
-    /// これが起きるのは「Factパターンが1つも残っていないのに、まだ
-    /// 束縛されていない変数が Order / Distinct に残っている」ときだけ。
-    /// 逆に言えば、制約に出てくる変数が全てどこかのFactパターンにも
-    /// 出てくるなら、その変数は必ず束縛されてから制約が評価される。
-    /// ここではその不変条件を全定理について確かめる。
+    /// dfs_match は一番安いパターンを消費するが、制約は「全変数が束縛されるまで INFINITY」。
+    /// 生きているパターンが全部 INFINITY なら一番若い添字が消費されるので、事実パターンで
+    /// 束縛されない変数があると、その変数についての制約は検査されないまま捨てられる。
     #[test]
     fn every_constrained_variable_is_also_bound_by_a_fact() {
         fn vars_of(pat: &Pattern, out: &mut Vec<String>) {
             match pat {
-                Pattern::Fact(d) => out.extend(d.args.iter().cloned()),
-                Pattern::Order(v) | Pattern::OrderNonStrict(v) | Pattern::Distinct(v) =>
-                    out.extend(v.iter().cloned()),
+                Pattern::Order(v) | Pattern::OrderNonStrict(v) | Pattern::Distinct(v) => out.extend(v.iter().cloned()),
                 Pattern::Not(inner) => vars_of(inner, out),
+                _ => out.extend(pat.fact_args().into_iter().flatten().cloned()),
             }
         }
-        let mut all = get_all_theorems();
-        all.extend(get_projective_theorems());
-        all.extend(get_central_angle_theorem());
         let mut bad: Vec<String> = Vec::new();
-        for t in &all {
+        for t in &every_theorem() {
             let mut fact_vars: Vec<String> = Vec::new();
             let mut constrained: Vec<String> = Vec::new();
             for p in &t.patterns {
                 match p {
-                    Pattern::Fact(_) | Pattern::Not(_) => vars_of(p, &mut fact_vars),
-                    _ => vars_of(p, &mut constrained),
+                    Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) => vars_of(p, &mut constrained),
+                    _ => vars_of(p, &mut fact_vars),
                 }
             }
             for v in constrained {
@@ -1410,23 +1414,37 @@ mod tests {
                 }
             }
         }
-        assert!(bad.is_empty(),
-            "Order/Distinct にしか出てこない変数がある。dfs_match は生きている             パターンが全部 INFINITY のとき一番若い添字を無条件に消費するので、             その変数についての制約は検査されないまま捨てられる:{n}{}",
-            bad.join("
-"), n = "
-");
+        assert!(bad.is_empty(), "Order/Distinct にしか出てこない変数がある:\n{}", bad.join("\n"));
     }
 
-    /// 🌟 dfs_match は「まだ消費していないパターン」を u64 のビットマスクで
-    /// 持つ(logic_core.rs::dfs_match のドキュメント参照)。定理1つあたりの
-    /// パターン数が64本を超えると、その上のビットが表現できず静かに
-    /// 取りこぼす。実測では最大31本だが、定理を足したときにここで気づける
-    /// ようにしておく。
+    /// 作図・DefinedBy の親の数が種類と合っていること。合わないと build_definition が
+    /// None を返し、その作図やパターンは黙って成立しなくなる。
+    #[test]
+    fn every_definition_has_the_right_number_of_parents() {
+        let mut bad: Vec<String> = Vec::new();
+        for t in &every_theorem() {
+            for p in &t.patterns {
+                let p = match p { Pattern::Not(inner) => &**inner, other => other };
+                if let Pattern::DefinedBy { kind, parents, .. } = p {
+                    if parents.len() != kind.arity() {
+                        bad.push(format!("定理「{}」の DefinedBy {:?}({})", t.name, kind, parents.join(",")));
+                    }
+                }
+            }
+            for c in &t.constructions {
+                if c.args.len() != c.kind.arity() {
+                    bad.push(format!("定理「{}」の作図 {:?}({})", t.name, c.kind, c.args.join(",")));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "親の数が種類と合わない:\n{}", bad.join("\n"));
+    }
+
+    /// dfs_match は「まだ消費していないパターン」を u64 のビットマスクで持つので、
+    /// 定理1つあたりのパターンは64本まで。
     #[test]
     fn every_theorem_fits_the_pattern_bitmask() {
-        let mut all = get_all_theorems();
-        all.extend(get_projective_theorems());
-        all.extend(get_central_angle_theorem());
+        let all = every_theorem();
         for t in &all {
             assert!(t.patterns.len() <= 64,
                 "定理「{}」のパターンが{}本あり、u64のビットマスクに入らない。\

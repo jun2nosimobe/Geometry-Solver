@@ -133,9 +133,8 @@ impl ActionGenerator {
             if let (Some(&dx), Some(&dy)) = (
                 egraph.memo.get(&egraph.normalize_definition(&Definition::DirectionOf(x))),
                 egraph.memo.get(&egraph.normalize_definition(&Definition::DirectionOf(y))),
-            ) {
-                if egraph.get_rep(dx) == egraph.get_rep(dy) { continue; }
-            }
+            )
+                && egraph.get_rep(dx) == egraph.get_rep(dy) { continue; }
             let (a, b) = if x.0 > y.0 { (y, x) } else { (x, y) };
             let def_int = Definition::Intersection(a, b);
             self.try_push_def(&mut actions, egraph, def_int, is_simulation);

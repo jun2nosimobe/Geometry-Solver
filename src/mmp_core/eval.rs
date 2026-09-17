@@ -395,9 +395,8 @@ impl EGraph {
         });
         let is_first = match canonical_existing {
             Some(old_key) => {
-                if old_key != key {
-                    if let Some(entry) = map.remove(&old_key) { map.insert(key, entry); }
-                }
+                if old_key != key
+                    && let Some(entry) = map.remove(&old_key) { map.insert(key, entry); }
                 if let Some(entry) = map.get_mut(&key) { entry.occurrences += 1; }
                 false
             }
@@ -1408,11 +1407,10 @@ impl EGraph {
         if v_new.is_empty() { return; }
 
         for &other in &others {
-            if let Some(v_other) = self.evaluate_node(other, &vars, &mut cache) {
-                if !v_other.is_empty() && v_new[0].0 == v_other[0].0 {
+            if let Some(v_other) = self.evaluate_node(other, &vars, &mut cache)
+                && !v_other.is_empty() && v_new[0].0 == v_other[0].0 {
                     self.log_conjecture_candidate(new_rep, other, "複比の値が一致(透視射影関係などの可能性)");
                 }
-            }
         }
     }
 

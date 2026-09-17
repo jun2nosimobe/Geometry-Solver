@@ -210,7 +210,6 @@ pub fn run(args: &[String]) {
                         crate::mmp_core::Fact::Connected(c, p) => {
                             egraph.link_logical_incidence_justified(*c, *p, crate::mmp_core::Justification::Given);
                         }
-                        _ => {}
                     }
                 }
             }
@@ -275,8 +274,8 @@ fn run_one_seed(
         && start.elapsed() < Duration::from_secs(time_budget_secs) && steps_done < max_steps {
         let found = mcts.run_step(&mut egraph, &None, sims_per_step);
         steps_done += 1;
-        if audit {
-            if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(&egraph, 0xC0FFEE) {
+        if audit
+            && let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(&egraph, 0xC0FFEE) {
                 let mut namer = PrettyNamer::new();
                 println!("\n🔬 [監査] ステップ{}でe-graphが幾何と矛盾しました: 「{} は {} 上にある」が数値的に成り立ちません。",
                     steps_done, namer.label(&egraph, bad_p), namer.label(&egraph, bad_l));
@@ -302,7 +301,6 @@ fn run_one_seed(
                 }
                 break;
             }
-        }
         if found {
             consecutive_failures = 0;
         } else {
@@ -638,11 +636,10 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
         html_sections.push(render_html_section(rank + 1, c, &name_a, &name_b, &steps, svg.as_deref()));
     }
 
-    if try_prove {
-        if let Some(top) = ranked.first() {
+    if try_prove
+        && let Some(top) = ranked.first() {
             attempt_proof(egraph, top.a, top.b, prove_time_secs);
         }
-    }
     html_sections
 }
 
@@ -1061,8 +1058,8 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
         // 残り1点がその円に乗ること」でしかない、という報告が上位を占めた。
         // 既知の円が集合の3点以上を含むなら、主張の中身はその円の上に
         // 「まだ載ると分かっていない点」が載ることなので、そう言い換える。
-        if let Some((circle, extra)) = known_circle_through_most(egraph, &set) {
-            if !extra.is_empty() {
+        if let Some((circle, extra)) = known_circle_through_most(egraph, &set)
+            && !extra.is_empty() {
                 let ex: Vec<String> = extra.iter().map(|&id| namer.label(egraph, id)).collect();
                 println!("  {}. 点 {} は 円 {} の上にある", rank + 1, ex.join(" , "), namer.label(egraph, circle));
                 let mut show = extra.clone();
@@ -1070,7 +1067,6 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
                 for line in explain_entities(egraph, &mut namer, &show) { println!("       {}", line); }
                 continue;
             }
-        }
         let labels: Vec<String> = set.iter().map(|&id| namer.label(egraph, id)).collect();
         println!("  {}. {}点 {} は共円", rank + 1, set.len(), labels.join(" , "));
         for line in explain_entities(egraph, &mut namer, &set) { println!("       {}", line); }
@@ -1495,8 +1491,8 @@ pub(crate) fn systematic_closure_until(
         // 🌟 系統的作図でも、ラウンドごとに「構造的な主張と数値評価の整合性」を
         // 監査できるようにする(DISCOVER_AUDIT=1)。崩壊が"激減"として現れない
         // タイプ(少数の誤マージ)は同値類数では捕まらないため。
-        if crate::cli::audit() {
-            if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, 0xC0FFEE) {
+        if crate::cli::audit()
+            && let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, 0xC0FFEE) {
                 println!("  🔬 [監査] ラウンド{}終了時点で矛盾: 「{} は {} 上にある」が数値的に成り立ちません。",
                     round + 1,
                     egraph.entities[egraph.get_rep(bad_p).0].name.chars().take(70).collect::<String>(),
@@ -1519,7 +1515,6 @@ pub(crate) fn systematic_closure_until(
                 }
                 return;
             }
-        }
         if after * 3 < before_closure {
             println!("  🚨 [崩壊] 合同閉包で同値類が{}→{}に激減しました。原因になったマージの根拠を表示します:", before_closure, after);
             let mut reasons: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();

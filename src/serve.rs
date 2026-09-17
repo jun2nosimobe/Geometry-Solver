@@ -563,9 +563,8 @@ fn discover_stream(body: &str, emit: &mut dyn FnMut(&str) -> bool) {
     }
 
     // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
-    if cfg.prove_seconds > 0 {
-        if !prove_and_report(&scored, &shown_ids, &script, &aux_lines, &cfg, emit) { return; }
-    }
+    if cfg.prove_seconds > 0
+        && !prove_and_report(&scored, &shown_ids, &script, &aux_lines, &cfg, emit) { return; }
     emit("stage|\n");
 }
 
@@ -626,9 +625,8 @@ fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
         for (k, &i) in shared.iter().enumerate() { result[i] = done[k]; }
     }
     for &i in &chosen {
-        if result[i] != Proof::Open {
-            if !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
-        }
+        if result[i] != Proof::Open
+            && !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
     }
 
     // --- 第2段: 残りを1件ずつ、その主張のためだけの図で ---
@@ -1131,12 +1129,11 @@ fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> S
     for set in crate::discover::maximal_verified_sets(egraph, &SEEDS, fresh_quads, pe::PropertyKind::Concyclic) {
         // 既知の円が3点以上を含むなら、主張の中身は「残りの点がその円の上にある」
         // (discover.rsの報告と同じ言い換え)。
-        if let Some((circle, extra)) = crate::discover::known_circle_through_most(egraph, &set) {
-            if !extra.is_empty() {
+        if let Some((circle, extra)) = crate::discover::known_circle_through_most(egraph, &set)
+            && !extra.is_empty() {
                 for &id in &extra { note_incidence(egraph, id, circle); }
                 continue;
             }
-        }
         let names: Vec<String> = set.iter().map(|&id| name_of(egraph, id)).collect();
         out.push(Finding {
             kind: "concyclic",

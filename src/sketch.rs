@@ -306,9 +306,8 @@ pub fn diagnose(args: &[String]) {
         for l in out.lines() {
             let mut f = l.split('\t');
             if f.next() != Some("SKETCH") { continue; }
-            if let (Some(i), Some(code)) = (f.next().and_then(|v| v.parse::<usize>().ok()), f.next()) {
-                if (1..=n).contains(&i) { st[i - 1] = code.to_string(); }
-            }
+            if let (Some(i), Some(code)) = (f.next().and_then(|v| v.parse::<usize>().ok()), f.next())
+                && (1..=n).contains(&i) { st[i - 1] = code.to_string(); }
         }
         if let Some(e) = out.lines().find(|l| l.contains("⚠️") && l.contains("筋書き")) {
             println!("  {}", e.trim());

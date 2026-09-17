@@ -172,11 +172,10 @@ impl MMPTester {
 
                 let mut match_count = 0;
                 for (vars, cache) in &mut environments {
-                    if let (Some(v1), Some(v2)) = (egraph.evaluate_node(n1, vars, cache), egraph.evaluate_node(n2, vars, cache)) {
-                        if self.verify_identical(&v1, &v2) {
+                    if let (Some(v1), Some(v2)) = (egraph.evaluate_node(n1, vars, cache), egraph.evaluate_node(n2, vars, cache))
+                        && self.verify_identical(&v1, &v2) {
                             match_count += 1;
                         }
-                    }
                 }
 
                 if match_count == 5 {

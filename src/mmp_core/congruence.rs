@@ -623,12 +623,10 @@ impl EGraph {
                 let inter_def = self.normalize_definition(&Definition::Intersection(l1, l2));
                 if let Some(&existing) = self.memo.get(&inter_def) { candidates.push((existing, l1, l2)); }
 
-                if l1 == self.line_infinity {
-                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l2)) { candidates.push((existing, l1, l2)); }
-                }
-                if l2 == self.line_infinity {
-                    if let Some(&existing) = self.memo.get(&Definition::DirectionOf(l1)) { candidates.push((existing, l1, l2)); }
-                }
+                if l1 == self.line_infinity
+                    && let Some(&existing) = self.memo.get(&Definition::DirectionOf(l2)) { candidates.push((existing, l1, l2)); }
+                if l2 == self.line_infinity
+                    && let Some(&existing) = self.memo.get(&Definition::DirectionOf(l1)) { candidates.push((existing, l1, l2)); }
             }
         }
 

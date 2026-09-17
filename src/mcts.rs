@@ -426,8 +426,8 @@ impl MCTSSearchEngine {
         self.print_root_ranking(egraph);
 
         let best_idx = self.nodes[0].children.iter().max_by_key(|&&c| self.nodes[c].visits).copied();
-        if let Some(best_idx) = best_idx {
-            if let Some(action) = self.nodes[best_idx].action.clone() {
+        if let Some(best_idx) = best_idx
+            && let Some(action) = self.nodes[best_idx].action.clone() {
                 println!("🤖 [MCTS] 最良の手を採用: {}", Self::describe_action(egraph, &action));
                 if let Some(new_id) = Self::apply_action(egraph, &action) {
                     // 🌟 resolve_demands/resolve_angle_demandsのAuto/Demand生成物と
@@ -438,7 +438,6 @@ impl MCTSSearchEngine {
                     return true;
                 }
             }
-        }
         false
     }
 

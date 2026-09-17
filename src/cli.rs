@@ -97,7 +97,7 @@ pub const OPTIONS: &[Opt] = &[
     Opt { name: "--no-mcts-target-bias", arg: Switch, default: "バイアス有効", mode: Solve,
           help: "MCTSが証明目標に近い図形を優先するのを切る(A/B比較用)" },
     Opt { name: "--no-projective", arg: Switch, default: "射影の定理を要する9問のみ", mode: Solve,
-          help: "複比・シュタイナー系の射影の定理を外す(既定は全問題で使う)" },
+          help: "複比・シュタイナー系の射影5定理を、既定で入れている問題からも外す" },
     Opt { name: "--projective", arg: Switch, default: "射影の定理を要する9問のみ", mode: Solve,
           help: "複比・シュタイナー系の射影5定理を全問題に入れる(既定は必要な問題だけ)" },
     Opt { name: "--length-theorems", arg: Switch, default: "無効", mode: Solve,
@@ -382,13 +382,14 @@ mod tests {
     fn every_flag_in_source_is_documented() {
         const SOURCES: &[&str] = &[
             include_str!("main.rs"),
+            include_str!("solve.rs"),
             include_str!("discover.rs"),
             include_str!("discover_degenerate.rs"),
         ];
         let known: BTreeSet<&str> = OPTIONS.iter().map(|o| o.name).collect();
         let mut missing: Vec<String> = Vec::new();
         for src in SOURCES {
-            for (pat, strip_eq) in [("strip_prefix(\"", true), ("a == \"", false)] {
+            for (pat, strip_eq) in [("strip_prefix(\"", true), ("a == \"", false), ("flag(args, \"", false), ("value(args, \"", true)] {
                 let mut rest = *src;
                 while let Some(pos) = rest.find(pat) {
                     rest = &rest[pos + pat.len()..];

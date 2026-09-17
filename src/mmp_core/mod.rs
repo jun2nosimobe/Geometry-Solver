@@ -182,6 +182,32 @@ impl Definition {
         Definition::LineThroughPoints(a, b)
     }
 
+    /// 定理から参照できる作図の種類。定数・自由点・内部専用の定義は None。
+    pub fn kind(&self) -> Option<DefKind> {
+        use DefKind as K;
+        Some(match self {
+            Definition::Intersection(..) => K::Intersection,
+            Definition::LineThroughPoints(..) => K::LineThroughPoints,
+            Definition::PerpendicularLine(..) => K::PerpendicularLine,
+            Definition::Circumcircle(..) => K::Circumcircle,
+            Definition::DirectionOf(..) => K::DirectionOf,
+            Definition::AnglePair(..) => K::AnglePair,
+            Definition::Midpoint(..) => K::Midpoint,
+            Definition::LengthSq(..) => K::LengthSq,
+            Definition::TangentLine(..) => K::TangentLine,
+            Definition::ParallelLine(..) => K::ParallelLine,
+            Definition::CrossRatio(..) => K::CrossRatio,
+            Definition::CrossRatioOfLines(..) => K::CrossRatioOfLines,
+            Definition::ConicThrough5Points(..) => K::ConicThrough5Points,
+            Definition::Product(..) => K::Product,
+            Definition::SecondIntersectionOfLineAndConic(..) => K::SecondIntersectionOfLineAndConic,
+            Definition::RadicalAxis(..) => K::RadicalAxis,
+            Definition::SecondIntersectionOfCircles(..) => K::SecondIntersectionOfCircles,
+            Definition::GivenPoint | Definition::FreePoint | Definition::PerpDirectionOf(_)
+            | Definition::HarmonicConjugateOf(..) | Definition::ConstantHomogeneous(..) => return None,
+        })
+    }
+
     pub fn get_type_name(&self) -> &'static str {
         match self {
             Definition::Midpoint(_,_) => "Midpoint",
@@ -268,6 +294,113 @@ impl Definition {
             Definition::RadicalAxis(_, _) => EntityType::Line,
             Definition::SecondIntersectionOfCircles(_, _, _) => EntityType::Point,
         }
+    }
+}
+
+/// 定理のパターン・作図テンプレートが名指しする作図の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DefKind {
+    Intersection,
+    LineThroughPoints,
+    PerpendicularLine,
+    Circumcircle,
+    DirectionOf,
+    AnglePair,
+    Midpoint,
+    LengthSq,
+    TangentLine,
+    ParallelLine,
+    CrossRatio,
+    CrossRatioOfLines,
+    ConicThrough5Points,
+    Product,
+    SecondIntersectionOfLineAndConic,
+    RadicalAxis,
+    SecondIntersectionOfCircles,
+}
+
+/// 親の並べ方の自由度。DefinedBy のマッチで、1つの定義から親変数への割り当てを何通り試すかを決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentSymmetry {
+    /// 親の順序に意味がある。
+    Ordered,
+    /// 親を任意に並べ替えてよい(2点・3点のみ全順列を試す)。
+    Unordered,
+    /// 複比: 値を保つクライン4群 V4 の4通りだけ。
+    KleinFour,
+}
+
+impl DefKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            DefKind::Intersection => "Intersection",
+            DefKind::LineThroughPoints => "LineThroughPoints",
+            DefKind::PerpendicularLine => "PerpendicularLine",
+            DefKind::Circumcircle => "Circumcircle",
+            DefKind::DirectionOf => "DirectionOf",
+            DefKind::AnglePair => "AnglePair",
+            DefKind::Midpoint => "Midpoint",
+            DefKind::LengthSq => "LengthSq",
+            DefKind::TangentLine => "TangentLine",
+            DefKind::ParallelLine => "ParallelLine",
+            DefKind::CrossRatio => "CrossRatio",
+            DefKind::CrossRatioOfLines => "CrossRatioOfLines",
+            DefKind::ConicThrough5Points => "ConicThrough5Points",
+            DefKind::Product => "Product",
+            DefKind::SecondIntersectionOfLineAndConic => "SecondIntersectionOfLineAndConic",
+            DefKind::RadicalAxis => "RadicalAxis",
+            DefKind::SecondIntersectionOfCircles => "SecondIntersectionOfCircles",
+        }
+    }
+
+    /// 作図名の接頭辞(DirectionOf だけ短く Dir)。
+    pub fn label(self) -> &'static str {
+        if self == DefKind::DirectionOf { "Dir" } else { self.name() }
+    }
+
+    pub fn arity(self) -> usize {
+        match self {
+            DefKind::DirectionOf => 1,
+            DefKind::Circumcircle | DefKind::SecondIntersectionOfLineAndConic
+            | DefKind::SecondIntersectionOfCircles => 3,
+            DefKind::CrossRatio | DefKind::CrossRatioOfLines => 4,
+            DefKind::ConicThrough5Points => 5,
+            _ => 2,
+        }
+    }
+
+    pub fn parent_symmetry(self) -> ParentSymmetry {
+        match self {
+            DefKind::Midpoint | DefKind::LineThroughPoints | DefKind::Intersection
+            | DefKind::LengthSq | DefKind::Circumcircle => ParentSymmetry::Unordered,
+            DefKind::CrossRatio | DefKind::CrossRatioOfLines => ParentSymmetry::KleinFour,
+            _ => ParentSymmetry::Ordered,
+        }
+    }
+
+    /// 正規化前の定義を組み立てる。親の数が合わなければ None。
+    /// 呼び出し側は EGraph::build_definition を使うこと(memo のキーは正規化済み)。
+    fn raw(self, p: &[ClassId]) -> Option<Definition> {
+        if p.len() != self.arity() { return None; }
+        Some(match self {
+            DefKind::Intersection => Definition::Intersection(p[0], p[1]),
+            DefKind::LineThroughPoints => Definition::LineThroughPoints(p[0], p[1]),
+            DefKind::PerpendicularLine => Definition::PerpendicularLine(p[0], p[1]),
+            DefKind::Circumcircle => Definition::Circumcircle(p[0], p[1], p[2]),
+            DefKind::DirectionOf => Definition::DirectionOf(p[0]),
+            DefKind::AnglePair => Definition::AnglePair(p[0], p[1]),
+            DefKind::Midpoint => Definition::Midpoint(p[0], p[1]),
+            DefKind::LengthSq => Definition::LengthSq(p[0], p[1]),
+            DefKind::TangentLine => Definition::TangentLine(p[0], p[1]),
+            DefKind::ParallelLine => Definition::ParallelLine(p[0], p[1]),
+            DefKind::CrossRatio => Definition::CrossRatio(p[0], p[1], p[2], p[3]),
+            DefKind::CrossRatioOfLines => Definition::CrossRatioOfLines(p[0], p[1], p[2], p[3]),
+            DefKind::ConicThrough5Points => Definition::ConicThrough5Points(p[0], p[1], p[2], p[3], p[4]),
+            DefKind::Product => Definition::Product(p[0], p[1]),
+            DefKind::SecondIntersectionOfLineAndConic => Definition::SecondIntersectionOfLineAndConic(p[0], p[1], p[2]),
+            DefKind::RadicalAxis => Definition::RadicalAxis(p[0], p[1]),
+            DefKind::SecondIntersectionOfCircles => Definition::SecondIntersectionOfCircles(p[0], p[1], p[2]),
+        })
     }
 }
 
@@ -654,9 +787,8 @@ impl EGraph {
     /// 消費仕事量が1ステップも変わらないことを確認済み)。
     pub fn count_of_type(&self, ty: EntityType) -> usize {
         let current = self.type_generation.get(&ty).copied().unwrap_or(0);
-        if let Some(&(cached_gen, n)) = self.type_counts.borrow().get(&ty) {
-            if cached_gen == current { return n; }
-        }
+        if let Some(&(cached_gen, n)) = self.type_counts.borrow().get(&ty)
+            && cached_gen == current { return n; }
         let n = self.entities.iter().filter(|e| e.entity_type == ty).count();
         self.type_counts.borrow_mut().insert(ty, (current, n));
         n
@@ -922,12 +1054,6 @@ impl GeoEntity {
 pub enum Fact {
     Identical(ClassId, ClassId),
     Connected(ClassId, ClassId), // (Child, Parent)
-    /// 🌟 今はどこからも構成されない。平行は「2直線が同じ無限遠点を通る」
-    /// という接続(Connected)として表しており、専用のFact型は要らないため
-    /// (上のConcyclic/Collinearを廃した話と同じ理由)。文字列形式への
-    /// 変換側にはまだ対応する腕が残っているので、型としては残してある。
-    #[allow(dead_code)]
-    Parallel(ClassId, ClassId),
 }
 
 impl Fact {
@@ -945,12 +1071,10 @@ impl EGraph {
         let rep2 = self.get_rep(id2);
 
         let mut added_new_link = false;
-        if let Some(comp1) = self.entities[rep1.0].components.first_mut() {
-            if !comp1.subobjects.contains(&rep2) { comp1.subobjects.push(rep2); added_new_link = true; }
-        }
-        if let Some(comp2) = self.entities[rep2.0].components.first_mut() {
-            if !comp2.subobjects.contains(&rep1) { comp2.subobjects.push(rep1); added_new_link = true; }
-        }
+        if let Some(comp1) = self.entities[rep1.0].components.first_mut()
+            && !comp1.subobjects.contains(&rep2) { comp1.subobjects.push(rep2); added_new_link = true; }
+        if let Some(comp2) = self.entities[rep2.0].components.first_mut()
+            && !comp2.subobjects.contains(&rep1) { comp2.subobjects.push(rep1); added_new_link = true; }
 
         // 🌟 type_generationのドキュメント参照: 既存の2エンティティ間に
         // 新しい接続関係(incidence)ができるのは、マージでも新規生成でもない
@@ -981,6 +1105,11 @@ impl EGraph {
         let rep2 = self.get_rep(id2);
         let key = if rep1.0 < rep2.0 { (rep1, rep2) } else { (rep2, rep1) };
         self.incidence_provenance.entry(key).or_insert(justification);
+    }
+
+    /// 種類と親から、memo を引ける正規化済みの定義を作る。親の数が合わなければ None。
+    pub fn build_definition(&self, kind: DefKind, parents: &[ClassId]) -> Option<Definition> {
+        kind.raw(parents).map(|d| self.normalize_definition(&d))
     }
 
     /// 定義内の親IDを最新の代表元に置き換え、順不同図形はソートして一意なシグネチャにする
