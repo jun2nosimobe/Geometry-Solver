@@ -38,7 +38,6 @@ pub struct SolveOptions {
     pub midpoint_demands: bool,
     pub length_theorems: bool,
     pub central_angle: bool,
-    pub projective: bool,
     pub no_projective: bool,
     pub degen_heat: bool,
     pub degen_heat_seed: u64,
@@ -73,7 +72,6 @@ impl SolveOptions {
             midpoint_demands: flag(args, "--midpoint-demands"),
             length_theorems: flag(args, "--length-theorems"),
             central_angle: flag(args, "--central-angle"),
-            projective: flag(args, "--projective"),
             no_projective: flag(args, "--no-projective"),
             degen_heat: flag(args, "--degen-heat"),
             degen_heat_seed: value(args, "--degen-heat-seed=").unwrap_or(12345),
@@ -97,16 +95,7 @@ impl SolveOptions {
     }
 }
 
-/// 射影5定理を既定で入れる問題。
-///
-/// 問題名で決めるのは暫定で、新しい問題には効かない。これらの定理を全問題に入れると、
-/// 使わない問題の仕事量が平均+29%になる(--projective / --no-projective で比べられる)。
-const PROJECTIVE_PROBLEMS: &[&str] = &[
-    "test_cross_ratio", "test_steiner", "test_steiner_tangent",
-    "test_involution", "test_steiner_converse",
-    "pappus", "pascal", "desargues", "newton_gauss",
-];
-/// 中心角の定理を既定で入れる問題(暫定。理由は PROJECTIVE_PROBLEMS と同じ)。
+/// 中心角の定理を既定で入れる問題。問題名で決めるのは暫定で、新しい問題には効かない。
 const CENTRAL_ANGLE_PROBLEMS: &[&str] = &["bench_2012egmop1"];
 
 fn theorem_set(problem_name: &str, opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
@@ -117,7 +106,7 @@ fn theorem_set(problem_name: &str, opts: &SolveOptions) -> Vec<logic_core::Theor
     if opts.central_angle || CENTRAL_ANGLE_PROBLEMS.contains(&problem_name) {
         all.extend(theorems::get_central_angle_theorem());
     }
-    if !opts.no_projective && (opts.projective || PROJECTIVE_PROBLEMS.contains(&problem_name)) {
+    if !opts.no_projective {
         all.extend(theorems::get_projective_theorems());
     }
     all
