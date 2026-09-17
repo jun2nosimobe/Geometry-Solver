@@ -10,10 +10,9 @@
 use std::fs;
 use std::time::{Duration, Instant};
 
-use crate::logic_core::{self, BlackboardEngine, ProverEngine, BRANCH_LABELS};
+use crate::logic_core::{self, BlackboardEngine, ProverEngine, Recovered, RecoveryOptions, BRANCH_LABELS};
 use crate::mcts::MCTSSearchEngine;
 use crate::mmp_core::{self, ClassId, EGraph, RawProof};
-use crate::mmp_tester::MMPTester;
 use crate::{cli, padic_eval, problems, sketch, theorems, trace};
 
 /// `--name` が付いているか。
@@ -90,8 +89,8 @@ impl SolveOptions {
         })
     }
 
-    fn skipped(&self, name: &str) -> bool {
-        self.skip_recovery.iter().any(|s| s == name)
+    fn recovery_options(&self) -> RecoveryOptions {
+        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone() }
     }
 }
 
@@ -99,17 +98,11 @@ impl SolveOptions {
 const CENTRAL_ANGLE_PROBLEMS: &[&str] = &["bench_2012egmop1"];
 
 fn theorem_set(problem_name: &str, opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
-    let mut all = theorems::get_all_theorems();
-    if opts.length_theorems {
-        all.extend(theorems::get_length_bridge_theorems());
-    }
-    if opts.central_angle || CENTRAL_ANGLE_PROBLEMS.contains(&problem_name) {
-        all.extend(theorems::get_central_angle_theorem());
-    }
-    if !opts.no_projective {
-        all.extend(theorems::get_projective_theorems());
-    }
-    all
+    theorems::theorem_set(&theorems::TheoremSetOptions {
+        projective: !opts.no_projective,
+        length_bridge: opts.length_theorems,
+        central_angle: opts.central_angle || CENTRAL_ANGLE_PROBLEMS.contains(&problem_name),
+    })
 }
 
 /// 証明を人間向けに復元し、コンソールと result/proof_<問題名>.txt に出す。
@@ -153,7 +146,6 @@ enum Goal {
 /// 目標到達の判定。MCTS が構成に関わった実行では、数値検証だけが根拠の局所ショートカットを
 /// 経路に含む到達を証明と認めない(予想として記録して探索を続ける)。
 struct GoalChecker {
-    tester: MMPTester,
     shortcut_noted: bool,
 }
 
@@ -174,8 +166,9 @@ impl GoalChecker {
                 let r1 = eg.get_rep(target_args[0]);
                 let r2 = eg.get_rep(target_args[1]);
                 if r1 != r2 { return Goal::NotYet; }
-                // 座標を持たない(有向角ベースの)比較は None なので、構造的な証明をそのまま信用する。
-                if self.tester.sanity_check_identical(eg, target_args[0], target_args[1], 3) == Some(false) {
+                // 前提(問題文が接続で与えた曲線)を満たす座標で検算する。座標を組み立てられない・評価できない比較は
+                // None なので、構造的な証明をそのまま信用する。
+                if eg.numeric_plausibility_check(target_args[0], target_args[1], 3) == Some(false) {
                     println!("🚨 [数値サニティチェック失敗] {} ≡ {} は構造的にはマージされましたが、ランダムな具体例では成り立ちません。",
                         eg.entities[r1.0].name, eg.entities[r2.0].name);
                     println!("    -> どこかの局所マージ(直線/点の一意性判定)が本来無関係な図形を誤って結合した可能性が高く、証明成立とは認めません。探索を打ち切ります。");
@@ -227,8 +220,6 @@ struct Recovery {
     mcts_ever_committed: bool,
 }
 
-/// 候補capの拡大の上限。
-const FANOUT_HEAT_CAP_CEILING: usize = 40;
 const MCTS_MAX_CONSECUTIVE_FAILURES: usize = 3;
 
 impl Recovery {
@@ -236,25 +227,17 @@ impl Recovery {
     fn run(&mut self, engine: &mut BlackboardEngine, target: &Option<(String, Vec<ClassId>)>, opts: &SolveOptions) -> bool {
         println!("⏳ ロジックがStallしました。リカバリーフェーズに移行します...");
         let recovery_start = Instant::now();
-        // 補助線と交点は毎回試す。それ以降は、狙いの定まった手が何も出さなかったときだけ広げる
-        // (有向角の総当たり・もう一方の交点は、毎回回すと解ける問題を遠回りさせる)。
-        let mut recovered = !opts.skipped("line") && engine.resolve_demands();
-        if !opts.skipped("point") && engine.resolve_point_demands() { recovered = true; }
-        if !recovered && !opts.skipped("angle") && engine.resolve_angle_demands() { recovered = true; }
-        if !recovered && !opts.skipped("second") && engine.resolve_second_intersection_demands() { recovered = true; }
-        if !recovered && opts.midpoint_demands && !opts.skipped("mid") && engine.resolve_midpoint_demands() { recovered = true; }
-        if !recovered && !opts.skipped("target") && engine.resolve_target_demands(target) { recovered = true; }
-        if !recovered && !opts.skipped("target") && engine.resolve_cross_ratio_demands(target) { recovered = true; }
+        let open: Vec<(String, Vec<ClassId>)> = target.iter().cloned().collect();
+        let mut rotate = 0;
+        let step = engine.recover(&open, &mut rotate, &opts.recovery_options());
         engine.prover.profile.recovery_time += recovery_start.elapsed();
-        if recovered { return true; }
-
-        // 狭い cap で除外されていただけの候補があれば、MCTS よりずっと安く届く。
-        // 失敗キャッシュは既に試した候補を再利用するので、広げても同じ探索を繰り返さない。
-        if engine.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
-            engine.prover.fanout_heat_cap = (engine.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
-            println!("  -> 需要による補助線が尽きたため、MCTSの前に候補capを広げて再探索します(fanout_heat_cap={})。", engine.prover.fanout_heat_cap);
-            engine.schedule_full_sweep();
-            return true;
+        match step {
+            Recovered::Construction => return true,
+            Recovered::WidenedCap(cap) => {
+                println!("  -> 需要による補助線が尽きたため、MCTSの前に候補capを広げて再探索します(fanout_heat_cap={})。", cap);
+                return true;
+            }
+            Recovered::Exhausted => {}
         }
 
         // MCTS は既定で無効: 無方向な作図は、数値検証が判定不能(None)を返す構造的な前提の
@@ -291,7 +274,6 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         opts.heat_cap, opts.fanout_heat_cap);
 
     let mut egraph = EGraph::new();
-    let tester = MMPTester::new();
     let problem = problems::load_problem(problem_name, &mut egraph);
     let sketch_ctx = match opts.sketch {
         None => None,
@@ -328,7 +310,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     let mut mcts = MCTSSearchEngine::new();
     mcts.target_bias_enabled = opts.mcts_target_bias;
     let mut recovery = Recovery { mcts, mcts_consecutive_failures: 0, mcts_ever_committed: false };
-    let mut goal = GoalChecker { tester, shortcut_noted: false };
+    let mut goal = GoalChecker { shortcut_noted: false };
 
     for fact in &problem.initial_facts {
         match fact {

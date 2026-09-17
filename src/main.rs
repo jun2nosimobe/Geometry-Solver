@@ -2,7 +2,6 @@ mod mmp_math;
 mod mmp_core;
 mod logic_core;
 mod mmp_calculators;
-mod mmp_tester;
 mod theorems;
 mod action_space;
 mod mcts;

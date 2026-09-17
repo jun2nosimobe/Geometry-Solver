@@ -8,6 +8,7 @@
 //! 5. 退化なしの一般の乱数でも一致する組(常に真の一致)は、この技法固有の発見ではないので除く。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::coords::{self, Geometry, Placed, Placement};
 use crate::padic::{
     cross3,
     self, affine_point, intersection, line_through_points, midpoint, parallel_line,
@@ -115,18 +116,16 @@ fn harmonic_conjugate(a: &Triple, b: &Triple, c: &Triple) -> Triple {
     d
 }
 
+/// p進の座標での評価。自由点の置き方と同値類の評価は mmp_core::coords と共通。
 pub struct DegenEvaluator<'a> {
     egraph: &'a EGraph,
-    cache: FxHashMap<ClassId, Option<DegenShape>>,
+    coords: DegenCoords,
+    cache: FxHashMap<usize, DegenShape>,
+}
+
+/// 置いた自由点の座標(代表元 -> アフィン座標)と、置くための乱数。
+struct DegenCoords {
     free_coords: FxHashMap<ClassId, (PInt, PInt)>,
-    /// 🌟 incidence_constraintsは定義グラフ全体を歩く判定
-    /// (evaluation_requires_point)を接続先ごとに行うため高価で、しかも
-    /// 評価失敗はキャッシュされないので同じ自由点について何度も呼ばれる。
-    /// e-graphはこの評価器の生存中は変化しないので、点ごとに1度だけ計算する。
-    constraints_cache: FxHashMap<ClassId, Vec<ClassId>>,
-    /// 評価中のClassId(自己参照的な定義への再突入検出用。本体の評価器の
-    /// in_progressと同じ役割)。
-    in_progress: rustc_hash::FxHashSet<ClassId>,
     rng: StdRng,
 }
 
@@ -135,6 +134,10 @@ impl<'a> DegenEvaluator<'a> {
     /// A = B + P*δという退化した座標で結ぶ。指定が無ければ全ての自由点を
     /// 完全に一般的な乱数座標にする(discover.rsの一般乱数一致検出との
     /// 対照実験、「この一致は退化固有か」を確かめるベースラインに使う)。
+    ///
+    /// 残りの自由点は最初にまとめて置く。前提(「Dは辺BC上」など)を持つ点はその曲線の上に置き、前提を満たせ
+    /// なかった点(直線と円の両方に乗る点など、平方根が要る組み合わせ)は置かずに残す ― 仮定を破った配置を作るより、
+    /// その点に依存する図形を評価不能にする方が安全(崩壊検出が誤って発火する)。
     pub fn new(egraph: &'a EGraph, seed: u64, merge_pair: Option<(ClassId, ClassId)>) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut free_coords = FxHashMap::default();
@@ -150,212 +153,97 @@ impl<'a> DegenEvaluator<'a> {
                 free_coords.insert(a_rep, (bx.add(&dx.scaled_by_p()), by.add(&dy.scaled_by_p())));
             }
         }
-        Self { egraph, cache: FxHashMap::default(), free_coords, constraints_cache: FxHashMap::default(),
-               in_progress: rustc_hash::FxHashSet::default(), rng }
+        let mut coords = DegenCoords { free_coords, rng };
+        if let Placed::Violated(points) = egraph.place_free_points(&egraph.all_free_points(), &mut coords, true) {
+            for fp in points { coords.unplace(egraph, fp); }
+        }
+        Self { egraph, coords, cache: FxHashMap::default() }
     }
 
-    /// 本体の評価器(mmp_core/eval.rs::evaluate_node_inner)と同じく、同値類の全ての定義を計算できるものが見つかるまで順に試し、
-    /// 再突入は in_progress で検出して、成功した結果だけをキャッシュする(マージが進んだ e-graph では自己参照的な定義が
-    /// 同居するのが普通で、original_definition 決め打ちだと循環ですぐ評価不能になる)。
     pub fn eval(&mut self, id: ClassId) -> Option<DegenShape> {
-        let rep = self.egraph.get_rep(id);
-        if let Some(v) = self.cache.get(&rep) { return *v; }
-        if !self.in_progress.insert(rep) { return None; }
+        coords::evaluate(self.egraph, &self.coords, id, &mut self.cache, &mut std::collections::HashSet::new())
+    }
+}
 
-        let defs: Vec<Definition> = self.egraph.entities[rep.0].components.first()
-            .map(|c| c.definitions.clone())
-            .unwrap_or_default();
-        let mut result = None;
-        for def in &defs {
-            if let Some(v) = self.eval_def(rep, def) { result = Some(v); break; }
-        }
-        if result.is_none() {
-            // componentsが空(定数ノード等)の場合の保険。
-            let od = self.egraph.entities[rep.0].original_definition.clone();
-            result = self.eval_def(rep, &od);
-        }
+impl DegenCoords {
+    fn set(&mut self, egraph: &EGraph, point: ClassId, t: &Triple) -> bool {
+        let Some(xy) = affine_xy(t) else { return false };
+        self.free_coords.insert(egraph.get_rep(point), xy);
+        true
+    }
+}
 
-        self.in_progress.remove(&rep);
-        if result.is_some() { self.cache.insert(rep, result); }
-        result
-    }
+impl Geometry for DegenCoords {
+    type Shape = DegenShape;
 
-    fn point_of(&mut self, id: ClassId) -> Option<Triple> {
-        match self.eval(id)? { DegenShape::Point(t) => Some(t), _ => None }
-    }
-    fn line_of(&mut self, id: ClassId) -> Option<Triple> {
-        match self.eval(id)? { DegenShape::Line(t) => Some(t), _ => None }
-    }
-    fn circle_of(&mut self, id: ClassId) -> Option<(Triple, PInt)> {
-        match self.eval(id)? { DegenShape::Circle { center, r_sq, .. } => Some((center, r_sq)), _ => None }
-    }
-    fn scalar_of(&mut self, id: ClassId) -> Option<(PInt, PInt)> {
-        match self.eval(id)? { DegenShape::Scalar { num, den } => Some((num, den)), _ => None }
+    fn free(&self, egraph: &EGraph, rep: ClassId, _def: &Definition) -> Option<DegenShape> {
+        if egraph.entities[rep.0].entity_type != EntityType::Point { return None; } // Line_infinity等
+        let &(x, y) = self.free_coords.get(&rep)?;
+        Some(DegenShape::Point(affine_point(x, y)))
     }
 
-    /// この点が構造的に接続されている曲線(直線・二次曲線)。自由点にとっては
-    /// 「その上にある」という問題の仮定そのものなので制約として扱う。
-    fn incidence_constraints(&mut self, rep: ClassId) -> Vec<ClassId> {
-        if let Some(v) = self.constraints_cache.get(&rep) { return v.clone(); }
-        let out = self.compute_incidence_constraints(rep);
-        self.constraints_cache.insert(rep, out.clone());
-        out
-    }
-
-    fn compute_incidence_constraints(&self, rep: ClassId) -> Vec<ClassId> {
-        // 依存判定のメモはこの点に対して共通なので、接続先ごとに作り直さず
-        // 1つを使い回す(作り直すとメモが効かず、実測で作図閉包が2.7秒から
-        // 125秒に悪化した)。
-        let mut memo: FxHashMap<usize, bool> = FxHashMap::default();
-        self.egraph.entities[rep.0].components.first()
-            .map(|c| c.subobjects.iter().map(|&s| self.egraph.get_rep(s))
-                .filter(|&s| matches!(self.egraph.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
-                .filter(|&s| s != self.egraph.line_infinity)
-                // 「その点自身から作られた曲線」への接続(Aと直線ABなど)は作図の結果で制約ではないので除く(制約とみなすと評価が
-                // 循環する)。判定は本体と同じ厳密な依存判定(evaluation_requires_point)で、問題の仮定(「Dは辺BC上」など)を
-                // 自然な接続と誤判定しない。
-                .filter(|&s| {
-                    let mut stack: std::collections::HashSet<usize> = std::collections::HashSet::new();
-                    !self.egraph.evaluation_requires_point(rep, s, &mut stack, &mut memo)
-                })
-                .collect::<Vec<_>>())
-            .map(|mut v| {
-                // 代表元に直した後の重複を落とす。subobjects には元々別々だった実体が並んでいて、マージ後は同じ rep が2回現れる
-                // (落とさないと下の「2直線に乗る自由点はその交点」が同じ直線どうしの交点を計算して退化する)。
-                v.sort_unstable_by_key(|c| c.0);
-                v.dedup();
-                v
-            })
-            .unwrap_or_default()
-    }
-
-    fn circle_parts(&mut self, id: ClassId) -> Option<(Triple, PInt, Triple)> {
-        match self.eval(id)? { DegenShape::Circle { center, r_sq, known } => Some((center, r_sq, known)), _ => None }
-    }
-
-    /// 直線l上の点を1つ無作為に取る。lと2本の補助直線とのクロス積で
-    /// l上の相異なる2点を作り、その射影的な線形結合を返す(除算不要)。
-    fn sample_on_line(&mut self, l: &Triple) -> Option<Triple> {
-        let aux1: Triple = [PInt::one(), PInt::zero(), PInt::zero()];
-        let aux2: Triple = [PInt::zero(), PInt::one(), PInt::zero()];
-        let p1 = cross3(l, &aux1);
-        let p2 = cross3(l, &aux2);
-        let ok = |t: &Triple| !t.iter().all(|x| x.valuation().is_none());
-        if !ok(&p1) || !ok(&p2) { return None; }
-        let s = PInt::random_unit(&mut self.rng);
-        let t = PInt::random_unit(&mut self.rng);
-        Some([
-            p1[0].mul(&s).add(&p2[0].mul(&t)),
-            p1[1].mul(&s).add(&p2[1].mul(&t)),
-            p1[2].mul(&s).add(&p2[2].mul(&t)),
-        ])
-    }
-
-    /// 中心centerの円周上の点を1つ無作為に取る。円周上の既知点Qから任意方向d
-    /// へ引いた直線ともう一度交わる点は、Qが既に根であることを使って
-    /// t = -2 d·(Q-center) / |d|² と1次で解ける(平方根が不要)。
-    fn sample_on_circle(&mut self, center: &Triple, known: &Triple) -> Option<Triple> {
-        let dx = PInt::random_unit(&mut self.rng);
-        let dy = PInt::random_unit(&mut self.rng);
-        second_on_circle(center, known, dx, dy)
-    }
-
-    fn eval_def(&mut self, rep: ClassId, def: &Definition) -> Option<DegenShape> {
+    fn construct(&self, _egraph: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<DegenShape>) -> Option<DegenShape> {
+        let point_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<DegenShape>| match get(id)? { DegenShape::Point(t) => Some(t), _ => None };
+        let line_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<DegenShape>| match get(id)? { DegenShape::Line(t) => Some(t), _ => None };
+        let circle_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<DegenShape>| match get(id)? {
+            DegenShape::Circle { center, r_sq, .. } => Some((center, r_sq)), _ => None };
+        let scalar_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<DegenShape>| match get(id)? {
+            DegenShape::Scalar { num, den } => Some((num, den)), _ => None };
         match def {
-            Definition::FreePoint | Definition::GivenPoint => {
-                if self.egraph.entities[rep.0].entity_type != EntityType::Point {
-                    return None; // Line_infinity等
-                }
-                if let Some(&c) = self.free_coords.get(&rep) { return Some(DegenShape::Point(affine_point(c.0, c.1))); }
-                // 自由点でも「辺BC上の点D」のように問題の仮定として曲線への接続を持つことがある。本体の評価器
-                // (eval.rs::sample_point_on_constraint)と同じく、接続を制約とみなして曲線上からサンプリングする(乱数座標だと
-                // 仮定を満たさない別の図になり、崩壊検出が誤って発火する)。
-                let constraints = self.incidence_constraints(rep);
-                let lines: Vec<ClassId> = constraints.iter().copied()
-                    .filter(|&c| self.egraph.entities[c.0].entity_type == EntityType::Line).collect();
-                let conics: Vec<ClassId> = constraints.iter().copied()
-                    .filter(|&c| self.egraph.entities[c.0].entity_type == EntityType::Conic).collect();
-
-                let sampled: Option<Triple> = if lines.len() >= 2 {
-                    // 2直線に同時に乗る自由点は、その交点として一意に決まる。
-                    let l1 = self.line_of(lines[0])?;
-                    let l2 = self.line_of(lines[1])?;
-                    Some(intersection(&l1, &l2))
-                } else if lines.len() == 1 && conics.is_empty() {
-                    let l = self.line_of(lines[0])?;
-                    self.sample_on_line(&l)
-                } else if lines.is_empty() && conics.len() == 1 {
-                    let (center, _r, known) = self.circle_parts(conics[0])?;
-                    self.sample_on_circle(&center, &known)
-                } else if lines.is_empty() && conics.is_empty() {
-                    let c = (PInt::random_unit(&mut self.rng), PInt::random_unit(&mut self.rng));
-                    Some(affine_point(c.0, c.1))
-                } else {
-                    // 直線と円の両方に乗る等、厳密に満たすには平方根が要る組み合わせ。
-                    // 仮定を破った配置を作るよりは評価不能として捨てる方が安全。
-                    None
-                };
-                let t = sampled?;
-                let (x, y) = affine_xy(&t)?;
-                self.free_coords.insert(rep, (x, y));
-                Some(DegenShape::Point(affine_point(x, y)))
-            }
             Definition::Intersection(l1, l2) => {
-                let a = self.line_of(*l1)?;
-                let b = self.line_of(*l2)?;
+                let a = line_of(*l1, get)?;
+                let b = line_of(*l2, get)?;
                 Some(DegenShape::Point(intersection(&a, &b)))
             }
             Definition::LineThroughPoints(p1, p2) => {
-                let a = self.point_of(*p1)?;
-                let b = self.point_of(*p2)?;
+                let a = point_of(*p1, get)?;
+                let b = point_of(*p2, get)?;
                 Some(DegenShape::Line(line_through_points(&a, &b)))
             }
             Definition::Midpoint(p1, p2) => {
-                let a = self.point_of(*p1)?;
-                let b = self.point_of(*p2)?;
+                let a = point_of(*p1, get)?;
+                let b = point_of(*p2, get)?;
                 Some(DegenShape::Point(midpoint(&a, &b)))
             }
             // 🌟 スカラー量。これが評価できないと、長さや複比についての
             // 主張を検出器にも証明の目標にも載せられない。
             Definition::LengthSq(p1, p2) => {
-                let a = self.point_of(*p1)?;
-                let b = self.point_of(*p2)?;
+                let a = point_of(*p1, get)?;
+                let b = point_of(*p2, get)?;
                 Some(DegenShape::Scalar { num: squared_distance(&a, &b)?, den: PInt::one() })
             }
             Definition::Product(s1, s2) => {
-                let (n1, d1) = self.scalar_of(*s1)?;
-                let (n2, d2) = self.scalar_of(*s2)?;
+                let (n1, d1) = scalar_of(*s1, get)?;
+                let (n2, d2) = scalar_of(*s2, get)?;
                 Some(DegenShape::Scalar { num: n1.mul(&n2), den: d1.mul(&d2) })
             }
             Definition::CrossRatio(a, b, c, d) => {
-                let (pa, pb) = (self.point_of(*a)?, self.point_of(*b)?);
-                let (pc, pd) = (self.point_of(*c)?, self.point_of(*d)?);
+                let (pa, pb) = (point_of(*a, get)?, point_of(*b, get)?);
+                let (pc, pd) = (point_of(*c, get)?, point_of(*d, get)?);
                 let (num, den) = cross_ratio_pair(&pa, &pb, &pc, &pd)?;
                 Some(DegenShape::Scalar { num, den })
             }
             Definition::CrossRatioOfLines(a, b, c, d) => {
-                // 直線の同次係数(a,b,c)を双対平面の"点"とみなせば、
-                // 点の複比と全く同じ計算になる(mmp_core::Definitionの
-                // CrossRatioOfLinesのドキュメント参照)。
-                let (la, lb) = (self.line_of(*a)?, self.line_of(*b)?);
-                let (lc, ld) = (self.line_of(*c)?, self.line_of(*d)?);
+                // 直線の同次係数(a,b,c)を双対平面の"点"とみなせば、点の複比と同じ計算になる。
+                let (la, lb) = (line_of(*a, get)?, line_of(*b, get)?);
+                let (lc, ld) = (line_of(*c, get)?, line_of(*d, get)?);
                 let (num, den) = cross_ratio_pair(&la, &lb, &lc, &ld)?;
                 Some(DegenShape::Scalar { num, den })
             }
             Definition::PerpendicularLine(l, p) => {
-                let ll = self.line_of(*l)?;
-                let pp = self.point_of(*p)?;
+                let ll = line_of(*l, get)?;
+                let pp = point_of(*p, get)?;
                 Some(DegenShape::Line(perpendicular_line(&ll, &pp)))
             }
             Definition::ParallelLine(l, p) => {
-                let ll = self.line_of(*l)?;
-                let pp = self.point_of(*p)?;
+                let ll = line_of(*l, get)?;
+                let pp = point_of(*p, get)?;
                 Some(DegenShape::Line(parallel_line(&ll, &pp)))
             }
             Definition::Circumcircle(a, b, c) => {
-                let pa = self.point_of(*a)?;
-                let pb = self.point_of(*b)?;
-                let pc = self.point_of(*c)?;
+                let pa = point_of(*a, get)?;
+                let pb = point_of(*b, get)?;
+                let pc = point_of(*c, get)?;
                 let mid_ab = midpoint(&pa, &pb);
                 let mid_ac = midpoint(&pa, &pc);
                 let l_ab = line_through_points(&pa, &pb);
@@ -367,47 +255,106 @@ impl<'a> DegenEvaluator<'a> {
                 Some(DegenShape::Circle { center, r_sq, known: pa })
             }
             Definition::TangentLine(circ, p) => {
-                // pは既に円上にある接点だという前提(このプロジェクト全体の
-                // 規約、discover_viz.rs::RealEvaluatorと同じ)。接線は
-                // 半径(中心→p)に垂直でpを通る直線。
-                let (center, _r_sq) = self.circle_of(*circ)?;
-                let pp = self.point_of(*p)?;
+                // pは既に円上にある接点(このプロジェクト全体の規約)。接線は半径(中心→p)に垂直でpを通る直線。
+                let (center, _r_sq) = circle_of(*circ, get)?;
+                let pp = point_of(*p, get)?;
                 let radial_line = line_through_points(&center, &pp);
                 Some(DegenShape::Line(perpendicular_line(&radial_line, &pp)))
             }
             Definition::HarmonicConjugateOf(a, b, c) => {
-                let pa = self.point_of(*a)?;
-                let pb = self.point_of(*b)?;
-                let pc = self.point_of(*c)?;
+                let pa = point_of(*a, get)?;
+                let pb = point_of(*b, get)?;
+                let pc = point_of(*c, get)?;
                 Some(DegenShape::Point(harmonic_conjugate(&pa, &pb, &pc)))
             }
-            // 🌟 円と直線の第2交点(一方の交点pが既知)。直線[a,b,c]の方向は
-            // (b,-a)なので、あとはsecond_on_circleの1次の式で解ける。
+            // 🌟 円と直線の第2交点(一方の交点pが既知)。直線[a,b,c]の方向は(b,-a)なので、second_on_circleの1次の式で解ける。
             Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
-                let pp = self.point_of(*p)?;
-                let ll = self.line_of(*l)?;
-                let (center, _r_sq) = self.circle_of(*c)?;
+                let pp = point_of(*p, get)?;
+                let ll = line_of(*l, get)?;
+                let (center, _r_sq) = circle_of(*c, get)?;
                 second_on_circle(&center, &pp, ll[1], ll[0].neg()).map(DegenShape::Point)
             }
             // 🌟 2円の根軸。
             Definition::RadicalAxis(c1, c2) => {
-                let (o1, r1) = self.circle_of(*c1)?;
-                let (o2, r2) = self.circle_of(*c2)?;
+                let (o1, r1) = circle_of(*c1, get)?;
+                let (o2, r2) = circle_of(*c2, get)?;
                 radical_axis((&o1, r1), (&o2, r2)).map(DegenShape::Line)
             }
-            // 🌟 2円の第2交点。2交点はどちらも根軸上にあるので、根軸と円c1の
-            // 第2交点として求まる(平方根不要)。
+            // 🌟 2円の第2交点。2交点はどちらも根軸上にあるので、根軸と円c1の第2交点として求まる(平方根不要)。
             Definition::SecondIntersectionOfCircles(p, c1, c2) => {
-                let pp = self.point_of(*p)?;
-                let (o1, r1) = self.circle_of(*c1)?;
-                let (o2, r2) = self.circle_of(*c2)?;
+                let pp = point_of(*p, get)?;
+                let (o1, r1) = circle_of(*c1, get)?;
+                let (o2, r2) = circle_of(*c2, get)?;
                 let axis = radical_axis((&o1, r1), (&o2, r2))?;
                 second_on_circle(&o1, &pp, axis[1], axis[0].neg()).map(DegenShape::Point)
             }
-            // Scalar/Conic(一般二次曲線)/CrossRatio系はまだ未対応
-            // (Point/Line/Circleのみが第一段の対象、discover_viz.rs::
-            // RealEvaluatorと同じスコープ)。
+            // 方向・有向角・一般の二次曲線は未対応(点・直線・円・スカラーが対象)。
             _ => None,
+        }
+    }
+}
+
+impl Placement for DegenCoords {
+    fn is_placed(&self, egraph: &EGraph, point: ClassId) -> bool {
+        self.free_coords.contains_key(&egraph.get_rep(point))
+    }
+
+    fn place_randomly(&mut self, egraph: &EGraph, point: ClassId) {
+        let c = (PInt::random_unit(&mut self.rng), PInt::random_unit(&mut self.rng));
+        self.free_coords.insert(egraph.get_rep(point), c);
+    }
+
+    fn unplace(&mut self, egraph: &EGraph, point: ClassId) {
+        self.free_coords.remove(&egraph.get_rep(point));
+    }
+
+    fn place_on_two_lines(&mut self, egraph: &EGraph, point: ClassId, l1: &DegenShape, l2: &DegenShape) -> bool {
+        let (DegenShape::Line(a), DegenShape::Line(b)) = (l1, l2) else { return false };
+        self.set(egraph, point, &intersection(a, b))
+    }
+
+    /// 直線l上の点を1つ無作為に取る。lと2本の補助直線とのクロス積でl上の相異なる2点を作り、その射影的な線形結合を
+    /// 返す(除算不要)。
+    fn place_on_line(&mut self, egraph: &EGraph, point: ClassId, line: &DegenShape) -> bool {
+        let DegenShape::Line(l) = line else { return false };
+        let aux1: Triple = [PInt::one(), PInt::zero(), PInt::zero()];
+        let aux2: Triple = [PInt::zero(), PInt::one(), PInt::zero()];
+        let p1 = cross3(l, &aux1);
+        let p2 = cross3(l, &aux2);
+        let ok = |t: &Triple| !t.iter().all(|x| x.valuation().is_none());
+        if !ok(&p1) || !ok(&p2) { return false; }
+        let s = PInt::random_unit(&mut self.rng);
+        let t = PInt::random_unit(&mut self.rng);
+        let on = [
+            p1[0].mul(&s).add(&p2[0].mul(&t)),
+            p1[1].mul(&s).add(&p2[1].mul(&t)),
+            p1[2].mul(&s).add(&p2[2].mul(&t)),
+        ];
+        self.set(egraph, point, &on)
+    }
+
+    fn conic_usable(&self, conic: &DegenShape) -> bool {
+        matches!(conic, DegenShape::Circle { .. })
+    }
+
+    /// 円周上の点を1つ無作為に取る。円周上の既知点から任意方向へ引いた直線ともう一度交わる点は1次で解ける
+    /// (second_on_circle)。既知点は円の値に入っているものを使う。
+    fn place_on_conic(&mut self, egraph: &EGraph, point: ClassId, conic: &DegenShape, _known: &DegenShape) -> bool {
+        let DegenShape::Circle { center, known, .. } = conic else { return false };
+        let dx = PInt::random_unit(&mut self.rng);
+        let dy = PInt::random_unit(&mut self.rng);
+        match second_on_circle(center, known, dx, dy) {
+            Some(t) => self.set(egraph, point, &t),
+            None => false,
+        }
+    }
+
+    fn lies_on(&self, point: &DegenShape, curve: &DegenShape, _curve_type: EntityType) -> bool {
+        let DegenShape::Point(p) = point else { return false };
+        match curve {
+            DegenShape::Line(l) => l[0].mul(&p[0]).add(&l[1].mul(&p[1])).add(&l[2].mul(&p[2])).valuation().is_none(),
+            DegenShape::Circle { center, r_sq, .. } => squared_distance(center, p).is_some_and(|d| d.sub(r_sq).valuation().is_none()),
+            _ => false,
         }
     }
 }
@@ -1477,7 +1424,7 @@ pub fn find_incidence_inconsistency(egraph: &EGraph, seed: u64) -> Option<(Class
                         .unwrap_or_default();
                     eprintln!("  [incidence-debug] 点の同値類が持つ定義: {:?}",
                         pdefs.iter().map(|d| d.chars().take(50).collect::<String>()).collect::<Vec<_>>());
-                    let cons: Vec<String> = ev.incidence_constraints(p).iter()
+                    let cons: Vec<String> = egraph.find_extraneous_incidences(p).iter()
                         .map(|&cc| egraph.entities[cc.0].name.chars().take(40).collect::<String>()).collect();
                     eprintln!("  [incidence-debug] 点が制約として使う曲線: {:?}", cons);
                     // 直線の各定義の親(点)について、その点が本当にこの直線上に
@@ -1487,7 +1434,7 @@ pub fn find_incidence_inconsistency(egraph: &EGraph, seed: u64) -> Option<(Class
                         .unwrap_or_default();
                     for q in parents {
                         if egraph.entities[q.0].entity_type != EntityType::Point { continue; }
-                        let qc: Vec<String> = ev.incidence_constraints(q).iter()
+                        let qc: Vec<String> = egraph.find_extraneous_incidences(q).iter()
                             .map(|&cc| egraph.entities[cc.0].name.chars().take(30).collect::<String>()).collect();
                         let on = match ev.eval(q) {
                             Some(DegenShape::Point(qv)) => {

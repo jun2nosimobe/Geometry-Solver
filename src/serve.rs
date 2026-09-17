@@ -800,13 +800,13 @@ pub(crate) fn goal_met(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
 /// サニティチェック(局所伝播は数値サンプリングだけが根拠なので、図全体が潰れて「矛盾から何でも従う」形になりうる)。
 fn proof_is_sound(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
     if t.0 != "Identical" { return true; }
-    let tester = crate::mmp_tester::MMPTester::new();
-    tester.sanity_check_identical(eg, t.1[0], t.1[1], 3) != Some(false)
+    eg.numeric_plausibility_check(t.1[0], t.1[1], 3) != Some(false)
 }
 
 /// 🌟 目標をまとめて1つの図で解く。1件ずつ解くと、どれも同じ図の同じ基本的な事実をゼロから導き直すが、まとめれば
 /// 導かれた事実が EGraph に溜まり、2件目以降はその続きから始まる。
-/// 手詰まりのときの回復は solve.rs と同じ順(需要駆動の補助線・補助点・角度・中点、目標からの逆算、候補capの拡張)。
+/// 定理集合と手詰まりのときの回復は solve と共通(theorems::theorem_set / BlackboardEngine::recover)。
+/// 中点の需要は solve では既定で切っているが、自由作図の主張では中点1つが足りないだけの形が多いので使う。
 /// MCTS は入れない(結果が実行ごとにぶれ、決定的な回復手段で届くならその方が速く確実)。
 fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], seconds: u64)
     -> Vec<Proof>
@@ -825,13 +825,11 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], second
     if targets.is_empty() || done.iter().all(|d| *d) { return finish(&done, &trivial); }
 
     let mut prover = crate::logic_core::ProverEngine::new(egraph);
-    prover.theorems = crate::theorems::get_all_theorems()
+    prover.theorems = crate::theorems::theorem_set(&Default::default())
         .into_iter().map(std::rc::Rc::new).collect();
     let mut engine = crate::logic_core::BlackboardEngine::new(prover);
     engine.schedule_full_sweep();
-    // main.rs の FANOUT_HEAT_CAP_CEILING と同じ。行き詰まったら候補capを
-    // 広げて同じ探索をやり直す。
-    const FANOUT_HEAT_CAP_CEILING: usize = 40;
+    let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
     let mut rotate = 0usize;
     while std::time::Instant::now() < deadline {
@@ -844,30 +842,12 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], second
         if all_done { break; }
         if applied { continue; }
 
-        let mut recovered = engine.resolve_demands();
-        if engine.resolve_point_demands() { recovered = true; }
-        if engine.resolve_angle_demands() { recovered = true; }
-        if !recovered && engine.resolve_midpoint_demands() { recovered = true; }
-        if !recovered {
-            // まだ導けていない目標を順に回して、逆算した補助線を要求する。
-            let open: Vec<usize> = (0..targets.len()).filter(|&i| !done[i]).collect();
-            for _ in 0..open.len() {
-                let i = open[rotate % open.len()];
-                rotate += 1;
-                let g = Some(targets[i].clone());
-                if engine.resolve_target_demands(&g) || engine.resolve_cross_ratio_demands(&g) {
-                    recovered = true;
-                    break;
-                }
-            }
+        // まだ導けていない目標を順に回して、逆算した補助線を要求する。
+        let open: Vec<(String, Vec<ClassId>)> = targets.iter().zip(&done)
+            .filter(|(_, d)| !**d).map(|(t, _)| t.clone()).collect();
+        if engine.recover(&open, &mut rotate, &recovery) == crate::logic_core::Recovered::Exhausted {
+            break;   // これ以上は時間を使っても伸びない
         }
-        if !recovered && engine.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
-            engine.prover.fanout_heat_cap =
-                (engine.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
-            engine.schedule_full_sweep();
-            recovered = true;
-        }
-        if !recovered { break; }   // これ以上は時間を使っても伸びない
     }
     for (i, t) in targets.iter().enumerate() {
         if !done[i] { done[i] = goal_met(&engine.prover.egraph, t); }
@@ -1392,7 +1372,7 @@ point Q inter L m2";
         assert_eq!(before, 0, "まだ複比は1つも作られていないはず");
 
         let mut prover = crate::logic_core::ProverEngine::new(egraph);
-        prover.theorems = crate::theorems::get_all_theorems()
+        prover.theorems = crate::theorems::theorem_set(&Default::default())
             .into_iter().map(std::rc::Rc::new).collect();
         let mut engine = crate::logic_core::BlackboardEngine::new(prover);
         let goal = Some(("Identical".to_string(), vec![p, q]));

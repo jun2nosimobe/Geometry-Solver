@@ -158,40 +158,13 @@ pub fn calc_cross_ratio(a: &[ModInt], b: &[ModInt], c: &[ModInt], d: &[ModInt]) 
     Some((q_c * p_d) / (p_c * q_d))
 }
 
-// 🐛 FIX: 以前は長さチェックも、vp(接点)のz成分が0(=無限遠点)かのチェックも
-// 無かった。cross_productと同様、退化した入力に対してpanicせずvec![]
-// (計算不能)を返すようにする。
-pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
-    // vc: [A, D, E, F] (A(x^2+y^2) + Dx + Ey + F = 0)。calc_circumcircle が返す並びで、A が先頭。
-    // vp: [x, y, z] (接点)
-    if vc.len() < 4 || vp.len() < 3 || vp[2].0 == 0 { return vec![]; }
-    let a_val = vc[0];
-    let d = vc[1];
-    let e = vc[2];
-    let f = vc[3];
-    
-    let x0 = vp[0] / vp[2];
-    let y0 = vp[1] / vp[2];
-    
-    let two = ModInt::new(2);
-    let a = a_val * x0 + d / two;
-    let b = a_val * y0 + e / two;
-    let c = (d / two) * x0 + (e / two) * y0 + f;
-
-    normalize(&[a, b, c])
-}
-
 // 🌟 一般の二次曲線 Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0(calc_conic_through_5_pointsの
 // 係数[A,B,C,D,E,F])上の点における接線(=極線)。射影幾何への移植
-// (接弦定理→シュタイナーの定理の接線版)のために追加した、calc_tangent_line
-// (円専用、円は「x²とy²の係数が等しくxyの係数が0」という特殊な二次曲線)の
-// 一般化。二次曲線を対称行列M(対角がA,C,F、非対角がB/2,D/2,E/2)で表した
+// (接弦定理→シュタイナーの定理の接線版)のために追加した。円も同じ式で扱う。二次曲線を対称行列M(対角がA,C,F、非対角がB/2,D/2,E/2)で表した
 // Q(v)=v^T M v とみなすと、点p=(x0,y0,z0)における極線の係数は単純に M*p
 // (Qの各変数についての偏微分を2で割ったもの、と一致する)。接点pが二次曲線
 // 上にあれば、この極線は文字通りその点における接線になる(射影幾何の標準的な
-// 事実)。calc_tangent_lineと違ってvpは斉次座標のまま(アフィン座標への
-// 正規化やz=0のガードは不要): 円の場合と違い、二次曲線側は最初から
-// (x,y,z)の斉次多項式として書かれているため、z0で割る必要が無い。
+// 事実)。vpは斉次座標のまま使う(二次曲線は(x,y,z)の斉次多項式なので、z0で割る必要が無い)。
 pub fn calc_tangent_to_conic(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
     if vc.len() < 6 || vp.len() < 3 { return vec![]; }
     let (a_c, b_c, c_c, d_c, e_c, f_c) = (vc[0], vc[1], vc[2], vc[3], vc[4], vc[5]);
@@ -287,14 +260,10 @@ pub fn calc_second_intersection_of_line_and_conic(known_point: &[ModInt], line: 
 // 打ち消し合うように定数倍して引くと1次式(直線)が残る。2円が交わるならその2交点を通る直線。
 // 作図プリミティブとして持つ意味: (a)一方の交点 P が既知なら SecondIntersectionOfLineAndConic(P, 根軸, c1) として
 // 平方根なしにもう一方の交点が作れる、(b)根軸そのものが「3円の根軸は根心で交わる」のような結果の源になる。
-// 入力は6係数 [A,B,C,D,E,F](旧来の円4係数 [A,D,E,F] も受ける)。二次の項が消えない(一方が円でない)なら空 Vec。
+// 入力は6係数 [A,B,C,D,E,F]。二次の項が消えない(一方が円でない)なら空 Vec。
 pub fn calc_radical_axis(c1: &[ModInt], c2: &[ModInt]) -> Vec<ModInt> {
-    let to6 = |v: &[ModInt]| -> Option<Vec<ModInt>> {
-        if v.len() >= 6 { Some(v[..6].to_vec()) }
-        else if v.len() == 4 { Some(vec![v[0], ModInt::new(0), v[0], v[1], v[2], v[3]]) }
-        else { None }
-    };
-    let (a, b) = match (to6(c1), to6(c2)) { (Some(a), Some(b)) => (a, b), _ => return vec![] };
+    if c1.len() < 6 || c2.len() < 6 { return vec![]; }
+    let (a, b) = (c1, c2);
     // c1 を b[0] 倍、c2 を a[0] 倍して引けば、x²の係数は必ず打ち消し合う。
     let (k1, k2) = (b[0], a[0]);
     for i in 0..3 {

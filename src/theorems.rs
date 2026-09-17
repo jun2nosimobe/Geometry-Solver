@@ -79,6 +79,40 @@ fn build(kind: DefKind, parents: &[&str], bind_to: &str) -> Construction {
 fn concl_same(a: &str, b: &str) -> Conclusion { Conclusion::Identical(a.to_string(), b.to_string()) }
 fn concl_on(child: &str, parent: &str) -> Conclusion { Conclusion::Connected(child.to_string(), parent.to_string()) }
 
+// --- 定理集合 ---
+
+/// 基本の定理(get_all_theorems)に足す定理群。
+pub struct TheoremSetOptions {
+    /// 射影の定理(複比の透視射影不変性・シュタイナーの定理)。既定で入る。
+    pub projective: bool,
+    /// 長さを橋渡しする定理(--length-theorems)。
+    pub length_bridge: bool,
+    /// 中心角の定理(--central-angle)。
+    pub central_angle: bool,
+}
+
+impl Default for TheoremSetOptions {
+    fn default() -> Self {
+        Self { projective: true, length_bridge: false, central_angle: false }
+    }
+}
+
+/// 証明に使う定理集合。solve・serve・discover の証明試行は全てここから取る。
+/// 同じ優先度のタスクは定理の登録順に取り出されるので、並び(基本 → 長さ → 中心角 → 射影)を変えると探索も変わる。
+pub fn theorem_set(opts: &TheoremSetOptions) -> Vec<TheoremDef> {
+    let mut all = get_all_theorems();
+    if opts.length_bridge {
+        all.extend(get_length_bridge_theorems());
+    }
+    if opts.central_angle {
+        all.extend(get_central_angle_theorem());
+    }
+    if opts.projective {
+        all.extend(get_projective_theorems());
+    }
+    all
+}
+
 // --- 定理の定義 ---
 
 pub fn get_all_theorems() -> Vec<TheoremDef> {

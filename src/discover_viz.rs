@@ -5,6 +5,7 @@
 //! 描画に必要な実体は Point/Line/Circle の祖先だけを辿れば揃う。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::coords::{self, Geometry, Placed, Placement};
 use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, Debug)]
@@ -59,21 +60,45 @@ fn harmonic_conjugate_real(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Optio
     Some(add(a, scale(dir, td)))
 }
 
-/// 🌟 discover.rsのdescribe_constructionと対になる、実数版の再評価器。
-/// キャッシュはClassId単位(get_rep後)で、自由点には初回評価時に
-/// ランダムな座標を割り当てて記憶する(以後は同じ座標を使い回す)。
+/// 🌟 discover.rsのdescribe_constructionと対になる、実数版の再評価器。自由点の置き方と同値類の評価は
+/// mmp_core::coords と共通なので、「Dは辺BC上」のような前提を持つ点も、その曲線の上に描かれる。
 pub struct RealEvaluator<'a> {
     egraph: &'a EGraph,
-    cache: FxHashMap<ClassId, Option<RealShape>>,
+    coords: RealCoords,
+    cache: FxHashMap<usize, RealShape>,
+}
+
+/// 置いた自由点の座標(代表元 -> 座標)と、置くための乱数。
+struct RealCoords {
     free_coords: FxHashMap<ClassId, (f64, f64)>,
     rng_state: u64,
 }
 
 impl<'a> RealEvaluator<'a> {
     pub fn new(egraph: &'a EGraph, seed: u64) -> Self {
-        Self { egraph, cache: FxHashMap::default(), free_coords: FxHashMap::default(), rng_state: seed.max(1) }
+        let mut coords = RealCoords { free_coords: FxHashMap::default(), rng_state: seed.max(1) };
+        // 前提を満たせなかった点(平方根が要る組み合わせなど)は、仮定を破った絵を描くより描かない方がよい。
+        if let Placed::Violated(points) = egraph.place_free_points(&egraph.all_free_points(), &mut coords, true) {
+            for fp in points { coords.unplace(egraph, fp); }
+        }
+        Self { egraph, coords, cache: FxHashMap::default() }
     }
 
+    pub fn eval(&mut self, id: ClassId) -> Option<RealShape> {
+        coords::evaluate(self.egraph, &self.coords, id, &mut self.cache, &mut std::collections::HashSet::new())
+    }
+
+    #[cfg(test)]
+    fn point_of(&mut self, id: ClassId) -> Option<(f64, f64)> {
+        match self.eval(id)? { RealShape::Point(x, y) => Some((x, y)), _ => None }
+    }
+    #[cfg(test)]
+    fn circle_of(&mut self, id: ClassId) -> Option<((f64, f64), f64)> {
+        match self.eval(id)? { RealShape::Circle { c, r } => Some((c, r)), _ => None }
+    }
+}
+
+impl RealCoords {
     // 🌟 依存を増やさないための最小限のxorshift64。座標の見た目に暗号学的な
     // 質は不要で、「同じseedなら同じ配置を再現できる」ことの方が重要
     // (失敗時に別のseedへ振り直して再試行する仕組みと組み合わせて使う)。
@@ -84,94 +109,127 @@ impl<'a> RealEvaluator<'a> {
         (x >> 11) as f64 / (1u64 << 53) as f64
     }
 
+    /// -1.5..1.5 で、0近辺(退化しやすい)は避ける。
     fn random_coord(&mut self) -> (f64, f64) {
-        // -1.5..1.5、0近辺(退化しやすい)は避ける
-        // (旧visualizer.pyのstatic_t_dict生成ロジックを踏襲)。
         let mut mk = || -> f64 {
             let v = self.next_unit() * 3.0 - 1.5;
             if v.abs() < 0.3 { if v >= 0.0 { 0.4 } else { -0.4 } } else { v }
         };
         (mk(), mk())
     }
+}
 
-    pub fn eval(&mut self, id: ClassId) -> Option<RealShape> {
-        let rep = self.egraph.get_rep(id);
-        if let Some(v) = self.cache.get(&rep) { return *v; }
-        // 循環防止のプレースホルダ。discover.rs::has_degenerate_ancestorが
-        // 事前に閉路を除外しているはずだが、防御的にNoneで埋めておく。
-        self.cache.insert(rep, None);
-        let def = self.egraph.entities[rep.0].original_definition.clone();
-        let result = self.eval_def(rep, &def);
-        self.cache.insert(rep, result);
-        result
+impl Geometry for RealCoords {
+    type Shape = RealShape;
+
+    fn free(&self, egraph: &EGraph, rep: ClassId, _def: &Definition) -> Option<RealShape> {
+        if egraph.entities[rep.0].entity_type != EntityType::Point { return None; } // Line_infinity等
+        let &(x, y) = self.free_coords.get(&rep)?;
+        Some(RealShape::Point(x, y))
     }
 
-    fn line_of(&mut self, id: ClassId) -> Option<((f64, f64), (f64, f64))> {
-        match self.eval(id)? { RealShape::Line { p, d } => Some((p, d)), _ => None }
-    }
-    fn point_of(&mut self, id: ClassId) -> Option<(f64, f64)> {
-        match self.eval(id)? { RealShape::Point(x, y) => Some((x, y)), _ => None }
-    }
-    fn circle_of(&mut self, id: ClassId) -> Option<((f64, f64), f64)> {
-        match self.eval(id)? { RealShape::Circle { c, r } => Some((c, r)), _ => None }
-    }
-
-    fn eval_def(&mut self, rep: ClassId, def: &Definition) -> Option<RealShape> {
+    fn construct(&self, _egraph: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<RealShape>) -> Option<RealShape> {
+        let point_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<RealShape>| match get(id)? { RealShape::Point(x, y) => Some((x, y)), _ => None };
+        let line_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<RealShape>| match get(id)? { RealShape::Line { p, d } => Some((p, d)), _ => None };
+        let circle_of = |id: ClassId, get: &mut dyn FnMut(ClassId) -> Option<RealShape>| match get(id)? { RealShape::Circle { c, r } => Some((c, r)), _ => None };
         match def {
-            Definition::FreePoint | Definition::GivenPoint => {
-                if self.egraph.entities[rep.0].entity_type == EntityType::Point {
-                    if let Some(&c) = self.free_coords.get(&rep) { return Some(RealShape::Point(c.0, c.1)); }
-                    let c = self.random_coord();
-                    self.free_coords.insert(rep, c);
-                    Some(RealShape::Point(c.0, c.1))
-                } else {
-                    None // Line_infinity等(非Point定数)は描画非対応
-                }
-            }
             Definition::Intersection(l1, l2) => {
-                let (p1, d1) = self.line_of(*l1)?;
-                let (p2, d2) = self.line_of(*l2)?;
+                let (p1, d1) = line_of(*l1, get)?;
+                let (p2, d2) = line_of(*l2, get)?;
                 intersect_lines(p1, d1, p2, d2).map(|(x, y)| RealShape::Point(x, y))
             }
             Definition::LineThroughPoints(a, b) => {
-                let (pa, pb) = (self.point_of(*a)?, self.point_of(*b)?);
+                let (pa, pb) = (point_of(*a, get)?, point_of(*b, get)?);
                 if dist(pa, pb) < EPS { return None; }
                 Some(RealShape::Line { p: pa, d: sub(pb, pa) })
             }
             Definition::Midpoint(a, b) => {
-                let (pa, pb) = (self.point_of(*a)?, self.point_of(*b)?);
+                let (pa, pb) = (point_of(*a, get)?, point_of(*b, get)?);
                 Some(RealShape::Point((pa.0 + pb.0) / 2.0, (pa.1 + pb.1) / 2.0))
             }
             Definition::Circumcircle(a, b, c) => {
-                let (pa, pb, pc) = (self.point_of(*a)?, self.point_of(*b)?, self.point_of(*c)?);
+                let (pa, pb, pc) = (point_of(*a, get)?, point_of(*b, get)?, point_of(*c, get)?);
                 circumcircle_real(pa, pb, pc).map(|(c, r)| RealShape::Circle { c, r })
             }
             Definition::PerpendicularLine(l, p) => {
-                let (_, d) = self.line_of(*l)?;
-                let pt = self.point_of(*p)?;
+                let (_, d) = line_of(*l, get)?;
+                let pt = point_of(*p, get)?;
                 Some(RealShape::Line { p: pt, d: (-d.1, d.0) })
             }
             Definition::ParallelLine(l, p) => {
-                let (_, d) = self.line_of(*l)?;
-                let pt = self.point_of(*p)?;
+                let (_, d) = line_of(*l, get)?;
+                let pt = point_of(*p, get)?;
                 Some(RealShape::Line { p: pt, d })
             }
             Definition::TangentLine(circ, p) => {
-                // 🌟 このプロジェクトのTangentLine(circle, p)は「pは既に円上に
-                // ある接点」という前提(円外の点からの2接線の選択曖昧性を
-                // 持たない)で使われている――半径方向に垂直な直線として描く。
-                let (center, _r) = self.circle_of(*circ)?;
-                let pt = self.point_of(*p)?;
+                // pは既に円上にある接点(このプロジェクト全体の規約)。半径方向に垂直な直線として描く。
+                let (center, _r) = circle_of(*circ, get)?;
+                let pt = point_of(*p, get)?;
                 let radial = sub(pt, center);
                 if norm(radial) < EPS { return None; }
                 Some(RealShape::Line { p: pt, d: (-radial.1, radial.0) })
             }
             Definition::HarmonicConjugateOf(a, b, c) => {
-                let (pa, pb, pc) = (self.point_of(*a)?, self.point_of(*b)?, self.point_of(*c)?);
+                let (pa, pb, pc) = (point_of(*a, get)?, point_of(*b, get)?, point_of(*c, get)?);
                 harmonic_conjugate_real(pa, pb, pc).map(|(x, y)| RealShape::Point(x, y))
             }
             // Angle/Scalar/Conic/CrossRatio 系と、方向(DirectionOf/PerpDirectionOf、無限遠点はアフィン平面に描けない)は描かない。
             _ => None,
+        }
+    }
+}
+
+impl Placement for RealCoords {
+    fn is_placed(&self, egraph: &EGraph, point: ClassId) -> bool {
+        self.free_coords.contains_key(&egraph.get_rep(point))
+    }
+
+    fn place_randomly(&mut self, egraph: &EGraph, point: ClassId) {
+        let c = self.random_coord();
+        self.free_coords.insert(egraph.get_rep(point), c);
+    }
+
+    fn unplace(&mut self, egraph: &EGraph, point: ClassId) {
+        self.free_coords.remove(&egraph.get_rep(point));
+    }
+
+    fn place_on_two_lines(&mut self, egraph: &EGraph, point: ClassId, l1: &RealShape, l2: &RealShape) -> bool {
+        let (RealShape::Line { p: p1, d: d1 }, RealShape::Line { p: p2, d: d2 }) = (l1, l2) else { return false };
+        let Some(x) = intersect_lines(*p1, *d1, *p2, *d2) else { return false };
+        self.free_coords.insert(egraph.get_rep(point), x);
+        true
+    }
+
+    fn place_on_line(&mut self, egraph: &EGraph, point: ClassId, line: &RealShape) -> bool {
+        let RealShape::Line { p, d } = line else { return false };
+        let n = norm(*d);
+        if n < EPS { return false; }
+        let t = self.next_unit() * 2.0 - 1.0;
+        self.free_coords.insert(egraph.get_rep(point), add(*p, scale(*d, t / n)));
+        true
+    }
+
+    fn conic_usable(&self, conic: &RealShape) -> bool {
+        matches!(conic, RealShape::Circle { .. })
+    }
+
+    fn place_on_conic(&mut self, egraph: &EGraph, point: ClassId, conic: &RealShape, _known: &RealShape) -> bool {
+        let RealShape::Circle { c, r } = conic else { return false };
+        let theta = self.next_unit() * std::f64::consts::TAU;
+        self.free_coords.insert(egraph.get_rep(point), (c.0 + r * theta.cos(), c.1 + r * theta.sin()));
+        true
+    }
+
+    fn lies_on(&self, point: &RealShape, curve: &RealShape, _curve_type: EntityType) -> bool {
+        const TOL: f64 = 1e-6;
+        let RealShape::Point(x, y) = point else { return false };
+        match curve {
+            RealShape::Line { p, d } => {
+                let n = norm(*d);
+                n >= EPS && (cross(*d, sub((*x, *y), *p)) / n).abs() < TOL
+            }
+            RealShape::Circle { c, r } => (dist((*x, *y), *c) - r).abs() < TOL,
+            _ => false,
         }
     }
 }

@@ -11,7 +11,7 @@
 //! 追加する(probe_and_expand_conjectures)。自由度を1つ落として何かを導くことになるので既定では無効。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
-use crate::logic_core::{ProverEngine, BlackboardEngine};
+use crate::logic_core::{BlackboardEngine, ProverEngine, Recovered, RecoveryOptions};
 use crate::mcts::MCTSSearchEngine;
 use crate::theorems;
 use std::time::{Duration, Instant};
@@ -270,13 +270,10 @@ fn run_one_seed(
         xml_escape_html(seed_label), sections.join("\n"))]
 }
 
-/// 🌟 仮説駆動プロービングと --prove の証明試行が使う、全定理を登録した BlackboardEngine を組み立てる
-/// (solve.rs の既定と同じく get_all_theorems + get_projective_theorems)。
+/// 🌟 仮説駆動プロービングと --prove の証明試行が使う BlackboardEngine を組み立てる(定理集合は solve の既定と同じ)。
 fn build_full_engine(egraph: EGraph) -> BlackboardEngine {
     let mut prover = ProverEngine::new(egraph);
-    let mut all_theorems = theorems::get_all_theorems();
-    all_theorems.extend(theorems::get_projective_theorems());
-    prover.theorems = all_theorems.into_iter().map(std::rc::Rc::new).collect();
+    prover.theorems = theorems::theorem_set(&Default::default()).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     // 🌟 プロービング・単発の証明試行はどちらも1回限りの短い実行なので、
     // UCB1バンディットの学習(複数回の試行で徐々に賢くなる仕組み)は
@@ -668,7 +665,9 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, time_budget_secs: u64)
         name_a, name_b, time_budget_secs);
 
     let mut engine = build_full_engine(egraph.clone());
-    let target: Option<(String, Vec<ClassId>)> = Some(("Identical".to_string(), vec![a, b]));
+    let open = [("Identical".to_string(), vec![a, b])];
+    let recovery = RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
+    let mut rotate = 0;
 
     engine.schedule_full_sweep();
     let start = Instant::now();
@@ -679,12 +678,9 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, time_budget_secs: u64)
             solved = true;
             break;
         }
-        if !applied {
-            let mut recovered = engine.resolve_demands();
-            if engine.resolve_point_demands() { recovered = true; }
-            if engine.resolve_angle_demands() { recovered = true; }
-            if !recovered && engine.resolve_target_demands(&target) { recovered = true; }
-            if !recovered { break; }
+        // 回復は serve の証明試行と同じ設定(中点の需要も使う)。
+        if !applied && engine.recover(&open, &mut rotate, &recovery) == Recovered::Exhausted {
+            break;
         }
     }
 

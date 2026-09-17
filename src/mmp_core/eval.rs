@@ -7,273 +7,17 @@ use rustc_hash::FxHashMap;
 use crate::mmp_math::ModInt;
 use crate::mmp_calculators;
 use super::{ClassId, ConjectureEntry, ConjectureValue, Definition, EntityType, EGraph, Justification};
+use super::coords::{self, Geometry, Placed, Placement};
 
 impl EGraph {
-    /// 🌟 数値評価環境 (MMPテスト用)
+    /// 🌟 数値評価。自由点の座標は vars に名前で入れておく(`{名前}_x`, `{名前}_y`)。
     pub fn evaluate_node(
         &self,
         node_id: ClassId,
         vars: &FxHashMap<String, ModInt>,
         cache: &mut FxHashMap<usize, Vec<ModInt>>,
     ) -> Option<Vec<ModInt>> {
-        let mut in_progress = HashSet::new();
-        self.evaluate_node_inner(node_id, vars, cache, &mut in_progress)
-    }
-
-    /// 🌟 evaluate_node の実体。PerpDirectionOf/HarmonicConjugateOfのように、
-    /// マージによって「互いを参照し合う定義」が同じコンポーネントに同居する
-    /// ことがある(例: D=Harm(A,B,C) と C=Harm(A,B,D) が対合として互いに
-    /// マージされる)。素朴に再帰するとどちらの定義から計算しても計算不能な
-    /// 組み合わせで無限再帰(スタックオーバーフロー)に陥るため、
-    /// 計算中のIDへの再突入を in_progress で検出し、その場合はその定義を
-    /// 諦めて(Noneを返して)コンポーネント内の他の定義を試す。
-    fn evaluate_node_inner(
-        &self,
-        node_id: ClassId,
-        vars: &FxHashMap<String, ModInt>,
-        cache: &mut FxHashMap<usize, Vec<ModInt>>,
-        in_progress: &mut HashSet<usize>,
-    ) -> Option<Vec<ModInt>> {
-        let rep_id = self.get_rep(node_id);
-        if let Some(val) = cache.get(&rep_id.0) {
-            return Some(val.clone());
-        }
-        if !in_progress.insert(rep_id.0) {
-            return None;
-        }
-
-        let name = self.entities[rep_id.0].name.clone();
-        let definitions = match self.entities[rep_id.0].components.first() {
-            Some(c) => c.definitions.clone(),
-            None => { in_progress.remove(&rep_id.0); return None; }
-        };
-
-        // 🌟 マージ後は1つのコンポーネントに複数の定義が同居し得るので、
-        // 計算可能なものが見つかるまで順に試す(以前は.first()決め打ちで、
-        // たまたま循環参照側が先頭に来ると即失敗していた)。
-        let mut result = None;
-        for def in &definitions {
-            if let Some(v) = self.evaluate_definition(def, &name, vars, cache, in_progress) {
-                result = Some(v);
-                break;
-            }
-        }
-
-        in_progress.remove(&rep_id.0);
-        if let Some(ref v) = result {
-            cache.insert(rep_id.0, v.clone());
-        }
-        result
-    }
-
-    fn evaluate_definition(
-        &self,
-        def: &Definition,
-        name: &str,
-        vars: &FxHashMap<String, ModInt>,
-        cache: &mut FxHashMap<usize, Vec<ModInt>>,
-        in_progress: &mut HashSet<usize>,
-    ) -> Option<Vec<ModInt>> {
-        match def {
-            // 🐛 座標がまだ割り当てられていない自由点は、(0,0) で黙って計算を
-            // 続けず評価不能にする。マージで1つの同値類に複数の定義が同居すると
-            // (外接円 Circumcircle(A,B,C) と Circumcircle(B,C,D) など)、座標の揃って
-            // いない定義を (0,0) で評価してしまい、揃っている別の定義に切り替わら
-            // なかった。None を返せば evaluate_node_inner が次の定義を試す。
-            // 呼び出し側は全ての祖先の自由点に座標を入れてから呼ぶので、座標が
-            // 欠けるのは制約付きサンプリングの途中だけ。
-            Definition::FreePoint => {
-                let x = vars.get(&format!("{}_x", name)).copied()?;
-                let y = vars.get(&format!("{}_y", name)).copied()?;
-                Some(vec![x, y, ModInt::new(1)])
-            }
-            Definition::GivenPoint => {
-                let x = vars.get(&format!("{}_x", name)).copied().unwrap_or(ModInt::new(0));
-                let y = vars.get(&format!("{}_y", name)).copied().unwrap_or(ModInt::new(0));
-                Some(vec![x, y, ModInt::new(1)])
-            }
-            Definition::Midpoint(p1, p2) => {
-                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_midpoint(&v1, &v2))
-            }
-            Definition::LineThroughPoints(p1, p2) => {
-                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                // 🐛 calc_line_through_points は2点が数値的に一致すると空 Vec を返すので、to_option で None にする。
-                let result = mmp_calculators::calc_line_through_points(&v1, &v2);
-                if result.is_empty() {
-                    // 🔮 CONJECTURE: 無作為な座標(独立一様分布, 法998244353)で
-                    // p1とp2が偶然一致する確率は約10億分の1で、単発でも観測されたなら
-                    // ほぼ確実に偶然ではない(Schwartz-Zippel補題の逆読み)。まだ記号的
-                    // には別物として扱われている2点が、実は常に同一なのではないか、
-                    // という「証明はできていないが数値的根拠のある予想」として
-                    // 目立つ形でログに残す(数値サニティチェックの土台として黙って
-                    // Noneに変換するだけでは、この情報がそのまま捨てられてしまう)。
-                    self.log_conjecture_candidate(*p1, *p2, "2点が同一点である");
-                }
-                Self::to_option(result)
-            }
-            Definition::Intersection(l1, l2) => {
-                let v1 = self.evaluate_node_inner(*l1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*l2, vars, cache, in_progress)?;
-                let result = mmp_calculators::calc_intersection(&v1, &v2);
-                if result.is_empty() || result.iter().all(|x| x.0 == 0) {
-                    // 🔮 CONJECTURE: 2直線の交点が定義不能([0,0,0])になるのは、
-                    // 2直線が数値的に同一直線である場合だけ(平行なだけの別直線は
-                    // 無限遠点で交わる、通常の交点として well-defined)。上と同じ理由で
-                    // 「実はl1とl2は同一直線なのでは」という予想として記録する。
-                    self.log_conjecture_candidate(*l1, *l2, "2直線が同一直線である");
-                }
-                Self::to_option(result)
-            }
-            Definition::DirectionOf(l) => {
-                let v = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
-                if v.len() >= 3 {
-                    // 直線 ax + by + c = 0 の方向は同次座標 (b, -a, 0)。Intersection(L∞, l) と同じ3要素にそろえる
-                    // (要素数が違うと、同じ方向を数値チェックが別の値と判定する)。l が無限遠直線だと (0,0,0) になるので
-                    // to_option で弾く。
-                    Self::to_option(mmp_calculators::normalize(&[v[1], -v[0], ModInt::new(0)]))
-                } else {
-                    None
-                }
-            }
-            // 🌟 有向角 = 無限遠直線上の4点の複比 (I,J;D1,D2)。D1,D2 は DirectionOf/PerpDirectionOf で (x,y,0) に
-            // 評価されるので、円周点 I,J と合わせた4点は共線で、calc_cross_ratio がそのまま使える。I,J を基準側に
-            // 置くと値は τ_D2/τ_D1 になり、有向角の加法性・交替律が求める代数法則を満たす。
-            Definition::AnglePair(d1, d2) => {
-                let v1 = self.evaluate_node_inner(*d1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*d2, vars, cache, in_progress)?;
-                let vi = self.evaluate_node_inner(self.circ_i, vars, cache, in_progress)?;
-                let vj = self.evaluate_node_inner(self.circ_j, vars, cache, in_progress)?;
-                mmp_calculators::calc_cross_ratio(&vi, &vj, &v1, &v2)
-                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
-            }
-            Definition::LengthSq(p1, p2) => {
-                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                // calc_squared_distance は無限遠点(z=0)に対して None を返す。
-                mmp_calculators::calc_squared_distance(&v1, &v2)
-                    .map(|d| vec![d, ModInt::new(1), ModInt::new(1)])
-            }
-            Definition::PerpendicularLine(l, p) => {
-                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
-                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_perpendicular(&vl, &vp))
-            }
-            // 🌟 以前は未実装で、ParallelLine型のエンティティ(まだ他の定義と
-            // マージされていないもの)を数値サニティチェック(numeric_plausibility_check)
-            // で評価できず、健全性チェックが素通りしてしまう抜け穴になっていた。
-            Definition::ParallelLine(l, p) => {
-                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
-                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_parallel(&vl, &vp))
-            }
-            // 🌟 同上の理由でPerpDirectionOfも実装する。方向ベクトル(dx,dy)を
-            // 90度回転させるだけ((dx,dy) -> (-dy,dx))。
-            Definition::PerpDirectionOf(d) => {
-                let v = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
-                if v.len() >= 2 {
-                    // DirectionOfと同じ理由でz成分0を付けた3要素の同次座標に統一する。
-                    // (同じくv=[0,0,...]由来の全ゼロ退化値をto_optionで弾く)
-                    Self::to_option(mmp_calculators::normalize(&[-v[1], v[0], ModInt::new(0)]))
-                } else {
-                    None
-                }
-            }
-            // 🌟 外接円は「3点 + 円周点 I,J を通る二次曲線」として calc_conic_through_5_points で作る(円も Conic)。
-            // I,J への接続は apply_trivial_relations が張る。
-            Definition::Circumcircle(p1, p2, p3) => {
-                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
-                let vi = self.evaluate_node_inner(self.circ_i, vars, cache, in_progress)?;
-                let vj = self.evaluate_node_inner(self.circ_j, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, vi, vj]))
-            }
-            Definition::TangentLine(c, p) => {
-                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                // 🌟 第1引数の係数の長さで振り分ける(6係数の二次曲線と、4係数の円)。
-                let result = if vc.len() >= 6 {
-                    mmp_calculators::calc_tangent_to_conic(&vc, &vp)
-                } else {
-                    mmp_calculators::calc_tangent_line(&vc, &vp)
-                };
-                Self::to_option(result)
-            }
-            // 🌟 mmp_core/mod.rs::Definition::SecondIntersectionOfLineAndConic
-            // のドキュメント参照。既知の交点p、直線l、二次曲線cから、
-            // もう一方の交点を斉次座標のまま(割り算無しで)直接求める。
-            Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
-                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                let vl = self.evaluate_node_inner(*l, vars, cache, in_progress)?;
-                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_second_intersection_of_line_and_conic(&vp, &vl, &vc))
-            }
-            // 🌟 2円の根軸。mmp_core/mod.rs::Definition::RadicalAxis のドキュメント参照。
-            Definition::RadicalAxis(c1, c2) => {
-                let v1 = self.evaluate_node_inner(*c1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*c2, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_radical_axis(&v1, &v2))
-            }
-            // 🌟 一方の交点が既知のときの2円のもう一方の交点(根軸経由)。
-            Definition::SecondIntersectionOfCircles(p, c1, c2) => {
-                let vp = self.evaluate_node_inner(*p, vars, cache, in_progress)?;
-                let v1 = self.evaluate_node_inner(*c1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*c2, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_second_intersection_of_circles(&vp, &v1, &v2))
-            }
-            Definition::HarmonicConjugateOf(a, b, c) => {
-                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
-                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
-                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
-            }
-            // 🌟 複比(A,B;C,D)はPoint型ではなくScalar型の値(A,B,C,Dが直線上に
-            // ある前提でのτ_D/τ_C)なので、点のような同次座標[x,y,z]ではなく
-            // LengthSqと同じ「値, 1, 1」の3要素形式で返す(numeric_values_proportional
-            // が単純な値比較として扱えるようにするための既存の慣習)。
-            Definition::CrossRatio(a, b, c, d) => {
-                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
-                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
-                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                let vd = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
-                mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
-                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
-            }
-            // 🌟 線束の複比。直線の同次係数を双対平面の点とみなせば、共点な4直線の複比は点の複比と同じ
-            // calc_cross_ratio で計算できる。
-            Definition::CrossRatioOfLines(a, b, c, d) => {
-                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
-                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
-                let vc = self.evaluate_node_inner(*c, vars, cache, in_progress)?;
-                let vd = self.evaluate_node_inner(*d, vars, cache, in_progress)?;
-                mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
-                    .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
-            }
-            // 🌟 円周点I,Jのような「常にこの値」の定数。varsの内容に関わらず
-            // 埋め込まれたModIntをそのまま返す。
-            Definition::ConstantHomogeneous(a, b, c) => Some(vec![*a, *b, *c]),
-            // 🌟 5点を通る一般二次曲線の係数[A,B,C,D,E,F]。calc_circumcircleの
-            // 一般化(calc_conic_through_5_pointsのコメント参照)。
-            Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
-                let v1 = self.evaluate_node_inner(*p1, vars, cache, in_progress)?;
-                let v2 = self.evaluate_node_inner(*p2, vars, cache, in_progress)?;
-                let v3 = self.evaluate_node_inner(*p3, vars, cache, in_progress)?;
-                let v4 = self.evaluate_node_inner(*p4, vars, cache, in_progress)?;
-                let v5 = self.evaluate_node_inner(*p5, vars, cache, in_progress)?;
-                Self::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, v4, v5]))
-            }
-            // 🌟 2つのScalarの積。LengthSq等と同じ「値,1,1」の3要素形式で
-            // 評価する(numeric_values_proportionalが単純な値比較として扱える)。
-            Definition::Product(a, b) => {
-                let va = self.evaluate_node_inner(*a, vars, cache, in_progress)?;
-                let vb = self.evaluate_node_inner(*b, vars, cache, in_progress)?;
-                if va.is_empty() || vb.is_empty() { return None; }
-                Some(vec![va[0] * vb[0], ModInt::new(1), ModInt::new(1)])
-            }
-        }
+        coords::evaluate(self, &ModIntVars { vars }, node_id, cache, &mut HashSet::new())
     }
 
     /// 🌟 calc_* が退化した入力(一致した2点、同一の2直線など)に返す値を、一箇所で「計算不能」(None)に
@@ -452,8 +196,7 @@ impl EGraph {
     /// 🌟 同次座標(2要素または3要素)としての比例判定。normalize()の正規化
     /// 方式が定義の種類によって異なる(FreePointは[x,y,1]のまま、他の多くは
     /// 「最初の非ゼロ成分を1にする」方式)ため、単純な要素比較ではなく
-    /// 外積(クロス積)がゼロかどうかで比較する(mmp_tester.rsのverify_identicalと
-    /// 同じロジック。EGraphからmmp_tester.rsに依存させたくないのでここに複製する)。
+    /// 外積(クロス積)がゼロかどうかで比較する。
     fn numeric_values_proportional(v1: &[ModInt], v2: &[ModInt]) -> bool {
         if v1.len() != v2.len() || v1.is_empty() { return false; }
         if v1.len() == 3 {
@@ -486,7 +229,8 @@ impl EGraph {
     /// node の全ての定義が親のどれかを通じて point を必要とするときだけ不可欠(point を使わない評価経路が
     /// 1本でもあれば不可欠ではない。親を持たない FreePoint/GivenPoint はそれ自体がそういう経路)。
     /// 循環に出会ったら「不可欠」側に倒す(制約付きサンプリングが循環すると座標が決まらなくなる)。
-    /// 定義グラフは DAG なのでメモ化が必須。ただし循環で「不可欠」と倒した結果は経路に依存するのでメモ化しない。
+    /// 定義グラフは DAG なのでメモ化が必須。⚠️ 循環に当たった節点そのものはメモしないが、その結果を使った親の結果は
+    /// メモされるので、同じ memo で別の節点から辿り直すと答えが変わりうる。呼び出しごとに memo を作り直すこと。
     pub(crate) fn evaluation_requires_point(&self, point_rep: ClassId, node: ClassId,
         stack: &mut HashSet<usize>, memo: &mut rustc_hash::FxHashMap<usize, bool>) -> bool
     {
@@ -508,322 +252,10 @@ impl EGraph {
         requires
     }
 
-    /// 🌟 このFreePointが、自身の座標では裏付けられない接続(incidence)を
-    /// 1つでも持っているか(=numeric_plausibility_checkがこの点に依存する
-    /// 数値評価を信用してよいか)を判定する。
-    fn has_extraneous_incidence(&self, free_point: ClassId) -> bool {
-        let rep = self.get_rep(free_point);
-        let comp = match self.entities[rep.0].components.first() {
-            Some(c) => c,
-            None => return false,
-        };
-        comp.subobjects.iter()
-            .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
-            .any(|curve| !self.is_natural_incidence(rep, curve))
-    }
-
-    /// 🌟 has_extraneous_incidenceが真だったFreePointについて、その前提の
-    /// 相手となる直線/円を1つ選ぶ(自身の定義からは自然に従わない、
-    /// link_logical_incidenceだけに由来する接続のうち最初に見つかったもの)。
-    /// 1点が複数の構造的前提を同時に持つ場合、ここでは最初の1つしか満たさない
-    /// (全部を同時に満たす座標は一般には存在しないので、これは近似的な
-    /// 対処にとどまる)。
-    fn find_incidence_constraint(&self, free_point: ClassId) -> Option<ClassId> {
-        let rep = self.get_rep(free_point);
-        let comp = self.entities[rep.0].components.first()?;
-        comp.subobjects.iter()
-            .map(|&s| self.get_rep(s))
-            .find(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic)
-                && !self.is_natural_incidence(rep, s))
-    }
-
-    /// 🌟 id を、座標が割り当て済みの自由点だけで評価できる定義が少なくとも1つあるか。サンプリングの途中で、
-    /// まだ座標の決まっていない自由点に依存する評価を先に弾く。
-    fn free_point_ancestors_ready(&self, id: ClassId, vars: &FxHashMap<String, ModInt>) -> bool {
-        // マージで定義が同居した同値類では、どれか1つの定義で評価できれば十分(全ての定義の祖先は要求しない)。
-        let mut stack = HashSet::new();
-        let mut ready_memo = FxHashMap::default();
-        self.node_ready(id, vars, &mut stack, &mut ready_memo)
-    }
-
-    /// nodeを、座標が既に割り当てられた自由点だけで評価できる定義が(再帰的に)
-    /// 少なくとも1つあるか。循環に当たった経路は「評価できない」とみなす。
-    /// 循環の影響を受けた偽は経路に依存するので、真だけをメモ化する。
-    fn node_ready(&self, id: ClassId, vars: &FxHashMap<String, ModInt>,
-                  stack: &mut HashSet<usize>, memo: &mut FxHashMap<usize, bool>) -> bool {
-        let rep = self.get_rep(id);
-        if memo.contains_key(&rep.0) { return true; }
-        if !stack.insert(rep.0) { return false; }
-        let defs = self.entities[rep.0].components.first()
-            .map(|c| c.definitions.clone()).unwrap_or_default();
-        let name = &self.entities[rep.0].name;
-        let ready = defs.iter().any(|d| match d {
-            Definition::FreePoint => vars.contains_key(&format!("{}_x", name)),
-            Definition::GivenPoint => true,
-            _ => d.get_parents().iter().all(|&p| self.node_ready(p, vars, stack, memo)),
-        });
-        stack.remove(&rep.0);
-        if ready { memo.insert(rep.0, true); }
-        ready
-    }
-
-    /// 自由点 fp が、自身の定義からは従わない全ての接続(直線・二次曲線に乗っている)を、
-    /// いま割り当てた座標で実際に満たしているか。
-    fn incidences_hold(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>,
-                       cache: &mut FxHashMap<usize, Vec<ModInt>>) -> bool {
-        let Some(p) = self.evaluate_node(fp, vars, cache) else { return false };
-        if p.len() < 3 { return false; }
-        let (x, y, z) = (p[0], p[1], p[2]);
-        self.find_extraneous_incidences(fp).into_iter().all(|curve| {
-            let Some(v) = self.evaluate_node(curve, vars, cache) else { return false };
-            match self.entities[curve.0].entity_type {
-                EntityType::Line if v.len() >= 3 => (v[0] * x + v[1] * y + v[2] * z).0 == 0,
-                EntityType::Conic if v.len() >= 6 =>
-                    (v[0] * x * x + v[1] * x * y + v[2] * y * y + v[3] * x * z + v[4] * y * z + v[5] * z * z).0 == 0,
-                _ => false,
-            }
-        })
-    }
-
-    /// curve の定義のうち少なくとも1つが point を必要とするか(= その定義で評価
-    /// する限り、point が curve に乗っていることは自動的に満たされる)。
-    fn some_definition_requires(&self, point: ClassId, curve: ClassId) -> bool {
-        let (point, curve) = (self.get_rep(point), self.get_rep(curve));
-        let defs = match self.entities[curve.0].components.first() {
-            Some(c) => c.definitions.clone(),
-            None => return false,
-        };
-        let mut memo = rustc_hash::FxHashMap::default();
-        defs.iter().any(|d| d.get_parents().iter().any(|&p| {
-            let mut stack = HashSet::new();
-            self.evaluation_requires_point(point, p, &mut stack, &mut memo)
-        }))
-    }
-
-    /// 🌟 直線の係数(a,b,c: a*x+b*y+c=0)を満たすランダムな点(x,y)を1つ選ぶ。
-    fn sample_point_on_line_coeffs(&self, a: ModInt, b: ModInt, c: ModInt) -> Option<(ModInt, ModInt)> {
-        if b.0 != 0 {
-            let x = self.random_modint();
-            let y = -(a * x + c) / b;
-            Some((x, y))
-        } else if a.0 != 0 {
-            let y = self.random_modint();
-            let x = -c / a;
-            Some((x, y))
-        } else {
-            None // 縮退した直線(0=0)。理論上起こらないはずだが安全側に倒す
-        }
-    }
-
-    /// 🌟 直線lineの上にあるランダムな点を1つサンプリングする。
-    /// lineが依存する自由点の座標がまだ決まっていなければNone(呼び出し側で
-    /// 後の反復に回してもらう)。
-    fn sample_point_on_line(&self, line: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
-        if !self.free_point_ancestors_ready(line, vars) { return None; }
-        let coeffs = self.evaluate_node(line, vars, cache)?;
-        if coeffs.len() < 3 { return None; }
-        self.sample_point_on_line_coeffs(coeffs[0], coeffs[1], coeffs[2])
-    }
-
-    /// 🌟 Circumcircle/ConicThrough5Points の定義から、その二次曲線に乗っていることが保証された点を1つ返す
-    /// (円もこの経路)。無限遠点(z=0)は Vieta のサンプリングに使えないので避ける。
-    fn conic_definition_known_point(&self, conic: ClassId) -> Option<ClassId> {
-        let rep = self.get_rep(conic);
-        let comp = self.entities[rep.0].components.first()?;
-        comp.definitions.iter().find_map(|def| {
-            match def {
-                Definition::Circumcircle(p1, _, _) => Some(*p1),
-                Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
-                    [*p1, *p2, *p3, *p4, *p5].into_iter()
-                        .find(|&p| !self.is_connected(p, self.line_infinity))
-                }
-                _ => None,
-            }
-        })
-    }
-
-    /// 🌟 二次曲線 conic 上のランダムな点を1つ取る。方程式に既知の点 (x1,y1) を通るランダムな直線
-    /// (x1+t dx, y1+t dy) を代入すると t の2次式の定数項が0になるので、非自明な解 t=-β/α が平方根なしに
-    /// 求まる(Vieta)。
-    fn sample_point_on_conic(&self, conic: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
-        if !self.free_point_ancestors_ready(conic, vars) { return None; }
-        let coeffs = self.evaluate_node(conic, vars, cache)?;
-        if coeffs.len() < 6 { return None; }
-        let (a, b, c, d, e) = (coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4]);
-
-        let known_point = self.conic_definition_known_point(conic)?;
-        // known_pointはconicの生成元自身なので、free_point_ancestors_ready(conic, ..)が
-        // 真であれば必ずその祖先もvarsに揃っている(部分集合関係)。
-        let kp = self.evaluate_node(known_point, vars, cache)?;
-        if kp.len() < 3 || kp[2].0 == 0 { return None; }
-        let (x1, y1) = (kp[0] / kp[2], kp[1] / kp[2]);
-
-        let two = ModInt::new(2);
-        for _ in 0..8 {
-            let dx = self.random_modint();
-            let dy = self.random_modint();
-            let alpha = a * dx * dx + b * dx * dy + c * dy * dy;
-            if alpha.0 == 0 { continue; } // 縮退方向(漸近方向、理論上ごく低確率)。引き直す
-            let beta = two * a * x1 * dx + b * (x1 * dy + y1 * dx) + two * c * y1 * dy + d * dx + e * dy;
-            let t = -(beta / alpha);
-            return Some((x1 + t * dx, y1 + t * dy));
-        }
-        None
-    }
-
-    /// 🌟 has_extraneous_incidence(fp) が真の自由点に、乗っていると分かっている直線・二次曲線の上の座標を
-    /// 割り当てる。評価できる直線が2本以上あれば、1本だけ選ばずにその交点を取る(1本しか満たさない座標では、
-    /// もう1本との正しい合流を数値チェックが却下してしまう)。
-    fn sample_point_on_constraint(&self, fp: ClassId, vars: &FxHashMap<String, ModInt>, cache: &mut FxHashMap<usize, Vec<ModInt>>) -> Option<(ModInt, ModInt)> {
-        let rep = self.get_rep(fp);
-        let ready_lines: Vec<ClassId> = self.find_extraneous_incidences(rep).into_iter()
-            .filter(|&c| self.entities[c.0].entity_type == EntityType::Line && self.free_point_ancestors_ready(c, vars))
-            .collect();
-        if ready_lines.len() >= 2 {
-            let v1 = self.evaluate_node(ready_lines[0], vars, cache)?;
-            let v2 = self.evaluate_node(ready_lines[1], vars, cache)?;
-            let inter = mmp_calculators::calc_intersection(&v1, &v2);
-            if inter.len() < 3 || inter[2].0 == 0 { return None; } // 平行(無限遠)や退化は諦める
-            return Some((inter[0] / inter[2], inter[1] / inter[2]));
-        }
-
-        let curve = self.find_incidence_constraint(rep)?;
-        match self.entities[curve.0].entity_type {
-            EntityType::Line => self.sample_point_on_line(curve, vars, cache),
-            // 🌟 EntityType::Circle撤廃(円もConic)により、sample_point_on_circle
-            // (4係数専用)への分岐は不要になった。全てsample_point_on_conic
-            // (6係数、円は3実点+I+Jの5点として自動的に含まれる)に一本化する。
-            EntityType::Conic => self.sample_point_on_conic(curve, vars, cache),
-            _ => None,
-        }
-    }
-
-    /// 🌟 find_incidence_constraintの「複数版」: has_extraneous_incidenceが
-    /// 真となる原因になっている(=自身の定義からは自然に従わない)接続を
-    /// 全て列挙する。sample_point_on_constraintが「2本以上の直線に同時に
-    /// 乗っている」ケースを検出するために使う。
-    fn find_extraneous_incidences(&self, free_point: ClassId) -> Vec<ClassId> {
-        let rep = self.get_rep(free_point);
-        let comp = match self.entities[rep.0].components.first() {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-        // 🐛 subobjects はマージ前の生のIDを持ち続けるので、代表元に直すと同じ曲線が
-        // 何度も現れる(miquel では CircAEF が数十回)。重複を落とさないと、下の
-        // 「2本の直線に乗っているなら交点」の分岐が同じ直線どうしの交点を計算して
-        // 退化し、その点の座標が決まらなくなる(発見モードの compute_incidence_constraints
-        // で直したのと同じ穴)。
-        let mut out: Vec<ClassId> = comp.subobjects.iter()
-            .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
-            .collect();
-        out.sort_unstable_by_key(|c| c.0);
-        out.dedup();
-        out.retain(|&s| !self.is_natural_incidence(rep, s));
-        out
-    }
-
-    /// 🌟 numeric_plausibility_check用に、祖先の自由点それぞれへ座標を割り当てる。
-    /// 構造的前提を持たない自由点には単純な乱数座標を、持つ自由点にはその前提
-    /// (直線/円の上にあること)を実際に満たす座標を割り当てる。前提を満たす
-    /// 座標は、前提の相手(直線/円)が依存する自由点の座標が先に決まっている
-    /// 必要があるため、複数パスで「計算できるものから確定させる」不動点反復を
-    /// 行う。全ての制約点を解決できればtrue、対応できない構造的前提や
-    /// 循環依存が残ればfalseを返す(呼び出し側は判定不能(None)に倒すこと)。
+    /// 祖先の自由点に座標を置く(coords の place_free_points の有限体版)。置けない点や前提を満たさない点が
+    /// 残れば false(呼び出し側は判定不能に倒す)。
     fn assign_free_point_coords(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>) -> bool {
-        let mut pending: Vec<ClassId> = Vec::new();
-        for &fp in ancestors {
-            if self.has_extraneous_incidence(fp) {
-                pending.push(fp);
-            } else {
-                let name = self.entities[fp.0].name.clone();
-                vars.insert(format!("{}_x", name), self.random_modint());
-                vars.insert(format!("{}_y", name), self.random_modint());
-            }
-        }
-
-        let constrained: Vec<ClassId> = pending.clone();
-        let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-        loop {
-            if pending.is_empty() {
-                // 🐛 最後に、制約付きの自由点が全ての構造的前提を本当に満たしているかを
-                // 確かめる。サンプリングは前提を1つしか満たさない(直線と円の両方に乗る点は
-                // 片方にしか乗らない)ことがあり、行き詰まりの解消で自由に置いた点も前提を
-                // 外れうる。そういう座標で比べると、正しい結合を「数値的に別物」と誤って
-                // 却下してしまう(bench_2010g1 で75件)。前提を満たさない座標しか作れない
-                // ときは、これまで通り判定不能にする。
-                return constrained.iter().all(|&fp| self.incidences_hold(fp, vars, &mut cache));
-            }
-            let mut progressed = false;
-            let mut still_pending = Vec::new();
-            for fp in pending.drain(..) {
-                match self.sample_point_on_constraint(fp, vars, &mut cache) {
-                    Some((x, y)) => {
-                        let name = self.entities[fp.0].name.clone();
-                        vars.insert(format!("{}_x", name), x);
-                        vars.insert(format!("{}_y", name), y);
-                        progressed = true;
-                    }
-                    None => still_pending.push(fp),
-                }
-            }
-            pending = still_pending;
-            if !progressed {
-                // 🐛 循環の解消(実測で判明): 円 Omega = Circumcircle(A,B,C) の上に自由点D
-                // がある図で、証明が進んで Omega に Circumcircle(B,C,D) などの定義が
-                // 同居すると、A・B・C それぞれにも「Aを使わずに Omega を評価する経路が
-                // ある」ので Omega への接続が制約扱いになる。すると A,B,C,D の全員が
-                // 互いの座標を待って1つも決まらず、数値チェックが全部「判定不能」を
-                // 返していた。判定不能は結合を許す側に倒れるので、無関係な直線どうしが
-                // 結合され、図が崩壊した(bench_2016armog10p2)。
-                //
-                // 実際に必要なのは「どの点を自由に置き、どの点を曲線上に取るか」の
-                // 順序だけで、A,B,C を自由に置けば D は Circumcircle(A,B,C) の上に
-                // 取れ、全ての定義が一致する。そこで行き詰まったら、制約の相手の曲線の
-                // どれかの定義がその点を必要とする(=その定義で評価すれば自動的に
-                // 乗っている)点のうち、最も古い1つを自由に置いてから続ける。
-                let pick = pending.iter().copied()
-                    .filter(|&fp| self.find_extraneous_incidences(fp).iter()
-                        .all(|&c| self.some_definition_requires(fp, c)))
-                    .min_by_key(|fp| fp.0);
-                match pick {
-                    Some(fp) => {
-                        let name = self.entities[fp.0].name.clone();
-                        vars.insert(format!("{}_x", name), self.random_modint());
-                        vars.insert(format!("{}_y", name), self.random_modint());
-                        pending.retain(|&q| q != fp);
-                    }
-                    None => return false,
-                }
-            }
-        }
-    }
-
-    /// 🌟 idの祖先(Definitionの親を再帰的に辿った先)にあるFreePointを全て集める。
-    /// 定数(GivenPoint)はそこで打ち切る(座標を持たないので祖先探索の対象外)。
-    /// マージ後は1つのエンティティが複数のDefinitionを持ち得るので、
-    /// 「安全側」に倒して全てのDefinitionの親を辿る(いずれか1つでも構造的にしか
-    /// 保証されていないFreePointに触れたら、そちら経由の値かもしれないとみなし
-    /// 用心する)。
-    fn collect_free_point_ancestors(&self, id: ClassId, visited: &mut HashSet<usize>, out: &mut Vec<ClassId>) {
-        let rep = self.get_rep(id);
-        if !visited.insert(rep.0) { return; }
-        let defs = match self.entities[rep.0].components.first() {
-            Some(c) => c.definitions.clone(),
-            None => return,
-        };
-        for def in &defs {
-            match def {
-                Definition::FreePoint => out.push(rep),
-                Definition::GivenPoint => {} // Ang90/Ang0/Line_infinity等の定数。座標を持たないので対象外
-                _ => {
-                    for p in def.get_parents() {
-                        self.collect_free_point_ancestors(p, visited, out);
-                    }
-                }
-            }
-        }
+        matches!(self.place_free_points(ancestors, &mut ModIntPlacer { vars }, false), Placed::All)
     }
 
     /// 🌟 マージを確定する前の数値的な裏付け。祖先の自由点にランダムな座標を割り当て(前提のある点は前提を
@@ -1110,5 +542,313 @@ impl EGraph {
             self.random_modint(),
             self.random_modint(),
         )
+    }
+}
+
+/// 有限体での各定義の値。点・直線は同次座標、二次曲線は6係数、スカラーは [値, 1, 1]。
+fn modint_construct(eg: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<Vec<ModInt>>) -> Option<Vec<ModInt>> {
+    match def {
+        Definition::FreePoint | Definition::GivenPoint => None,
+        Definition::Midpoint(p1, p2) => {
+            let v1 = get(*p1)?;
+            let v2 = get(*p2)?;
+            EGraph::to_option(mmp_calculators::calc_midpoint(&v1, &v2))
+        }
+        Definition::LineThroughPoints(p1, p2) => {
+            let v1 = get(*p1)?;
+            let v2 = get(*p2)?;
+            // 🐛 calc_line_through_points は2点が数値的に一致すると空 Vec を返すので、to_option で None にする。
+            let result = mmp_calculators::calc_line_through_points(&v1, &v2);
+            if result.is_empty() {
+                // 🔮 CONJECTURE: 無作為な座標(独立一様分布, 法998244353)で
+                // p1とp2が偶然一致する確率は約10億分の1で、単発でも観測されたなら
+                // ほぼ確実に偶然ではない(Schwartz-Zippel補題の逆読み)。まだ記号的
+                // には別物として扱われている2点が、実は常に同一なのではないか、
+                // という「証明はできていないが数値的根拠のある予想」として
+                // 目立つ形でログに残す(数値サニティチェックの土台として黙って
+                // Noneに変換するだけでは、この情報がそのまま捨てられてしまう)。
+                eg.log_conjecture_candidate(*p1, *p2, "2点が同一点である");
+            }
+            EGraph::to_option(result)
+        }
+        Definition::Intersection(l1, l2) => {
+            let v1 = get(*l1)?;
+            let v2 = get(*l2)?;
+            let result = mmp_calculators::calc_intersection(&v1, &v2);
+            if result.is_empty() || result.iter().all(|x| x.0 == 0) {
+                // 🔮 CONJECTURE: 2直線の交点が定義不能([0,0,0])になるのは、
+                // 2直線が数値的に同一直線である場合だけ(平行なだけの別直線は
+                // 無限遠点で交わる、通常の交点として well-defined)。上と同じ理由で
+                // 「実はl1とl2は同一直線なのでは」という予想として記録する。
+                eg.log_conjecture_candidate(*l1, *l2, "2直線が同一直線である");
+            }
+            EGraph::to_option(result)
+        }
+        Definition::DirectionOf(l) => {
+            let v = get(*l)?;
+            if v.len() >= 3 {
+                // 直線 ax + by + c = 0 の方向は同次座標 (b, -a, 0)。Intersection(L∞, l) と同じ3要素にそろえる
+                // (要素数が違うと、同じ方向を数値チェックが別の値と判定する)。l が無限遠直線だと (0,0,0) になるので
+                // to_option で弾く。
+                EGraph::to_option(mmp_calculators::normalize(&[v[1], -v[0], ModInt::new(0)]))
+            } else {
+                None
+            }
+        }
+        // 🌟 有向角 = 無限遠直線上の4点の複比 (I,J;D1,D2)。D1,D2 は DirectionOf/PerpDirectionOf で (x,y,0) に
+        // 評価されるので、円周点 I,J と合わせた4点は共線で、calc_cross_ratio がそのまま使える。I,J を基準側に
+        // 置くと値は τ_D2/τ_D1 になり、有向角の加法性・交替律が求める代数法則を満たす。
+        Definition::AnglePair(d1, d2) => {
+            let v1 = get(*d1)?;
+            let v2 = get(*d2)?;
+            let vi = get(eg.circ_i)?;
+            let vj = get(eg.circ_j)?;
+            mmp_calculators::calc_cross_ratio(&vi, &vj, &v1, &v2)
+                .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+        }
+        Definition::LengthSq(p1, p2) => {
+            let v1 = get(*p1)?;
+            let v2 = get(*p2)?;
+            // calc_squared_distance は無限遠点(z=0)に対して None を返す。
+            mmp_calculators::calc_squared_distance(&v1, &v2)
+                .map(|d| vec![d, ModInt::new(1), ModInt::new(1)])
+        }
+        Definition::PerpendicularLine(l, p) => {
+            let vl = get(*l)?;
+            let vp = get(*p)?;
+            EGraph::to_option(mmp_calculators::calc_perpendicular(&vl, &vp))
+        }
+        // 🌟 以前は未実装で、ParallelLine型のエンティティ(まだ他の定義と
+        // マージされていないもの)を数値サニティチェック(numeric_plausibility_check)
+        // で評価できず、健全性チェックが素通りしてしまう抜け穴になっていた。
+        Definition::ParallelLine(l, p) => {
+            let vl = get(*l)?;
+            let vp = get(*p)?;
+            EGraph::to_option(mmp_calculators::calc_parallel(&vl, &vp))
+        }
+        // 🌟 同上の理由でPerpDirectionOfも実装する。方向ベクトル(dx,dy)を
+        // 90度回転させるだけ((dx,dy) -> (-dy,dx))。
+        Definition::PerpDirectionOf(d) => {
+            let v = get(*d)?;
+            if v.len() >= 2 {
+                // DirectionOfと同じ理由でz成分0を付けた3要素の同次座標に統一する。
+                // (同じくv=[0,0,...]由来の全ゼロ退化値をto_optionで弾く)
+                EGraph::to_option(mmp_calculators::normalize(&[-v[1], v[0], ModInt::new(0)]))
+            } else {
+                None
+            }
+        }
+        // 🌟 外接円は「3点 + 円周点 I,J を通る二次曲線」として calc_conic_through_5_points で作る(円も Conic)。
+        // I,J への接続は apply_trivial_relations が張る。
+        Definition::Circumcircle(p1, p2, p3) => {
+            let v1 = get(*p1)?;
+            let v2 = get(*p2)?;
+            let v3 = get(*p3)?;
+            let vi = get(eg.circ_i)?;
+            let vj = get(eg.circ_j)?;
+            EGraph::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, vi, vj]))
+        }
+        Definition::TangentLine(c, p) => {
+            let vc = get(*c)?;
+            let vp = get(*p)?;
+            // 円も6係数の二次曲線として評価されるので、接線は極線の式1つで足りる。
+            EGraph::to_option(mmp_calculators::calc_tangent_to_conic(&vc, &vp))
+        }
+        // 🌟 mmp_core/mod.rs::Definition::SecondIntersectionOfLineAndConic
+        // のドキュメント参照。既知の交点p、直線l、二次曲線cから、
+        // もう一方の交点を斉次座標のまま(割り算無しで)直接求める。
+        Definition::SecondIntersectionOfLineAndConic(p, l, c) => {
+            let vp = get(*p)?;
+            let vl = get(*l)?;
+            let vc = get(*c)?;
+            EGraph::to_option(mmp_calculators::calc_second_intersection_of_line_and_conic(&vp, &vl, &vc))
+        }
+        // 🌟 2円の根軸。mmp_core/mod.rs::Definition::RadicalAxis のドキュメント参照。
+        Definition::RadicalAxis(c1, c2) => {
+            let v1 = get(*c1)?;
+            let v2 = get(*c2)?;
+            EGraph::to_option(mmp_calculators::calc_radical_axis(&v1, &v2))
+        }
+        // 🌟 一方の交点が既知のときの2円のもう一方の交点(根軸経由)。
+        Definition::SecondIntersectionOfCircles(p, c1, c2) => {
+            let vp = get(*p)?;
+            let v1 = get(*c1)?;
+            let v2 = get(*c2)?;
+            EGraph::to_option(mmp_calculators::calc_second_intersection_of_circles(&vp, &v1, &v2))
+        }
+        Definition::HarmonicConjugateOf(a, b, c) => {
+            let va = get(*a)?;
+            let vb = get(*b)?;
+            let vc = get(*c)?;
+            EGraph::to_option(mmp_calculators::calc_harmonic_conjugate(&va, &vb, &vc))
+        }
+        // 🌟 複比(A,B;C,D)はPoint型ではなくScalar型の値(A,B,C,Dが直線上に
+        // ある前提でのτ_D/τ_C)なので、点のような同次座標[x,y,z]ではなく
+        // LengthSqと同じ「値, 1, 1」の3要素形式で返す(numeric_values_proportional
+        // が単純な値比較として扱えるようにするための既存の慣習)。
+        Definition::CrossRatio(a, b, c, d) => {
+            let va = get(*a)?;
+            let vb = get(*b)?;
+            let vc = get(*c)?;
+            let vd = get(*d)?;
+            mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
+                .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+        }
+        // 🌟 線束の複比。直線の同次係数を双対平面の点とみなせば、共点な4直線の複比は点の複比と同じ
+        // calc_cross_ratio で計算できる。
+        Definition::CrossRatioOfLines(a, b, c, d) => {
+            let va = get(*a)?;
+            let vb = get(*b)?;
+            let vc = get(*c)?;
+            let vd = get(*d)?;
+            mmp_calculators::calc_cross_ratio(&va, &vb, &vc, &vd)
+                .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
+        }
+        // 🌟 円周点I,Jのような「常にこの値」の定数。varsの内容に関わらず
+        // 埋め込まれたModIntをそのまま返す。
+        Definition::ConstantHomogeneous(a, b, c) => Some(vec![*a, *b, *c]),
+        // 🌟 5点を通る一般二次曲線の係数[A,B,C,D,E,F]。calc_circumcircleの
+        // 一般化(calc_conic_through_5_pointsのコメント参照)。
+        Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => {
+            let v1 = get(*p1)?;
+            let v2 = get(*p2)?;
+            let v3 = get(*p3)?;
+            let v4 = get(*p4)?;
+            let v5 = get(*p5)?;
+            EGraph::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, v4, v5]))
+        }
+        // 🌟 2つのScalarの積。LengthSq等と同じ「値,1,1」の3要素形式で
+        // 評価する(numeric_values_proportionalが単純な値比較として扱える)。
+        Definition::Product(a, b) => {
+            let va = get(*a)?;
+            let vb = get(*b)?;
+            if va.is_empty() || vb.is_empty() { return None; }
+            Some(vec![va[0] * vb[0], ModInt::new(1), ModInt::new(1)])
+        }
+    }
+}
+
+fn modint_free(eg: &EGraph, rep: ClassId, def: &Definition, vars: &FxHashMap<String, ModInt>) -> Option<Vec<ModInt>> {
+    match def {
+        // 🐛 座標がまだ割り当てられていない自由点は、(0,0) で黙って計算を
+        // 続けず評価不能にする。マージで1つの同値類に複数の定義が同居すると
+        // (外接円 Circumcircle(A,B,C) と Circumcircle(B,C,D) など)、座標の揃って
+        // いない定義を (0,0) で評価してしまい、揃っている別の定義に切り替わら
+        // なかった。None を返せば coords::evaluate が次の定義を試す。
+        // 呼び出し側は全ての祖先の自由点に座標を入れてから呼ぶので、座標が
+        // 欠けるのは自由点を置いている途中だけ。
+        Definition::FreePoint => {
+            let x = vars.get(&format!("{}_x", eg.entities[rep.0].name)).copied()?;
+            let y = vars.get(&format!("{}_y", eg.entities[rep.0].name)).copied()?;
+            Some(vec![x, y, ModInt::new(1)])
+        }
+        Definition::GivenPoint => {
+            let x = vars.get(&format!("{}_x", eg.entities[rep.0].name)).copied().unwrap_or(ModInt::new(0));
+            let y = vars.get(&format!("{}_y", eg.entities[rep.0].name)).copied().unwrap_or(ModInt::new(0));
+            Some(vec![x, y, ModInt::new(1)])
+        }
+        _ => None,
+    }
+}
+
+/// 自由点の座標を名前で引く(`{名前}_x`, `{名前}_y`)評価。
+pub(crate) struct ModIntVars<'v> {
+    pub vars: &'v FxHashMap<String, ModInt>,
+}
+
+impl Geometry for ModIntVars<'_> {
+    type Shape = Vec<ModInt>;
+    fn free(&self, eg: &EGraph, rep: ClassId, def: &Definition) -> Option<Vec<ModInt>> { modint_free(eg, rep, def, self.vars) }
+    fn construct(&self, eg: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<Vec<ModInt>>) -> Option<Vec<ModInt>> {
+        modint_construct(eg, def, get)
+    }
+}
+
+/// 有限体での自由点の置き方。乱数は EGraph の乱数(random_modint)を使う。
+pub(crate) struct ModIntPlacer<'v> {
+    pub vars: &'v mut FxHashMap<String, ModInt>,
+}
+
+impl ModIntPlacer<'_> {
+    fn set(&mut self, eg: &EGraph, point: ClassId, x: ModInt, y: ModInt) {
+        let name = &eg.entities[point.0].name;
+        self.vars.insert(format!("{}_x", name), x);
+        self.vars.insert(format!("{}_y", name), y);
+    }
+}
+
+impl Geometry for ModIntPlacer<'_> {
+    type Shape = Vec<ModInt>;
+    fn free(&self, eg: &EGraph, rep: ClassId, def: &Definition) -> Option<Vec<ModInt>> { modint_free(eg, rep, def, self.vars) }
+    fn construct(&self, eg: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<Vec<ModInt>>) -> Option<Vec<ModInt>> {
+        modint_construct(eg, def, get)
+    }
+}
+
+impl Placement for ModIntPlacer<'_> {
+    fn is_placed(&self, eg: &EGraph, point: ClassId) -> bool {
+        self.vars.contains_key(&format!("{}_x", eg.entities[point.0].name))
+    }
+    fn place_randomly(&mut self, eg: &EGraph, point: ClassId) {
+        let x = eg.random_modint();
+        let y = eg.random_modint();
+        self.set(eg, point, x, y);
+    }
+    fn unplace(&mut self, eg: &EGraph, point: ClassId) {
+        let name = &eg.entities[point.0].name;
+        self.vars.remove(&format!("{}_x", name));
+        self.vars.remove(&format!("{}_y", name));
+    }
+    fn place_on_two_lines(&mut self, eg: &EGraph, point: ClassId, l1: &Vec<ModInt>, l2: &Vec<ModInt>) -> bool {
+        let inter = mmp_calculators::calc_intersection(l1, l2);
+        if inter.len() < 3 || inter[2].0 == 0 { return false; } // 平行(無限遠)や退化は諦める
+        self.set(eg, point, inter[0] / inter[2], inter[1] / inter[2]);
+        true
+    }
+    /// 直線 a*x+b*y+c=0 の上のランダムな点。
+    fn place_on_line(&mut self, eg: &EGraph, point: ClassId, line: &Vec<ModInt>) -> bool {
+        if line.len() < 3 { return false; }
+        let (a, b, c) = (line[0], line[1], line[2]);
+        let (x, y) = if b.0 != 0 {
+            let x = eg.random_modint();
+            (x, -(a * x + c) / b)
+        } else if a.0 != 0 {
+            let y = eg.random_modint();
+            (-c / a, y)
+        } else {
+            return false; // 縮退した直線(0=0)
+        };
+        self.set(eg, point, x, y);
+        true
+    }
+    fn conic_usable(&self, conic: &Vec<ModInt>) -> bool { conic.len() >= 6 }
+    /// 二次曲線上のランダムな点。既知の点 (x1,y1) を通るランダムな直線 (x1+t dx, y1+t dy) を代入すると t の2次式の
+    /// 定数項が0になるので、非自明な解 t=-β/α が平方根なしに求まる(Vieta)。
+    fn place_on_conic(&mut self, eg: &EGraph, point: ClassId, conic: &Vec<ModInt>, known: &Vec<ModInt>) -> bool {
+        let (a, b, c, d, e) = (conic[0], conic[1], conic[2], conic[3], conic[4]);
+        if known.len() < 3 || known[2].0 == 0 { return false; }
+        let (x1, y1) = (known[0] / known[2], known[1] / known[2]);
+        let two = ModInt::new(2);
+        for _ in 0..8 {
+            let dx = eg.random_modint();
+            let dy = eg.random_modint();
+            let alpha = a * dx * dx + b * dx * dy + c * dy * dy;
+            if alpha.0 == 0 { continue; } // 漸近方向(ごく低確率)。引き直す
+            let beta = two * a * x1 * dx + b * (x1 * dy + y1 * dx) + two * c * y1 * dy + d * dx + e * dy;
+            let t = -(beta / alpha);
+            self.set(eg, point, x1 + t * dx, y1 + t * dy);
+            return true;
+        }
+        false
+    }
+    fn lies_on(&self, point: &Vec<ModInt>, v: &Vec<ModInt>, curve_type: EntityType) -> bool {
+        if point.len() < 3 { return false; }
+        let (x, y, z) = (point[0], point[1], point[2]);
+        match curve_type {
+            EntityType::Line if v.len() >= 3 => (v[0] * x + v[1] * y + v[2] * z).0 == 0,
+            EntityType::Conic if v.len() >= 6 =>
+                (v[0] * x * x + v[1] * x * y + v[2] * y * y + v[3] * x * z + v[4] * y * z + v[5] * z * z).0 == 0,
+            _ => false,
+        }
     }
 }

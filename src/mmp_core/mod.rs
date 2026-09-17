@@ -10,6 +10,7 @@ use crate::mmp_math::ModInt;
 //   construction      - 調和共役点など、複数の実体を作る補助構成
 //   query             - is_connected など読み取り専用の問い合わせ
 mod congruence;
+pub(crate) mod coords;
 mod eval;
 mod proof;
 mod construction;

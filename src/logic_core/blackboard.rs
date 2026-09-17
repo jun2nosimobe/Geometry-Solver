@@ -10,6 +10,35 @@ use super::*;
 use super::matcher::Search;
 use rustc_hash::FxHashMap;
 
+/// 候補cap(fanout_heat_cap)を広げるときの上限。
+pub const FANOUT_HEAT_CAP_CEILING: usize = 40;
+
+/// 行き詰まったときの決定的な手(BlackboardEngine::recover)の設定。
+#[derive(Clone, Debug, Default)]
+pub struct RecoveryOptions {
+    /// 需要駆動の中点(resolve_midpoint_demands)も使うか。
+    pub midpoint_demands: bool,
+    /// 外す手の名前(line, point, angle, second, mid, target)。
+    pub skip: Vec<String>,
+}
+
+impl RecoveryOptions {
+    fn skipped(&self, name: &str) -> bool {
+        self.skip.iter().any(|s| s == name)
+    }
+}
+
+/// BlackboardEngine::recover が打った手。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recovered {
+    /// 需要駆動の作図で図を伸ばした。
+    Construction,
+    /// 候補capを広げて全探索をやり直す(値は広げた後の cap)。
+    WidenedCap(usize),
+    /// 決定的な手が尽きた。
+    Exhausted,
+}
+
 pub struct BlackboardEngine {
     pub prover: ProverEngine,
     pub task_queue: BinaryHeap<MatchTask>,
@@ -33,6 +62,39 @@ impl BlackboardEngine {
             seeded_rematch_enabled: false,
             work_limit: u64::MAX,
         }
+    }
+
+    /// 行き詰まったときの決定的な手を順に打つ。solve・serve・discover の証明試行で共通。
+    ///
+    /// 補助線と交点は毎回試す。それ以降は、狙いの定まった手が何も出さなかったときだけ広げる
+    /// (有向角の総当たり・もう一方の交点は、毎回回すと解ける問題を遠回りさせる)。目標からの逆算は、
+    /// 未達の目標を rotate の位置から順に回し、最初に何か作れたところで止める。
+    /// 作図が何も出なければ候補capを広げる: 狭い cap で除外されていただけの候補なら MCTS よりずっと安く届き、
+    /// 失敗キャッシュが既に試した候補を再利用するので同じ探索を繰り返さない。
+    pub fn recover(&mut self, open_targets: &[(String, Vec<ClassId>)], rotate: &mut usize, opts: &RecoveryOptions) -> Recovered {
+        let mut recovered = !opts.skipped("line") && self.resolve_demands();
+        if !opts.skipped("point") && self.resolve_point_demands() { recovered = true; }
+        if !recovered && !opts.skipped("angle") && self.resolve_angle_demands() { recovered = true; }
+        if !recovered && !opts.skipped("second") && self.resolve_second_intersection_demands() { recovered = true; }
+        if !recovered && opts.midpoint_demands && !opts.skipped("mid") && self.resolve_midpoint_demands() { recovered = true; }
+        if !recovered && !opts.skipped("target") {
+            for _ in 0..open_targets.len() {
+                let goal = Some(open_targets[*rotate % open_targets.len()].clone());
+                *rotate += 1;
+                if self.resolve_target_demands(&goal) || self.resolve_cross_ratio_demands(&goal) {
+                    recovered = true;
+                    break;
+                }
+            }
+        }
+        if recovered { return Recovered::Construction; }
+
+        if self.prover.fanout_heat_cap < FANOUT_HEAT_CAP_CEILING {
+            self.prover.fanout_heat_cap = (self.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
+            self.schedule_full_sweep();
+            return Recovered::WidenedCap(self.prover.fanout_heat_cap);
+        }
+        Recovered::Exhausted
     }
 
     /// 数値的な偶然の一致(予想)を評価して熱に反映する(実体は EGraph 側)。
