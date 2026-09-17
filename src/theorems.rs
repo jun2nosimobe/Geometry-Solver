@@ -352,25 +352,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("ProdAB", EntityType::Scalar), ("ProdCD", EntityType::Scalar),
             ]),
             patterns: vec![
-                // 🌟 シード: Identical(AngA,AngC)から始めて、それぞれの定義から
-                // 4方向を直接束縛する(全件スキャン不要)。
-                //
-                // 🐛 実測に基づくFIX: 当初はAngA・AngCの2つのAnglePair抽出に
-                // 共通のflip_group("ProdSim")を与えていたが、これは
-                // 「二等辺三角形の底角」のように"同じ定理が今まさに新規作成する
-                // 2つの角"を反射対称の一貫した向きで結びたい場合の道具立てで
-                // あり、AngA・AngCは(別の定理=円周角の定理が、それ自身の
-                // 独立したflip_group「Cyclic」で向きを決めて)既に作成済みの
-                // 角を後から読み取るだけなので、両者の向きの選び方に一貫性が
-                // 保証されている前提が成り立たない。共通グループにすると、
-                // AngA側で選ばれた向きがAngC側の選択を強制してしまい、AngCの
-                // 実際の格納形と噛み合わない(=常に不整合になる)組み合わせしか
-                // 試せなくなっていた。flip_groupをNone(=各自が独立に両方の
-                // 向きを試す)にすることで、2つの角が別々の定理由来でも
-                // 正しく噛み合う組み合わせを見つけられるようにした。
+                // Identical(AngA,AngC) から始めて、それぞれの定義から4方向を直接束縛する。
+                // 前提は弦 BD を見込む円周角の一致 ∠(AB,AD) = ∠(CB,CD)(円周角の定理と同じ形)。
+                // 2つの角は同じ向きで読む(グループ PowSim)。以前は2つ目を ∠(CD,CB) と逆向きに
+                // 書いたうえで向きを独立に読ませていたので、共円でない配置でもマッチして
+                // 数値的に偽のマージを作っていた。
                 same_angle("AngA", "AngC"),
-                angle_free(&["DirAB", "DirAD", "AngA"]),
-                angle_free(&["DirCD", "DirCB", "AngC"]),
+                angle_grouped(&["DirAB", "DirAD", "AngA"], "PowSim"),
+                angle_grouped(&["DirCB", "DirCD", "AngC"], "PowSim"),
                 distinct(&["DirAB", "DirAD"]),
                 distinct(&["DirCD", "DirCB"]),
 
@@ -467,14 +456,11 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("ProdEAEN", EntityType::Scalar), ("ProdEMED", EntityType::Scalar),
             ]),
             patterns: vec![
-                // シード: 角度の一致(∠AEB=∠DEC)から4方向を束縛する
-                // (共点二弦の相似と同じ理由でflip_groupはNone: AngE_AB,AngE_DCは
-                // 別々の定理(円周角の定理など)が独自の向きで作成済みの角を
-                // 後から読み取るだけなので、共通flip_groupを使うと正しい
-                // 組み合わせが噛み合わなくなる)。
+                // 角度の一致 ∠AEB = ∠DEC(A→D, B→C の向きをそろえた相似)から4方向を束縛する。
+                // 2つの角は同じ向きで読む(向きが食い違うと ∠AEB = -∠DEC になり、相似ではない)。
                 same_angle("AngE_AB", "AngE_DC"),
-                angle_free(&["DirEA", "DirEB", "AngE_AB"]),
-                angle_free(&["DirED", "DirEC", "AngE_DC"]),
+                angle_grouped(&["DirEA", "DirEB", "AngE_AB"], "SpiralSim"),
+                angle_grouped(&["DirED", "DirEC", "AngE_DC"], "SpiralSim"),
                 distinct(&["DirEA", "DirEB"]),
                 distinct(&["DirED", "DirEC"]),
 
