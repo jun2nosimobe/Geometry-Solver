@@ -227,15 +227,15 @@
     <h1 class="title">証明探索パイプライン全体図</h1>
     <p class="subtitle">e-graph上の合同閉包 + 定理マッチングによる幾何定理自動証明エンジンの、現在の構造と最適化の来歴。次に何へ着手するかを判断するための一枚。</p>
     <div class="meta-row">
-      <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/main.rs(全体像は§01)</span>
+      <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は§01)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> cb106e0</span>
+      <span><b>最新コミット</b> 0870d7d</span>
     </div>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="n">31/44</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
-    <div class="stat"><div class="n">22</div><div class="l">既定で有効な定理(基本17 + 射影5)。中心角の定理はopt-in</div></div>
+    <div class="stat"><div class="n">32/44</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
+    <div class="stat"><div class="n">22</div><div class="l">既定で有効な定理(基本17 + 射影5、射影も全問題で既定)。中心角の定理だけ問題名で入れる(暫定)</div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
@@ -288,7 +288,8 @@
     <p class="section-note">1つのRustバイナリ(<code>geom_solver</code>)に、証明・発見・退化解析・ベンチ掃引・Web配信の入口が同居している。<code>src/mmp_core/</code>が図形の表現(e-graph)、<code>src/logic_core/</code>がその上を探索する証明器、という二層が骨格。</p>
 
     <div class="gloss">
-      <div class="gterm"><b>src/main.rs</b><p>入口とメインループ。問題の読み込み → <code>run_step</code> → 行き詰まったら回復フェーズ → 目標判定、の一巡を回す。サブコマンドの振り分けと、終了時の各種レポート出力もここ。</p></div>
+      <div class="gterm"><b>src/main.rs</b><p>入口。未知のフラグの検出とサブコマンドの振り分け、<code>extract-proof</code>。</p></div>
+      <div class="gterm"><b>src/solve.rs</b><p>問題を1つ解くメインループ。オプションの解析(<code>SolveOptions</code>)→ 問題の読み込み → <code>run_step</code> → 目標判定(<code>GoalChecker</code>)→ 行き詰まったら回復(<code>Recovery</code>: 需要駆動の作図 → 候補capの拡大 → MCTS)、の一巡と、終了時のレポート。</p></div>
       <div class="gterm"><b>src/cli.rs</b><p>オプションの一覧表と<code>help</code>/<code>list</code>。知らないフラグは黙って無視せずエラーにする(「変えたつもりで既定値のまま走る」事故を止めるため)。</p></div>
       <div class="gterm"><b>src/mmp_core/mod.rs</b><p><code>EGraph</code>・<code>GeoEntity</code>・<code>Definition</code>・<code>EntityType</code>・<code>Fact</code>・<code>Justification</code>。生の構造を書き換える4ゲートウェイもここ(§03)。</p></div>
       <div class="gterm"><b>mmp_core/congruence.rs</b><p><code>apply_congruence_closure</code>と、直線・二次曲線・交点の一意性の局所伝播。マージの実行(<code>merge_entities_justified</code>)もここ。</p></div>
@@ -757,6 +758,66 @@ flowchart TD
           <br><b>見つかった健全性の穴(18af360):</b> もう一方の交点を足したとき bench_2016armog10p2 で図が崩壊した。円 Omega = Circumcircle(A,B,C) の上に自由点 D がある図で Omega に Circumcircle(B,C,D) などの定義が同居すると、A・B・C の Omega への接続まで「制約」扱いになり、A,B,C,D が互いの座標を待って1つも決まらず、数値チェックが全部「判定不能」を返していた。判定不能は結合を許す側に倒れるので、直線 BD と「DP の垂直二等分線」が結合された。座標の無い自由点を (0,0) で評価しない・どれか1つの定義で評価できれば準備済みとする・行き詰まったら定義からその点を必要とする最古の点を自由に置く・制約の相手の重複を落とす・割り当て後に全ての構造的前提を満たすか確かめる、の5点で直した。この修正だけなら 31/44・総仕事量 +173 ステップで挙動はほぼ変わらない。</div>
         </div>
       </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>定理の書き方を型で表し、探索本体と main を分ける(挙動は不変)</h3><span class="pill shipped">bbb3676</span></div>
+          <div class="desc">ユーザー指示「見やすくできる箇所を改善する」。定理のパターン・作図・結論を文字列フィールドから列挙型(<code>Pattern</code> の各変種・<code>DefKind</code>・<code>Refinement</code>・<code>Flip</code>・<code>Conclusion</code>)にし、theorems.rs は <code>on("A","L")</code>・<code>has_direction</code>・<code>angle_grouped</code>・<code>def_by</code>・<code>build</code> で書く形にした(変換は機械的に行い、パターン237・作図52・結論25の件数を突き合わせた)。作図の <code>Definition</code> の組み立ては <code>build_definition</code> に一本化、<code>dfs_match</code> は1つでも見つかったかを戻り値で返し引数を <code>Search</code> にまとめ、補助作図の定型処理を <code>add_aux</code> に寄せ、main.rs の問題を解く部分を solve.rs へ移した。clippy の警告 99→39。</div>
+<div class="desc"><b>整理の中で見つけて消したもの:</b> 効いていないマーカー(DefinedBy の <code>"Unordered"</code>、LengthSq/Product に付いた <code>allow_flip</code>)、どこからも作られない <code>Fact::Parallel</code> と汎用照合、実装と矛盾していたコメント4件(Distinct の前倒し・<code>dfs_cap</code>・優先度の範囲・<code>--no-projective</code> のヘルプ)。照合側の組み立てに <code>ConicThrough5Points</code> の分岐が無く <code>GivenPoint</code> で memo を引いていた・<code>RadicalAxis</code> 等を正規化せずに memo を引いていた、という潜在的な食い違いも一本化で消えた(今の定理はこの経路を通らない)。</div>
+          <div class="evidence"><b>検証:</b> 全44問を7設定(既定・<code>--projective</code>・長さ/中心角/中点・<code>--seeded-rematch</code>・<code>--bandit</code>・筋書き aux/2)で流し、<b>解けたか・消費仕事量・推論ログ(マージ・リンク・作図の行)のmd5</b>が変更前と全問で一致した。この比較の仕組みは以後の変更の検証にも使っている(基準の再実行でハッシュまで一致=決定的)。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>Not を含む定理が失敗キャッシュと見積もりのせいで途中で打ち切られていた</h3><span class="pill shipped">aa7df05</span></div>
+          <div class="desc">(1) 失敗キャッシュの署名が<b>残りパターンの数</b>しか持っておらず、<code>Not</code> の中身を調べたときの失敗(残り1本)が、同じ束縛で残り1本になった本体の状態の失敗と同じキーになり、<code>Not</code> が通った直後の最後のパターンを必ず刈っていた。初期束縛の違うタスク間でも、別のパターンが残った状態を取り違えうる。署名に残りパターンの集合と「Not の中身か本体か」を入れた。(2) <code>Not</code> の見積もりが中身の見積もりをそのまま使っていたので、中の変数がそろう前に選ばれ、「どの割り当てでも中身が成り立たない」というほぼ常に偽の主張として評価されていた。順序・相異の制約と同じく全変数が束縛されるまで INFINITY にした。どちらも単体テストで再現する(修正前は0件、修正後は2件見つかる)。</div>
+          <div class="evidence"><b>実測:</b> 解けた数はどの設定でも不変。(1) だけなら既定・長さ/中心角/中点・バンディット・筋書きで完全一致、<code>--seeded-rematch</code> は推論ログ一致で仕事量 +0.1% 前後。(2) を加えると「複比の透視射影不変性(線束→点)」が実際に探索されるようになり、射影の問題で仕事量が増えた(pappus 46,460→180,458)― この定理が健全でないことが表に出たのは次の項目。<br><b>予算の読み違い:</b> <code>--projective --steps=1500000</code> で bench_2018chnwesternmop5 が落ちたのは、変更前も予算内では解けておらず最後の <code>run_step</code> の超過分(200万ステップ)で解けていただけだった(既定の予算なら変更後も解け、証明は 57,694→33,277 ステップ)。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>予算を run_step の途中でも守り、数値検証と MCTS の乱数をシード固定にする</h3><span class="pill shipped">a2e9e87</span></div>
+          <div class="desc">仕事量の予算は <code>run_step</code>(最大1万タスク)を1回終えるたびにしか見ていなかったので、既定の800万で bench_2016armog10p2 が920万まで走っていた(予算を超えて解けても「予算内」と数えてしまう)。タスクごとに <code>work_limit</code> を確かめる。また、数値検証の座標・次数測定の直線・MCTS の行動選択が <code>rand::random</code> / <code>thread_rng</code> で実行ごとに変わっていたので、<code>EGraph</code> に SplitMix64 の状態(複製は状態ごと引き継ぐ)、MCTS と行動生成器に固定シードの <code>StdRng</code> を持たせた(MCTS はシミュレーションごとに <code>EGraph</code> を複製するので、そちらの乱数を使うと全シミュレーションが同じ手を引く)。</div>
+          <div class="evidence"><b>実測(既定・44問):</b> 解けた31問は仕事量・推論ログとも不変。予算を使い切る未解決の5問が 800.0〜808.9万ステップで止まるようになった。<code>--mcts</code> を2回流して結果が完全に一致する。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>複比の透視射影不変性(線束→点)が偽の等式を大量に作っていた ― 共点と横断線の前提を足す</h3><span class="pill shipped">4fe6d22</span></div>
+          <div class="desc">この定理は「4直線 L1..L4 の線束の複比 = 各直線上の点 Ap..Dp の複比」を結論するのに、L1..L4 が1点で交わることも、Ap..Dp が同じ直線に乗ることも要求していなかった。DefinedBy は線束の複比を任意の4直線に対してその場で作るので(<code>CrossRatioOfLines_..._L2_L2</code> のように同じ直線を2回含むものまで)、共点でない直線の複比と一直線上にない4点の複比を等しいと結論していた。前の項目の <code>Not</code> の修正でこの定理が実際に探索されるようになって表に出た。</div>
+<div class="desc"><b>測り方:</b> 定理の結論でマージする直前に <code>numeric_plausibility_check</code> を呼んで結果を定理ごとに数える一時計測(コミットしていない)。<code>--projective --steps=1500000</code>・全44問で:</div>
+<table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">線束→点の前提</th><th style="text-align:right;padding:2px 12px 2px 0">偽</th><th style="text-align:right;padding:2px 12px 2px 0">真</th><th style="text-align:right;padding:2px 12px 2px 0">判定不能</th></tr><tr><td style="padding:2px 12px 2px 0">(修正前)線束の複比 + 各直線上の点</td><td style="text-align:right;padding:2px 12px 2px 0"><b>3,525</b></td><td style="text-align:right;padding:2px 12px 2px 0">2</td><td style="text-align:right;padding:2px 12px 2px 0">394</td></tr><tr><td style="padding:2px 12px 2px 0">+ 4点が横断線 T に乗る</td><td style="text-align:right;padding:2px 12px 2px 0">3,660</td><td style="text-align:right;padding:2px 12px 2px 0">236</td><td style="text-align:right;padding:2px 12px 2px 0">1,018</td></tr><tr><td style="padding:2px 12px 2px 0">+ L1..L4 が中心 O で交わる(採用、Not は不要に)</td><td style="text-align:right;padding:2px 12px 2px 0"><b>0</b></td><td style="text-align:right;padding:2px 12px 2px 0">36</td><td style="text-align:right;padding:2px 12px 2px 0">0</td></tr></table>
+          <div class="evidence"><b>実測(予算は既定):</b> <code>--projective</code> で 31→32問(nine_point_full が偽の等式の氾濫による900秒の時間切れから485万ステップで解ける)、miquel_quadrilateral 194,838→35,211・circumcenter 9,090→2,514 など大半の問題で仕事量が減る(miquel_quadrilateral は196秒かかっていた)。既定で射影の定理を入れていた9問は修正前の水準に戻った(pappus 180,458→48,186)。<br><b>既定の定理(射影なし)で残った偽のマージ:</b> 前提付きの問題(thales・test_parallel・test_right_midpoint・test_isosceles_converse・test_spiral_similarity。乱数座標が前提を満たさない誤警報)と、共点二弦の相似(bench_2008armog10p6・bench_2022balkanmop1、→ 下の項目)。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>同じ優先度のタスクを定理の登録順に取り出し、射影の定理を全問題で既定にする</h3><span class="pill shipped">5258a21 / a15f03b</span></div>
+          <div class="desc">射影の定理を入れた nine_point_full は再スケジュールが3回→27回・補助作図が5→67回に増えていたが、定理そのもののコストではなかった。<code>MatchTask</code> の順序は優先度しか比べておらず、同じ優先度(全探索タスクは既定で全部0)の並びは <code>BinaryHeap</code> の内部構造で決まるので、<b>定理を1つ足しただけで既存の定理を試す順序まで入れ替わっていた</b>。優先度が同じなら定理の登録順に取り出すようにし、そのうえで問題名のリスト(<code>PROJECTIVE_PROBLEMS</code>)をやめて射影の定理を全問題で既定にした(ユーザー方針: opt-in は新しい問題に効かないので原則使わない。<code>--projective</code> は削除、<code>--no-projective</code> は残す)。</div>
+<table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0"></th><th style="text-align:right;padding:2px 12px 2px 0">解けた数</th><th style="text-align:left;padding:2px 12px 2px 0">両方で解けた問題の仕事量</th></tr><tr><td style="padding:2px 12px 2px 0">登録順のタイブレーク(既定)</td><td style="text-align:right;padding:2px 12px 2px 0">31→31</td><td style="padding:2px 12px 2px 0">+46.6%(bench_2012egmop1 +358%・nine_point_full +115% / nine_point −36%・test_steiner −35%)</td></tr><tr><td style="padding:2px 12px 2px 0">登録順のタイブレーク(<code>--projective</code>)</td><td style="text-align:right;padding:2px 12px 2px 0">32→32</td><td style="padding:2px 12px 2px 0">−31.6%</td></tr><tr><td style="padding:2px 12px 2px 0">射影を既定に(タイブレーク後の既定比)</td><td style="text-align:right;padding:2px 12px 2px 0">31→<b>32</b></td><td style="padding:2px 12px 2px 0">+7.4%(bench_2018chnwesternmop5 がギャップ無しで解ける)</td></tr></table>
+<div class="desc"><b>登録順を最適化できるか(ユーザー要望で少しだけ検証、不採用):</b></div>
+<table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">並べ方</th><th style="text-align:right;padding:2px 12px 2px 0">解けた数</th><th style="text-align:right;padding:2px 12px 2px 0">両方で解けた問題の仕事量(登録順比)</th></tr><tr><td style="padding:2px 12px 2px 0">登録順(採用)</td><td style="text-align:right;padding:2px 12px 2px 0">32</td><td style="text-align:right;padding:2px 12px 2px 0">—</td></tr><tr><td style="padding:2px 12px 2px 0">逆順</td><td style="text-align:right;padding:2px 12px 2px 0">32</td><td style="text-align:right;padding:2px 12px 2px 0">+29.1%</td></tr><tr><td style="padding:2px 12px 2px 0">パターン数の少ない順</td><td style="text-align:right;padding:2px 12px 2px 0">32</td><td style="text-align:right;padding:2px 12px 2px 0">+20.3%</td></tr><tr><td style="padding:2px 12px 2px 0">射影の定理を先頭</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">−1.0%</td></tr><tr><td style="padding:2px 12px 2px 0">ランダム1</td><td style="text-align:right;padding:2px 12px 2px 0">32</td><td style="text-align:right;padding:2px 12px 2px 0">−12.4%</td></tr><tr><td style="padding:2px 12px 2px 0">ランダム2</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">+6.6%</td></tr><tr><td style="padding:2px 12px 2px 0">ランダム3</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">+11.5%</td></tr></table>
+          <div class="evidence"><b>結論:</b> 筋の通った並べ方はどれも登録順より遅く、一番速いのはランダムな並べ替えの1つ(別の乱数では逆に振れる)。登録順は中央付近で、順序によるばらつきは ±15% 程度。bench_2018chnwesternmop5 は7通り中3通りで解けなくなる ― この問題が解けるかはまだ探索の運に頼っている(§05)。登録順のタイブレークの価値は速さではなく「定理を足しても既存の順序が変わらない」こと。</div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">·</div>
+        <div>
+          <div class="headline"><h3>共点二弦の相似の円周角を正しい向きで書き、スパイラル相似と共に向きをそろえて読む</h3><span class="pill shipped">0870d7d</span></div>
+          <div class="desc">共点二弦の相似は前提を ∠(AB,AD) = ∠(CD,CB) と書いていたが、弦 BD を見込む円周角の一致は ∠(AB,AD) = ∠(CB,CD)(円周角の定理と同じ形)。2つの角の向きを独立に読ませていた(<code>Flip::Free</code>)ので、正しい向きの組と誤った向きの組の両方が通り、共円でない配置でも方冪を結論していた。以前コメントで「向きをそろえると噛み合わない」として独立に読ませた経緯は、この書き方の誤りが原因だった ― 実際、角の書き方を直さずに向きだけそろえると test_power_of_point が解けなくなる。2つ目の角を (CB, CD) の順に直して向きをそろえ(<code>Flip::Grouped</code>)、同じく2角の一致を前提にするスパイラル相似の中点対応(∠AEB = ∠DEC)も向きをそろえた。</div>
+          <div class="evidence"><b>数値監査(既定、<code>--steps=1500000</code>、44問):</b> 共点二弦の相似のマージは偽6件(bench_2008armog10p6 4・bench_2022balkanmop1 2)→ <b>偽0件・真110件</b>。残る偽のマージは前提付きの問題の誤警報だけ。<br><b>実測(既定・44問):</b> 32/44 のまま、両方で解けた問題の仕事量 −0.9%(解けた32問の合計 7,103,776、最大は bench_2012egmop1 の1,704,996)。未解決は bench_2000usatstp2・bench_2005usamop3・bench_2008armog10p6・bench_2011balkanmop1・bench_2012chnwesternmop5・bench_2015apmop1・bench_2016armog10p2・centroid・desargues・newton_gauss・pappus・pascal の12問で、予算を使い切るのは5問。</div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -765,6 +826,24 @@ flowchart TD
     <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(§04)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 
     <div class="backlog-list">
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>★ 探索が定理を試す順序に大きく左右される ― 解けるかどうかが順序の運に依存している</h3>
+          <div class="desc">§04「同じ優先度のタスクを定理の登録順に取り出し…」の実測で、定理の登録順を変えるだけで両方で解けた問題の仕事量が ±15% 程度振れ、個別には bench_2012egmop1 +358%・nine_point_full +115% のように大きく動き、bench_2018chnwesternmop5 は7通り中3通りで解けなくなった。筋の通った並べ方(逆順・パターン数順・射影先頭)はどれも登録順に勝たず、登録順を詰めても問題が変われば効かない見込み。順序に鈍感な探索にする方が本筋 ― 例えば1回の <code>run_step</code> の途中でマージが起きても、同じ全探索の残りのタスクには古い図の上での結果を使わせない(全タスクを試してから結論を適用する)と、順序の影響がどれだけ減るかを測る。</div>
+          <div class="b-tags"><span class="tag">順序で ±15%・1問が解けたり解けなかったり</span><span class="tag">目安: bench_2018chnwesternmop5 がどの順序でも解ける</span></div>
+        </div>
+      </div>
+
+      <div class="b-item">
+        <div class="b-rank">0</div>
+        <div>
+          <h3>結論のマージの数値監査を常設する</h3>
+          <div class="desc">§04 の2件の健全性の穴(線束→点で偽3,525件、共点二弦の相似で偽6件)は、定理の結論のマージを <code>numeric_plausibility_check</code> にかけて数える一時計測で初めて見えた。<code>merge_entities_justified</code> は定理の結論を数値で裏付けずにマージするので、定理の書き方の誤りは最終目標の数値サニティチェックに引っかかるまで気づけない。これを <code>--audit-merges</code> のような診断フラグにし、全問掃引で定理ごとの偽の件数を出せるようにする。前提付きの問題(乱数座標が前提を満たさない)は誤警報になるので、問題ファイル側で前提付きであることを宣言して除外する(<code>problems::tests</code> の <code>ASSUMES_A_HYPOTHESIS</code> と同じ扱い)。</div>
+          <div class="b-tags"><span class="tag">定理の追加・書き換えのたびに回す</span></div>
+        </div>
+      </div>
 
       <div class="b-item">
         <div class="b-rank">0</div>
@@ -1037,7 +1116,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: --trace 導入と証明追跡の穴の修正まで(cb106e0)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 定理の型付け・Not と射影の定理の健全性修正・射影の既定化まで(0870d7d)
   </footer>
 
 </div>
