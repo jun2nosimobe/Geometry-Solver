@@ -2,16 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::cell::Cell;
 use crate::mmp_math::ModInt;
 
-// 🌟 mmp_core はファイルが肥大化していたため、関心事ごとにサブモジュールへ分割した。
-// 型定義・EGraphの基本操作(生成・union-find・論理リンク)はこのmod.rs自身に残し、
-// それ以外は以下のサブモジュールへ委譲する:
-//   congruence  - 合同閉包エンジン (merge_entities, propagate_*, apply_congruence_closure)
-//   eval        - 数値評価/健全性チェック (evaluate_node系, numeric_plausibility_check系)
-//   proof       - 証明復元 (Justification/ProofEdgeを人間可読な証明文へ変換)
-//   construction- 調和共役点など、複数のエンティティ生成を伴う補助構成
-//   query       - is_connected等、EGraphの状態を問い合わせるだけの読み取り専用ユーティリティ
-// いずれも同じ EGraph 型への impl ブロックを追加しているだけなので、
-// 呼び出し側(main.rs, logic_core.rs等)から見た公開APIは一切変わらない。
+// mmp_core は図形の表現(e-graph)。型定義と基本操作(生成・union-find・接続)はこのファイルに置き、
+// 残りは関心事ごとに分ける:
+//   congruence        - 合同閉包 (merge_entities, propagate_*, apply_congruence_closure)
+//   eval              - 数値評価と健全性チェック (evaluate_node, numeric_plausibility_check)
+//   proof / raw_proof - 証明の復元と出力
+//   construction      - 調和共役点など、複数の実体を作る補助構成
+//   query             - is_connected など読み取り専用の問い合わせ
 mod congruence;
 mod eval;
 mod proof;
@@ -28,45 +25,13 @@ mod tests;
 pub struct ClassId(pub usize);
 
 // 2. 図形の種類
-//
-// 🌟 EntityType::Direction撤廃の経緯: 「方向」はかつて独立した型として
-// 存在したが、実体としては常に「無限遠直線L∞(line_infinity)上の点」
-// (link_logical_incidenceで接続されたPoint)そのものだった。これが独立した
-// 型タグとしても存在していたことが、平行な2直線をIntersectionしてしまうと
-// (常にPoint型で作られる)本物のDirection型の実体と統合しようとして型が
-// 混ざる、という実際のバグ(triangle_centersプリセットでの自由探索中に
-// 発見)の温床になっていた。ユーザー提案「directionはL∞上にあるという
-// 条件が付与されたPoint型のオブジェクトで、検索もL∞上の点を探せばよい」
-// を型システムのレベルで徹底し、Directionという型タグ自体を廃止した――
-// 「無限遠点かどうか」はもう型ではなく、L∞へのincidence(is_connected)
-// という構造的事実だけで表現される。これにより上記の型混同はそもそも
-// 起こりようがなくなった(action_space.rs::entities_of_typeがPointの
-// 候補プールからL∞に繋がる点を明示的に除外しているのは、この設計の
-// 一部として「有限点だけを候補にしたい」既存の意図を保つため)。
-// 🌟 EntityType::Circle撤廃の経緯: 円は古典的に「円周点(circular points at
-// infinity) I=(1,i,0), J=(1,-i,0) を通る二次曲線」として特徴づけられる
-// (実際、外接円Circumcircle(A,B,C)は今やConicThrough5Points(A,B,C,I,J)と
-// 全く同じ計算で作られる――eval.rs参照)。EntityType::Directionの撤廃と
-// 全く同じ理由で、「円かどうか」を独立した型タグで持つのではなく、
-// I,Jへのincidence(is_connected)という構造的事実だけで表現することにした
-// (apply_trivial_relationsがCircumcircle生成時にI,Jへのlink_logical_incidenceを
-// 張る)。これによりpropagate_circle_uniqueness(円は3点で一意という特別扱い)も
-// propagate_conic_uniqueness(二次曲線は5点で一意)へ統合できた――円どうしが
-// 実点3点を共有していれば、構造的に共有しているI,Jの2点と合わせて常に5点
-// 共有になるので、特別扱いなしに同じ規則から「円は3点で決まる」が導かれる。
-// 🌟 EntityType::Angle撤廃の経緯: 有向角AnglePair(D1,D2)の数値評価は既に
-// 「無限遠直線上の4点I,J,D1,D2の複比」として実装されていた(circ_i/circ_jの
-// ドキュメント参照)――つまり角度は数値的には最初からただのScalar(複比値)
-// だった。EntityType::Direction/Circle撤廃と全く同じ理由で、この事実を
-// 型システムにも反映し、AnglePairの結果もEntityType::Scalarにした
-// (Definition::AnglePair自体は2引数のまま残す――CrossRatioへの書き換えは
-// せず、あくまで「この構成が作る実体の型タグ」だけを変える、Circumcircleと
-// 同じ最小限のアプローチ)。有向角の加法性・交替律・二等辺三角形の底角
-// といった定理は、角度どうしのIdentical比較でしか使われておらず、角度値の
-// 向き(flip)の一致判定(logic_core.rs::apply_conclusions/is_already_proven)は
-// 実はEntityTypeではなくFlipStates(allow_flipで"AnglePair"ターゲットの
-// DefinedByだけが populate する、文字列ベースで既に型非依存な機構)で
-// 完結していたため、型タグの撤廃で追加の分岐は一切必要なかった。
+// 方向・円・有向角には専用の型を持たせない。「特殊な場合」は型タグではなく、基準となる実体への接続で表す:
+//   方向   = 無限遠直線 line_infinity 上の Point
+//   円     = 円周点 circ_i, circ_j を通る Conic
+//   有向角 = 無限遠直線上の4点の複比 (I,J;D1,D2) である Scalar
+// 型をまとめるときは、候補プールが混ざらないかと、キャッシュの無効化が粗くならないか
+// (angle_generation 参照)の両方を点検する。
+// 経緯: docs/notes/mmp_core.md「Direction / Circle / Angle 型の撤廃」
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
     Point, Line, Scalar,
@@ -113,29 +78,13 @@ pub enum Definition {
     // 他のDefinitionと同様にmemoによる遅延生成なので、実際に定理/問題文が
     // 参照した組み合わせしか作られない(組み合わせ爆発はしない)。
     CrossRatio(ClassId, ClassId, ClassId, ClassId),
-    // 🌟 ユーザー提案:「複比の透視射影不変性は、4点複比(A,B;C,D)→4直線の
-    // 複比(PA,PB;PC,PD)→4点複比(A',B';C',D')として扱えばマッチングが楽に
-    // なりそう」への対応。4本の共点(同じ点を共有する)直線がなす線束の複比。
-    // 「円も係数を射影空間の点だと思えばOK」と全く同じ発想で、直線の同次係数
-    // (a,b,c)を射影平面の"点"とみなせば、4直線が共点である(=双対平面上で
-    // 4つの係数点が共線)ときのCrossRatioと、通常のCrossRatio(4点の共線)は
-    // 全く同じ計算式(calc_cross_ratio)で扱える。これにより「透視射影不変性」
-    // という1つの巨大な定理(自由変数9個、天然のシードが無くdfs_capを
-    // 食い潰す)を、
-    //   定理A: 点の複比(直線L上のA,B,C,D) = 線束の複比(Oを通るPA,PB,PC,PD)
-    //   定理B: 線束の複比(Oを通るPA,PB,PC,PD) = 点の複比(直線L'上のA',B',C',D')
-    // という2つの小さな定理に分解できる――CrossRatioOfLines(PA,PB,PC,PD)を
-    // 共通の"ハブ"として経由することで、それぞれの定理が同時に束縛すべき
-    // 自由変数の数が減り(定理Aは実質O,A,B,C,Dの5点)、かつ定理Bの4直線は
-    // 「Oに繋がっている既存の直線」というConnected(O,_)由来の自然なシードで
-    // 絞り込める(定理Aが作ったPA..PDがまさにその候補になる)。
+    // 🌟 共点な4直線がなす線束の複比 (Scalar)。直線の同次係数 (a,b,c) を双対平面の点とみなせば、
+    // 点の複比と同じ calc_cross_ratio で計算できる。透視射影不変性を「点の複比 → 線束の複比 →
+    // 別の直線上の点の複比」という2つの小さな定理(theorems.rs)に分けるための中継点。
     CrossRatioOfLines(ClassId, ClassId, ClassId, ClassId),
-    // 🌟 固定された同次座標を持つ定数エンティティ。GivenPointは(名前を
-    // varsから引くが誰も登録しないので実質)常に(0,0,1)に評価されるだけで
-    // 任意の定数は表現できないため、円周点(circular points) I=(1,i,0),
-    // J=(1,-i,0)(有向角を複比として扱うための固定参照点。i=√-1はこの
-    // プロジェクトの法998244353がp≡1(mod4)なので体内に存在する)のような
-    // 「常にこの値」という定数を導入するために追加した。
+    // 🌟 固定された同次座標を持つ定数。円周点 I=(1,i,0), J=(1,-i,0) のような定点に使う
+    // (法 998244353 は p≡1 (mod 4) なので i が体の中にある)。GivenPoint は常に (0,0,1) に
+    // 評価されるので、任意の定数には使えない。
     ConstantHomogeneous(ModInt, ModInt, ModInt),
     // 🌟 5点を通る一般二次曲線(Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0、射影空間として
     // 5自由度)。Circumcircle(3点から円を復元)の一般化で、5点は完全に
@@ -147,24 +96,12 @@ pub enum Definition {
     // 「2辺の長さの積」を1つのScalarとして比較したい場合に使う。
     // LengthSq等と同じ「値,1,1」の3要素形式で評価される。
     Product(ClassId, ClassId),
-    // 🌟 ユーザー指示(「無闇に定理を追加してもノイズが増えるだけなので、
-    // ondemand作図やMCTSによる補助点作図の改善もすべき」)への対応:
-    // オリンピック幾何で頻出する「直線を延長して既存の円/二次曲線と
-    // 再び交わる点」という補助構成を、個別の定理ではなく汎用の作図
-    // プリミティブとして追加した。(known_point, line, conic)の3引数――
-    // known_pointは既にlineとconicの両方に乗っていることが前提の
-    // 「もう一方ではない方」の交点で、順不同にはならない(3者はそれぞれ
-    // 役割が違う)。計算はmmp_calculators::calc_second_intersection_of_
-    // line_and_conicのドキュメント参照(直線をP+tRとパラメータ化し、
-    // Pが根であることを使ってもう一方の根を斉次座標のまま求める)。
+    // 🌟 (known_point, line, conic): line と conic の交点のうち known_point ではない方。known_point は
+    // 両方に乗っている前提なので、引数は順不同ではない。計算は
+    // mmp_calculators::calc_second_intersection_of_line_and_conic。
     SecondIntersectionOfLineAndConic(ClassId, ClassId, ClassId),
-    // 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、
-    // もう一個の円と円、円と直線の交点を作図するなど)の方が、よりいろんな
-    // 結果を作れる」)への対応。2円の根軸(radical axis)。順不同。
-    // 2円が交わるならその2交点を通る直線であり、交わらなくても常に定義される
-    // (方冪が等しい点の軌跡)。計算は mmp_calculators::calc_radical_axis 参照。
-    // 「3円の根軸は1点(根心)で交わる」のように、根軸そのものが、すぐには
-    // 示しにくい結果を生む源になる。
+    // 🌟 2円の根軸(方冪が等しい点の軌跡)。順不同。2円が交わらなくても定義される。
+    // 計算は mmp_calculators::calc_radical_axis。
     RadicalAxis(ClassId, ClassId),
     // 🌟 同上。一方の交点が既知のときの「2円のもう一方の交点」。
     // (known_point, c1, c2) で、c1とc2は順不同。SecondIntersectionOfLineAnd
@@ -420,16 +357,9 @@ pub struct EGraph {
     // 定理(有向角の加法性・交替律・円周角の定理など)は Definition::DirectionOf
     // を通じて方向をそのまま参照し続けるので、この追加はパターンには一切影響しない。
     pub line_infinity: ClassId,
-    // 🌟 円周点(circular points at infinity) I, J。有向角AnglePair(D1,D2)を
-    // 「無限遠直線上の4点D1,D2,I,Jの複比」として扱うための固定参照点。
-    // ユーザー提案「有向角を複比として扱う」への対応で、AnglePairの数値評価
-    // (eval.rs)がこの2点とcalc_cross_ratioを使うように変更されている。
-    // I,Jは古典的に(1,±i,0)(iは虚数単位)で、この複比 (I,J;D1,D2) は
-    // Möbius変換の比として D1→D2→D3 の加法性(掛け算則)・交替律
-    // (a/b=c/d ⟹ a/c=b/d)をそのまま満たすため、既存の「有向角の加法性」
-    // 「有向角の交替律」定理(AnglePairの値をIdenticalで比較するだけの
-    // 純粋に構造的な定理で、値の具体的な計算式には一切依存しない)は
-    // パターン・定理側を一切変更せずにそのまま複比としての意味を持つ。
+    // 🌟 円周点 I, J。有向角 AnglePair(D1,D2) は無限遠直線上の4点の複比 (I,J;D1,D2) として
+    // 評価する(eval.rs)。この複比は加法性・交替律をそのまま満たすので、角度の定理は値の計算式に
+    // 依存しない。円は I,J を通る Conic として表す。
     pub circ_i: ClassId,
     pub circ_j: ClassId,
     pub worklist: Vec<ClassId>, // 🌟 NEW: マージが発生して再評価が必要なIDキュー
@@ -459,104 +389,43 @@ pub struct EGraph {
     // (mmp_tester.rs等、既存の全ての呼び出し元は&EGraphしか渡さない)。
     // キーは正規化された(小さい方の代表元インデックス, 大きい方の代表元インデックス)。
     pub conjectures: std::cell::RefCell<rustc_hash::FxHashMap<(usize, usize), ConjectureEntry>>,
-    // 🌟 実際にunion-findの併合が起きるたび(merge_entities内で root1 != root2
-    // だった回数だけ)単調増加するカウンタ。logic_core.rs::MatchTaskが
-    // dfs_cap到達で再キューされる際、そのタスク専用のfailed_paths
-    // (このタスクの中でどのbind/flip_states状態が「これ以上進めない」と
-    // 分かったかのハッシュキャッシュ)を安全に持ち越せるかどうかの判定に使う。
-    // failed_pathsはget_rep()した後のClassIdをハッシュに含めているため、
-    // キャッシュを作った時点から1回でもマージが起きていれば、同じハッシュが
-    // 別の(今はマージにより到達可能になったかもしれない)状態を指してしまい
-    // 得る。そのため「保存時のこの値」と「再開時のこの値」が一致する場合
-    // だけ再利用し、1つでもずれていれば安全側に倒して空から作り直す。
+    // 🌟 union-find の併合が実際に起きるたびに増えるカウンタ。rejected_conic_pairs が
+    // 「却下してから一度もマージが起きていないか」を判定するのに使う。
     pub merge_generation: u64,
-    // 🌟 propagate_circle_uniqueness用の「却下済みペア」キャッシュ。
-    // キーは(小さい方の代表元インデックス, 大きい方の代表元インデックス)、
-    // 値はそのペアを数値的健全性チェックで却下した時点のmerge_generation。
-    // 円は直線よりも同一点集合上に多数の重複エンティティが積み上がりやすく
-    // (HAGeo-409ベンチマークで実測: ある問題では全円エンティティの100%が
-    // 統合されるべき重複だった)、あるペアが一度「共有点はあるが数値的には
-    // 別の円」と判定されても、そのペアの片方に別の(無関係な)点がマージ
-    // されるたびに(円自体のrepは変わっていなくても)再チェックされてしまい、
-    // 同じ却下を何度も繰り返すことがrealorthocenterで実測された(壁時計時間
-    // 4.5秒→17.5秒への劣化の主因)。マージが1件も起きていない間は再チェック
-    // しても結果が変わりようがないので、merge_generationが前回の却下時点から
-    // 変わっていなければ即座にスキップする。
+    // 🌟 propagate_conic_uniqueness で数値チェックが却下したペア。キーは代表元インデックスの
+    // (小, 大)、値は却下したときの merge_generation。その後マージが起きていなければ再チェックしても
+    // 結果は同じなので飛ばす(円は同じ点集合の上に重複が積み上がりやすく、同じ却下の繰り返しが
+    // 時間の大半を食うことがある)。
     pub rejected_conic_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
     /// 数値検証・次数測定に使う乱数の状態(EGraph::random_modint)。シード固定なので、
     /// 同じ問題は毎回同じ座標で検算する。
     rng_state: Cell<u64>,
-    // 🌟 ユーザー提案(定理マッチングの最適化)への対応その1: EntityTypeごとの
-    // 生成済みエンティティID一覧のインデックス。create_entity内で追記するだけの
-    // 単調増加リストで、union-findのマージでは更新しない(吸収された側の
-    // ClassIdもそのまま残る)。そのため利用側は必ずget_rep()で正規化された
-    // 代表元だけを拾う(iter_reps_of_type参照)。
-    //
-    // 従来、logic_core.rs側の複数箇所(Identical/Connectedの両変数未束縛分岐、
-    // DefinedByの親変数も未束縛な場合のフルスキャン分岐)が「特定の型を持つ
-    // 代表元」を探すために self.egraph.entities を毎回全件ループしていた。
-    // 定理が増えるほどエンティティ数(補助図形)も増えるため、この種の
-    // フルスキャンのコストが線形に効いてくる。型ごとに索引を引けるように
-    // しておけば、目的の型のエンティティ数だけのスキャンで済む
-    // (特にCircle/Conicのような個体数の少ない型で効果が大きい)。
+    // 🌟 EntityType ごとの生成済み ClassId の一覧。create_entity で追記するだけでマージでは消さないので、
+    // 使う側は get_rep で代表元に直す(iter_reps_of_type)。定理マッチングが特定の型の実体を探すときに
+    // 全件を走査しないための索引。
     pub type_index: rustc_hash::FxHashMap<EntityType, Vec<ClassId>>,
-    // 🌟 ユーザー提案(定理マッチングの最適化・案3→ゲートウェイ集約による
-    // リファクタリング)への対応: EntityTypeごとに独立した「この型に関する
-    // マッチング候補集合(候補エンティティ・接続関係・memo経由の到達可能性)が
-    // 最後に変化した世代」のカウンタ。logic_core.rs::MatchTaskのfailed_paths
-    // 持ち越し判定に使う――単一のグローバルmerge_generationだと「e-graphの
-    // どこかで1回でも変化が起きたか」しか区別できず、無関係な型の変化でも
-    // 全タスクのキャッシュを巻き添えで捨てていたため、型ごとに絞り込めるよう
-    // 分解した。
-    //
-    // 🐛 この値を正しく保つには「マッチングに影響し得る構造
-    // (components/subobjects/uses/memo)を変更する操作を漏れなくここに
-    // 通知する」ことが不可欠で、実際に最初の実装では複数箇所を見落として
-    // (新規エンティティ生成、接続関係の新規追加、apply_congruence_closure内で
-    // 既存エンティティにmemoを事後登録するケースの3つ)HAGeo-409ベンチマークの
-    // 複数問題で回帰を起こした。そこで生の構造フィールドへの書き込みを
-    // create_entity/merge_entities/link_logical_incidence/insert_memoの
-    // 4つのゲートウェイ関数だけに集約し(この4つ以外がentities[..].components/
-    // subobjects/usesやself.memoに直接書き込むことは無い、という不変条件を
-    // 保つ)、それぞれの内部でnote_type_changedを呼ぶことで「この値を
-    // 更新し忘れる」余地を構造的に無くした。
+    // 🌟 EntityType ごとの「その型のマッチング候補(実体・接続・memo)が最後に変わった世代」。
+    // 失敗キャッシュ(logic_core の failed_paths)や型ごとのキャッシュの無効化判定に使う。
+    // 不変条件: components / subobjects / uses / memo を書き換えるのは create_entity /
+    // merge_entities / link_logical_incidence / insert_memo の4つのゲートウェイだけで、それぞれが
+    // note_type_changed を呼ぶ。書き込み経路を足すときは必ずゲートウェイを通す(通知漏れは
+    // エラーにならず、探索の取りこぼしとして静かに効く)。
     pub type_generation: rustc_hash::FxHashMap<EntityType, u64>,
     /// 🌟 EntityTypeごとの実体数のキャッシュ。(数えた世代, 個数)を持ち、
     /// type_generation が動いていなければ数え直さない。
     pub(crate) type_counts: std::cell::RefCell<rustc_hash::FxHashMap<EntityType, (u64, usize)>>,
-    /// 🌟 EntityType::Angle撤廃(このモジュールのEntityTypeドキュメント参照)
-    /// により、有向角(AnglePair)は他の全てのScalar(長さ・積・複比等)と
-    /// 同じEntityType::Scalarを共有し、type_generation[Scalar]も
-    /// 共有するようになった。これをそのまま角度連鎖定理の自己束縛
-    /// キャッシュ(logic_core.rs::identical_self_bind_angle_cache)の
-    /// 無効化判定に使うと、無関係な長さ・積の新規生成のたびに角度側の
-    /// キャッシュまで無効化されてしまい、統合前には無かったキャッシュ
-    /// ヒット率の急落(=無関係イベントによる過剰な再計算)を招く
-    /// (実測でベンチマーク合格率が69/96→57/96に悪化する回帰として
-    /// 顕在化した)。そこでtype_generation[Scalar]はこれまで通り
-    /// (他の消費者が依存する「全てのScalarの変化で必ず上がる」という
-    /// 健全性は崩さず)残したまま、「実際に角度(AnglePair)が絡む変化か
-    /// どうか」だけを追跡する専用カウンタを別途持つ。plain_scalar_
-    /// generationはその裏返し(角度以外のScalarの変化だけを追跡する)で、
-    /// 角度側と対称にキャッシュを分離することで、非角度の自己束縛
-    /// クエリが逆に角度側の変化で無駄に無効化されるのも防ぐ。
-    /// note_type_changedと同じ4つのゲートウェイ(create_entity/
-    /// merge_entities/insert_memo。link_logical_incidenceは対象外――
-    /// 接続関係の追加はEntityType::Scalarの「代表元集合」自体を
-    /// 変えないため、この2カウンタが守る自己束縛候補プールには無関係)
-    /// だけがこれを更新する。
+    /// 🌟 Scalar のうち有向角(AnglePair)が絡む変化だけで増える世代(angle_generation)と、それ以外の
+    /// Scalar の変化だけで増える世代(plain_scalar_generation)。角度の自己束縛候補のキャッシュ
+    /// (logic_core::cost の identical_self_bind_angle_cache)を、長さや積が作られるたびに捨てないよう、
+    /// type_generation[Scalar] とは別に持つ。更新するのは create_entity / merge_entities / insert_memo
+    /// (接続の追加は Scalar の代表元集合を変えないので対象外)。
     pub angle_generation: u64,
     pub plain_scalar_generation: u64,
-    // 🌟 ユーザー提案:「図形を退化させた時の振る舞いを観察して関連が深い
-    // オブジェクトを発見し、それをheatのボーナスに使う」への対応
-    // (padic.rs/padic_eval.rsのドキュメント参照)。既定ではNone(計算しない
-    // 限り一切のコストが無い)。discover_degenerate::compute_degeneration_groups
-    // で計算した結果をここへ差し込むと、bump_heat_bonusが同じグループの
-    // 他のメンバーにも(小さい)ボーナスを伝播するようになる。
+    // 🌟 退化のもとで関連が観測された実体の組(padic_eval.rs)。Some のときだけ bump_heat_bonus が
+    // 同じ組の他の実体にもボーナスを伝播する。既定は None で、何も計算しない。
     pub degeneration_groups: Option<crate::padic_eval::DegenerationRelations>,
-    // 🌟 bump_heat_bonusが退化グループの他のメンバーに伝播するボーナスの
-    // 割合(0.5=元の半分)。main.rsの--degen-heat-factor=Xでチューニング
-    // 実験できるようにCLIから調整可能にしてある。
+    // 🌟 bump_heat_bonus が退化グループの他の実体に伝播するボーナスの割合(0.5 = 元の半分)。
+    // --degen-heat-factor=X で変えられる。
     pub degeneration_heat_factor: f64,
     /// 🌟 いま作られる図形に刻む出どころ。既定は Given (問題文) で、オンデマンド
     /// 作図などの呼び出し側が set_origin で一時的に差し替える。
@@ -670,29 +539,16 @@ impl EGraph {
         let neg_i = -i;
         egraph.circ_i = egraph.create_entity("CircI".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), i, ModInt::new(0)), EntityType::Point);
         egraph.circ_j = egraph.create_entity("CircJ".to_string(), Definition::ConstantHomogeneous(ModInt::new(1), neg_i, ModInt::new(0)), EntityType::Point);
-        // 🌟 EntityType::Direction撤廃に伴うFIX: I,Jは同次座標のz成分が0
-        // (=無限遠直線L∞上の点)という意味で、これまでDirectionという型タグで
-        // それを表現していた。型を撤廃した今、この事実は他の全ての方向と
-        // 同じくlink_logical_incidenceによるL∞への明示的な接続で表現する
-        // 必要がある(ConstantHomogeneousのapply_trivial_relationsには
-        // これに対応する分岐が無いため、ここで直接張る)。
+        // 🌟 I,J は無限遠直線上の点なので、他の方向と同じく L∞ への接続で表す
+        // (ConstantHomogeneous の apply_trivial_relations には該当する分岐が無いので、ここで張る)。
         egraph.link_logical_incidence(egraph.circ_i, egraph.line_infinity);
         egraph.link_logical_incidence(egraph.circ_j, egraph.line_infinity);
         egraph
     }
 
-    // 🌟 ユーザー提案:「同じ退化グループにあるかはすぐ判定できるはずだから
-    // それを用いてheatにボーナスすることを考えている」への対応。通常の
-    // heat_bonus加算をこの関数経由に統一し、degeneration_groupsが計算済み
-    // (Some)であれば、退化のもとで直接関連が観測された他のエンティティにも
-    // (割り引いた)ボーナスを伝播する(推移閉包は取らない、padic_eval.rs::
-    // DegenerationRelationsのドキュメント参照――union-findで推移閉包を
-    // 取ると異なる退化パターンの関係まで無差別に合併され、実測で明確な
-    // 悪化を引き起こしたため、直接観測された辺だけを使う設計にした)。
-    // degeneration_groupsがNone(既定、計算していない問題)の場合は従来通り
-    // entities[rep].heat_bonus += amountと完全に同じ挙動になり、このボーナス
-    // 伝播機構を使わない既存の全ての呼び出し元・全ての問題に一切の副作用が
-    // 無い。
+    // 🌟 heat_bonus を足す唯一の入口。degeneration_groups が Some なら、直接関連が観測された他の実体にも
+    // degeneration_heat_factor 倍のボーナスを伝播する(推移閉包は取らない ― 異なる退化パターンの関係まで
+    // 合併されて悪化した)。None なら entities[rep].heat_bonus += amount と同じ。
     pub fn bump_heat_bonus(&mut self, id: ClassId, amount: f64) {
         let rep = self.get_rep(id);
         self.entities[rep.0].heat_bonus += amount;
@@ -778,17 +634,9 @@ impl EGraph {
         id
     }
 
-    /// 🌟 このEntityTypeの実体数。
-    ///
-    /// logic_core.rs::estimate_cost の Connected(未束縛, 未束縛) 分岐が
-    /// 「親の型がグラフに何個あるか」で見積もるために呼ぶ。estimate_cost は
-    /// DFSの各ノードで残りパターンの数だけ呼ばれるホットパスなので、
-    /// 以前のように毎回 entities を全走査すると、実体数が数百になる
-    /// 自由作図後は見積もりだけで無視できない量になる。
-    /// type_generation が動いていなければ前回の値をそのまま返す
-    /// (返す値は全走査と完全に同じなので、探索の経路は一切変わらない。
-    /// 実測でも simson / nine_point_full / orthocenter / bench_2012egmop1 の
-    /// 消費仕事量が1ステップも変わらないことを確認済み)。
+    /// 🌟 このEntityTypeの実体数。logic_core::cost の estimate_cost が Connected(未束縛, 未束縛) の
+    /// 見積もりのために DFS の各ノードで呼ぶので、type_generation が動いていなければ前回の値を返す
+    /// (値は全走査と同じ)。
     pub fn count_of_type(&self, ty: EntityType) -> usize {
         let current = self.type_generation.get(&ty).copied().unwrap_or(0);
         if let Some(&(cached_gen, n)) = self.type_counts.borrow().get(&ty)
@@ -821,15 +669,8 @@ impl EGraph {
         }
     }
 
-    /// 🌟 self.memoへの書き込みを一箇所に集約するゲートウェイ。以前は
-    /// create_entityとapply_congruence_closure(congruence.rs)の2箇所が
-    /// それぞれ直接self.memo.insertを呼んでおり、後者(既存エンティティに
-    /// 対して正規化後の定義を事後的にmemo登録するケース)がnote_type_changedの
-    /// 呼び出し漏れの原因になっていた(HAGeo-409ベンチマークで実際に
-    /// 回帰として顕在化)。memoへの新規登録は「このDefinitionから
-    /// このエンティティへ到達できるようになった」という、defined_by_valid_nodes等の
-    /// memoルックアップの結果を変え得る変化なので、登録したエンティティの
-    /// 型を必ずnote_type_changedに通知する。
+    /// 🌟 self.memo への書き込みはここだけ。memo への登録は defined_by_valid_nodes などの memo 検索の
+    /// 結果を変えるので、登録した実体の型を note_type_changed に通知する。
     fn insert_memo(&mut self, def: Definition, id: ClassId) {
         let et = self.entities[id.0].entity_type;
         // 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
@@ -868,16 +709,9 @@ impl EGraph {
 #[derive(Debug, Clone)]
 pub struct LogicalComponent {
     pub definitions: Vec<Definition>,
-    // 🌟 以前は std::collections::HashSet<ClassId>(標準のRandomState、
-    // プロセスごとに異なるランダムシード)だった。重複除去自体は必要だが、
-    // その反復順序がプロセス起動のたびに変わってしまうため、これに依存する
-    // 局所伝播(propagate_line_uniqueness/propagate_point_uniqueness)や
-    // 定理マッチングの候補列挙の探索順序までプロセスごとに変わってしまい、
-    // 同じ問題・同じロジックでも実行時間が実行のたびに大きくばらつく
-    // (実測: miquelで0.35秒/1.05秒の二峰性)原因になっていた。挿入順を保持する
-    // Vecに変え、重複除去はlink_logical_incidence/merge_entities側で
-    // 明示的に行う(小規模なので線形探索で十分)ことで、探索順序を完全に
-    // 再現可能にする。
+    // 🌟 挿入順を保つ Vec(重複除去は link_logical_incidence / merge_entities 側で行う)。HashSet に
+    // すると反復順序がプロセスごとに変わり、局所伝播や候補列挙の順序、ひいては探索の結果が実行のたびに
+    // ぶれる。
     pub subobjects: Vec<ClassId>,
 }
 
@@ -892,17 +726,9 @@ pub(crate) fn dedup_sorted_ids(ids: impl IntoIterator<Item = ClassId>) -> Vec<Cl
     out
 }
 
-/// 🌟 その図形を「誰が作ったか」。探索の途中で作られた補助構成が実際に
-/// 証明へ効いているのかを後から測るために、create_entity の時点で一度だけ
-/// 刻む(以後どれだけマージが起きても書き換えない)。
-///
-/// 動機(ユーザー要望): オンデマンド作図(resolve_*_demands)と、定理の
-/// マッチングが DefinedBy パターンを満たすためにその場で作る図形は、
-/// どちらも「行き詰まったら図を増やす」という同じ賭けをしている。賭けが
-/// 当たっているのか(=作ったものが本当に証明に使われているのか)はこれまで
-/// 一切測れていなかった。名前の接尾辞 (Auto) は「定義からの自動派生」と
-/// 「マッチャのその場生成」の両方に使われていて事後には区別できないので、
-/// 作る側で印を付けるしかない。
+/// 🌟 その図形を「誰が作ったか」。create_entity で一度だけ刻み、マージでは書き換えない。
+/// オンデマンド作図やマッチャのその場生成が証明に効いているかを後から測る(--origins)ためのもの。
+/// 名前の接尾辞 (Auto) では事後に区別できないので、作る側で印を付ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EntityOrigin {
     /// 問題文(あるいは作図スクリプト)で最初から与えられたもの。
@@ -976,17 +802,9 @@ pub struct GeoEntity {
     pub base_importance: f64,
     pub heat_bonus: f64,
     pub components: Vec<LogicalComponent>,
-    // 🌟 create_entity時に一度だけ設定され、以後マージが起きても絶対に
-    // 書き換えられない、そのスロット固有の不変な「元の定義」。components側は
-    // merge_entities で(生き残った側に)吸収された実体からstd::mem::takeされ
-    // 空になってしまうため、「このIDは元々どんな(引数の)定義で作られたか」を
-    // 後から(raw_proof::dump_raw_proofが)正確に復元するために必要。
-    // extract_proofの「DefinedBy(d1,d2,result)前提は、実は名前付き定理の合流の
-    // 産物であることが多いのに一律『定義から自明』と表示してしまう」問題を、
-    // 全合流履歴の総当たり列挙ではなく、この特定の(d1,d2)組み合わせを
-    // 最初に持っていた"元の"実体1つとその実体からresultまでの最短合流経路だけを
-    // ピンポイントで特定する形で解消するために導入した(ユーザー提案の
-    // 「証明の先頭からDPで証明木を構築する」方針への対応)。
+    // 🌟 create_entity 時の元の定義。merge_entities で吸収された側の components は空になるので、
+    // 「このIDは元々どんな定義で作られたか」をここで保つ。raw_proof::dump_raw_proof が DefinedBy 前提の
+    // 本当の出どころ(最初にその定義を持っていた実体と、そこから result までの合流経路)を特定するのに使う。
     pub original_definition: Definition,
     pub uses: rustc_hash::FxHashSet<ClassId>,
     // 🌟 MCTSが自由な探索で作った補助構成が、他のMCTS補助構成の上にさらに
@@ -996,14 +814,8 @@ pub struct GeoEntity {
     // MCTS自身の産物の上に何段も構成を積み増す(例:中点のまた中点のまた中点…)
     // ことだけを対象にした、ローカルな連鎖専用のカウンタ。
     pub mcts_depth: usize,
-    // 🌟 MMP(動点法)の次数(measure_numerical_degree)のメモ化キャッシュ。
-    // heat_bonus/base_importance/usesと同じく「そのエンティティ固有の
-    // 派生情報」なので、EGraph側に別立てのHashMapを持つのではなくここに
-    // 置く(ユーザー指摘: 次数はGeoEntityの中にあった方が自然)。
-    // None=未計算、Some(None)=計算済みだが測定不能、Some(Some(d))=次数d。
-    // Cell(RefCellではない)で足りるのは中身がCopyだから。定理マッチングの
-    // ホットパス(logic_core.rs::match_defined_by_fact)から&selfのまま
-    // 読み書きできるようにするための内部可変性。
+    // 🌟 動点法の次数(measure_numerical_degree)のメモ。None=未計算、Some(None)=測定不能、
+    // Some(Some(d))=次数d。マッチングのホットパスから &self のまま読み書きするための Cell。
     pub degree_cache: std::cell::Cell<Option<Option<usize>>>,
     // 🌟 この図形を「誰が作ったか」(EntityOrigin 参照)。
     pub origin: EntityOrigin,
@@ -1014,17 +826,8 @@ pub struct GeoEntity {
     pub origin_cascade: bool,
 }
 
-// 🌟 熱関連処理の統一(ユーザー要望「熱関連の処理をリファクタリングして整理」)。
-// 以前は「base_importance + heat_bonus + uses.len()*0.5」という同じ式が
-// calc_bind_heat/estimate_cost(logic_core.rs)とaction_space.rs::entity_weightの
-// 計3箇所に、「base_importance + heat_bonus」(次数抜き)がmatch_identical_fact
-// の自己束縛ソート/heat_capped_connected_candidates/match_connected_factの
-// 局所スキャンソートの計3箇所に、それぞれ独立にコピーされていた
-// (後者は前者から「次数の項だけ」意図的に省いた別の式で、単なる重複ではなく
-// 実際に2種類の式が使い分けられている――この違いも含めてここに集約する)。
-// DFSのbind順序付け・MCTSの行動サンプリング/報酬評価のどちらでも「何が
-// 面白い図形か」を判定する箇所は、常にこの2メソッドのどちらかを呼ぶことに
-// 統一し、式そのものを直接書く場所を無くす。
+// 🌟 「何が面白い図形か」を表す熱量の式は、ここの heat / heat_with_degree の2つだけに置く。
+// DFS の束縛順序・コスト見積もり・MCTS の行動の重みは、式を直接書かずにどちらかを呼ぶ。
 impl GeoEntity {
     /// 熱(heat_bonus) + 基本重要度(base_importance)。「直近マージされた/
     /// 予想の裏付けが取れた」対象を優先するための、次数を含まない素の熱量。
@@ -1048,12 +851,8 @@ impl GeoEntity {
     }
 }
 
-// 🌟 Concyclic/Collinear は専用のFact型として持つのをやめた。
-// 「N点が同じ円/直線に乗っている」ことは、各点をその円/直線に
-// link_logical_incidence で構造的につなぐだけで既に表現できており
-// (Connected述語で汎用的に問い合わせられる)、別建てのN項Factとして
-// 二重に記録・維持する必要がなかった。実際、記録し忘れるバグの温床にも
-// なっていた(simson/cyclic_quadで発生)。
+// 🌟 共円・共線は専用の Fact にせず、各点を円・直線に link_logical_incidence でつなぐだけで表す
+// (Connected で問い合わせられる)。別の Fact として二重に持つと、記録漏れの温床になる。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Fact {
     Identical(ClassId, ClassId),
@@ -1268,14 +1067,8 @@ impl EGraph {
                 self.link_logical_incidence_justified(*p1, new_id, Justification::Trivial { reason: reason.clone() });
                 self.link_logical_incidence_justified(*p2, new_id, Justification::Trivial { reason: reason.clone() });
                 self.link_logical_incidence_justified(*p3, new_id, Justification::Trivial { reason });
-                // 🌟 EntityType::Circle撤廃(円周点I,Jを通るという条件で
-                // 「円かどうか」を判定する、mmp_core/mod.rs::EntityTypeの
-                // ドキュメント参照): 外接円は今やConicThrough5Points(p1,p2,p3,I,J)
-                // と全く同じ計算(eval.rs::Definition::Circumcircle参照)で
-                // 作られているので、その事実を構造的にも表現しておく。これにより
-                // propagate_conic_uniquenessが「実点3つ共有」を自動的に
-                // 「5点共有(実点3つ+I+J)」として扱え、円専用の特別扱いが
-                // 不要になる。
+                // 🌟 円は I,J を通る Conic と同じ計算で作られるので、I,J への接続も張る。これで
+                // propagate_conic_uniqueness が「実点3つを共有」を「5点を共有」として扱え、円専用の規則が要らない。
                 self.link_logical_incidence(new_id, self.circ_i);
                 self.link_logical_incidence(new_id, self.circ_j);
             },
@@ -1308,19 +1101,9 @@ impl EGraph {
                     let ang2_id = self.create_entity(format!("Ang90_{}_{}", dir2_id.0, dir1_id.0), ang2_def, EntityType::Scalar);
                     self.merge_entities_justified(ang2_id, self.ang90, Justification::Trivial { reason: "垂線の定義より2方向のなす角は90度(逆順)".to_string() });
 
-                    // 🌟 射影的な表現を追加: dir2 は「dir1に垂直な方向」そのものとして
-                    // PerpDirectionOfでも構造的に登録しておく(対合性 perp(perp(D))=D
-                    // も両方向に登録する)。これにより「同じ直線への垂線は全て平行」
-                    // のような事実が、専用の角度チェイス定理を経由せず、
-                    // f(a)=f(b) if a=b という通常の合同閉包(create_entityのmemo)
-                    // だけで自動的に導かれるようになる。既存のAng90ベースの定理には
-                    // 一切影響しない、純粋な追加。
-                    // 🐛 バグ修正: 1つ目のmerge_entities(perp1_id, dir2_id)によって
-                    // dir2_id側の生のエンティティ格納先が「敗者」になった場合、
-                    // その.nameはmerge_entities内でstd::mem::takeされて空文字になる。
-                    // その後dir2_idという生の(mergeを経ていない)IDのままself.entities[..].name
-                    // を読むと空文字を拾ってしまい、"PerpDir__(Auto)"のような名前になる。
-                    // 常にget_repを通した代表元の名前を読むようにする。
+                    // 🌟 dir2 を PerpDirectionOf(dir1) としても登録し(対合 perp(perp(D))=D も両方向に)、「同じ直線への
+                    // 垂線は平行」を専用の定理なしに合同閉包だけで導けるようにする。
+                    // 名前は必ず get_rep を通して読む: 直前の merge_entities で dir2_id 側が吸収されると、その name は空になる。
                     let dir1_name = self.entities[self.get_rep(dir1_id).0].name.clone();
                     let perp1_id = self.create_entity(
                         format!("PerpDir_{}_(Auto)", dir1_name),
@@ -1433,13 +1216,8 @@ impl EGraph {
                 let line_def = Definition::new_line(*a, *b);
                 let line_id = self.create_entity(format!("Line_{}_{}_(Auto)", self.entities[a.0].name, self.entities[b.0].name), line_def, EntityType::Line);
                 self.link_logical_incidence(new_id, line_id);
-                // 🐛 中点の定義から直に従う「MA = MB」をここで出していなかった。
-                // そのため discover モードのスカラー検出器が、中点を作るたびに
-                // この自明な等式を「発見」し直していた(ユーザ指摘:
-                // 「長さが等しいという発見が多すぎる」)。垂線→Ang90 や
-                // 外接円→生成元の接続と同じく、定義から機械的に従う事実は
-                // ここで構造的に登録するのがこのエンジンの方針。
-                // 検出器が黙るだけでなく、証明側もこの等式を前提として使えるようになる。
+                // 🌟 中点の定義から直に従う MA = MB をここで登録する(垂線→Ang90 と同じく、定義から機械的に従う事実は
+                // 構造的に入れる)。登録しないと、discover の検出器が中点を作るたびにこの等式を「発見」し直す。
                 let la_def = self.normalize_definition(&Definition::LengthSq(*a, new_id));
                 let la = self.create_entity(
                     format!("LenSq_{}_{}_(Auto)", self.entities[a.0].name, self.entities[new_id.0].name),

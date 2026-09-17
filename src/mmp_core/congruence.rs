@@ -26,19 +26,8 @@ impl EGraph {
         // 🌟 FIX: root1のコンポーネントも一度takeし、mutable borrowの競合を回避する
         let mut root1_comps = std::mem::take(&mut self.entities[root1.0].components);
 
-        // 🐛 FIX: definitionsも以前は std::collections::HashSet(標準の
-        // RandomState、インスタンスごとに異なるランダムな鍵)に溜めて、
-        // そのまま into_iter().collect() していた。
-        // LogicalComponent::subobjects が全く同じ理由で既にVec化されている
-        // (そちらのドキュメント参照)のに、同じ構造体のdefinitionsだけが
-        // 取り残されていた。
-        //
-        // 評価器は「コンポーネント内の全定義を、計算できるものが見つかる
-        // まで順に試す」ので、この並び順が変わると探索そのものが変わる。
-        // 実測でも nine_point_full を同じ引数で3回流すと、出力が
-        // 6560行 / 4832行 / 4832行 と実行ごとに別物になっていた。
-        // subobjectsと同じく挿入順を保持するVecに変え、重複除去は明示的に
-        // 行う(コンポーネントは小さいので線形探索で十分)。
+        // 🌟 definitions は挿入順を保つ Vec に溜め、重複は明示的に除く(subobjects と同じ)。評価器は
+        // 「計算できる定義が見つかるまで順に試す」ので、並び順が変わると探索そのものが変わる。
         let mut merged_defs: Vec<Definition> = Vec::new();
         let push_def = |defs: &mut Vec<Definition>, d: Definition| {
             if !defs.contains(&d) { defs.push(d); }
@@ -177,35 +166,17 @@ impl EGraph {
                         }
                     } else {
                         def_map.insert(norm_def.clone(), u_rep);
-                        // 🌟 ゲートウェイ集約(type_generationのドキュメント参照):
-                        // 以前はここが直接self.memo.insertしており、
-                        // note_type_changedの呼び出し漏れの原因になっていた
-                        // (このエンティティは既存だがこの正規化後の定義では
-                        // 初めてmemoに載る、というケースなので、他のタスクの
-                        // memoルックアップ結果を変え得る)。insert_memo経由に
-                        // 統一する。
+                        // 🌟 既存の実体が正規化後の定義で初めて memo に載る場合も、insert_memo を通して型の世代を上げる。
                         self.insert_memo(norm_def, u_rep); // 🌟 グローバルにも登録
                     }
                 }
             }
 
-            // 🌟 [構造的マージ] 点・直線の接続関係(incidence)から従う合同閉包を、
-            // 全図形×全図形の総当たりではなく、"今回変化した図形(rep_id)の
-            // 局所的な隣接関係(subobjects)だけを辿る" DFS的な伝播で行う。
-            //
-            // - 直線が変化した場合:「直線の一致条件」(2直線が2点を共有、
-            //   または1点を共有しつつ方向も等しいなら同一直線)を、
-            //   この直線上の点それぞれが他にどの直線に乗っているかだけを見て判定する。
-            // - 点が変化した場合:「2直線の交点の一意性」(この点が乗っている
-            //   2直線の交点として既に登録済みの点があれば同一点)を、
-            //   memoへのO(1)参照だけで判定する(全点を舐めない)。
-            //
-            // 以前はここを「全直線ペア×全点」のO(直線数^2 × 点数)の総当たりで
-            // 実行しており(apply_congruence_closureが呼ばれるたびに無条件で
-            // 走っていた)、かつ「点の一致」版は専用のBlackboard定理として
-            // dfs_match経由でしか判定できず、どちらも無駄が大きかった。
-            // ここでのマージも merge_entities 経由で worklist に積まれるので、
-            // 連鎖的な合流はこの while ループが自然に続けて処理する。
+            // 🌟 [構造的マージ] 接続関係から従う合同閉包を、全図形の総当たりではなく、今回変化した図形の
+            // 隣接関係(subobjects)だけを辿って局所的に伝播する:
+            // - 直線が変化した: 「2点を共有する直線は同一」を、この直線上の点が他に乗っている直線だけで判定する。
+            // - 点が変化した: 「2直線の交点は一意」を memo の O(1) 参照で判定する。
+            // ここでのマージも worklist に積まれるので、連鎖的な合流はこの while ループがそのまま続けて処理する。
             let rep_id = self.get_rep(changed_id); // 上のuses処理でrepが動いた可能性があるので取り直す
             match self.entities[rep_id.0].entity_type {
                 EntityType::Line => {
@@ -217,34 +188,16 @@ impl EGraph {
                 EntityType::Conic => {
                     if self.propagate_conic_uniqueness(rep_id) { changed_any = true; }
                 }
-                // 🌟 「方向」はもはや独立したEntityTypeではなく、L∞
-                // (line_infinity)にlink_logical_incidenceで接続しているだけの
-                // ただのPointである(EntityType::Direction撤廃、
-                // ユーザー提案「directionを検索するときもL∞上の点を探せば
-                // よい」を型システムのレベルで徹底した)。そのためこの分岐は
-                // 単純にEntityType::Pointだけを見ればよく、以前のように
-                // 「PointとDirectionをここでは同じに扱う」という特別扱いの
-                // コメントも不要になった。
-                // 🌟 スカラー(複比)の一致から、点の一致を導く。
-                // propagate_cross_ratio_uniqueness のドキュメント参照。
+                // 🌟 スカラー(複比)の一致から、点の一致を導く。propagate_cross_ratio_uniqueness 参照。
                 EntityType::Scalar => {
                     if self.propagate_cross_ratio_uniqueness(rep_id) { changed_any = true; }
                 }
                 EntityType::Point => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
 
-                    // 🐛 FIX: 点/方向が変化(他の点/方向とマージ)しても、それを
-                    // 含む直線側の「直線の一致条件」判定は自動的には再トリガー
-                    // されない(propagate_line_uniquenessは直線自身のrepが
-                    // 変化したときしか呼ばれないため)。このため「2直線が
-                    // 既に1点を共有していて、後から同位角判定などで方向まで
-                    // 一致した」というケースで、方向の一致が確立された直後に
-                    // 直線同士の合流だけが見逃されてStallする実例が
-                    // orthocenter_altで見つかった(同位角による平行判定で
-                    // Dir_Alt_A≡Dir_Line_AHが確立された直後、Alt_A≡Line_AHへの
-                    // 合流だけが起きなかった)。この点/方向を含む直線それぞれ
-                    // についてもpropagate_line_uniquenessを再実行することで
-                    // これを修正する。
+                    // 🐛 点が他の点とマージされても、それを含む直線の一致判定は自動では走らない
+                    // (propagate_line_uniqueness は直線自身の rep が変わったときしか呼ばれない)。1点を共有する2直線の
+                    // 方向が後から一致した、というような合流を見逃さないよう、この点を含む直線についても再実行する。
                     let lines: Vec<ClassId> = self.entities[rep_id.0].components.first()
                         .map(|c| dedup_sorted_ids(c.subobjects.iter()
                             .map(|&s| self.get_rep(s))
@@ -254,15 +207,8 @@ impl EGraph {
                         if self.propagate_line_uniqueness(l) { changed_any = true; }
                     }
 
-                    // 🌟 同じ理由で、この点が乗っている二次曲線側の「一致条件」も
-                    // 再トリガーする(HAGeo-409ベンチマークで、同じ4点が乗って
-                    // いるはずのCircumcircleが別実体のまま統合されない問題が
-                    // 見つかったことへの対応。EGraph::merge_generationのドキュメント
-                    // 参照のような大掛かりな仕組みは不要で、直線と全く同じ
-                    // パターンで解決できる)。円周点I,Jはどの円(Circumcircle)にも
-                    // 構造的に乗っているため、I,J自身が変化した場合はconicsが
-                    // 多め(全ての円)になり得るが、I,Jはほぼ固定の定数で
-                    // 他の実体と統合されることが無いため実害は無い。
+                    // 🌟 同じ理由で、この点が乗っている二次曲線の一致判定も再実行する。円周点 I,J はあらゆる円に
+                    // 乗っているので、I,J 自身が変化すると全ての円が対象になるが、I,J は定数で他の実体と統合されない。
                     let conics: Vec<ClassId> = self.entities[rep_id.0].components.first()
                         .map(|c| dedup_sorted_ids(c.subobjects.iter()
                             .map(|&s| self.get_rep(s))
@@ -278,28 +224,15 @@ impl EGraph {
         changed_any
     }
 
-    /// 🌟 「直線の一致条件」の局所伝播版。
-    /// line 自身が乗っている点(局所・少数)だけを見て、それらの点が他に
-    /// 乗っている直線との共有点数を調べる。全直線を舐めない。
-    ///
-    /// 🌟 「方向」はEntityType::Directionという独立した型ではなく、L∞
-    /// (line_infinity)にlink_logical_incidenceで接続しているだけの
-    /// ただのPointなので(EntityType::Direction撤廃)、ここでPoint以外を
-    /// 特別扱いする必要はない。これにより「2直線が1点を共有しかつ方向が
-    /// 同じなら同一直線」という以前の特別扱い(same_dir)は、単に
-    /// 「無限遠直線上の共有点も含めて2点共有」という同じルールに統合される
-    /// (平行なだけの別々の直線は無限遠点1つしか共有しないので誤ってマージ
-    /// されない。同一直線は通常の点+無限遠点の2つを共有するので正しく
-    /// マージされる)。
+    /// 🌟 「直線の一致条件」の局所伝播版。line 上の点(少数)だけを見て、それらの点が他に乗っている直線との
+    /// 共有点数を調べる。全直線を舐めない。
+    /// 方向は無限遠直線上のただの Point なので、「1点を共有し方向も同じ」は「無限遠点を含めて2点を共有」
+    /// という同じ規則に含まれる(平行なだけの直線は無限遠点1つしか共有しない)。
     fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool {
         let mut line = self.get_rep(line);
 
-        // 🐛 FIX: 共有点を数える前に、この直線上の点(無限遠点を含む)どうしの
-        // 「2直線の交点の一意性」を先に局所的な不動点まで確定させておく。
-        // これをやらないと、本来は同一になるはずだがまだ別IDのままの2つ
-        // (例: 外心の候補O1とO2、あるいはまだ別々に導出された同じ方向)を
-        // 「別々の2つの共有点」と誤認し、無関係な直線を誤ってマージして
-        // しまうことがある(外心の証明で実際に発生した)。
+        // 🐛 共有点を数える前に、この直線上の点どうしの「交点の一意性」を局所的な不動点まで確定させる。
+        // まだ別IDのままの同一点を「別々の2つの共有点」と数え、無関係な直線をマージしてしまうため。
         loop {
             let points: Vec<ClassId> = match self.entities[line.0].components.first() {
                 Some(c) => c.subobjects.iter()
@@ -348,15 +281,9 @@ impl EGraph {
             if line == other_line { continue; }
 
             if shared.len() >= 2 {
-                // 🐛 propagate_conic_uniquenessと全く同じ構造のバグ
-                // (ユーザー指摘「そもそも誤った結合は起こらないはず」への
-                // 対応): sharedはline自身の点として重複除去済みだが、まだ
-                // e-graph上で正式にマージされていない2つの異なる代表元が
-                // 実は同じ幾何学的な点を指している場合を区別できず、真に
-                // 相異なる共有点が実際には1点しかないのに2点と誤カウント
-                // され得る。1点だけの共有では直線の一意性を主張できない
-                // (直線は2点で決まる)ため、ここでも数値的に等しい代表元を
-                // 1つにまとめてから改めて閾値判定する。
+                // 🐛 shared は重複除去済みでも、まだマージされていない2つの代表元が同じ点を指していることがある。
+                // 1点の共有を2点と数えないよう、数値的に等しい代表元を1つにまとめてから閾値を判定する
+                // (propagate_conic_uniqueness と同じ)。
                 let mut distinct_shared: Vec<ClassId> = Vec::new();
                 for &p in &shared {
                     let is_dup = distinct_shared.iter()
@@ -365,10 +292,8 @@ impl EGraph {
                 }
                 if distinct_shared.len() < 2 { continue; }
 
-                // 🌟 健全性の穴の修正: マージを確定する前に、ランダムな座標での
-                // 具体例で本当にこの2直線が等しいかを検算する。数値的に明確に
-                // 矛盾する場合(Some(false))はこの偶然の一致を却下し、このペアは
-                // マージしない(判定不能なSome(true)/Noneの場合は従来通り進める)。
+                // 🌟 マージを確定する前に、ランダムな座標で本当に2直線が等しいかを検算する。明確に矛盾する
+                // (Some(false))ならマージしない。判定不能(None)なら進める。
                 if self.numeric_plausibility_check(line, other_line, 2) == Some(false) {
                     let name1 = self.entities[line.0].name.clone();
                     let name2 = self.entities[other_line.0].name.clone();
@@ -389,35 +314,16 @@ impl EGraph {
         false
     }
 
-    /// 🌟 「二次曲線の一致条件」の局所伝播版。propagate_line_uniquenessと
-    /// 全く同じ発想だが、直線が2点で一意に決まるのに対し二次曲線は
-    /// (一般の位置にある)5点で一意に決まるため、しきい値が2→5になる。
-    ///
-    /// 🌟 EntityType::Circle撤廃の経緯(mmp_core/mod.rs::EntityTypeのドキュメント
-    /// 参照)で、旧propagate_circle_uniqueness(円は3点で一意という特別扱い、
-    /// しきい値3)をこの二次曲線版(しきい値5)へ統合した。円どうしが実点を
-    /// 3つ共有していれば、円は構造的に必ずI,Jにもincidenceで繋がっている
-    /// (apply_trivial_relationsのCircumcircle分岐)ため、共有点数は自動的に
-    /// 3+I+J=5になり、特別扱いなしに同じ規則から「円は3点で決まる」が導かれる
-    /// (非circleな一般の二次曲線どうしが3点だけ共有していても、5点未満なので
-    /// 誤ってマージされない――旧実装は"円"という前提を暗黙に置いていたため、
-    /// もし将来3点だけ共有する非円の二次曲線が現れたら誤マージし得た)。
-    ///
-    /// HAGeo-409ベンチマークの調査で判明した問題への対応: 例えば
-    /// Circumcircle(A,B,C)とCircumcircle(A,B,D)がどちらも「A,B,C,Dの4点が
-    /// 乗っている」ことまで構造的に分かっていても、この伝播が無いと
-    /// 永遠に別々の円エンティティのまま残り、(a)エンティティ数が無駄に
-    /// 膨れ上がりマッチングを遅くする、(b)片方の円だけに乗っている
-    /// 情報(接線・他の点の接続等)がもう片方には伝わらず証明が断絶する、
-    /// という2つの問題を引き起こしていた。
+    /// 🌟 「二次曲線の一致条件」の局所伝播版。propagate_line_uniqueness と同じ発想で、二次曲線は一般の位置の
+    /// 5点で決まるのでしきい値は5。円は構造的に I,J にも接続されているので、実点3つを共有すれば共有点は
+    /// 3+I+J=5 になり、「円は3点で決まる」が特別扱いなしに従う(3点しか共有しない一般の二次曲線は
+    /// マージされない)。同一の円が別実体のまま残ると、実体数が膨らむうえ、片方にだけ乗った情報が
+    /// もう片方に伝わらず証明が途切れる。
     fn propagate_conic_uniqueness(&mut self, conic: ClassId) -> bool {
         let mut conic = self.get_rep(conic);
 
-        // 🐛 propagate_line_uniquenessと同じ理由: 共有点を数える前に、この
-        // 二次曲線上の点どうしの「2直線の交点の一意性」を先に局所的な不動点
-        // まで確定させておく。これをやらないと、本来は同一になるはずだが
-        // まだ別IDのままの2点を「別々の2点」と誤認し、共有点数を過小評価して
-        // 本来マージすべき二次曲線を見逃すことがある。
+        // 🐛 propagate_line_uniqueness と同じ理由で、共有点を数える前に点どうしの交点の一意性を確定させる
+        // (しないと共有点数を過小評価し、マージすべき二次曲線を見逃す)。
         loop {
             let points: Vec<ClassId> = match self.entities[conic.0].components.first() {
                 Some(c) => c.subobjects.iter()
@@ -461,22 +367,9 @@ impl EGraph {
 
             // 🌟 直線は2点、二次曲線は(一般の位置にある)5点で一意に決まる。
             if shared.len() >= 5 {
-                // 🐛 実際に発見されたバグ(ユーザー指摘「そもそも誤った結合は
-                // 起こらないはず」への対応): sharedは「conic自身の点として
-                // 重複除去済み」なだけで、まだe-graph上で正式にマージされて
-                // いない2つの異なる代表元が、実は同じ幾何学的な点(例:
-                // 「2本の高さの交点」として別々に構築された、同じ垂心H)を
-                // 指している場合を区別できない。この場合、真に相異なる
-                // 共有点は実際には5点未満なのに、5点以上あるかのように
-                // 誤ってカウントされ、本来は一意に定まらない(5点未満でしか
-                // 共有していない)2つの二次曲線を「同じ曲線だ」と誤って
-                // 提案してしまう(orthocenterで実際に観測: H_AltA_AltBと
-                // H_AltB_AltCが2重カウントされ、真の共有点はI,J,H,Hcの4点
-                // しかないのに5点と誤認された)。数値的に等しい(=同じ点の
-                // 可能性が高い)代表元どうしをここで1つにまとめてから、
-                // 改めて5点以上あるかを判定する――数が少ない(shared.len()
-                // が5前後)候補でしか実行されないため、O(shared.len()²)の
-                // numeric_plausibility_check呼び出しはコスト上無視できる。
+                // 🐛 まだマージされていない2つの代表元が同じ点(例: 別々に作った同じ垂心)を指していると、真の共有点が
+                // 5点未満でも5点以上と数えてしまう。数値的に等しい代表元を1つにまとめてから、改めて5点以上かを判定する
+                // (shared は5前後と少ないので O(n²) の数値チェックは無視できる)。
                 let mut distinct_shared: Vec<ClassId> = Vec::new();
                 for &p in &shared {
                     let is_dup = distinct_shared.iter()
@@ -516,35 +409,12 @@ impl EGraph {
         false
     }
 
-    /// 🌟 「2直線の交点の一意性」の局所伝播版。
-    /// point(方向を含む)自身が乗っている直線(局所・少数)のペアについて、
-    /// その交点が memo に既に登録されていないかをO(1)参照するだけ。全点を舐めない。
-    ///
-    /// 方向(Direction)は Definition::Intersection(line, 無限遠直線) ではなく
-    /// Definition::DirectionOf(line) という別のDefinitionで登録されている
-    /// (定理側のパターンを変えずに済ませるため、あえて既存の表現のままにしてある)。
-    /// そのため、ペアのどちらかが無限遠直線のときは DirectionOf での読み替えも試す。
-    /// 🌟 「複比の透視射影不変性の逆」。ユーザー要望で追加。
-    ///
-    /// 共線な4点の複比 (A,B;C,D) は、A,B,C を固定すると D の射影座標そのもの
-    /// (D についての1次分数変換)なので、D について単射。したがって
-    ///
+    /// 🌟 「複比の透視射影不変性の逆」。共線な4点の複比 (A,B;C,D) は A,B,C を固定すると D について単射なので、
     ///   (A,B;C,D) = (A,B;C,E) かつ A,B,C が相異なり、5点が同じ直線上 ⟹ D = E
-    ///
-    /// 既存の射影の定理5つのうち4つは「接続を前提にスカラーの等式を結論する」
-    /// 向きで、逆向き(スカラーの等式から接続を結論する)はシュタイナーの定理の
-    /// 逆しか無かった。ところが探索が見つけるのは共点・共線という接続の主張
-    /// なので、証明に使いたいのはまさにこの逆向きで、実測でも複比の発見は
-    /// 0/5しか証明できていなかった。これは比についての古典的な主張
-    /// (メネラウス・チェバの逆)を射影的に言い換えたものでもある。
-    ///
-    /// 🌟 dfs_matchの定理(TheoremDef)ではなく合同閉包の局所伝播として書いて
-    /// ある。CrossRatioはV4クライン群 {(a,b,c,d),(b,a,d,c),(c,d,a,b),(d,c,b,a)}
-    /// で正準化される(normalize_definition参照)ため、「3つが同じで1つだけ
-    /// 違う」がどのスロットに現れるかが ClassId の大小で変わってしまい、
-    /// パターンで書くと4通りに分裂して探索コストも4倍になる。ここなら軌道を
-    /// 自分で回して照合できる。HarmonicConjugateOf/PerpDirectionOf の対合性を
-    /// apply_trivial_relations に構造的に登録しているのと同じ方針。
+    /// 探索が見つけたいのは共点・共線という接続の主張なので、証明に効くのはこの「スカラーの等式から接続を
+    /// 導く」向き(メネラウス・チェバの逆の射影版)。
+    /// 定理(TheoremDef)ではなく局所伝播として書くのは、CrossRatio が V4 で正準化されるため「3つ同じで1つ違う」
+    /// スロットが ClassId の大小で変わり、パターンでは4通りに分裂するから。ここなら軌道を自分で回して照合できる。
     fn propagate_cross_ratio_uniqueness(&mut self, scalar: ClassId) -> bool {
         let scalar = self.get_rep(scalar);
         // 同じ同値類に入っている = 値が等しい複比たち。
@@ -605,6 +475,10 @@ impl EGraph {
         false
     }
 
+    /// 🌟 「2直線の交点の一意性」の局所伝播版。point(方向を含む)が乗っている直線のペアについて、
+    /// その交点が memo に登録済みかを O(1) で引くだけ。全点を舐めない。
+    /// 方向は Intersection(line, 無限遠直線) ではなく DirectionOf(line) で登録されているので、
+    /// ペアの片方が無限遠直線のときは DirectionOf での読み替えも試す。
     fn propagate_point_uniqueness(&mut self, point: ClassId) -> bool {
         let point = self.get_rep(point);
         // 🐛 FIX: subobjects の重複エントリを rep 化した後に除いてから使う(理由は
@@ -634,19 +508,8 @@ impl EGraph {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
             if existing_rep != point_rep {
-                // 🌟 経緯: 以前はDirectionが独立したEntityTypeで、平行な2直線を
-                // Intersectionしてしまうと(常にPoint型で作られる)「Point型の
-                // 実体とDirection型の実体を統合しようとする」型混同が起こり
-                // 得た。ここに型不一致を弾くガードを試みたこともあったが、
-                // orthocenter/nine_point_fullがまさにこの「2直線が実は平行 ⟹
-                // 交点は無限遠点」という同一視に正しく依存していたため回帰した。
-                // ユーザー提案(directionはL∞上のPointとして扱い、検索も
-                // incidenceで行う)に沿ってEntityType::Directionを撤廃した今は、
-                // existing/point はどちらも常にPointであり、この種の型混同は
-                // 構造的に起こり得ない――ここで型を気にする必要が無くなった
-                // こと自体が、その設計変更の直接の効果。
-                // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
-                // 確定する前に数値的な裏付けを取る。
+                // 🌟 マージを確定する前に数値的な裏付けを取る(propagate_line_uniqueness と同じ)。平行な2直線の交点は
+                // 無限遠点になり、それが方向と同一視されるのは正しい(方向も Point なので型の不一致は起きない)。
                 if self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {
                     let name1 = self.entities[existing_rep.0].name.clone();
                     let name2 = self.entities[point_rep.0].name.clone();

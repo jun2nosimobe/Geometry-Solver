@@ -80,10 +80,7 @@ impl EGraph {
         None
     }
 
-    /// 🌟 pointsの全てが乗っている共通の円を(あれば)1つ返す。
-    /// 🌟 query.rs::points_share_a_circleと同じ理由(EntityType::Circle撤廃
-    /// により、円は今やI,Jへのincidenceでしか区別できない)で、単なる
-    /// Conic型ではなくI,Jの両方に接続していることも確認する。
+    /// 🌟 points の全てが乗っている共通の円を(あれば)1つ返す。points_share_a_circle と同じく I,J の両方への接続も確認する。
     pub fn find_shared_circle(&self, points: &[ClassId]) -> Option<ClassId> {
         if points.is_empty() { return None; }
         for i in 0..self.entities.len() {
@@ -98,26 +95,10 @@ impl EGraph {
         None
     }
 
-    /// 🌟 証明経路の中に、名前付き定理の連鎖(Given/Theorem/Congruence/Trivial)
-    /// ではなく、局所伝播のショートカット(LineUniqueness/PointUniqueness)だけを
-    /// 根拠にしたステップが含まれているかを判定する。
-    ///
-    /// 🐛 背景: propagate_line_uniqueness/propagate_point_uniqueness(「2直線が
-    /// 十分な点/方向を共有していれば同一視する」「2直線の交点は一意」)は、
-    /// マージを確定する前にnumeric_plausibility_checkで有限体上のランダムな
-    /// 1点(または少数)による数値的裏付けを取ってはいるものの、これは
-    /// あくまで「ランダムに選んだ具体例で矛盾が見つからなかった」という
-    /// 確率的な根拠(Schwartz-Zippel的な議論)であり、名前付き定理を
-    /// 前提から結論へ連鎖させる形式的な演繹ではない。この2つのJustification
-    /// だけがそれに該当する(Congruenceは定義の構造的な一致、Trivialは
-    /// apply_trivial_relations由来の定義から機械的に従う結合なので、
-    /// どちらも数値サンプリングには依存しない)。
-    ///
-    /// MCTSのような無方向な探索は、この局所伝播だけを頼りに大量の補助構成を
-    /// 経由して目標へ到達することがあり(実測: orthocenter_altで観測)、
-    /// 個々のステップは(numeric_plausibility_checkにより)偽陽性ではなさそうで
-    /// あっても、その経路全体を「形式的な証明」と呼ぶのは正確ではない。
-    /// generate_proof/main.rsの🎉表示で、この違いを利用者に明示するために使う。
+    /// 🌟 証明経路の中に、名前付き定理の連鎖ではなく局所伝播のショートカット(LineUniqueness/PointUniqueness)だけを
+    /// 根拠にしたステップが含まれているか。これらは numeric_plausibility_check で数値的な裏付けを取ってはいるが、
+    /// それは「ランダムな具体例で矛盾が見つからなかった」という確率的な根拠で、形式的な演繹ではない(Congruence と
+    /// Trivial は定義の構造から従うので該当しない)。solve.rs の証明完了表示で、この違いを明示するのに使う。
     pub fn proof_uses_numeric_shortcut(edges: &[ProofEdge]) -> bool {
         edges.iter().any(|e| matches!(
             e.justification,
@@ -166,12 +147,8 @@ impl EGraph {
         }
     }
 
-    /// 🌟 ユーザー要望: 「e-graphのマージ履歴から証明を作ってresultに出力する
-    /// 仕組み」。Python版のextract_proof.pyは全ログを無差別にダンプするだけ
-    /// だったため無関係な定理まで大量に混入していたが、こちらはexplain_identical/
-    /// find_incidence_justificationで「実際に目標へ辿り着くのに使われた
-    /// ステップだけ」を証明の森から遡って再構成するので、不要な定理は
-    /// 原理的に混入しない。
+    /// 🌟 e-graph のマージ履歴から証明を作る。explain_identical/find_incidence_justification で「実際に目標へ辿り着くのに
+    /// 使われたステップだけ」を証明の森から遡って再構成するので、無関係な定理は混入しない。
     pub fn generate_proof(&self, fact_type: &str, target_args: &[ClassId]) -> String {
         let mut out = String::new();
         out.push_str("========================================\n");

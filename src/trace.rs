@@ -250,18 +250,9 @@ pub fn collect_proof_support(eg: &EGraph, target: &(String, Vec<ClassId>),
 }
 
 /// 「x が y に乗っている」ことが、どちらかの作図の定義そのものから従うか。
-///
-/// 🐛 ユーザー指摘への対応: 以前はここで真偽だけを返し、真なら「前提だから
-/// 追う必要なし」と打ち切っていた。しかし親との一致を見ているのは代表元
-/// どうし(get_rep)なので、「定義に書かれている親そのもの」ではなく
-/// 「定義に書かれている親に後から合流してきた実体」で一致していることが
-/// 多い。その合流こそが定理の仕事なのに、丸ごと見落としていた
-/// (orthocenter が「証明に効いた発火0件」に見えていた原因)。
-///
-/// そこで、一致した親(定義に書かれている側)と相手を返し、呼び出し側が
-/// 「その2つがなぜ同じ同値類にいるのか」を改めて辿れるようにする。
-/// 同じスロットそのものだった場合は explain_identical が空を返すだけなので、
-/// 呼び出し側は何も特別扱いしなくてよい。
+/// 一致は代表元どうしで見ているので、「定義に書かれている親」ではなく「その親に後から合流してきた実体」で一致している
+/// ことが多く、その合流こそが定理の仕事になる。そこで一致した親(定義に書かれている側)と相手を返し、呼び出し側が
+/// 「その2つがなぜ同じ同値類にいるのか」を辿れるようにする(同じスロットなら explain_identical が空を返すだけ)。
 fn structural_incidence(eg: &EGraph, x: ClassId, y: ClassId) -> Option<Vec<(ClassId, ClassId)>> {
     let (rx, ry) = (eg.get_rep(x), eg.get_rep(y));
     let mut bridges: Vec<(ClassId, ClassId)> = Vec::new();
@@ -387,24 +378,13 @@ fn on_proof_path(f: &Firing, sup: &ProofSupport) -> bool {
 struct Row { fires: u64, useful: u64, anc_useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
 
 
-/// 🌟 「その場で作った図形は、本当に使われているのか」の集計(--origins)。
-///
-/// 動機(ユーザー要望): オンデマンド作図(resolve_*_demands)と、定理の
-/// マッチングが DefinedBy パターンを満たすためにその場で作る図形は、
-/// どちらも「行き詰まったら図を増やす」という賭けをしている。作った数は
-/// ログに出ていたが、作ったものが実際に証明へ効いたかは一度も測れていな
-/// かった。
-///
-/// 数え方で気を付けたのは2点:
-///
-/// - 直接作ったものと、その作図に付随して apply_trivial_relations が芋づる式に
-///   作ったもの(方向・長さ・自動生成の直線)を分ける。補助線を1本引くと
-///   何個も派生するので、混ぜると「作った数」が実態の何倍にも見える。
-/// - 「証明に登場した」は代表元ではなくスロット単位で数える。代表元で数えると、
-///   たまたま同じ同値類へ合流しただけの無関係な補助図形まで「証明に登場した」に
-///   なってしまう(合流させること自体が目的の補助図形では、これは深刻な
-///   過大評価になる)。collect_proof_support の merges/incidences は生の
-///   スロット対で記録されているので、そのまま使える。
+/// 🌟 「その場で作った図形は、本当に使われているのか」の集計(--origins)。オンデマンド作図と、DefinedBy パターンを
+/// 満たすためにマッチャがその場で作る図形は、どちらも「行き詰まったら図を増やす」という賭けで、それが証明に効いたかを測る。
+/// 数え方で気を付ける2点:
+/// - 直接作ったものと、apply_trivial_relations が芋づる式に作ったもの(方向・長さ・自動生成の直線)を分ける
+///   (混ぜると作った数が実態の何倍にも見える)。
+/// - 「証明に登場した」は代表元ではなくスロット単位で数える(代表元だと、同じ同値類へ合流しただけの無関係な補助図形まで
+///   数えてしまう)。collect_proof_support の merges/incidences は生のスロット対なのでそのまま使える。
 pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, problem: &str) {
     // --- 証明に実際に登場したスロット ---
     let mut in_proof: FxHashSet<usize> = FxHashSet::default();
@@ -662,18 +642,9 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
         return;
     }
 
-    // heat_cap による絞り込みは「同じ型の中で heat() の降順に並べて上位N件」
-    // という形(cost.rs の heat_capped_* / matcher.rs の自己束縛ソート)なので、
-    // 順位も同じ土俵、すなわち型ごと・heat()降順で数える。
-    // 熱には2つの式がある(GeoEntity::heat / heat_with_degree)。cap の
-    // 絞り込みは次数抜きの heat() を使っているので、両方の順位を
-    // 並べて「どちらで並べる方が証明に要る実体を上に持ち上げるか」を
-    // その場で見比べられるようにする。
-    // 🌟 ユーザー指摘「次数は低いほどうれしいから熱から次数を引くべきでは」
-    // への対応。ここで言う次数は uses.len()(参照数。heat_with_degree が
-    // 足している方)ではなく、動点法の代数的な次数(EGraph::cached_degree)。
-    // 低次数ほど単純で扱いやすいので、符号は負で入るのが自然なはず
-    // ――それを順位で確かめられるよう、3つの並べ方を同じ土俵で比べる。
+    // heat_cap による絞り込みは「同じ型の中で heat() の降順に上位N件」(cost.rs の heat_capped_* / matcher.rs の自己束縛ソート)
+    // なので、順位も型ごと・heat() 降順で数える。heat() と heat_with_degree、さらに動点法の次数(EGraph::cached_degree)を
+    // 引いた並べ方の3つを並べ、どれが証明に要る実体を上に持ち上げるかをその場で比べられるようにする。
     const DEGREE_MAX_D: usize = 6;
     const DEGREE_WEIGHT: f64 = 0.5;
     let score_of = |i: usize, mode: u8| -> f64 {

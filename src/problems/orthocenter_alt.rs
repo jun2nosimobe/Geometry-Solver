@@ -1,26 +1,10 @@
 use crate::mmp_core::{Definition, EGraph, EntityType};
 use crate::problems::ProblemSetup;
 
-// 🌟 垂心の存在(別証明ルート): H = Intersection(Alt_B, Alt_C) として先に
-// 垂心の候補点を1つの交点だけで定義し、直線AHを補助線として引いて、
-// それが「Aから対辺BCへ下ろした垂線」Alt_Aと一致することを示す。
-//
-// orthocenter.rs(2本の交点が一致することを示す対称な定式化)と数学的な
-// 本質は同じだが、こちらは「AとHを結ぶ」という補助構成(LineThroughPoints)
-// を証明の主役として明示的に問題文に組み込む点が異なる。MCTS/ヒューリス
-// ティックな探索に頼らず、DFSマッチャー+需要駆動の補助線機構だけで
-// 到達できるかどうかを確認するためのベンチマーク。
-//
-// 🌟 履歴: 当初はB,Cから対辺への垂線の足E,Fをこの問題ファイル自身が
-// 明示的に作図していた(円周角の定理の逆→有向角の交替律→同位角による
-// 平行判定という定理チェーンの起点として必要だったため)。その後
-// BlackboardEngine::resolve_point_demands(既存のPerpendicularLineそれぞれに
-// ついて、それ自身とその基準線との交点=垂線の足が図形として存在しなければ
-// 需要とみなし、DFSがStallした際に能動的に作図する汎用ヒューリスティック)
-// を実装したことで、E,Fを問題文に一切書かなくても自動発見・自動作図
-// されるようになったため、この2点の手動宣言は削除した(ユーザー要望:
-// 補助点なしでこの問題を解けるようにしたい、への対応)。純粋なDFS
-// (--mctsなし)のみで2.5秒前後で証明が完了する。
+// 🌟 垂心の存在(別証明ルート): H = Intersection(Alt_B, Alt_C) を垂心の候補として1つの交点だけで定義し、直線AHを
+// 補助線として引いて、それが「Aから対辺BCへ下ろした垂線」Alt_Aと一致することを示す。
+// orthocenter.rs(2本の交点が一致することを示す対称な定式化)と本質は同じだが、「AとHを結ぶ」補助構成を問題文に
+// 組み込む点が異なる。垂線の足E,Fは問題文に書かず、需要駆動の作図(resolve_point_demands)が自動で作ることを確かめる。
 pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     println!("=== 問題: 垂心の存在 (別証明ルート: AHを補助線として引く) ===");
     let a = egraph.create_entity("A".to_string(), Definition::FreePoint, EntityType::Point);

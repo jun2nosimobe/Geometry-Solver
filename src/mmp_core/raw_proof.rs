@@ -1,39 +1,20 @@
-//! 🌟 raw_proof: e-graphの全マージ履歴(union-findの「証明の森」+ incidenceの
-//! 由来)を、人間が読むためではなくRust側で読み書きしやすい単純なテキスト
-//! 形式でダンプ/復元するモジュール。
-//!
-//! proof.rs::generate_proofは「目標から遡って実際に使われたステップだけ」
-//! を人間可読な文章として復元するのに対し、こちらは役割を2段階に分ける:
-//!   1. `EGraph::dump_raw_proof` — main.rsが実行のたびに、EGraphが保持する
-//!      証明関連情報(proof_edges, incidence_provenance, 全エンティティの
-//!      名前/型)を一切フィルタせず丸ごとテキストへシリアライズする。
-//!   2. `RawProof::parse` + `verify_identical` — 保存されたテキストを
-//!      (実行中のEGraphとは完全に独立に)読み込み直し、目標の等式から
-//!      遡ってTheoremのpremisesまで再帰的に検証することで、「本当に
-//!      最初から最後まで証明が繋がっているか、途中にLineUniqueness/
-//!      PointUniqueness/Trivialのような数値サンプリングや構造的近似だけに
-//!      頼った(=名前付き定理の連鎖による形式的な演繹ではない)ギャップが
-//!      眠っていないか」を監査する。
-//!
-//! 🌟 なぜ2段階に分けるか: generate_proof/EGraph::proof_uses_numeric_shortcut
-//! は目標そのものの直接のマージ経路(explain_identicalが返す最上位の辺)しか
-//! 見ないため、Theoremの前提(premises)自体がさらに別のLineUniqueness等の
-//! ショートカットに依存しているケースを見逃しうる(実際にcircumcenterの
-//! 調査でこの種の深い依存が実在することが判明した)。ここではTheoremの
-//! premisesを再帰的に遡ることで、そのような深いところに隠れたギャップも
-//! 検出する。またテキストファイルとして永続化しておくことで、ソルバーを
-//! 再実行せずに後から(あるいは別プロセスから)同じ検証をやり直せる。
-//!
-//! 🌟 フォーマット: 依存クレートを増やさないための独自の単純なTSV風形式。
-//! 各行はタブ区切りで、最初の数フィールドだけを厳密にタブ分割し、残りは
-//! 「行の残り全部」として1つのペイロード文字列に詰める(Theoremの前提や
-//! Congruenceの定義文字列にカンマ・コロン・括弧が出てきても、それらは
-//! ペイロード内部の記法であって行の区切りには使わないため安全)。
+//! 🌟 raw_proof: e-graph の全マージ履歴(union-find の「証明の森」+ incidence の由来)を、Rust 側で読み書き
+//! しやすい単純なテキスト形式でダンプ/復元するモジュール。
+//! proof.rs::generate_proof が「目標から遡って実際に使われたステップだけ」を文章にするのに対し、こちらは2段階:
+//!   1. `EGraph::dump_raw_proof` — 証明関連の情報(proof_edges, incidence_provenance, 全エンティティの名前/型)を
+//!      フィルタせずにテキストへ書き出す(solve.rs が実行のたびに呼ぶ)。
+//!   2. `RawProof::parse` + `verify_identical` — 保存したテキストを実行中の EGraph と独立に読み直し、目標の等式から
+//!      Theorem の premises まで再帰的に遡って、数値サンプリングや構造的な近似(LineUniqueness/PointUniqueness/Trivial)
+//!      だけに頼ったギャップが無いかを監査する。
+//! 目標の直接のマージ経路だけを見ると、前提がさらにショートカットに依存しているケースを見逃すので、premises を
+//! 再帰的に遡る。テキストに残すので、ソルバーを再実行せずに同じ検証をやり直せる。
+//! フォーマット: 依存クレートを増やさない独自の TSV 風形式。先頭の数フィールドだけをタブで分割し、残りは1つの
+//! ペイロード文字列にする(前提や定義の文字列にカンマ・コロン・括弧が出てきても区切りに使わないので安全)。
 //!   E\t{id}\t{original_name}\t{entity_type}
 //!   P\t{from_id}\t{to_id}\t{kind}\t{payload}      (proof_edges 1件)
 //!   I\t{a_id}\t{b_id}\t{kind}\t{payload}          (incidence_provenance 1件)
-//! kind は Given/Theorem/Congruence/LineUniqueness/PointUniqueness/Trivial の
-//! いずれか。payloadのkind別の中身は encode_justification を参照。
+//! kind は Given/Theorem/Congruence/LineUniqueness/PointUniqueness/Trivial のいずれか。payload の中身は
+//! encode_justification を参照。
 
 use super::{EGraph, Justification};
 use rustc_hash::FxHashMap;
@@ -293,11 +274,8 @@ impl RawProof {
         Some(result)
     }
 
-    /// 🌟 gapの(またはノードの)location文字列を組み立てる。fromとedge.toの
-    /// 関係が「等しい」(proof_edges由来、explain_identicalの辺)なのか
-    /// 「接続している」(incidence_provenance由来、点が直線/円に乗っている)
-    /// なのかで表記を変える(以前は両方とも"≡"と表示しており、"A ≡ Circ"の
-    /// ような誤解を招く出力になっていた)。
+    /// 🌟 gap(またはノード)の location 文字列を組み立てる。from と edge.to の関係が「等しい」(proof_edges)なら ≡、
+    /// 「接続している」(incidence_provenance、点が直線/円に乗っている)なら別の記号で書く。
     fn format_location(&self, from: usize, to: usize, is_incidence: bool) -> String {
         if is_incidence {
             format!("{} は {} に接続", self.name_of(from), self.name_of(to))
@@ -306,21 +284,12 @@ impl RawProof {
         }
     }
 
-    /// 🌟 「深い証明」の中核: 1本の辺をDeepStepツリーへ再帰的に展開する。
-    /// Given/Congruence/Trivialは子を持たない基底ケース。Theoremは
-    /// premisesそれぞれを子ノードとして再帰的に展開する。LineUniqueness/
-    /// PointUniqueness(「2点/2直線の共有」という構造的観察)は、共有点/
-    /// 共有直線の由来(それ自身のマージ履歴 + incidence_provenance)を子
-    /// ノードとして展開する――これにより「2直線が2点を共有」という
-    /// ショートカット自体を、その根拠まで含めて完全に人間可読な形で
-    /// 追跡できる(ユーザー指摘: 「共有によるマージも履歴に残せば証明を
-    /// 完全に辿ることができないか」への直接の回答)。
-    ///
-    /// visitedで(種別タグ, 対象id列)の組を覚えておき、同じ前提/同じ辺を
-    /// 何度も展開する無駄・循環を防ぐ(有向角の加法性/交替律など、多くの
-    /// 定理が同じAng90絡みの前提を共有するため、これが無いと組み合わせ的に
-    /// 膨れ上がる)。既に展開済みの箇所は、内容を繰り返さず「(既出、上記で
-    /// 検証済み)」という参照だけの葉ノードにする。
+    /// 🌟 「深い証明」の中核: 1本の辺を DeepStep ツリーへ再帰的に展開する。Given/Congruence/Trivial は子を持たない
+    /// 基底ケース。Theorem は premises を子として展開する。LineUniqueness/PointUniqueness(「2点/2直線の共有」)は、
+    /// 共有点・共有直線の由来(それ自身のマージ履歴 + incidence_provenance)を子として展開するので、共有による
+    /// マージもその根拠まで辿れる。
+    /// visited で(種別タグ, 対象id列)を覚えて、同じ前提を何度も展開する無駄と循環を防ぐ(多くの定理が Ang90 絡みの
+    /// 前提を共有する)。展開済みの箇所は「(既出、上記で検証済み)」という参照だけの葉にする。
     fn build_step(
         &self,
         from: usize,
@@ -354,12 +323,8 @@ impl RawProof {
                 let mut children = Vec::new();
                 if !premises_str.is_empty() {
                     for premise in premises_str.split(';') {
-                        // 🌟 FIX: DefinedBy前提はfact_type自体が"DefinedBy:AnglePair"の
-                        // ようにコロンを含むようになったため、split_once(':')(最初の
-                        // コロン)ではなくrsplit_once(':')(最後のコロン)で区切る必要が
-                        // ある。引数部分は常にカンマ区切りの数字だけなので、最後の
-                        // コロンの後ろが引数、それより前が(コロンを含み得る)fact_type
-                        // という区切り方は常に一意に定まる。
+                        // 🌟 fact_type は "DefinedBy:AnglePair" のようにコロンを含むので、最後のコロンで区切る(引数部分はカンマ
+                        // 区切りの数字だけなので一意に定まる)。
                         let Some((fact_type, args_str)) = premise.rsplit_once(':') else { continue; };
                         let args: Vec<usize> = args_str.split(',').filter_map(|s| s.parse::<usize>().ok()).collect();
                         children.push(self.build_premise_step(fact_type, &args, visited, depth + 1));
@@ -429,14 +394,9 @@ impl RawProof {
             if is_excluded(sf, se.to) { continue; }
             children.push(self.build_step(sf, &se, false, visited, depth + 1));
         }
-        // 🐛 FIX: 共有点/共有直線や、DefinedByの結果として参照されるClassIdは、
-        // 多くの場合そのマージの当時から今も代表元であり続けている側(=誰かが
-        // こちらへ吸収されてきた側)であるため、上のpath_to_root(前向き)だけ
-        // では何も出てこない(代表元自身はproof_edges上で"from"にはならない
-        // ため)。逆に「誰がこの実体に合流してきたか」をreverse_edgesで辿る
-        // ことで、例えば「別の方向が同位角判定などの定理チェーンでこの方向に
-        // 合流した」という、まさに知りたい経緯を拾い上げる(orthocenter_alt
-        // の調査でこの取りこぼしが実際に発覚した)。
+        // 🐛 共有点や DefinedBy の結果として参照される ClassId は、今も代表元であり続けている側であることが多く、
+        // path_to_root(前向き)では何も出ない。誰がこの実体に合流してきたかを reverse_edges で辿って、その経緯
+        // (別の方向が定理のチェーンでこの方向に合流した、など)を拾う。
         if let Some(sources) = self.reverse_edges.get(&entity) {
             for &src in sources {
                 if is_excluded(src, entity) { continue; }
@@ -481,21 +441,10 @@ impl RawProof {
         DeepStep { headline, reason: "共有点/共有直線としての由来".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
     }
 
-    /// 🌟 接続の由来が incidence に記録されていない場合の基底ケース。
-    ///
-    /// 🐛 以前はここで無条件に「作図時点の構造的な接続(定義から機械的に従う)」
-    /// という葉にしていた。しかしそれが本当なのは「いま問われている直線・円
-    /// そのものが、定義上その点を通る」場合だけで、実際には
-    /// 「定義上その点を通る別の実体が、後からこの直線・円と合流した」
-    /// ケースが混ざる。その合流こそが名前付き定理の仕事なので、基底扱いに
-    /// すると証明の本体が丸ごと消える。
-    ///
-    /// orthocenter がまさにこれだった: 目標は結局
-    /// 「H_AltB_AltC が Alt_A 上にある」に帰着するが、その接続の記録は無い。
-    /// 定義上 H_AltB_AltC を通るのは Line_A_H_AltB_AltC で、これが
-    /// 「同位角による平行判定」→「直線の一意性」で Alt_A と合流したことが
-    /// 垂心定理の本体である。以前の extract_proof はこれを落としたまま
-    /// 「7ステップ全て厳密」と報告していた。
+    /// 🌟 接続の由来が incidence に記録されていない場合の基底ケース。「作図時点の構造的な接続」として葉にしてよいのは、
+    /// 問われている直線・円そのものが定義上その点を通る場合だけ。定義上その点を通る別の実体が後から合流したのなら、
+    /// その合流(名前付き定理の仕事)を展開する ― 基底扱いにすると証明の本体が消える(orthocenter では垂心定理の本体が
+    /// 消えたまま「全て厳密」と報告していた)。
     fn build_structural_incidence_step(
         &self,
         entity: usize,
@@ -578,22 +527,11 @@ impl RawProof {
         }
     }
 
-    /// 🌟 DefinedBy前提(の結果として参照される実体)や、Identical(X,X)の
-    /// ように「既に同じ実体を指している」premiseは、一見すると「定義から
-    /// 機械的に従う自明な基底事実」に見えるが、実際にはその実体がこれまで
-    /// 他の実体を(named theoremによって)吸収してきた結果として初めて
-    /// 成立しているケースが多い(ユーザー指摘: orthocenter_altやsimsonの
-    /// extracted_proofで、本来は円周角の定理・有向角の交替律が使われている
-    /// はずの箇所が「定義より従う」で片付けられていた問題への対応)。
-    /// この実体のmerge_ancestry_steps(合流してきた実体の履歴)を子ノードと
-    /// して展開し、合流履歴が無ければ初めて「本当に自明な基底事実」として
-    /// 扱う。
-    ///
-    /// ⚠️ 精度の限界: raw_proofは「どのDefinitionがどの合流によって
-    /// 加わったか」までは記録していないため、この実体に合流履歴が複数
-    /// あれば全て列挙する(この特定の引数の組と無関係な合流が混ざる
-    /// 可能性はゼロではない)。それでも「定義から機械的に従う」と一律に
-    /// 片付けるよりは遥かに正直な提示になる。
+    /// 🌟 DefinedBy 前提の結果や Identical(X,X) のように「既に同じ実体を指している」前提は、自明な基底事実に見えて、
+    /// 実際にはその実体が名前付き定理で他の実体を吸収してきた結果として成り立っていることが多い。この実体の
+    /// merge_ancestry_steps(合流してきた履歴)を子として展開し、合流履歴が無いときだけ自明な基底事実として扱う。
+    /// ⚠️ 精度の限界: どの定義がどの合流で加わったかまでは記録していないので、合流履歴が複数あれば全て列挙する
+    /// (この引数の組と無関係な合流が混ざりうる)。それでも一律に「定義から従う」とするよりは正直な提示になる。
     fn build_result_ancestry_step(
         &self,
         entity: usize,
@@ -623,18 +561,10 @@ impl RawProof {
         }
     }
 
-    /// 🌟 Definition単位の由来トラッキング(by_definition索引)を使い、
-    /// DefinedBy前提を「resultの合流履歴を総当たりで列挙する」のではなく
-    /// 「この特定の(引数の組)を最初に持っていた実体1つ + そこからresultへの
-    /// 最短合流経路」だけにピンポイントで絞り込む。ユーザー提案(「証明の
-    /// 先頭からDPで証明木を構築する」)への対応: 各実体の"元の定義"は
-    /// create_entity時点で確定する不変情報なので、それを起点に「この定義は
-    /// 最初どのIDに属していたか」を逆引きし、そこから目的のresultまでの
-    /// 経路だけを辿ればよい。
-    ///
-    /// fact_typeが"DefinedBy:{type_name}"の形(target_type付き)でない場合
-    /// (理論上は無いはずだが後方互換のため)は、従来通りbuild_result_ancestry_step
-    /// (resultの合流履歴全体)にフォールバックする。
+    /// 🌟 Definition 単位の由来(by_definition 索引)を使い、DefinedBy 前提を「result の合流履歴の総当たり」ではなく
+    /// 「この引数の組を最初に持っていた実体1つ + そこから result への最短合流経路」に絞る。各実体の元の定義は
+    /// create_entity 時に確定する不変情報なので、そこから逆引きできる。
+    /// fact_type が "DefinedBy:{type_name}" の形でない場合は build_result_ancestry_step にフォールバックする。
     fn build_defined_by_step(
         &self,
         fact_type: &str,
@@ -861,15 +791,8 @@ impl DeepStep {
     }
 }
 
-/// 🌟 エンティティ名に付いた"_(Auto)"/"_(Demand)"ラベルを取り除く。これらは
-/// 「resolve_demands系のオンデマンド作図によって生まれた」という実装都合の
-/// 印であり、命名時に親の名前をそのまま埋め込むため入れ子(例:
-/// "Dir_Line_A_B_(Auto)_(Auto)")になることもあるが、str::replaceは文字列中の
-/// 全ての出現を1回の呼び出しで置換するため、ネストの回数によらず1回の
-/// 置換呼び出しずつで全て取り除ける。証明の可読性(ユーザー要望)のためだけの
-/// 整形であり、名前からラベルを消しても指しているClassId自体は変わらないので
-/// 曖昧さは生じない(重複排除のキーには使わない――compressed_proof側で
-/// 別途headline文字列そのものをキーにする)。
+/// 🌟 エンティティ名に付いた "_(Auto)"/"_(Demand)" ラベルを取り除く(入れ子になっていても replace 1回で全て消える)。
+/// 証明を読みやすくするための整形だけで、ClassId は変わらないので曖昧さは生じない(重複排除のキーには使わない)。
 fn clean_label(s: &str) -> String {
     s.replace("_(Auto)", "").replace("_(Demand)", "")
 }
@@ -951,20 +874,10 @@ impl DeepProof {
         out
     }
 
-    /// 🌟 ユーザー要望: 「extracted_proofから、(Auto)/(Demand)ラベルを除き、
-    /// 前提から結論へ上から順に書き、既に証明済みの前提の重複はスキップした
-    /// compressed_proofを作りたい」への対応。
-    ///
-    /// format_deepは「目標→なぜ成り立つか→そのまた根拠」という目標始点の
-    /// 再帰的な入れ子(インデント)構造で、同じ事実が複数箇所から必要と
-    /// されるとその都度(既出: 上記で検証済みなので省略)という葉で参照だけ
-    /// 残す。ここではその木を**post-order**(子=前提を先に、親=結論を後に
-    /// 処理する)で辿って1本のステップ列に平坦化することで、実際に人が
-    /// 書く数学の証明のように「まず基本的な事実を確認し、それらを使って
-    /// 次第に目標に近づく」という順序に並べ替える。同じheadlineを持つ
-    /// ノードが複数箇所に現れる場合(既出プレースホルダ自身も含む)は
-    /// 新しいステップを作らず、既存のステップ番号への参照(「Step N より」)
-    /// に置き換えることで重複を圧縮する。
+    /// 🌟 compressed_proof: (Auto)/(Demand) ラベルを除き、前提から結論へ上から順に書き、既に示した事実の重複を省く。
+    /// format_deep は目標始点の入れ子構造なので、その木を post-order(前提を先に、結論を後に)で辿って1本のステップ列に
+    /// 平坦化する。同じ headline のノードが複数箇所に現れたら(既出プレースホルダも含む)、新しいステップを作らずに
+    /// 既存のステップ番号への参照(「Step N より」)にする。
     pub fn format_compressed(&self) -> String {
         let mut out = String::new();
         out.push_str("========================================\n");

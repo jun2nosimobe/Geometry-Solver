@@ -4,17 +4,9 @@
 use super::{ClassId, Definition, EntityType, EGraph};
 
 impl EGraph {
-    /// 🌟 id に接続している実体のうち、型が ty のものの数(代表元で重複除去)。
-    ///
-    /// logic_core/cost.rs の estimate_cost が「片側だけ束縛された Connected」の
-    /// 分岐数を見積もるために使う。以前そこは固定値だったため、接続先が2つの
-    /// 点と12の点を区別できず、分岐の大きい Connected を安いものとして先に
-    /// 選んでしまっていた(--profile の「枝の出どころ」で、全dfs呼び出しの
-    /// 56〜76%がこの分岐から伸びていると判明)。
-    ///
-    /// matcher.rs の列挙と同じく subobjects を rep 化して数えるが、
-    /// accept_point の Direction/Circle の特別扱いまでは見ない ― 見積もりは
-    /// 並べ替えの順序さえ合っていればよく、厳密な一致は要らない。
+    /// 🌟 id に接続している実体のうち、型が ty のものの数(代表元で重複除去)。logic_core::cost の estimate_cost が
+    /// 「片側だけ束縛された Connected」の分岐数を見積もるのに使う(接続先が2つか12個かで分岐の大きさが全く違う)。
+    /// matcher.rs の列挙と同じく subobjects を rep 化して数えるが、厳密な一致は要らない(並べ替えの順序が合えばよい)。
     pub fn count_neighbors_of_type(&self, id: ClassId, ty: EntityType) -> usize {
         let rep = self.get_rep(id);
         let mut seen = rustc_hash::FxHashSet::default();
@@ -37,29 +29,17 @@ impl EGraph {
         (0..self.entities.len()).filter(|&i| self.get_rep(ClassId(i)).0 == i).count()
     }
 
-    /// 🌟 EntityType::Angle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント参照)
-    /// により、「この値が有向角(AnglePair)か、それとも別の(長さ・積・複比等の)
-    /// Scalarか」はもう型では区別できない。代わりに、このIDが吸収してきた
-    /// 全ての定義(merge_entitiesが両側の定義集合を合流させて蓄積する)の
-    /// どれかがAnglePairかどうかで判定する――単にoriginal_definitionだけを
-    /// 見ると、AnglePairで作られた実体が後からAng90/Ang0(GivenPoint定義)の
-    /// ような非AnglePair起源の実体に吸収された場合を見逃す。
-    /// logic_core.rsの自己束縛候補の絞り込み(角度追跡系定理の
-    /// Identical(Ang1,Ang2)シードが、無関係な長さ・複比のScalarまで
-    /// 候補に含めてしまわないようにする)で使う。
+    /// 🌟 この Scalar が有向角(AnglePair)か。型では区別できないので、この ID が吸収してきた全ての定義のどれかが
+    /// AnglePair かで判定する(original_definition だけを見ると、Ang90/Ang0 のような別起源の実体に吸収された場合を
+    /// 見逃す)。角度の定理の自己束縛候補を、長さや複比の Scalar まで広げないために使う。
     pub fn is_angle_value(&self, id: ClassId) -> bool {
         let rep = self.get_rep(id);
         self.entities[rep.0].components.first()
             .is_some_and(|c| c.definitions.iter().any(|d| matches!(d, Definition::AnglePair(_, _))))
     }
 
-    /// 🌟 is_angle_valueと同じ発想: このScalarがCrossRatioOfLines(線束の複比)
-    /// 由来かどうかを、吸収してきた定義のどれかがCrossRatioOfLinesかどうかで
-    /// 判定する。「シュタイナーの定理の逆」のIdentical(CR_P1,CR_P5)自己束縛
-    /// (logic_core.rs::match_identical_fact)が、長さ・積・点の複比まで
-    /// 無差別に含む自己束縛候補プールに埋もれて無関係な値ばかり試すのを防ぐ
-    /// ために使う(miquel_quadrilateralで実際に観測した、この自己束縛が
-    /// dfs_capを繰り返し使い切る性能問題への対応)。
+    /// 🌟 is_angle_value と同じ発想で、この Scalar が CrossRatioOfLines(線束の複比)由来か。シュタイナーの定理の逆の
+    /// 自己束縛(SelfBindPool::CrossRatioOfLines)の候補を絞るのに使う。
     pub fn is_cross_ratio_of_lines_value(&self, id: ClassId) -> bool {
         let rep = self.get_rep(id);
         self.entities[rep.0].components.first()
@@ -79,16 +59,9 @@ impl EGraph {
         false
     }
 
-    /// 🌟 points に含まれる全ての点が乗っている共通の円が存在するかを判定する。
-    /// Concyclicを専用Factで持たなくなったので、目標判定などでこれを使う。
-    /// 円の数は通常ごく少数なので、全円を舐めても軽い。
-    /// 🌟 EntityType::Circle撤廃(mmp_core/mod.rs::EntityTypeのドキュメント
-    /// 参照)により、円は今やEntityType::Conicの特殊な場合(I,Jを通る)として
-    /// しか区別できない。この関数は「共円(Concyclic)」という円に固有の
-    /// 目標を判定するためのものなので、単にConic型であるだけでなく、
-    /// I,Jの両方に接続している(=本物の円である)ことも確認する――そうしないと
-    /// 円ではない一般の二次曲線(ConicThrough5Points)まで「共円」と誤判定
-    /// してしまう。
+    /// 🌟 points の全ての点が乗っている共通の円があるか(共円の目標判定などに使う)。円は数が少ないので全て舐めても軽い。
+    /// Conic 型であるだけでなく I,J の両方に接続している(本物の円である)ことも確認する(一般の二次曲線を共円と
+    /// 誤判定しない)。
     pub fn points_share_a_circle(&self, points: &[ClassId]) -> bool {
         if points.is_empty() { return false; }
         for i in 0..self.entities.len() {
@@ -141,26 +114,11 @@ impl EGraph {
         }
     }
 
-    /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
-    /// 🌟 自由点どうしが同じ同値類に入っていないか(= e-graphが崩壊して
-    /// いないか)を調べ、崩壊していれば最初に見つけた組を返す。
-    ///
-    /// 自由点は互いに独立に置けるから自由点なので、正しい推論だけを積んだ
-    /// 限り絶対に一致しない。一致しているなら、どこかの局所マージが無関係な
-    /// 図形を結合して図全体が潰れており、その状態からは「矛盾から何でも
-    /// 従う」形で任意の目標が"証明"できてしまう。
-    ///
-    /// 🐛 これを入れた経緯: bench_2018chnwesternmop5 がまさにこの状態で
-    /// 「証明完了」を出していた。5つの自由点A..Eのうち C と E が消え、
-    /// 最終的な同値類が13個(正常に解ける問題は78〜362個)、生き残った
-    /// スカラーに LengthSq(B,B)(=0)まで混ざっていた。目標が
-    /// Identical(LengthSq, LengthSq) だったので数値サニティチェックは
-    /// 走っていたが、潰れたe-graphの定義をたどって評価するため、
-    /// そのチェック自体が騙されていた。
-    /// 戻り値は見つかった2つの自由点の名前。merge_entities は吸収された側の
-    /// name を std::mem::take で奪ってしまうので、崩壊を検出した時点で
-    /// entities[..].name を読んでも空文字になっている。作られた順に
-    /// 名前を控えながら走査して、元の名前を返す。
+    /// 🌟 自由点どうしが同じ同値類に入っていないか(= e-graph が崩壊していないか)を調べ、崩壊していれば最初に
+    /// 見つけた組を返す。自由点は独立に置けるので、正しい推論だけを積んだ限り一致しない。一致しているなら局所マージが
+    /// 無関係な図形を結合して図全体が潰れており、そこからは任意の目標が「証明」できてしまう(崩壊した e-graph の定義を
+    /// 辿るので、目標の数値チェックもそれに騙される)。
+    /// 戻り値は2つの自由点の名前。merge_entities は吸収された側の name を奪うので、作られた順に名前を控えながら走査する。
     pub fn merged_free_points(&self) -> Option<(String, String)> {
         let mut seen: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
         for i in 0..self.entities.len() {
@@ -178,6 +136,7 @@ impl EGraph {
         None
     }
 
+    /// 現在のE-Graphの有効な同値類と、その作図履歴・関係を出力する
     pub fn dump_state(&self) {
         println!("\n=== 📊 E-Graph State Dump ===");
         let mut active_nodes = Vec::new();

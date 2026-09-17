@@ -13,13 +13,9 @@ pub fn normalize(v: &[ModInt]) -> Vec<ModInt> {
     res
 }
 
-// 2直線（または点と直線）のクロス積（外積/交点計算）
-// 🐛 FIX: 以前は長さチェックが一切無く、退化した入力(例: calc_line_through_points
-// が2点の座標が数値的に一致した際に返す空Vec)がここに渡されるとv1[2]等の
-// インデックスアクセスでpanicしていた(orthocenter --mctsで実際に発生)。
-// evaluate_node系はNoneで「計算不能」を表現する設計なので、ここでは例外を
-// 投げず空Vecを返し、呼び出し側(calc_intersection等、そしてeval.rs側の
-// to_option)が「計算不能」として一貫して扱えるようにする。
+// 2直線(または点と直線)のクロス積(外積/交点計算)
+// 長さが足りない退化入力(calc_line_through_points が一致した2点に返す空 Vec など)には panic せず空 Vec を返し、
+// 呼び出し側(eval.rs の to_option)が「計算不能」として扱う。
 pub fn cross_product(v1: &[ModInt], v2: &[ModInt]) -> Vec<ModInt> {
     if v1.len() < 3 || v2.len() < 3 { return vec![]; }
     vec![
@@ -90,10 +86,7 @@ pub fn calc_parallel(l: &[ModInt], p: &[ModInt]) -> Vec<ModInt> {
     normalize(&cross_product(&inf_pt, p))
 }
 
-// 🐛 FIX: 以前は長さチェックも、z成分(同次座標の第3要素)が0(=無限遠点)かの
-// チェックも無かった。z==0の点を渡すと `v1[0]/v1[2]` がModInt::inv()内で
-// ゼロ除算panicを起こす(0.inv()はpanicする実装になっている)。戻り値を
-// Option<ModInt>にして、計算不能な場合はNoneで表現する。
+// 2点間の距離の平方。無限遠点(z==0)や長さの足りない入力は None(ModInt の 0.inv() は panic する)。
 pub fn calc_squared_distance(v1: &[ModInt], v2: &[ModInt]) -> Option<ModInt> {
     if v1.len() < 3 || v2.len() < 3 || v1[2].0 == 0 || v2[2].0 == 0 { return None; }
     let x1 = v1[0] / v1[2];
@@ -169,20 +162,8 @@ pub fn calc_cross_ratio(a: &[ModInt], b: &[ModInt], c: &[ModInt], d: &[ModInt]) 
 // 無かった。cross_productと同様、退化した入力に対してpanicせずvec![]
 // (計算不能)を返すようにする。
 pub fn calc_tangent_line(vc: &[ModInt], vp: &[ModInt]) -> Vec<ModInt> {
-    // vc: [A, D, E, F] (A(x^2+y^2) + Dx + Ey + F = 0)
+    // vc: [A, D, E, F] (A(x^2+y^2) + Dx + Ey + F = 0)。calc_circumcircle が返す並びで、A が先頭。
     // vp: [x, y, z] (接点)
-    // 🐛 FIX: 以前はここを[D,E,F,A](Aが最後)だと思ってvc[0..3]を読んでいたが、
-    // calc_circumcircleが実際に返す並びは[A,D,E,F](Aが先頭)だった
-    // (eval.rs::sample_point_on_circleのコメント、および
-    // test_tangent_line_to_circle_is_numerically_correctで非対称な円
-    // (D,E,Fが全て非自明な値を持つ配置)を使って実測・確認済み――対称な
-    // 単位円ではD=E=0になり、この食い違いが偶然打ち消し合って検出でき
-    // なかった)。この食い違いはtangent_orthic.rs等の既存問題では、証明が
-    // 純粋に記号的な定理適用(接弦定理)だけで届き、接線の数値そのものを
-    // 検算する経路を一度も通っていなかったため症状として顕在化していな
-    // かった。射影版(シュタイナーの定理)の接弦定理を二次曲線の接線を使って
-    // 構築するにあたり、複比という本質的に数値/代数的な量を経由するため、
-    // 誤った係数のままでは正しく動かない。
     if vc.len() < 4 || vp.len() < 3 || vp[2].0 == 0 { return vec![]; }
     let a_val = vc[0];
     let d = vc[1];
@@ -302,26 +283,11 @@ pub fn calc_second_intersection_of_line_and_conic(known_point: &[ModInt], line: 
     if result.iter().all(|v| v.0 == 0) { return vec![]; }
     normalize(&result)
 }
-// 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、もう一個の
-// 円と円、円と直線の交点を作図するなど)の方が、よりいろんな結果を作れる」)への
-// 対応その1: 2円の根軸(radical axis)。
-//
-// 円は「x²とy²の係数が等しくxyの係数が0」という特殊な二次曲線なので、
-// 2つの円 c1, c2 を「二次の項が打ち消し合う」ように定数倍して引くと、
-// 二次の項が完全に消えて1次式(=直線)だけが残る。これが根軸であり、
-// 2円が交わる場合はその2交点を通る直線そのものになる。
-//
-// これを独立した作図プリミティブとして持つ意味は2つある:
-//   (a)「一方の交点Pが既知のとき、もう一方の交点」を
-//      SecondIntersectionOfLineAndConic(P, 根軸, c1) として、平方根を一切
-//      使わずに斉次座標のまま作図できる(2交点は根軸上にあるため)。
-//   (b) 根軸そのものが「3円の根軸は1点(根心)で交わる」のような、すぐには
-//      示しにくい結果の源になる。
-//
-// 入力は calc_conic_through_5_points と同じ6係数[A,B,C,D,E,F]
-// (Ax²+Bxy+Cy²+Dxz+Eyz+Fz²=0)。互換のため旧来の円4係数[A,D,E,F]も受ける。
-// 二次の項が実際には消えない(=少なくとも一方が円ではない)場合は、
-// 差が直線にならないので空ベクトルを返す。
+// 🌟 2円の根軸(radical axis)。円は x² と y² の係数が等しく xy の係数が0の二次曲線なので、2円を二次の項が
+// 打ち消し合うように定数倍して引くと1次式(直線)が残る。2円が交わるならその2交点を通る直線。
+// 作図プリミティブとして持つ意味: (a)一方の交点 P が既知なら SecondIntersectionOfLineAndConic(P, 根軸, c1) として
+// 平方根なしにもう一方の交点が作れる、(b)根軸そのものが「3円の根軸は根心で交わる」のような結果の源になる。
+// 入力は6係数 [A,B,C,D,E,F](旧来の円4係数 [A,D,E,F] も受ける)。二次の項が消えない(一方が円でない)なら空 Vec。
 pub fn calc_radical_axis(c1: &[ModInt], c2: &[ModInt]) -> Vec<ModInt> {
     let to6 = |v: &[ModInt]| -> Option<Vec<ModInt>> {
         if v.len() >= 6 { Some(v[..6].to_vec()) }

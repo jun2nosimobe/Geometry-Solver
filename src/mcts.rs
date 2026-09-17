@@ -408,19 +408,9 @@ impl MCTSSearchEngine {
             // 失われ、heat_bonusへのフィードバックが機能しなくなる。
             egraph.absorb_conjectures_from(&sim_egraph);
 
-            // 🌟 直結: 以前はmain.rsのメインループ側だけがprocess_pending_conjectures
-            // を呼んでおり、MCTS自身がこのrun_step呼び出しの中で発見した予想は、
-            // このrun_stepが終わって呼び出し元に戻り、次のメインループの
-            // ティックが回ってくるまでheat_bonusに反映されなかった
-            // (=同じrun_step内の残りのシミュレーションには一切効かなかった)。
-            // ここで20シミュレーションに1回、EGraph::process_pending_conjectures
-            // を直接呼ぶことで、MCTSが自分の手番の中で見つけた「あと数個で
-            // マッチングできそうな」予想を、同じ呼び出し内の後続シミュレーション
-            // のentity_weight(=get_possible_actions/weighted_pickが読む値)に
-            // 即座に反映させる。呼び出し1回あたりの評価件数上限(MAX_PER_CALL=3)
-            // はprocess_pending_conjectures側でそのまま維持されるので、頻度を
-            // 上げても評価コスト(クローン+合同閉包1回)は「20シミュレーションに
-            // つき高々3件」に留まり、組み合わせ爆発は起きない。
+            // 🌟 20シミュレーションに1回、MCTS 自身が見つけた予想を process_pending_conjectures で評価し、同じ run_step 内の後続の
+            // シミュレーションの entity_weight に反映させる。1回あたりの評価件数上限(MAX_PER_CALL=3)は維持されるので、
+            // 評価コストは20シミュレーションにつき高々3件にとどまる。
             if sim_idx % 20 == 19 {
                 egraph.process_pending_conjectures(target);
             }

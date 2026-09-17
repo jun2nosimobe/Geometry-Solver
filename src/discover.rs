@@ -1,51 +1,14 @@
-//! 🌟 ユーザー要望:「MCTSと自由作図を通して、初等幾何の『綺麗な』問題を
-//! 発見する(証明はできればでOK)」への対応。初等幾何的に筋の良い作図や
-//! 熱の分配がどのようなものかを実際の探索結果から観察するための、
-//! 証明目標を一切持たない自由探索モード。
-//!
-//! 既存の定理探索エンジン(logic_core.rs)・MCTS(mcts.rs)は常に固定の
-//! 証明目標(target_fact)へ向けて探索するが、このモードには目標を渡さない
-//! (target: &None)。代わりに:
-//!   1. 生成的な種配置(汎用三角形、既定でA,B,Cの3自由点)からMCTSに、
-//!      target=Noneのまま自由に補助構成(中点・垂線・平行線・外接円・交点・
-//!      方向・調和共役点)を積ませる。target=Noneでは
-//!      MCTSSearchEngine::evaluate_stepのtarget_bonus/target_reachedが
-//!      常に0/falseになるため、報酬は純粋に「合同閉包で実際に何件
-//!      同値類が減ったか」+「構成された図形自体の構造的な面白さ
-//!      (heat_with_degree + 作図の種類 + 共線/共円の強さ)」だけになる
-//!      ――これがまさに人間が"手が空いた時にとりあえず補助線を引いて
-//!      みる"素朴な探索に近い、目標非依存の版。
-//!   2. 数値評価(eval.rs::log_conjecture_candidate)が「記号的にはまだ
-//!      別物として扱われている2つの図形が、独立な乱数サンプルで数値的に
-//!      一致した」ことを自動検出する(Schwartz-Zippel補題により、単発の
-//!      観測でも約10億分の1の偶然でしか起こらない、ほぼ確実な兆候)たびに、
-//!      それを「未証明だが数値的根拠のある予想」(EGraph::conjectures)
-//!      として記録する既存の仕組みをそのまま利用する――新しい発見の
-//!      仕組みを作るのではなく、既にある「予想検出器」を目標無しの
-//!      自由探索の上で走らせるだけ、というのがこのモードの骨子。
-//!   3. 探索終了後、蓄積された予想候補を「美しさ」スコア(v1、今後の
-//!      チューニング対象)で順位付けし、構成手順(どうやってその2つの
-//!      図形にたどり着いたか)とともに提示する。
-//!   4. (--prove指定時のみ)最上位の予想について、既存の定理探索エンジン
-//!      (schedule_full_sweep + dfs_match + 需要駆動の回復フェーズ、MCTSは
-//!      使わない)で実際に名前付き定理の連鎖による証明を試みる。証明できな
-//!      くても「名前付き定理の連鎖では見つからなかった」というだけで、
-//!      数値的な根拠(Schwartz-Zippel)自体の確からしさは変わらない。
-//!   5. 熱量(GeoEntity::heat_with_degree)ランキングも併せて表示する。
-//!      これは「探索が何を"注目に値する"と判断したか」をそのまま可視化
-//!      したもので、人間の直感(中点・垂心・共円点のような"要"の図形が
-//!      上位に来るべき)と実際の分配を見比べるための診断材料。
-//!
-//! 🌟 ユーザー提案(「定理を無マージで動かし、conjectureのみでも定理を
-//! 適用させるモード」):自由構築の後、蓄積された各予想(a≡b)について
-//! BlackboardEngine::probe_conjectureで「その予想を一時的に真だと仮定した
-//! 使い捨てのクローン上で、実際に名前付き定理の連鎖を走らせたら何が
-//! 追加で導かれるか」を調べ、見つかった新しい等式を"条件付きの"予想として
-//! 同じconjecturesマップに合流させる(probe_and_expand_conjectures)。
-//! 既存のestimate_conjecture_value(合同閉包1回だけの浅い見積もり)より
-//! ずっと深く「その仮説が本当に効くとしたら何が起きるか」を覗ける一方、
-//! 定理マッチングの本予算を使うため計算コストは高い――既定では検出済みの
-//! 予想1件あたり1回だけ(連鎖の深追いはしない)に留めている。
+//! 🌟 discover: 証明目標を持たない自由探索で、初等幾何の「綺麗な」関係を発見する(証明はできれば)。
+//!   1. 種配置(既定は汎用三角形。--preset で問題の配置を再利用)から、MCTS に target=None のまま補助構成を
+//!      積ませる。報酬は「合同閉包で同値類が何件減ったか」と構成された図形の構造的な面白さだけになる。
+//!   2. 数値評価が「記号的には別物の2つの図形が乱数座標で一致した」ことを予想(EGraph::conjectures)として
+//!      記録する既存の仕組みを、目標なしの探索の上で走らせる。
+//!   3. 探索後、予想や総当たり検出(report_sweep_discoveries)の結果を「美しさ」で順位付けし、構成手順と
+//!      ともに提示する(図は discover_viz で HTML に書き出す)。
+//!   4. --prove 指定時だけ、最上位の予想を定理探索エンジン(MCTS なし)で証明してみる。
+//!   5. 熱量(heat_with_degree)のランキングも表示し、探索が何を注目に値すると判断したかを見られるようにする。
+//! --probe 指定時だけ、各予想を仮定したクローン上で定理を走らせ、そこから導かれる等式を「条件付きの」予想として
+//! 追加する(probe_and_expand_conjectures)。自由度を1つ落として何かを導くことになるので既定では無効。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use crate::logic_core::{ProverEngine, BlackboardEngine};
@@ -53,12 +16,8 @@ use crate::mcts::MCTSSearchEngine;
 use crate::theorems;
 use std::time::{Duration, Instant};
 
-/// 🌟 ユーザー提案:「初期に与えるシードにもっと構図を増やしてみる」への
-/// 対応。既存31問題(src/problems/*.rs)のうち、test_*(単体検証専用の
-/// 狭い設定)・bench_*(HAGeo-409、難問すぎてセットアップ自体が重い/
-/// 偏りがある)を除いた"名前付きの"古典的で豊かな配置に、新設の
+/// 🌟 --preset=all で順番に走らせる古典的な配置。単体検証用の test_* と重い bench_* を除いた名前付きの問題に、
 /// triangle_centers(三角形+外心+垂心+重心+九点円中心)を加えたもの。
-/// --preset=allでこれを全て順番に走らせる。
 pub const CLASSIC_PRESETS: &[&str] = &[
     "triangle_centers", "cyclic_quad", "varignon", "tangent_orthic", "miquel",
     "nine_point", "nine_point_full", "miquel_quadrilateral", "simson",
@@ -127,13 +86,8 @@ pub fn run(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3)
         .max(3);
-    // 🐛 方針転換(ユーザー指摘): 「a≡bを仮定せずにできることをやりたい。
-    // 自由度が落ちるような条件を課して何かを導いても基本的に意味がない」。
-    // 仮説駆動プロービング(probe_and_expand_conjectures)は、まさに
-    // 「一時的に自由度を1つ強制的に落として何が従うか見る」仕組みであり、
-    // 実際にこれが「P1≡P2(無関係な2自由点)」のような見せかけの発見を
-    // 生む主因だったと判明した(全体崩壊の除外ルールを参照)。既定を
-    // 無効に切り替え、必要な場合だけ--probeで明示的に有効化する形にした。
+    // 🌟 仮説駆動プロービングは「自由度を1つ強制的に落として何が従うか見る」仕組みで、無関係な2自由点の一致のような
+    // 見せかけの発見を生みやすいので、--probe を付けたときだけ有効にする。
     let use_probe = args.iter().any(|a| a == "--probe");
     let probe_dfs_budget: usize = args.iter()
         .find_map(|a| a.strip_prefix("--probe-dfs-budget="))
@@ -143,24 +97,11 @@ pub fn run(args: &[String]) {
         .find_map(|a| a.strip_prefix("--probe-rounds="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
-    // 🌟 ユーザー提案:「シードとして予め五心やミケル点、回転相似、接線と
-    // いった構図を入れ込んでしまうのはどうか」「初期に与えるシードにもっと
-    // 構図を増やしてみる」への対応。裸の自由点だけから始めると、予算の
-    // 大半が(中点1つ引く程度の)基礎的な足場作りに費やされ、本当に豊かな
-    // 構造にMCTSが到達する前に予算が尽きやすい。既存の31問題
-    // (src/problems/*.rs)はそうした"名前付きの"豊かな配置を既に持って
-    // いるので、problems::load_problemでそのまま再利用する
-    // (--preset=<問題名>)。--preset=allで、厳選した複数の古典的配置
-    // (CLASSIC_PRESETS)を1回の実行でまとめて試す。--preset=名前1,名前2
-    // のようにカンマ区切りで独自の組み合わせも指定できる。読み込んだ
-    // 問題のtarget_fact(証明目標)はこのモードでは使わない(自由探索は
-    // そもそも目標を持たない)ため読み捨て、initial_factsだけを
-    // main.rsの通常経路と同じ形で適用する。
-    // 🌟 総当たり検出(report_sweep_discoveries)の候補数上限。既定を大きめに
-    // 取るのは、自由探索が進むほど「問題・定理由来の本物の実体」も増えて
-    // いくため、上限が小さいと肝心の古典的な点(外心・垂心・重心など)が
-    // 候補枠から押し出されてしまうため(実測: 上限22だと45秒探索後の
-    // triangle_centersでオイラー線が候補集合に入らず検出できなかった)。
+    // 🌟 --preset=<問題名>: 問題ファイルの配置(initial_facts)を種として再利用する(target_fact は使わない)。
+    // 裸の自由点から始めると予算の大半が基礎的な足場作りに消えるため。--preset=all で CLASSIC_PRESETS をまとめて、
+    // --preset=名前1,名前2 で任意の組み合わせを試せる。
+    // 🌟 総当たり検出(report_sweep_discoveries)の候補数の上限。探索が進むと実体が増えるので、小さいと肝心の
+    // 古典的な点(外心・垂心・重心など)が候補から押し出される。
     let sweep_pts: usize = args.iter()
         .find_map(|a| a.strip_prefix("--sweep-points="))
         .and_then(|v| v.parse().ok())
@@ -253,12 +194,8 @@ fn run_one_seed(
     let mut steps_done = 0usize;
     let mut consecutive_failures = 0usize;
     const MAX_CONSECUTIVE_FAILURES: usize = 5;
-    // 🌟 誤マージの原因調査用(--audit)。自由探索は稀にe-graphを実際の幾何と
-    // 矛盾した状態へ壊す(実測でmiquel/two_circles_reimの2配置で発生)。
-    // 毎ステップ後に「e-graphが構造的に主張している接続が数値評価と
-    // 整合しているか」を確かめ、最初に壊れた瞬間のステップ番号・該当する
-    // 接続・その接続の根拠・その2つの同値類に流れ込んだ全マージの理由を
-    // まとめて出力する。
+    // 🌟 誤マージの原因調査用(--audit)。毎ステップ後に e-graph が主張している接続が数値評価と整合しているかを確かめ、
+    // 最初に壊れたステップ・該当する接続・その根拠・関係する全マージの理由をまとめて出力する。
     let audit = crate::cli::audit();
     // 🌟 --systematic: MCTSの代わりに決定的な幅優先の作図閉包を使う
     // (systematic_closureのドキュメント参照)。
@@ -333,10 +270,8 @@ fn run_one_seed(
         xml_escape_html(seed_label), sections.join("\n"))]
 }
 
-/// 🌟 discover.rs内の各所(仮説駆動プロービング/--proveの証明試行)が
-/// 使う、全定理を登録済みのBlackboardEngineを組み立てる共通処理。
-/// main.rsの通常の問題実行と同じ定理集合(get_all_theorems +
-/// get_projective_theorems)を使う。
+/// 🌟 仮説駆動プロービングと --prove の証明試行が使う、全定理を登録した BlackboardEngine を組み立てる
+/// (solve.rs の既定と同じく get_all_theorems + get_projective_theorems)。
 fn build_full_engine(egraph: EGraph) -> BlackboardEngine {
     let mut prover = ProverEngine::new(egraph);
     let mut all_theorems = theorems::get_all_theorems();
@@ -350,13 +285,8 @@ fn build_full_engine(egraph: EGraph) -> BlackboardEngine {
     engine
 }
 
-/// 🌟 ユーザー提案:「定理を無マージで動かし、conjectureのみでも定理を
-/// 適用させるモード」。蓄積されている予想それぞれについて
-/// BlackboardEngine::probe_conjectureを1回適用し、「その予想を仮定すると
-/// さらに導かれる」新しい等式を"条件付きの"予想として同じconjectures
-/// マップに追加する。連鎖はここでは1段階だけ(見つかった条件付き予想を
-/// さらに再帰的にプロービングする深追いは、組み合わせ爆発のリスクが
-/// あるためv2の課題として残す)。
+/// 🌟 蓄積された予想それぞれに BlackboardEngine::probe_conjecture を1回適用し、「その予想を仮定するとさらに導かれる」
+/// 等式を条件付きの予想として同じ conjectures マップに追加する。連鎖は1段だけ(再帰的な深追いは組み合わせ爆発する)。
 fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize, sweep_rounds: usize) {
     let seeds: Vec<((usize, usize), String)> = {
         let map = engine.prover.egraph.conjectures.borrow();
@@ -380,28 +310,13 @@ fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize
         if a == b { continue; }
         let key = if a.0 < b.0 { (a, b) } else { (b, a) };
         if !probed_pairs.insert(key) { continue; }
-        // 🌟 FIX: report_conjecturesと同じhas_degenerate_ancestorの事前
-        // フィルタをここにも適用する。以前はここを素通りしていたため、
-        // 「調和共役の入力に自分自身の結果を使い回す」ような、そもそも
-        // 構造的に退化した(=真ではあっても偶然でも新発見でもない)種
-        // 予想まで律儀にプロービングしており、無駄な計算コストに加えて、
-        // まさにこの種の退化した前提が全体崩壊カスケードの主な火種に
-        // なっていた可能性が高い。
+        // 🌟 report_conjectures と同じく、構造的に退化した祖先を持つ予想はプロービングしない(無駄なうえ、退化した前提は
+        // 全体崩壊の火種になる)。
         if has_degenerate_ancestor(&engine.prover.egraph, a, b) { continue; }
         let name_a = engine.prover.egraph.entities[engine.prover.egraph.get_rep(a).0].name.clone();
         let name_b = engine.prover.egraph.entities[engine.prover.egraph.get_rep(b).0].name.clone();
-        // 🐛 FIX(ユーザー報告で判明): 「P1 ≡ P2(2つの無関係な自由点)」の
-        // ような、明らかにおかしい"発見"が上位に来る実例が繰り返し
-        // 見つかった。原因は、ある前提を仮定した結果グラフの大部分
-        // (時には過半数)の実体が一斉に1つの同値類へ潰れる「全体崩壊」が
-        // 起きた場合、崩壊で生じた大量のペアのうち構成手順が最短のもの
-        // (=たまたま素の自由点同士だったペア)が「美しさ」スコアで最も
-        // 減点が少なく、たまたま最上位に来てしまうこと。全体崩壊は
-        // 前提そのものが既に破綻している(数値的な偶然ではなく単なる誤り)
-        // 兆候であり、そこから生まれた個々のペアはどれも「新しい発見」
-        // ではなく崩壊の言い換えに過ぎないので、崩壊の規模(仮定前の
-        // アクティブな同値類数に対する比率)が閾値を超えたら、この前提
-        // からの伝播を丸ごとスキップする。
+        // 🐛 ある前提を仮定した結果、グラフの大部分が1つの同値類へ潰れる「全体崩壊」が起きたら、その前提からの伝播は
+        // 丸ごと捨てる。崩壊は前提が破綻している兆候で、そこから出るペア(無関係な自由点どうしの一致など)は発見ではない。
         let classes_before = engine.prover.egraph.count_active_classes();
         let discovered = engine.probe_conjecture(a, b, dfs_budget, sweep_rounds);
         const COLLAPSE_SUSPECT_RATIO: f64 = 0.2;
@@ -417,14 +332,8 @@ fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize
         }
         for (x, y) in discovered {
             if x == y { continue; }
-            // 🐛 FIX(実測で判明): ここでname_a/name_bを埋め込むと、MCTSが
-            // 自動生成した(場合によっては数百文字を超える)実体名が予想の
-            // hypothesisテキストに永続的に焼き込まれてしまい、報告側で
-            // PrettyNamerによる付け替え名を使っても、この部分文字列だけは
-            // 読めないまま残ってしまう(実測で確認)。どの予想が引き金だったか
-            // より、「これは仮説駆動プロービングで見つかった条件付きの発見で、
-            // 元の数値的根拠は何だったか」の方が報告としては重要なので、
-            // 名前は埋め込まず親の仮説(常に短い定型文)だけを残す。
+            // 仮説のテキストに実体名は埋め込まない(自動生成名は数百文字になり、報告側で付け替え名を使っても読めないまま残る)。
+            // 条件付きの発見であることと、親の仮説だけを残す。
             let hypothesis = format!("[定理連鎖] 他の予想(仮説: {})を仮定すると導かれる", parent_hypothesis);
             engine.prover.egraph.log_conjecture_candidate(x, y, &hypothesis);
             new_count += 1;
@@ -443,20 +352,11 @@ struct RankedConjecture {
     beauty: f64,
 }
 
-/// 🌟 実測で判明した問題への対応: MCTSが自動生成する実体名は
-/// (「型_親の名前1_親の名前2_(MCTS)」のように)親の名前をそのまま連結する
-/// ため、構成が数段重なるだけで数百文字を超え、報告がほぼ読めなくなる
-/// (自由点は最初から短い名前なので触らない)。報告の表示専用に、
-/// 自由点/定数以外の実体へ型ごとの短い付け替え名(P1, L1, D1, Ang1, S1,
-/// C1...)を割り当てる。実体の真の識別(証明・union-find)には一切使わず、
-/// あくまで人間向けの表示文字列を作るためだけの、この関数呼び出し内で
-/// 完結する使い捨てのラベル表。
+/// 🌟 報告の表示専用に、自由点・定数以外の実体へ型ごとの短い付け替え名(P1, L1, D1, Ang1, S1, C1...)を割り当てる。
+/// 自動生成名は親の名前を連結するので数段で数百文字になる。証明や union-find には使わない。
 struct PrettyNamer {
     labels: rustc_hash::FxHashMap<ClassId, String>,
-    // 🌟 EntityType::Direction撤廃(方向はL∞に接続されたただのPoint)に伴い、
-    // 表示上「有限点(P)」と「無限遠点(D、旧Direction)」を分けて数えるには
-    // もうEntityTypeだけでは足りない(is_connectedで判定した接頭辞そのもの
-    // をキーにする)。
+    // 🌟 有限点(P)と無限遠点(D)は型では分からないので、判定した接頭辞そのものをキーに数える。
     counters: rustc_hash::FxHashMap<&'static str, usize>,
 }
 
@@ -469,31 +369,13 @@ impl PrettyNamer {
         let rep = egraph.get_rep(id);
         if let Some(l) = self.labels.get(&rep) { return l.clone(); }
         let e = &egraph.entities[rep.0];
-        // 🐛 FIX(実測で判明): 当初はoriginal_definitionがFreePoint/GivenPoint
-        // かどうかで判定していたが、調和共役点の完全四辺形作図
-        // (construction.rs::construct_harmonic_conjugate)が内部で使う補助点
-        // (P, Q)もDefinition::FreePointとして作られ、しかも名前は
-        // 「P_Harm_(親の名前を連結)_(Aux)」という他のMCTS産物と同じくらい
-        // 長い自動生成名になる。「original_definitionの種類」ではなく
-        // 「名前が既に短いか(=自動生成のタグ"_("を含まないか)」で判定する
-        // ことで、本当に最初から短い名前を持つ実体(A, B, Ang90, ...)だけを
-        // 素通りさせ、この種の"見た目だけFreePointな"補助点も正しく
-        // 付け替え対象にする。
+        // 名前が既に短い(自動生成のタグ "_(" を含まない)実体だけを素通りさせる。調和共役の作図の補助点のように、
+        // 定義は FreePoint でも名前が長い実体があるので、定義の種類では判定しない。
         let label = if !e.name.contains("_(") {
             e.name.clone()
         } else {
-            // 🌟 EntityType::Direction撤廃により、「無限遠直線L∞上の点か」は
-            // 型ではなくincidence(is_connected)で判定する。ユーザー提案
-            // 「directionを検索するときもL∞上の点を探せばよい」をそのまま
-            // 表示ラベルの判定にも適用した形。EntityType::Circle撤廃も同じ
-            // 発想: 「円周点I,Jを両方通るか」で二次曲線が円かどうかを判定し、
-            // 表示上は円らしく"Cir"、そうでなければ一般の二次曲線として"Q"を使う
-            // (内部的にはどちらも同じEntityType::Conic)。EntityType::Angle撤廃も
-            // 同じ発想だが、角度か否かはincidenceでは判定できない(有向角は
-            // L∞上の何か特定の点を通るという構造的特徴を持たない)ので、
-            // 代わりにoriginal_definitionがAnglePairかどうかで判定する
-            // (このIDが元々どんな定義で作られたかを問うだけの、こちらも
-            // 表示専用の判定なので、厳密さより手軽さを優先する)。
+            // 🌟 接頭辞は型ではなく構造で決める: 無限遠直線に乗る点は D、円周点 I,J を両方通る二次曲線は Cir、それ以外の
+            // 二次曲線は Q、AnglePair で作られた Scalar は Ang(表示専用なので original_definition だけで判定する)。
             let prefix: &'static str = if e.entity_type == EntityType::Point
                 && egraph.is_connected(rep, egraph.line_infinity) {
                 "D"
@@ -547,17 +429,8 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
     for ((ai, bi), hypothesis, occurrences) in entries {
         let (a, b) = (egraph.get_rep(ClassId(ai)), egraph.get_rep(ClassId(bi)));
         if a == b { continue; } // 探索の続きで別経路により既に証明済みになっていた
-        // 🌟 除外ルール(実測で判明): 自由探索が「調和共役点の入力に、既に
-        // その調和共役の結果自体を(別の役割で)使い回す」ような循環した
-        // 作図を実際に生成することがあり、その結果3点が数値的に同一点へ
-        // 収束するケースを観測した。この状態だと、以降に作られる
-        // LineThroughPoints(X, Y)のような「2つの異なる図形を要求する」
-        // 構成が(X, Yの代表元が既に同じになっているため)実質
-        // LineThroughPoints(X, X)という定義不能な形に成り下がり、そこから
-        // 導かれる「等式」は図形が退化しているという事実の言い換えに
-        // 過ぎず、綺麗な定理ではない。a, bの祖先(依存関係の閉包)の中に、
-        // このような「同じ代表元を2回以上要求する退化した構成」が
-        // 1つでも含まれていれば除外する。
+        // 🌟 除外ルール: a, b の祖先に「同じ代表元を2回以上要求する退化した構成」(調和共役の入力に自分の結果を使い回す、
+        // など)があれば除外する。そこから導かれる等式は図形が退化しているという事実の言い換えでしかない。
         if has_degenerate_ancestor(egraph, a, b) {
             degenerate_skipped += 1;
             continue;
@@ -567,15 +440,8 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
             collapse_skipped += 1;
             continue;
         }
-        // 🐛 FIX(実測で判明): 以前はmcts_depth(MCTSSearchEngine::apply_action
-        // だけが設定する、MCTS自身の補助構成の連鎖の深さ)の和を「構成手順の
-        // 長さ」の代わりに使っていたが、これはdfs_match(仮説駆動プロービング
-        // 由来の予想を含む、名前付き定理が結論として作る実体)経由で生まれた
-        // 実体では一切更新されず常に0のままになる――実測で「構成手順は
-        // 十数段あるのにmcts_depthの和は0+0」という乖離が実際に起きていた。
-        // describe_constructionが辿る依存関係(original_definition)の実際の
-        // ステップ数を使えば、MCTS由来・定理由来のどちらでも正しく深さを
-        // 反映できる。
+        // 構成手順の長さは describe_construction が辿る依存関係のステップ数で測る(mcts_depth は MCTS の構成でしか
+        // 増えないので、定理が作った実体では常に0になる)。
         let construction_steps = describe_construction(egraph, a, b).2.len();
         // 🌟 美しさスコア(v1、今後の調整対象として意図的に単純にしてある):
         // ・additional_merges(この等式1つを仮定するだけで合同閉包が連鎖的に
@@ -614,11 +480,8 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
 
     println!("\n=== 🏛️  発見された「綺麗な」関係の候補 (美しさスコア降順、上位{}件 / 全{}件、退化した構成として除外{}件、全体崩壊として除外{}件) ===",
         top_n.min(ranked.len()), ranked.len(), degenerate_skipped, collapse_skipped);
-    // 🌟 ユーザー要望「報告が読めない問題に対処するため、図形を描画して
-    // 確認できるようにしたい」への対応。テキストの構成手順と全く同じ実体
-    // 集合・同じPrettyNamerラベルを使って、discover_viz::render_svgに
-    // SVG図を作らせ、result/discover_report.htmlへまとめて書き出す
-    // (--proveのように標準出力だけで済ませられる情報量ではないため)。
+    // 🌟 テキストの構成手順と同じ実体集合・同じ付け替え名で discover_viz::render_svg に図を描かせ、
+    // result/discover_report.html にまとめて書き出す。
     let mut html_sections: Vec<String> = Vec::new();
     for (rank, c) in ranked.iter().take(top_n).enumerate() {
         let (name_a, name_b, steps, order, labels) = describe_construction(egraph, c.a, c.b);
@@ -725,16 +588,8 @@ pub(crate) fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -
         }
         false
     }
-    // 🐛 FIX(実測で判明): 単純な「訪問済み集合」だけでは、本来DAGのはずの
-    // 依存関係(original_definition.get_parents())が、後から起きた
-    // union-findのマージによって現在(get_rep後)は循環して見えるケース
-    // (例: 「調和共役の入力に、その結果と後にマージされる別の実体を使う」
-    // ことで、post-merge視点では実体YがP1に依存し、P1もYに依存して見える
-    // ようになる)を見逃す――単なる訪問済みスキップでは無限再帰は防げても
-    // 「循環そのもの」を異常として検出できない。白(未訪問)/灰(現在の
-    // 再帰スタック上)/黒(訪問済みで安全)の3色DFSに変更し、灰色のノードへ
-    // 再度到達したら閉路(=構成手順として書き下せない、退化した状態)として
-    // 検出する。
+    // 🐛 依存関係は本来 DAG だが、マージ後(get_rep 後)に見ると循環することがある。白/灰/黒の3色 DFS にして、
+    // 灰色のノードに再び到達したら閉路(構成手順として書き下せない退化した状態)として検出する。
     fn visit(egraph: &EGraph, id: ClassId, gray: &mut rustc_hash::FxHashSet<ClassId>, black: &mut rustc_hash::FxHashSet<ClassId>) -> bool {
         let rep = egraph.get_rep(id);
         if black.contains(&rep) { return false; }
@@ -752,16 +607,10 @@ pub(crate) fn has_degenerate_ancestor(egraph: &EGraph, a: ClassId, b: ClassId) -
     visit(egraph, a, &mut gray, &mut black) || visit(egraph, b, &mut gray, &mut black)
 }
 
-/// 🌟 実体a, bにたどり着くまでに実際に使われた作図を、依存関係の順
-/// (親が先)に列挙する。original_definition(create_entity時に一度だけ
-/// 設定され、以後マージが起きても書き換わらない)を辿ることで、
-/// 「後から短い名前に上書きされた」影響を受けずに、本当にその実体が
-/// 何から作られたかを正確に復元する。表示にはPrettyNamerの付け替え名を
-/// 使う(実体本来の名前は構成が深くなると際限なく長くなり、報告が読めなく
-/// なるため――実測で数百文字超の名前が実際に出ることを確認した)。
-/// 戻り値は(aの付け替え名, bの付け替え名, 構成手順の行一覧, 依存関係順の
-/// ClassId列, 付け替え名の対応表)。最後の2つはdiscover_viz::render_svgが
-/// テキスト報告と全く同じ実体集合・同じラベルで図を描くために使う。
+/// 🌟 実体 a, b にたどり着くまでに使われた作図を、依存関係の順(親が先)に列挙する。original_definition を辿るので、
+/// 後から名前が上書きされても何から作られたかを正確に復元できる。表示は PrettyNamer の付け替え名を使う。
+/// 戻り値は(aの付け替え名, bの付け替え名, 構成手順の行一覧, 依存関係順の ClassId 列, 付け替え名の対応表)。
+/// 最後の2つは discover_viz::render_svg がテキストと同じ実体・同じラベルで図を描くのに使う。
 fn describe_construction(egraph: &EGraph, a: ClassId, b: ClassId) -> (String, String, Vec<String>, Vec<ClassId>, rustc_hash::FxHashMap<ClassId, String>) {
     let mut seen = rustc_hash::FxHashSet::default();
     let mut order: Vec<ClassId> = Vec::new();
@@ -871,31 +720,17 @@ fn report_heat_ranking(egraph: &EGraph, top_n: usize) {
     println!("=============================\n");
 }
 
-/// 🌟 ユーザー要望:「mctsとon demand construction, heatなどを用いて
-/// 非自明な定理を発見する部分を改善して、実際に見つけた定理を報告して
-/// ほしい」への対応。
-///
-/// 従来の予想検出(eval.rs::log_conjecture_candidate)は「作図が0/0に退化
-/// した時」しか発火せず、実測ではその全てが調和共役の内部足場の退化で、
-/// 報告に値するものが0件だった。ここでは代わりに、自由探索で組み上がった
-/// e-graph全体を独立な乱数座標で複数回評価し、
-///   (a) 同型の全ペアのうち射影的に一致するもの(=独立に作った2つの図形が
-///       実は同一。3直線の共点性はIntersection同士の一致として現れる)
-///   (b) 熱量上位の点の3つ組のうち共線なもの(オイラー線型の発見)
-/// を総当たりで検出する。いずれも「まだ記号的には統合されていない」
-/// 「構造的にはまだ共線と分かっていない」ものだけに絞るので、報告される
-/// のは現在の定理群では導けていない関係だけになる。
+/// 🌟 自由探索で組み上がった e-graph 全体を独立な乱数座標で複数回評価し、
+///   (a) 同型の全ペアのうち射影的に一致するもの(独立に作った2つの図形が実は同一。3直線の共点性は交点どうしの一致になる)
+///   (b) 熱量上位の点の3つ組のうち共線なもの(オイラー線型)
+/// を総当たりで検出する。まだ記号的に統合されていない・構造的に共線と分かっていないものだけに絞るので、
+/// 報告されるのは今の定理群では導けていない関係だけになる。
 fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize, sweep_lines: usize) -> usize {
     const SEEDS: [u64; 3] = [0xC0FFEE, 0xBEEF77, 0x1234ABCD];
     let mut namer = PrettyNamer::new();
 
-    // 🌟 崩壊検出: 自由探索は稀に誤ったマージを連鎖させ、e-graphを実際の
-    // 幾何と矛盾した状態へ潰してしまう。その状態の数値評価から出てくる
-    // 「一致」「共円」は全て崩壊の言い換えであって発見ではない(実測で
-    // 「28点が共円」「15点が共円(うち多くは同一直線上で、円には2点しか
-    // 乗れないはず)」という報告が実際に出た)。e-graph自身が構造的に
-    // 主張している接続(点Pは直線L上にある)が数値評価と整合しているかを
-    // 確かめ、1件でも矛盾があればこの種配置の報告を打ち切る。
+    // 🌟 崩壊検出: e-graph が構造的に主張している接続(点Pは直線L上)が数値評価と1件でも矛盾したら、この配置の報告を
+    // 打ち切る。潰れた e-graph から出る一致・共円は崩壊の言い換えで、発見ではない。
     if let Some((bad_p, bad_l)) = crate::padic_eval::find_incidence_inconsistency(egraph, SEEDS[0]) {
         println!("\n⚠️  [崩壊検出] e-graphは「{} は {} 上にある」と主張していますが、数値評価では成り立ちません。自由探索中の誤ったマージでe-graphが実際の幾何と矛盾した状態に陥っているため、この種配置の発見報告は信頼できないものとして打ち切ります。",
             namer.label(egraph, bad_p), namer.label(egraph, bad_l));
@@ -958,18 +793,10 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
     let mut fresh_conc: Vec<(ClassId, ClassId, ClassId)> = Vec::new();
     for (a, b, c) in conc {
         if shares_known_point(egraph, a, b, c) { continue; }
-        // 🌟 定義上の自明性の除外: 3直線がどれも「同じ点Pを通るように作られた」
-        // 直線(LineThrough(P,_) / Perpendicular(_ ⟂ P) / Parallel(_ ∥ P) など)
-        // なら、Pで交わるのは作図の言い換えでしかない。実測でも「AB、ABの
-        // 垂直二等分線、…が Mid(A,B) で交わる」のような組が上位に並んでいた。
+        // 🌟 3直線がどれも定義上同じ点Pを通るように作られた直線なら、Pで交わるのは作図の言い換えなので除く。
         if is_trivial_pencil(egraph, &[a, b, c]) { continue; }
-        // 🌟 3本のうち2本が既に構造的な共有点Pを持っているなら、この"共点性"の
-        // 中身は「Pが3本目の直線の上にある」という1本の接続に過ぎない。実測でも
-        // 「直線AC、Mid(A,C)を通る垂線、ABに平行でMid(B,C)を通る直線が共点」
-        // (=中点連結線がMid(A,C)を通る、という1つの事実)が、3本目を取り替えた
-        // だけの10件として上位を占領していた。この形は新設の接続検出
-        // (find_generic_point_on_curve)が「点Pは直線L上にある」という正準な
-        // 形で1件だけ報告するので、共点性のセクションからは外す。
+        // 🌟 3本のうち2本が既に構造的な共有点Pを持つなら、この共点性の中身は「Pが3本目の直線の上にある」という1本の
+        // 接続で、接続の検出(find_generic_point_on_curve)が正準な形で報告するので、共点性からは外す。
         if pairwise_shared_point(egraph, a, b).is_some()
             || pairwise_shared_point(egraph, b, c).is_some()
             || pairwise_shared_point(egraph, a, c).is_some() { continue; }
@@ -1011,12 +838,8 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
     for (p, c) in inc {
         // 「その点自身から作られた曲線」への接続は作図の言い換えなので除く。
         if egraph.is_natural_incidence(egraph.get_rep(p), egraph.get_rep(c)) { rej_nat += 1; continue; }
-        // 🐛 has_degenerate_ancestor はここでは使えない: あれは
-        // 「post-merge視点で依存関係に閉路がある」ものも退化として弾くが、
-        // 第2交点は「2回取ると元に戻る」という正しい対合性を持つため、
-        // 円がらみの作図では必ず閉路が現れる(実測で生検出30件のうち29件が
-        // これで捨てられ、このセクションが常に空だった)。本当に意味が無いのは
-        // 「同じ実体を2回引数に取る」退化した作図の方なので、そちらだけを弾く。
+        // 🐛 has_degenerate_ancestor はここでは使えない: 第2交点は「2回取ると元に戻る」対合性を持つので、円がらみの作図では
+        // 依存関係に必ず閉路が現れる。弾くのは「同じ実体を2回引数に取る」退化した作図だけにする。
         if has_duplicated_parent(egraph, p) || has_duplicated_parent(egraph, c) { rej_deg += 1; continue; }
         fresh_inc.push((p, c));
     }
@@ -1052,12 +875,8 @@ fn report_sweep_discoveries(egraph: &mut EGraph, top_n: usize, sweep_pts: usize,
     println!("\n=== ⭕ 未知の共円性の検出 (4点が同一円周上) ===");
     if fresh_quads.is_empty() { println!("  (構造的にまだ知られていない共円性は見つかりませんでした)"); }
     for (rank, set) in maximal_verified_sets(egraph, &SEEDS, fresh_quads.iter().map(|q| q.to_vec()).collect(), crate::padic_eval::PropertyKind::Concyclic).into_iter().take(top_n).enumerate() {
-        // 🐛 FIX(実測で判明): 系統的作図が円の上の点(接点・第2交点)を大量に
-        // 作るようになった結果、「8点が共円」と report されたものの中身が
-        // 「そのうち7点は定義からして同じ円の上にあり、本当に新しいのは
-        // 残り1点がその円に乗ること」でしかない、という報告が上位を占めた。
-        // 既知の円が集合の3点以上を含むなら、主張の中身はその円の上に
-        // 「まだ載ると分かっていない点」が載ることなので、そう言い換える。
+        // 既知の円が集合の3点以上を含むなら、主張の中身は「まだ載ると分かっていない点がその円に載る」ことなので、そう言い換える
+        // (「8点が共円」の中身が「残り1点がこの円に乗る」だけ、という報告を避ける)。
         if let Some((circle, extra)) = known_circle_through_most(egraph, &set)
             && !extra.is_empty() {
                 let ex: Vec<String> = extra.iter().map(|&id| namer.label(egraph, id)).collect();
@@ -1139,18 +958,9 @@ pub(crate) fn shares_known_conic(egraph: &EGraph, q: &[ClassId]) -> bool {
 }
 
 
-/// 🌟 報告の可読性のための集約(検証つき)。
-///
-/// 検出結果は「3点組」「4点組」という部分集合の形で大量に出るため、素朴に
-/// 並べると同じ円・同じ交点を指すだけの組が何十件も並んで読めない。かと
-/// いって「共有要素が多い集合どうしを無条件に併合する」と偽の大集合が
-/// できてしまう(実測: 垂線の族のような平行な直線の集まりが連鎖的に
-/// 併合され、35本が1つの"共点"グループになった)。
-///
-/// そこで、検出された各組を種にして、他の組に現れた要素を1つずつ足しては
-/// 「その集合全体で本当に性質が成り立つか」をverify_propertyで数値的に
-/// 確かめ、成り立つ場合だけ採用する(貪欲な極大化)。こうして報告する集合は
-/// 常に、主張が集合全体で検証済みであることが保証される。
+/// 🌟 報告の可読性のための集約(検証つき)。検出結果は3点組・4点組の部分集合として大量に出るが、共有要素が多い集合を
+/// 無条件に併合すると偽の大集合ができる(平行な直線の族が連鎖的に併合される、など)。そこで各組を種に、他の組の要素を
+/// 1つずつ足しては verify_property で集合全体で性質が成り立つかを数値的に確かめ、成り立つときだけ採用する(貪欲な極大化)。
 pub(crate) fn maximal_verified_sets(
     egraph: &EGraph,
     seeds: &[u64],
@@ -1193,11 +1003,8 @@ pub(crate) fn maximal_verified_sets(
             // 共点性は「定義上その点を通る直線」を足しても情報が増えない
             // (is_trivial_pencil参照)ので、自明な束に育てない。
             if kind == crate::padic_eval::PropertyKind::Concurrent && is_trivial_pencil(egraph, &trial) { continue; }
-            // 🐛 FIX(実測で判明): 種の三つ組には「2本が既に構造的な共有点を
-            // 持つ組は除く」フィルタを掛けているのに、成長のときは掛けて
-            // いなかった。そのため orthocenter の配置で、Mid(B,C)を通る直線が
-            // 5本まとめて「共点」として報告される(中点連結線・中線・BCが
-            // すべてMid(B,C)を通るだけ)という、内容の無い束が上位を占めた。
+            // 種の三つ組と同じく、成長させるときも「2本が既に構造的な共有点を持つ」直線は足さない(同じ中点を通るだけの直線の束を
+            // 共点として報告しない)。
             if kind == crate::padic_eval::PropertyKind::Concurrent
                 && set.iter().any(|&x| pairwise_shared_point(egraph, x, c).is_some()) { continue; }
             // 共円も同様に、既に同じ円に乗ると分かっている点を足しても
@@ -1214,14 +1021,8 @@ pub(crate) fn maximal_verified_sets(
         seen.push(key);
         out.push(set);
     }
-    // 🌟 新規性による並べ替え(ユーザー要望「さらに有名でない結果を発見
-    // できるよう工夫したい」への対応)。中線の共点性・垂心・外心のような
-    // 有名な定理は、構成要素が全て同じ"形"で頂点を巡回させただけ
-    // (3本とも Perpendicular(対辺 ⟂ 頂点) など)という強い対称性を持つ。
-    // 逆に「Aからの垂線と、2つの中点からの垂線が共点」のような教科書に
-    // 載りにくい結果は、構成の形が混ざっている。そこで各要素の
-    // 「定義の形の署名」(定義の種類 + 各引数の定義の種類)を取り、
-    // 異なる署名の個数が多い集合を上位に出す。
+    // 🌟 新規性による並べ替え。有名な定理(中線・垂心・外心)は3本とも同じ形の構成を頂点で巡回させただけの強い対称性を
+    // 持ち、教科書に載りにくい結果は構成の形が混ざっている。各要素の「定義の形の署名」の異なる個数が多い集合を上に出す。
     out.sort_by_key(|g| (std::cmp::Reverse(shape_diversity(egraph, g)), std::cmp::Reverse(g.len())));
     out
 }
@@ -1271,14 +1072,9 @@ fn explain_entities(egraph: &EGraph, namer: &mut PrettyNamer, ids: &[ClassId]) -
 }
 
 /// 共点性の「自明さ」判定。
-///
-/// LineThrough(P,Q)ならP,Qが、Perpendicular(l ⟂ P)/Parallel(l ∥ P)/
-/// TangentLine(c,P)ならPが、その直線上にあることは作図の定義から自明。
-/// ある点Pについて「定義上Pを通る」直線が3本以上あれば、それらがPで
-/// 交わるのは作figureの言い換えでしかない(2直線なら必ずどこかで交わるので、
-/// 内容があるのは3本目以降)。実測でも、自由探索が作った「P6を通る直線」の
-/// 束が6本まとめて"共点"として報告され、本物の発見(3本の高さの共点性)が
-/// 埋もれていた。
+/// LineThrough(P,Q) なら P,Q が、Perpendicular(l ⟂ P)/Parallel(l ∥ P)/TangentLine(c,P) なら P が、その直線上にあることは
+/// 作図の定義から自明。ある点Pについて定義上Pを通る直線が3本以上あれば、それらがPで交わるのは作図の言い換えでしかない
+/// (2直線は必ずどこかで交わるので、内容があるのは3本目以降)。
 pub(crate) fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
     let pts_on = |l: ClassId| -> Vec<ClassId> {
         let rep = egraph.get_rep(l);
@@ -1304,23 +1100,11 @@ pub(crate) fn is_trivial_pencil(egraph: &EGraph, lines: &[ClassId]) -> bool {
     all.dedup();
     all.iter().any(|&p| per_line.iter().filter(|v| v.contains(&p)).count() >= 3)
 }
-/// 🌟 ユーザー要望「さらに有名ではない結果を発見できるよう、探索の工夫を
-/// したい」への対応。
-///
-/// MCTSによる自由探索は1手ずつ確率的に伸ばすため、実測では「一般の4自由点」
-/// のような構造の薄い種配置だと何の一致にも到達できなかった(古典的な定理が
-/// 現れるのは、中点・垂線・外接円のような"意味のある"作図が噛み合った時だけ
-/// なので、ランダムな1手の連鎖では到達しにくい)。そこで、既存の点・直線から
-/// 機械的に作れる作図を幅優先で閉包していく決定的なモードを用意する。
-/// 名前の付いた古典的配置(プリセット)に依存しないので、出てくる関係も
-/// 「その配置のために用意された有名な定理」に偏りにくい。
-///
-/// 各ラウンドで作るもの:
-///   点×点 -> 直線・中点 / 直線×直線 -> 交点 /
-///   点×直線 -> 垂線 / 点×点×点 -> 外接円
-/// 実体数がcapを超えたところで打ち切る(組合せ爆発の抑制)。候補は熱量
-/// (heat_with_degree、次数が効くので図の"要"になっている実体が上位に来る)
-/// の降順に絞る。
+/// 🌟 既存の点・直線から機械的に作れる作図を幅優先で閉包していく決定的なモード。MCTS の1手ずつの確率的な探索は、
+/// 構造の薄い種配置では意味のある作図が噛み合わず何の一致にも届かない。プリセットに依存しないので、出てくる関係も
+/// 有名な定理に偏りにくい。
+/// 各ラウンドで作るもの: 点×点 -> 直線・中点 / 直線×直線 -> 交点 / 点×直線 -> 垂線 / 点×点×点 -> 外接円。
+/// 実体数が cap を超えたら打ち切り、候補は熱量(heat_with_degree)の降順に絞る。
 pub(crate) fn systematic_closure(egraph: &mut EGraph, rounds: usize, cap: usize, per_kind: usize) {
     systematic_closure_until(egraph, rounds, cap, per_kind, None)
 }
@@ -1360,12 +1144,8 @@ pub(crate) fn systematic_closure_until(
         let sieve = crate::padic_eval::numeric_sieve(egraph, 0xD1F7 + round as u64, &pts);
 
         let mut new_defs: Vec<(Definition, EntityType)> = Vec::new();
-        // 🐛 FIX(実測で判明): 中点の中点をどこまでも作ると、
-        // Midpoint(Midpoint(A, Midpoint(A,B)), B) のような「線分の1/8点」が
-        // 爆発的に増え、報告の上位がその類の共線・共円で埋まってしまった。
-        // 中点の反復はアフィンな細分にすぎず新しい構造を生まないので、
-        // 中点どうしの中点は作らない(中点を端点とする直線や、中点への垂線は
-        // 引き続き作るので、中点連結線・オイラー点のような結果は失われない)。
+        // 中点どうしの中点は作らない(アフィンな細分にすぎず、「線分の1/8点」の共線・共円が報告を埋める)。
+        // 中点を端点とする直線や中点への垂線は作るので、中点連結線などは失われない。
         let is_midpoint = |eg: &EGraph, id: ClassId| -> bool {
             let rep = eg.get_rep(id);
             eg.entities[rep.0].components.first()
@@ -1392,22 +1172,14 @@ pub(crate) fn systematic_closure_until(
                 new_defs.push((Definition::PerpendicularLine(l, p), EntityType::Line));
             }
         }
-        // 🌟 外接円は三つ組なので数が増えやすく、以前は最初のラウンドだけ
-        // 作っていた。だがそれだと図の中に円が1つ(=種の3点の外接円)しか
-        // 存在せず、根軸も2円の第2交点も定義しようが無い ―― ユーザー指示
-        // 「円と円の交点を作図する方がよりいろんな結果を作れる」に応えるには、
-        // 探索の途中で生まれた点からも円を作れなければならない。毎ラウンド、
-        // 熱量上位の点だけに絞って全三つ組の外接円を作る。
+        // 🌟 外接円は毎ラウンド、熱量上位の点だけに絞って作る(最初のラウンドだけだと円が1つしか無く、根軸も2円の第2交点も
+        // 作れない)。
         let circle_pts = &pts[..pts.len().min(6)];
         for i in 0..circle_pts.len() {
             for j in (i + 1)..circle_pts.len() {
                 for k in (j + 1)..circle_pts.len() {
                     let tri = [circle_pts[i], circle_pts[j], circle_pts[k]];
-                    // 🐛 FIX(実測で判明): 既に共線と分かっている3点の「外接円」は
-                    // 円ではなく退化した二次曲線になる。中点を作るようになると
-                    // (A, Midpoint(A,B), B)のような共線の三つ組がすぐ現れ、
-                    // この退化した"円"を通じて円の一意性伝播が暴走し、e-graph
-                    // 全体が潰れた(ラウンド4で229個の同値類が11個になる崩壊を実測)。
+                    // 既に共線と分かっている3点の「外接円」は退化した二次曲線で、円の一意性伝播を暴走させて e-graph を潰すので作らない。
                     if egraph.find_common_line(&tri).is_some() { continue; }
                     if sieve.degenerate_triple(tri[0], tri[1], tri[2]) { continue; }
                     new_defs.push((Definition::Circumcircle(tri[0], tri[1], tri[2]), EntityType::Conic));
@@ -1415,12 +1187,8 @@ pub(crate) fn systematic_closure_until(
             }
         }
 
-        // 🌟 ユーザー指示(「円関連の作図(接線、交点が一つわかっている時に、
-        // もう一個の円と円、円と直線の交点を作図するなど)の方が、よりいろんな
-        // 結果を作れる」)への対応。直線と中点だけの閉包は、どうしても
-        // 「中線・垂線・その交点」という一次的な(=すぐ示せる)関係しか生まない。
-        // 円を経由する作図は方冪・共円・角度という別の層の関係を持ち込むので、
-        // 出てくる結果の"深さ"が変わる。
+        // 🌟 円を経由する作図(根軸・第2交点)も作る。直線と中点だけの閉包は一次的な関係しか生まないが、円は方冪・共円・角度と
+        // いう別の層の関係を持ち込む。
         let conics = hot(egraph, EntityType::Conic, per_kind.min(6));
         let on_curve = |eg: &EGraph, curve: ClassId| -> Vec<ClassId> {
             eg.entities[eg.get_rep(curve).0].components.first()
@@ -1466,13 +1234,8 @@ pub(crate) fn systematic_closure_until(
             if added % 16 == 0 && expired(deadline) { break; }
             let norm = egraph.normalize_definition(&def);
             if egraph.memo.contains_key(&norm) { continue; }
-            // 作図そのものを名前にする(Sys3_17のような通し番号だと報告が
-            // 読めないため)。親の名前が長くなりすぎたら切り詰める。
-            // 🐛 FIX(実測で判明): 親の名前を22文字で切ると
-            // 「Perpendicular(Perpendicular(LineThro ⟂ Midpoint(B, C))」の
-            // ように括弧の途中で切れ、報告がまったく読めなくなっていた。
-            // ラウンド数は高々数回なので、親をそのまま埋め込んでも名前は
-            // せいぜい100文字程度に収まる。切るのは最後の保険としてだけ。
+            // 作図そのものを名前にする(通し番号だと報告が読めない)。ラウンド数は高々数回なので親の名前をそのまま埋め込み、
+            // 切り詰めるのは最後の保険としてだけ(途中で切ると括弧の途中で切れて読めなくなる)。
             let raw = egraph.format_definition_with(&norm, |id| {
                 let n = egraph.entities[egraph.get_rep(id).0].name.clone();
                 if n.chars().count() > 90 { n.chars().take(90).collect::<String>() + "…" } else { n }

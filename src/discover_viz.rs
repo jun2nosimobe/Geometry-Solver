@@ -1,24 +1,8 @@
-//! 🌟 ユーザー要望:「報告が読めない問題に対処するために、図形を描画して
-//! 確認できるようにしたい」への対応(discover.rsの報告がPrettyNamerで
-//! 読める名前になった後も、テキストの構成手順から実際の図を思い浮かべる
-//! のは依然として大変、という指摘)。discover.rsが発見した予想(a≡b)に
-//! ついて、その依存関係の閉包を実数座標(f64)で評価し直し、SVGとして
-//! 描画する。
-//!
-//! 既存の証明エンジン(mmp_core/eval.rs)は健全性のため有限体(ModInt、
-//! mod 998244353)上の厳密演算だけを使い、実数座標を一切保持しない
-//! (証明の正しさに実数座標は不要で、むしろ浮動小数点誤差を持ち込む
-//! リスクにしかならない)。図示のためだけに、この設計とは完全に独立した
-//! 「実数版の再評価器」をここに新設する――旧Python版のvisualizer.py
-//! (RealtimeVisualizer.broadcast_state)が自由変数にランダムな実数を
-//! 割り当ててcalculate()する方式を参考にした(ModIntへのモンキーパッチは
-//! Rust版には存在しない有限体/実数混在の都合なので移植不要)。
-//!
-//! 対象はPoint/Line/Circleの3種類だけで良い: このプロジェクトの
-//! Definition列挙型(mmp_core/mod.rs::get_parents)を確認したところ、
-//! Angle/Scalar/Direction/Conic/CrossRatio系の値を入力に取るPoint/Line/
-//! Circle構成は1つも無い――つまり描画に必要な実体は、必ずPoint/Line/
-//! Circle型の祖先だけを辿れば揃う。
+//! 🌟 discover.rs が発見した予想(a≡b)の依存関係の閉包を実数座標(f64)で評価し直し、SVG として描画する。
+//! 証明エンジン(mmp_core/eval.rs)は健全性のため有限体上の厳密演算だけを使い実数座標を持たないので、図示のためだけの
+//! 独立した「実数版の再評価器」をここに置く。
+//! 対象は Point/Line/Circle だけで足りる: Angle/Scalar/CrossRatio 系の値を入力に取る Point/Line/Circle の構成は無いので、
+//! 描画に必要な実体は Point/Line/Circle の祖先だけを辿れば揃う。
 
 use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
 use rustc_hash::FxHashMap;
@@ -186,10 +170,7 @@ impl<'a> RealEvaluator<'a> {
                 let (pa, pb, pc) = (self.point_of(*a)?, self.point_of(*b)?, self.point_of(*c)?);
                 harmonic_conjugate_real(pa, pb, pc).map(|(x, y)| RealShape::Point(x, y))
             }
-            // Angle/Scalar/Conic/CrossRatio系、およびDirectionOf/PerpDirectionOf
-            // (EntityType::Direction撤廃後は単なるPoint型だが、無限遠点は
-            // アフィン平面のSVGには描画しようがないので変わらずNoneでよい)
-            // は描画不要と確認済み。
+            // Angle/Scalar/Conic/CrossRatio 系と、方向(DirectionOf/PerpDirectionOf、無限遠点はアフィン平面に描けない)は描かない。
             _ => None,
         }
     }
