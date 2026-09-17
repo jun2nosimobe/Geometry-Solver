@@ -191,6 +191,7 @@ impl BlackboardEngine {
                 let mut search = Search {
                     theorem: &theorem,
                     patterns: &theorem.patterns,
+                    scope: 0,
                     failed_paths: &mut failed_paths,
                     on_match: &mut collect,
                 };

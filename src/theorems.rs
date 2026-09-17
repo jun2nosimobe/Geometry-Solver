@@ -1384,9 +1384,9 @@ mod tests {
         all
     }
 
-    /// Order / Distinct に出てくる変数が、事実パターンのどれかにも出てくること。
+    /// Order / Distinct / Not に出てくる変数が、(Not の外の)事実パターンのどれかにも出てくること。
     ///
-    /// dfs_match は一番安いパターンを消費するが、制約は「全変数が束縛されるまで INFINITY」。
+    /// dfs_match は一番安いパターンを消費するが、制約と Not は「全変数が束縛されるまで INFINITY」。
     /// 生きているパターンが全部 INFINITY なら一番若い添字が消費されるので、事実パターンで
     /// 束縛されない変数があると、その変数についての制約は検査されないまま捨てられる。
     #[test]
@@ -1404,7 +1404,7 @@ mod tests {
             let mut constrained: Vec<String> = Vec::new();
             for p in &t.patterns {
                 match p {
-                    Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) => vars_of(p, &mut constrained),
+                    Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) | Pattern::Not(_) => vars_of(p, &mut constrained),
                     _ => vars_of(p, &mut fact_vars),
                 }
             }

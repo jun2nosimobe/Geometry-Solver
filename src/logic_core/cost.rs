@@ -55,7 +55,13 @@ impl ProverEngine {
             Pattern::Order(vars) | Pattern::Distinct(vars) | Pattern::OrderNonStrict(vars) => {
                 return if vars.iter().any(|v| !bind.contains_key(v)) { f64::INFINITY } else { 0.0 };
             }
-            Pattern::Not(inner_pat) => return self.estimate_cost(inner_pat, bind, theorem),
+            // 中の変数がそろう前に評価すると「どの割り当てでも中身が成り立たない」という
+            // 別の(ほぼ常に偽になる)主張になるので、順序・相異の制約と同じく最後まで待たせる。
+            Pattern::Not(inner_pat) => {
+                let mut vars = Vec::new();
+                collect_pattern_vars(inner_pat, &mut vars);
+                return if vars.iter().any(|v| !bind.contains_key(*v)) { f64::INFINITY } else { 0.0 };
+            }
             _ => pat.fact_args().unwrap_or_default(),
         };
         let unbound_count = args.iter().filter(|v| !bind.contains_key(v.as_str())).count();

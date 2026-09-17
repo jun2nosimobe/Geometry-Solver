@@ -22,6 +22,9 @@ pub(crate) struct Search<'a> {
     pub theorem: &'a TheoremDef,
     /// いま消費しているパターン列(Not の中身を調べるときはその1本だけ)。
     pub patterns: &'a [Pattern],
+    /// patterns がどの列か。0 は定理のパターン列そのもの。Not の中身は別の値にして、
+    /// 同じ失敗キャッシュの中で本体の状態と取り違えないようにする。
+    pub scope: usize,
     pub failed_paths: &'a mut FailedPaths,
     pub on_match: &'a mut dyn FnMut(&Bind, &FlipStates),
 }
@@ -33,13 +36,18 @@ fn created_on_demand(kind: DefKind) -> bool {
 }
 
 impl ProverEngine {
-    /// 失敗キャッシュのキー。束縛(代表元に直したもの)・フリップ状態・残りパターン数から作る。
-    fn state_signature(&self, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
+    /// 失敗キャッシュのキー。どのパターン列の、どのパターンが残っているか・束縛(代表元に
+    /// 直したもの)・フリップ状態から作る。
+    ///
+    /// 残りパターンは数ではなく集合で入れること。数だけだと、同じ束縛で別のパターンが
+    /// 残っている状態(タスクの初期束縛が違えば消費の順序も変わる)や、Not の中身を調べた
+    /// ときの失敗(残り1本)を、本体の「残り1本」の状態の失敗と取り違えて正しい枝を刈る。
+    fn state_signature(&self, scope: usize, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
         // 定理の変数は多くても20個程度なので、確保を避けてスタック上で並べる。
         // 順序に依らない畳み込み(wrapping_add)は FxHash の撹拌が弱く衝突が増えたので使わない。
         const SIG_CAP: usize = 48;
         let mut hasher = rustc_hash::FxHasher::default();
-        (active.count_ones() as usize).hash(&mut hasher);
+        (scope, active).hash(&mut hasher);
         let mut pairs: [(&str, usize); SIG_CAP] = [("", 0); SIG_CAP];
         let mut np = 0usize;
         for (k, v) in bind.iter() {
@@ -81,7 +89,7 @@ impl ProverEngine {
         self.profile.branch_counts[self.branch_tag as usize] += 1;
         if self.dfs_calls > self.dfs_cap { return false; }
 
-        let state_sig = self.state_signature(active, &bind, &flip_states);
+        let state_sig = self.state_signature(s.scope, active, &bind, &flip_states);
         if let Some(&(cached_mask, cached_gens)) = s.failed_paths.get(&state_sig) {
             let still_valid = (0..4).all(|i| {
                 (cached_mask & (1 << i)) == 0
@@ -144,6 +152,7 @@ impl ProverEngine {
                     let mut inner_search = Search {
                         theorem,
                         patterns: std::slice::from_ref(&**inner),
+                        scope: s.scope * 65 + best_idx + 1,
                         failed_paths: &mut *s.failed_paths,
                         on_match: &mut ignore,
                     };
@@ -636,3 +645,54 @@ impl ProverEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mmp_core::EGraph;
+
+    /// Not の中身が成り立たなかった(= Not が通った)ときの記録が、同じ束縛で残り1本になった
+    /// 本体の状態の失敗と取り違えられないこと。取り違えると、Not の直後に最後のパターンが
+    /// 残る定理は決してマッチしない。
+    #[test]
+    fn a_passed_not_does_not_block_the_last_pattern() {
+        let mut eg = EGraph::new();
+        let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+        let b = eg.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+        let line_def = Definition::new_line(a, b);
+        let l = eg.create_entity("L".into(), line_def.clone(), EntityType::Line);
+        eg.apply_trivial_relations(l, &line_def);
+
+        let s = |x: &str| x.to_string();
+        let on = |c: &str, p: &str| Pattern::Connected {
+            child: s(c), parent: s(p), child_ref: Refinement::Default, parent_ref: Refinement::Default,
+        };
+        let theorem = TheoremDef {
+            name: s("2点が相異なる直線上の点"),
+            entities: [("A", EntityType::Point), ("B", EntityType::Point), ("L", EntityType::Line)]
+                .iter().map(|(k, v)| (s(k), *v)).collect(),
+            patterns: vec![
+                on("A", "L"),
+                on("B", "L"),
+                Pattern::Not(Box::new(Pattern::Identical { a: s("A"), b: s("B"), pool: SelfBindPool::Any })),
+                Pattern::Distinct(vec![s("A"), s("B")]),
+            ],
+            constructions: vec![],
+            conclusions: vec![],
+        };
+
+        let mut prover = ProverEngine::new(eg);
+        let mut failed_paths = FailedPaths::default();
+        let mut found = 0;
+        let mut count = |_: &Bind, _: &FlipStates| found += 1;
+        let mut search = Search {
+            theorem: &theorem,
+            patterns: &theorem.patterns,
+            scope: 0,
+            failed_paths: &mut failed_paths,
+            on_match: &mut count,
+        };
+        let mut dep_mask = 0;
+        prover.dfs_match(&mut search, 0b1111, Bind::default(), FlipStates::default(), &mut dep_mask);
+        assert_eq!(found, 2, "(A, B) と (B, A) の2通りが見つかるはず");
+    }
+}
