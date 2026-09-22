@@ -15,6 +15,13 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l49" data-status="shipped">
+  <summary><span class="idx">#49</span><span class="t">目標の判定を3つの入口で共通にし、結論のマージの数値監査と仕事量での証明予算を入れる</span><span class="pill shipped">fe6247a</span></summary>
+  <div class="body">
+<div class="desc"><b>目標の判定:</b> <code>EGraph::goal_status</code>(図の崩壊 → 構造的に到達したか → 前提を満たす座標での検算)に1本化して solve・作図画面(serve)・<code>discover --prove</code> が使う。serve と discover は自由点どうしの一致(図の崩壊)を見ておらず、discover は数値の検算もしていなかった ― 潰れた図から出た「証明」をそのまま報告しえた。<br><b>数値監査(<code>--audit-merges</code>):</b> 定理の結論のマージと接続を適用する直前に検算し、<code>MERGE_AUDIT</code> 行で定理ごとの真・偽・判定不能を出す。前提付きの問題(座標への制約を等式で与えている問題)は、問題名のリストではなく「探索を始める前にマージ済みの組が乱数座標で成り立つか」で自動判定する(定数 Ang90/Ang0 は有向角の複比の値 -1/1 として比べる)。<br><b>証明の予算:</b> serve と discover の証明を秒から仕事量へ(<code>config prove_steps</code> / <code>--prove-steps</code>、秒は安全弁)。同じ図なら何度試しても同じ結果になる。<br><b>速度:</b> 数値チェックが毎回図全体を辿り直していた部分(前提の曲線・祖先の自由点)を、構造の世代で無効化するキャッシュにした。</div>
+          <div class="evidence"><b>solve:</b> 既定 / <code>--length-theorems --central-angle --midpoint-demands</code> / <code>--skip-recovery=angle,target</code> の3設定×44問で、解けた問題・仕事量・推論ログが変更前と完全に一致(<code>--audit-merges</code> を付けても同じ)。テスト94件通過。<br><b>監査(全44問・既定設定):</b> 偽のマージ34件は全て「前提あり」と判定された6問(thales・test_parallel・test_isosceles_converse・test_right_midpoint・test_spiral_similarity・test_steiner_converse)の中で、残り38問は偽0件・真5,839件・判定不能2,552件。<br><b>キャッシュの効果:</b> 自由作図で実体が616個になった図で、1回の <code>run_step</code> が46秒→6秒。solve の重い問題でも数%速い(nine_point_full 5.6→5.4秒)。<br><b>分かったこと:</b> それでも仕事量の予算は時間を抑えきれない ― 残りの時間は二次曲線の一致判定が出す検算そのもので、二次曲線の組の数に比例する(<a class="secref" href="backlog.html">§05</a> に記録。方針Eのノイズ耐性で最初に当たる壁)。</div>
+  </div>
+</details>
 <details class="item" id="l48" data-status="shipped">
   <summary><span class="idx">#48</span><span class="t">3つの数値評価器の「評価の仕方」と「自由点の置き方」を1つにする</span><span class="pill shipped">2dd4eb0</span></summary>
   <div class="body">
@@ -369,7 +376,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 目標判定の共通化・結論のマージの数値監査・証明予算の仕事量化まで(fe6247a)
   </footer>
 </div>
 <script src="atlas.js"></script>

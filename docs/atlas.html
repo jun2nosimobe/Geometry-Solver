@@ -16,7 +16,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> 2dd4eb0</span>
+      <span><b>最新コミット</b> fe6247a</span>
     </div>
   </div>
   <div class="stats">
@@ -28,7 +28,7 @@
   </div>
   <div class="cards"><a class="card" href="ledger.html"><b>§04 来歴</b><span>試した最適化と修正を、新しい順に折り畳みで</span></a><a class="card" href="backlog.html"><b>§05 改善候補</b><span>未着手の項目と、解決・不発になった項目</span></a><a class="card" href="notes/README.md"><b>設計ノート</b><span>ソースのコメントから移した経緯と設計判断</span></a></div>
   <section id="tracks">
-<div class="section-head"><span class="section-num">00</span><h2>今、並行して走っている4つの方針</h2></div>
+<div class="section-head"><span class="section-num">00</span><h2>今、並行して走っている5つの方針</h2></div>
 <p class="section-note">性質の違う作業を混ぜて着手しないための一覧(2026-09-17 時点の状態に書き直した)。数字は既定設定・44問・仕事量予算8,000,000での値。変更ごとの詳細は<a class="secref" href="ledger.html">§04</a>、未着手の項目は<a class="secref" href="backlog.html">§05</a>。</p>
 <div class="items">
 <details class="item" id="track-1" data-status="shipped">
@@ -53,6 +53,12 @@
   <summary><span class="idx">方針D</span><span class="t">定理の追加は最小限に、問題ごとの opt-in はしない</span><span class="pill backlog">診断で詰まり所を名指し済み</span></summary>
   <div class="body">
 <div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 例外は暫定の中心角の定理(<code>CENTRAL_ANGLE_PROBLEMS</code>)だけで、長さを橋渡しする定理は全問題一律のスイッチ(<code>--length-theorems</code>)にしてある。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。足りないのは作図より「長さ・中心・垂直二等分線」の橋渡しで、これを課税なしに既定へ入れる方法がまだ無い(<a class="secref" href="backlog.html">§05</a>)。</div>
+  </div>
+</details>
+<details class="item" id="track-5" data-status="open">
+  <summary><span class="idx">方針E</span><span class="t">無駄な作図のノイズを足しても解ける頑健性</span><span class="pill open">方針として決定・計測はこれから</span></summary>
+  <div class="body">
+<div class="desc" style="margin-bottom:6px"><b>方針E 頑健性</b></div><div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に、証明と無関係な作図をノイズとして加えても解けるぐらいの頑健性を目指す。難しい問題では探索そのものが大量の補助図形を作るので、最小限のきれいな図でしか解けないソルバーは難問に届かない。<br><b>判断の基準:</b> 改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先する(定理の順序に鈍感な探索、無関係な実体で増えないコスト、図が最小であることに頼らないヒューリスティック)。特定の問題の作図の並びに合わせた調整は採らない(問題ごとの opt-in をしない方針と同じ理由)。<br><b>既に見えている弱さ:</b> 定理の登録順を変えるだけで仕事量が±15%動き、1問が解けたり解けなかったりする(<a class="secref" href="backlog.html">§05</a>)。作図画面で射影の定理を足すと、円の図の証明が1件減った(<a class="secref" href="ledger.html">§04</a> #47)。ノイズを足した図での計測はまだ無い。</div>
   </div>
 </details>
 </div>
@@ -90,13 +96,13 @@
 
     <p class="section-note" style="margin-top:20px">入口(サブコマンド)は次の通り。いずれも <code>geom_solver help</code> に一覧が出る。</p>
     <div class="gloss">
-      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定800万)が本当の予算で、<code>--time</code>(既定600秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>(作図の出どころ別の効き)。行き詰まり時の手を個別に外すA/Bは<code>--skip-recovery=line,point,second,mid,angle,target</code>。長さを橋渡しする定理は<code>--length-theorems</code>。</p></div>
+      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定800万)が本当の予算で、<code>--time</code>(既定600秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>(作図の出どころ別の効き)。<code>--audit-merges</code>は定理の結論を適用直前に数値で検算し、定理ごとの偽のマージを数える(探索は変えない)。行き詰まり時の手を個別に外すA/Bは<code>--skip-recovery=line,point,second,mid,angle,target</code>。長さを橋渡しする定理は<code>--length-theorems</code>。</p></div>
       <div class="gterm"><b>geom_solver sweep</b><p>全44問を順に解いて成否と所要時間を集計する。<code>--vary</code>でパラメータを振れる。</p></div>
       <div class="gterm"><b>geom_solver diagnose</b><p>問題ファイルに書いた人間の証明の筋書き(<code>SKETCH</code>)に沿って、補助作図と手順1..kを順に前提として与え、各手順が自力で出るかを表にする。解けない問題がどの手順で詰まるかを名指しする。</p></div>
       <div class="gterm"><b>geom_solver discover</b><p>目標なしの自由作図から非自明な性質を探す。<code>--prove</code>で見つけた性質の証明まで試す。</p></div>
       <div class="gterm"><b>geom_solver discover-degenerate</b><p>図を退化させて「一緒に潰れる」実体の組を観測する。</p></div>
       <div class="gterm"><b>geom_solver extract-proof</b><p>記録したマージ履歴から、目標までの証明を再帰的に展開して監査する。</p></div>
-      <div class="gterm"><b>geom_solver serve</b><p>ブラウザUIを配信する。発見結果を逐次ストリームする。</p></div>
+      <div class="gterm"><b>geom_solver serve</b><p>ブラウザUIを配信する。発見結果を逐次ストリームし、1件ずつ証明を試す(予算は solve と同じ仕事量)。</p></div>
     </div>
   </section>
   <section id="pipeline">
@@ -153,7 +159,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 目標判定の共通化・結論のマージの数値監査・証明予算の仕事量化まで(fe6247a)
   </footer>
 </div>
 <script src="atlas.js"></script>

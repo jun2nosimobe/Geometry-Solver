@@ -14,6 +14,13 @@
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="group"><div class="group-title">未着手 · 19件</div>
+<details class="item" id="b26" data-status="open">
+  <summary><span class="idx"></span><span class="t">★ 仕事量に数えられない数値チェックが、実体が増えると時間の大半を占める ― 仕事量予算が時間を抑えられない</span></summary>
+  <div class="body">
+<div class="desc">作図画面の証明を秒から仕事量(<code>dfs_match</code> の回数)の予算に移したところ、自由作図で実体が数百個になった円の図で、1回の <code>run_step</code> が仕事量17万で46秒かかった(solve の典型は毎秒15万〜25万、ここは毎秒約3,700)。スタックを採ると、時間はほぼ全て <code>propagate_conic_uniqueness</code> が呼ぶ <code>numeric_plausibility_check</code> に消えていた。内訳は (1) 前提の曲線の洗い出しと祖先の自由点集めを毎回図全体から辿り直すこと、(2) 検算そのもの(大きな祖先の評価)を二次曲線の組の数だけ繰り返すこと。(1) は構造の世代で無効化するキャッシュにして 46秒→6秒(結果は不変、<a class="secref" href="ledger.html">§04</a> #49)。(2) は残っていて、二次曲線の組が増えるほど効く。<br><b>方針Eとの関係:</b> 無関係な作図を足すと円・二次曲線が増え、仕事量は同じでも時間が大きく伸びる ― ノイズへの頑健性を測ると最初に当たる壁。候補: 検算の結果を(代表元の組, 構造の世代)で覚える、評価の中間値を同じ座標のまま使い回す、数値チェックのコストを仕事量に数える(solve の結果が変わるので要計測)。</div>
+    <div class="b-tags"><span class="tag">1回の run_step が46秒(キャッシュ後6秒)</span><span class="tag">ノイズを足した図で最初に効く</span></div>
+  </div>
+</details>
 <details class="item" id="b25" data-status="open">
   <summary><span class="idx"></span><span class="t">「その点なしで曲線を評価できるか」の判定が、辿る順序で変わる</span></summary>
   <div class="body">
@@ -26,13 +33,6 @@
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html">§04</a>「同じ優先度のタスクを定理の登録順に取り出し…」の実測で、定理の登録順を変えるだけで両方で解けた問題の仕事量が ±15% 程度振れ、個別には bench_2012egmop1 +358%・nine_point_full +115% のように大きく動き、bench_2018chnwesternmop5 は7通り中3通りで解けなくなった。筋の通った並べ方(逆順・パターン数順・射影先頭)はどれも登録順に勝たず、登録順を詰めても問題が変われば効かない見込み。順序に鈍感な探索にする方が本筋 ― 例えば1回の <code>run_step</code> の途中でマージが起きても、同じ全探索の残りのタスクには古い図の上での結果を使わせない(全タスクを試してから結論を適用する)と、順序の影響がどれだけ減るかを測る。</div>
           <div class="b-tags"><span class="tag">順序で ±15%・1問が解けたり解けなかったり</span><span class="tag">目安: bench_2018chnwesternmop5 がどの順序でも解ける</span></div>
-  </div>
-</details>
-<details class="item" id="b2" data-status="open">
-  <summary><span class="idx"></span><span class="t">結論のマージの数値監査を常設する</span></summary>
-  <div class="body">
-<div class="desc"><a class="secref" href="ledger.html">§04</a> の2件の健全性の穴(線束→点で偽3,525件、共点二弦の相似で偽6件)は、定理の結論のマージを <code>numeric_plausibility_check</code> にかけて数える一時計測で初めて見えた。<code>merge_entities_justified</code> は定理の結論を数値で裏付けずにマージするので、定理の書き方の誤りは最終目標の数値サニティチェックに引っかかるまで気づけない。これを <code>--audit-merges</code> のような診断フラグにし、全問掃引で定理ごとの偽の件数を出せるようにする。前提付きの問題(乱数座標が前提を満たさない)は誤警報になるので、問題ファイル側で前提付きであることを宣言して除外する(<code>problems::tests</code> の <code>ASSUMES_A_HYPOTHESIS</code> と同じ扱い)。</div>
-          <div class="b-tags"><span class="tag">定理の追加・書き換えのたびに回す</span></div>
   </div>
 </details>
 <details class="item" id="b3" data-status="open">
@@ -195,7 +195,15 @@
   </div>
 </details>
 </div>
-<div class="group"><div class="group-title">解決・反証・不発 · 6件</div>
+<div class="group"><div class="group-title">解決・反証・不発 · 7件</div>
+<details class="item" id="b2" data-status="done">
+  <summary><span class="idx"></span><span class="t"><s>結論のマージの数値監査を常設する</s> — <code>--audit-merges</code> として実装</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="ledger.html">§04</a> の2件の健全性の穴(線束→点で偽3,525件、共点二弦の相似で偽6件)は、定理の結論のマージを <code>numeric_plausibility_check</code> にかけて数える一時計測で初めて見えた。<code>merge_entities_justified</code> は定理の結論を数値で裏付けずにマージするので、定理の書き方の誤りは最終目標の数値サニティチェックに引っかかるまで気づけない。これを <code>--audit-merges</code> のような診断フラグにし、全問掃引で定理ごとの偽の件数を出せるようにする。前提付きの問題(乱数座標が前提を満たさない)は誤警報になるので、問題ファイル側で前提付きであることを宣言して除外する(<code>problems::tests</code> の <code>ASSUMES_A_HYPOTHESIS</code> と同じ扱い)。</div>
+          <div class="b-tags"><span class="tag">定理の追加・書き換えのたびに回す</span></div>
+<div class="evidence" style="margin-top:10px"><b>2026-09-17 実装(<a class="secref" href="ledger.html">§04</a> #49):</b> 定理の結論のマージと接続を適用直前に検算し、<code>MERGE_AUDIT</code> 行で定理ごとの真・偽・判定不能を出す。探索の乱数は消費しない(付けても44問の結果・仕事量・推論ログが完全に一致)。前提付きの問題は問題名のリストではなく「探索前にマージ済みの組が乱数座標で成り立つか」で自動判定する(直角・0度の定数 Ang90/Ang0 は複比の値 -1/1 として比べる)。全44問で偽34件は全て前提付きと判定された6問の中で、それ以外の38問は偽0件。</div>
+  </div>
+</details>
 <details class="item" id="b4" data-status="done">
   <summary><span class="idx"></span><span class="t"><s>交点の需要は当たる割合が最も高いのに30個しか作っていない ― 候補の出どころを広げる</s> — 定理のパターンから広げる案は2通りとも不発</span></summary>
   <div class="body">
@@ -262,7 +270,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 証明の入口と数値評価器の1本化・atlas の分割とコメントの移動まで(2dd4eb0)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 目標判定の共通化・結論のマージの数値監査・証明予算の仕事量化まで(fe6247a)
   </footer>
 </div>
 <script src="atlas.js"></script>
