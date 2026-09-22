@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::logic_core::{self, BlackboardEngine, ProverEngine, Recovered, RecoveryOptions, BRANCH_LABELS};
 use crate::mcts::MCTSSearchEngine;
-use crate::mmp_core::{self, ClassId, EGraph, RawProof};
+use crate::mmp_core::{self, ClassId, EGraph, GoalStatus, RawProof};
 use crate::{cli, padic_eval, problems, sketch, theorems, trace};
 
 /// `--name` が付いているか。
@@ -49,6 +49,7 @@ pub struct SolveOptions {
     pub show_profile: bool,
     pub show_trace: bool,
     pub show_origins: bool,
+    pub audit_merges: bool,
 }
 
 impl SolveOptions {
@@ -86,6 +87,7 @@ impl SolveOptions {
             show_profile: flag(args, "--profile"),
             show_trace,
             show_origins: flag(args, "--origins") || show_trace,
+            audit_merges: flag(args, "--audit-merges"),
         })
     }
 
@@ -153,63 +155,50 @@ impl GoalChecker {
     fn check(&mut self, engine: &BlackboardEngine, problem_name: &str, target: &Option<(String, Vec<ClassId>)>,
              mcts_ever_committed: bool, start_time: Instant) -> Goal {
         let eg = &engine.prover.egraph;
-        // 自由点どうしは独立なので、正しい推論だけでは一致しない。一致したら図が潰れていて、
-        // そこからは何でも「証明」できてしまう。
-        if let Some((p, q)) = eg.merged_free_points() {
-            println!("🚨 [図の崩壊を検出] 自由点 {} と {} が同じ同値類に入りました。", p, q);
-            println!("    -> 自由点は互いに独立なので、正しい推論だけでは絶対に一致しません。どこかの局所マージが無関係な図形を結合して図全体が潰れています。この状態からはどんな目標も\"証明\"できてしまうため、探索を打ち切ります。");
-            return Goal::Abort;
-        }
-        let Some((fact_type, target_args)) = target else { return Goal::NotYet };
-        match fact_type.as_str() {
-            "Identical" => {
+        match eg.goal_status(target.as_ref()) {
+            GoalStatus::NotYet => return Goal::NotYet,
+            GoalStatus::Collapsed(p, q) => {
+                println!("🚨 [図の崩壊を検出] 自由点 {} と {} が同じ同値類に入りました。", p, q);
+                println!("    -> 自由点は互いに独立なので、正しい推論だけでは絶対に一致しません。どこかの局所マージが無関係な図形を結合して図全体が潰れています。この状態からはどんな目標も\"証明\"できてしまうため、探索を打ち切ります。");
+                return Goal::Abort;
+            }
+            GoalStatus::NumericallyFalse => {
+                let (_, target_args) = target.as_ref().expect("NumericallyFalse は目標があるときだけ");
                 let r1 = eg.get_rep(target_args[0]);
                 let r2 = eg.get_rep(target_args[1]);
-                if r1 != r2 { return Goal::NotYet; }
-                // 前提(問題文が接続で与えた曲線)を満たす座標で検算する。座標を組み立てられない・評価できない比較は
-                // None なので、構造的な証明をそのまま信用する。
-                if eg.numeric_plausibility_check(target_args[0], target_args[1], 3) == Some(false) {
-                    println!("🚨 [数値サニティチェック失敗] {} ≡ {} は構造的にはマージされましたが、ランダムな具体例では成り立ちません。",
-                        eg.entities[r1.0].name, eg.entities[r2.0].name);
-                    println!("    -> どこかの局所マージ(直線/点の一意性判定)が本来無関係な図形を誤って結合した可能性が高く、証明成立とは認めません。探索を打ち切ります。");
-                    return Goal::Abort;
-                }
-                let uses_shortcut = mcts_ever_committed
-                    && EGraph::proof_uses_numeric_shortcut(&eg.explain_identical(target_args[0], target_args[1]));
-                if uses_shortcut {
-                    if !self.shortcut_noted {
-                        println!("🔮 [目標到達を却下・予想として記録] {} ≡ {} は構造的には統合されましたが、経路に数値的検証のみに基づく局所ショートカットが含まれ、かつMCTSがこの実行で構成に関与しているため、証明成立とは認めません。",
-                            eg.entities[r1.0].name, eg.entities[r2.0].name);
-                        println!("    -> 名前付き定理の連鎖による厳密な経路が別に見つかるまで、これは(反例が出なかったという意味で強い根拠のある)予想として扱い、探索を継続します。");
-                        self.shortcut_noted = true;
-                    }
-                    return Goal::NotYet;
-                }
-                println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
-                output_proof(eg, problem_name, fact_type, target_args);
-                // 上の判定は目標の直接のマージ経路しか見ないので、定理の前提まで再帰的に
-                // たどって、名前付き定理の連鎖だけで繋がっているかを監査する。
-                let raw_text = output_raw_proof(eg, problem_name);
-                let report = RawProof::parse(&raw_text).verify_identical(target_args[0].0, target_args[1].0);
-                output_extract_report(&report, problem_name);
-                Goal::Proved
+                println!("🚨 [数値サニティチェック失敗] {} ≡ {} は構造的にはマージされましたが、ランダムな具体例では成り立ちません。",
+                    eg.entities[r1.0].name, eg.entities[r2.0].name);
+                println!("    -> どこかの局所マージ(直線/点の一意性判定)が本来無関係な図形を誤って結合した可能性が高く、証明成立とは認めません。探索を打ち切ります。");
+                return Goal::Abort;
             }
-            // Concyclic と Connected の目標にはまだ数値サニティチェックが無い。
-            "Concyclic" => {
-                let reps: Vec<_> = target_args.iter().map(|&id| eg.get_rep(id)).collect();
-                if !eg.points_share_a_circle(&reps) { return Goal::NotYet; }
-                println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
-                output_proof(eg, problem_name, fact_type, target_args);
-                Goal::Proved
-            }
-            "Connected" => {
-                if !eg.is_connected(eg.get_rep(target_args[0]), eg.get_rep(target_args[1])) { return Goal::NotYet; }
-                println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
-                output_proof(eg, problem_name, fact_type, target_args);
-                Goal::Proved
-            }
-            _ => Goal::NotYet,
+            GoalStatus::Reached => {}
         }
+        let Some((fact_type, target_args)) = target else { return Goal::NotYet };
+        if fact_type == "Identical" {
+            let uses_shortcut = mcts_ever_committed
+                && EGraph::proof_uses_numeric_shortcut(&eg.explain_identical(target_args[0], target_args[1]));
+            if uses_shortcut {
+                if !self.shortcut_noted {
+                    let r1 = eg.get_rep(target_args[0]);
+                    let r2 = eg.get_rep(target_args[1]);
+                    println!("🔮 [目標到達を却下・予想として記録] {} ≡ {} は構造的には統合されましたが、経路に数値的検証のみに基づく局所ショートカットが含まれ、かつMCTSがこの実行で構成に関与しているため、証明成立とは認めません。",
+                        eg.entities[r1.0].name, eg.entities[r2.0].name);
+                    println!("    -> 名前付き定理の連鎖による厳密な経路が別に見つかるまで、これは(反例が出なかったという意味で強い根拠のある)予想として扱い、探索を継続します。");
+                    self.shortcut_noted = true;
+                }
+                return Goal::NotYet;
+            }
+        }
+        println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
+        output_proof(eg, problem_name, fact_type, target_args);
+        if fact_type == "Identical" {
+            // 上の判定は目標の直接のマージ経路しか見ないので、定理の前提まで再帰的に
+            // たどって、名前付き定理の連鎖だけで繋がっているかを監査する。
+            let raw_text = output_raw_proof(eg, problem_name);
+            let report = RawProof::parse(&raw_text).verify_identical(target_args[0].0, target_args[1].0);
+            output_extract_report(&report, problem_name);
+        }
+        Goal::Proved
     }
 }
 
@@ -325,6 +314,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         engine.emit(logic_core::Event::FactProven(fact.clone()));
     }
 
+    // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」は誤警報になりうる。
+    let hypotheses_hold = opts.audit_merges && engine.prover.egraph.hypotheses_hold_numerically();
+    if opts.audit_merges { engine.prover.merge_audit = Some(logic_core::MergeAudit::default()); }
+
     let start_time = Instant::now();
     engine.schedule_full_sweep();
     while engine.prover.work_done() < opts.step_budget
@@ -354,6 +347,9 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         trace::report(&engine.prover.egraph, log, &problem.target_fact,
             engine.prover.work_done(), engine.prover.heat_cap, engine.prover.fanout_heat_cap);
     }
+    if let Some(audit) = &engine.prover.merge_audit {
+        print_merge_audit(audit, problem_name, hypotheses_hold);
+    }
     if opts.show_origins {
         trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);
     }
@@ -366,6 +362,24 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     if opts.show_profile {
         print_profile(&engine.prover, start_time.elapsed());
     }
+}
+
+/// --audit-merges の集計。`MERGE_AUDIT\t問題\t定理\t真\t偽\t判定不能\t前提` の行は全問の掃引で集計しやすいように出す
+/// (前提は、探索前の前提が乱数座標で成り立つなら ok、成り立たないなら hypothesis ― その問題の「偽」は誤警報の可能性)。
+fn print_merge_audit(audit: &logic_core::MergeAudit, problem_name: &str, hypotheses_hold: bool) {
+    println!("\n=== 🔍 定理の結論の数値監査 (--audit-merges) ===");
+    if !hypotheses_hold {
+        println!("  ⚠️ この問題の前提は乱数座標で成り立たない(座標への制約を等式で与えている)ので、「偽」は誤警報の可能性があります。");
+    }
+    let tag = if hypotheses_hold { "ok" } else { "hypothesis" };
+    for (theorem, [t, f, u]) in &audit.per_theorem {
+        println!("  真 {:>5} / 偽 {:>4} / 判定不能 {:>5} : {}", t, f, u, theorem);
+        println!("MERGE_AUDIT\t{}\t{}\t{}\t{}\t{}\t{}", problem_name, theorem, t, f, u, tag);
+    }
+    for (theorem, example) in &audit.false_examples {
+        println!("  ❌ 偽: {} (理由: {})", example, theorem);
+    }
+    println!("=============================\n");
 }
 
 /// 定理ごとの試行回数・cap到達・平均dfs_call・平均報酬(1回あたりの消費が大きい順に20件)。

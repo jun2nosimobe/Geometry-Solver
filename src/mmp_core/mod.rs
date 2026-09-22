@@ -17,6 +17,8 @@ mod construction;
 mod query;
 mod raw_proof;
 pub use raw_proof::{RawProof, DeepProof};
+pub use query::GoalStatus;
+pub(crate) use coords::StructureCache;
 #[cfg(test)]
 mod tests;
 
@@ -398,6 +400,11 @@ pub struct EGraph {
     // 結果は同じなので飛ばす(円は同じ点集合の上に重複が積み上がりやすく、同じ却下の繰り返しが
     // 時間の大半を食うことがある)。
     pub rejected_conic_pairs: rustc_hash::FxHashMap<(usize, usize), u64>,
+    /// 構造(components / subobjects / uses / memo)が変わるたびに増えるカウンタ。4つのゲートウェイの
+    /// note_type_changed が上げる。構造だけで決まる計算のキャッシュ(structure_cache)の無効化に使う。
+    pub(crate) structure_generation: u64,
+    /// 数値チェックのたびに図を辿り直していた、構造だけで決まる結果のキャッシュ(coords.rs)。
+    pub(crate) structure_cache: std::cell::RefCell<StructureCache>,
     /// 数値検証・次数測定に使う乱数の状態(EGraph::random_modint)。シード固定なので、
     /// 同じ問題は毎回同じ座標で検算する。
     rng_state: Cell<u64>,
@@ -516,6 +523,8 @@ impl EGraph {
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
+            structure_generation: 0,
+            structure_cache: std::cell::RefCell::new(StructureCache::default()),
             rng_state: Cell::new(0x5EED_6E0_5017_E5),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
@@ -655,6 +664,7 @@ impl EGraph {
     /// ルール1つに集約している。
     fn note_type_changed(&mut self, et: EntityType) {
         *self.type_generation.entry(et).or_insert(0) += 1;
+        self.structure_generation += 1;
     }
 
     /// 🌟 angle_generation/plain_scalar_generationのドキュメント参照。

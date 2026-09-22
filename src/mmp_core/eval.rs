@@ -267,10 +267,7 @@ impl EGraph {
         // 🐛 問題文は「P はこの円の上」のような前提を座標ではなく link_logical_incidence で与えることが多い。
         // そういう自由点に完全な乱数座標を置くと前提を満たさず、正しいマージまで却下してしまうので、
         // assign_free_point_coords は前提を満たす座標を取る。取れないときだけ None に倒す。
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(a, &mut visited, &mut ancestors);
-        self.collect_free_point_ancestors(b, &mut visited, &mut ancestors);
+        let ancestors = self.free_point_ancestors_of(&[a, b]);
         if ancestors.is_empty() { return None; }
 
         for _ in 0..trials {
@@ -288,14 +285,70 @@ impl EGraph {
         Some(true)
     }
 
+    /// 乱数の状態を戻して f を実行する。診断(--audit-merges)の検算が、探索が使う乱数の列を変えないように。
+    pub(crate) fn without_consuming_rng<T>(&self, f: impl FnOnce(&Self) -> T) -> T {
+        let saved = self.rng_state.get();
+        let out = f(self);
+        self.rng_state.set(saved);
+        out
+    }
+
+    /// 点 point が曲線 curve(直線・二次曲線)に乗っているかの数値的な裏付け(numeric_plausibility_check の接続版)。
+    /// 判定できなければ None。
+    pub(crate) fn numeric_incidence_check(&self, point: ClassId, curve: ClassId, trials: usize) -> Option<bool> {
+        let (point, curve) = (self.get_rep(point), self.get_rep(curve));
+        let curve_type = self.entities[curve.0].entity_type;
+        if self.entities[point.0].entity_type != EntityType::Point
+            || !matches!(curve_type, EntityType::Line | EntityType::Conic) { return None; }
+        let ancestors = self.free_point_ancestors_of(&[point, curve]);
+        if ancestors.is_empty() { return None; }
+        for _ in 0..trials {
+            let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+            if !self.assign_free_point_coords(&ancestors, &mut vars) { return None; }
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            let (Some(p), Some(c)) = (self.evaluate_node(point, &vars, &mut cache), self.evaluate_node(curve, &vars, &mut cache))
+                else { return None };
+            if !(ModIntPlacer { vars: &mut vars }).lies_on(&p, &c, curve_type) { return Some(false); }
+        }
+        Some(true)
+    }
+
+    /// 探索を始める前にマージ済みの組(問題文の前提)が、乱数座標で数値的に成り立つか。マージ済みの2つは同じ同値類として
+    /// 評価されてしまうので、それぞれの元の定義(original_definition)を個別に評価して比べる。成り立たない組があるなら、
+    /// その問題の前提は座標への制約(「OP = OA」など)で、乱数座標による検算は前提を満たさない図で行われている。
+    pub fn hypotheses_hold_numerically(&self) -> bool {
+        self.without_consuming_rng(|eg| {
+            let points = eg.all_free_points();
+            for _ in 0..2 {
+                let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+                if !eg.assign_free_point_coords(&points, &mut vars) { return true; } // 判定できない
+                let geometry = ModIntVars { vars: &vars };
+                let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+                for (i, e) in eg.entities.iter().enumerate() {
+                    let rep = eg.get_rep(ClassId(i));
+                    if rep.0 == i { continue; }
+                    let own = |id: usize, def: &Definition, cache: &mut FxHashMap<usize, Vec<ModInt>>| match def {
+                        // 有向角は複比 (I,J;D1,D2) で評価するので、直角は -1、0度は 1。
+                        Definition::GivenPoint if id == eg.ang90.0 => Some(vec![ModInt::new(-1), ModInt::new(1), ModInt::new(1)]),
+                        Definition::GivenPoint if id == eg.ang0.0 => Some(vec![ModInt::new(1), ModInt::new(1), ModInt::new(1)]),
+                        Definition::FreePoint | Definition::GivenPoint | Definition::ConstantHomogeneous(..) => None,
+                        _ => geometry.construct(eg, def, &mut |q| coords::evaluate(eg, &geometry, q, cache, &mut HashSet::new())),
+                    };
+                    let (Some(v1), Some(v2)) = (own(i, &e.original_definition, &mut cache), own(rep.0, &eg.entities[rep.0].original_definition, &mut cache))
+                        else { continue };
+                    if !Self::numeric_values_proportional(&v1, &v2) { return false; }
+                }
+            }
+            true
+        })
+    }
+
     /// 🌟 動点法(Method of Moving Points)の次数を数値的に測る。祖先の自由点の1つ(mover)を直線に沿って動かし、
     /// 複数の t で評価して、有限体上のランク判定で座標が満たす有理関数の次数を求める。親の次数の和という構造的な
     /// 上界と違い、中点のように次数が上がらない操作を正しく低く測れる。
     /// mover が見つからないか、どれかのサンプルで評価できなければ None(次数不明)。呼び出し側は次数で足切りしない。
     pub fn measure_numerical_degree(&self, entity: ClassId, max_d: usize) -> Option<usize> {
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(entity, &mut visited, &mut ancestors);
+        let ancestors = self.free_point_ancestors_of(&[entity]);
         if ancestors.is_empty() { return Some(0); } // 自由点に一切依存しない(定数)ので次数0
 
         let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
@@ -339,10 +392,7 @@ impl EGraph {
     /// resolve_point_demandsのような「実際に作る前に有望さを判定したい」
     /// 場面向けに、2直線l1, l2の交点をentityとして作らずに次数だけ測定する。
     pub fn measure_intersection_degree_candidate(&self, l1: ClassId, l2: ClassId, max_d: usize) -> Option<usize> {
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(l1, &mut visited, &mut ancestors);
-        self.collect_free_point_ancestors(l2, &mut visited, &mut ancestors);
+        let ancestors = self.free_point_ancestors_of(&[l1, l2]);
         if ancestors.is_empty() { return Some(0); }
 
         let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
@@ -400,11 +450,7 @@ impl EGraph {
         combine: impl Fn(&[Vec<ModInt>]) -> Vec<ModInt>,
         max_d: usize,
     ) -> Option<(Vec<usize>, usize)> {
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        for &p in parents {
-            self.collect_free_point_ancestors(p, &mut visited, &mut ancestors);
-        }
+        let ancestors = self.free_point_ancestors_of(parents);
         if ancestors.is_empty() { return Some((vec![0; parents.len()], 0)); }
 
         let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
@@ -489,12 +535,8 @@ impl EGraph {
             .collect();
         if others.is_empty() { return; }
 
-        let mut visited = HashSet::new();
-        let mut ancestors = Vec::new();
-        self.collect_free_point_ancestors(new_rep, &mut visited, &mut ancestors);
-        for &other in &others {
-            self.collect_free_point_ancestors(other, &mut visited, &mut ancestors);
-        }
+        let roots: Vec<ClassId> = std::iter::once(new_rep).chain(others.iter().copied()).collect();
+        let ancestors = self.free_point_ancestors_of(&roots);
         if ancestors.is_empty() { return; }
 
         let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();

@@ -10,7 +10,7 @@
 //! --probe 指定時だけ、各予想を仮定したクローン上で定理を走らせ、そこから導かれる等式を「条件付きの」予想として
 //! 追加する(probe_and_expand_conjectures)。自由度を1つ落として何かを導くことになるので既定では無効。
 
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, GoalStatus};
 use crate::logic_core::{BlackboardEngine, ProverEngine, Recovered, RecoveryOptions};
 use crate::mcts::MCTSSearchEngine;
 use crate::theorems;
@@ -75,10 +75,10 @@ pub fn run(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
     let try_prove = args.iter().any(|a| a == "--prove");
-    let prove_time_secs: u64 = args.iter()
-        .find_map(|a| a.strip_prefix("--prove-time="))
+    let prove_steps: u64 = args.iter()
+        .find_map(|a| a.strip_prefix("--prove-steps="))
         .and_then(|v| v.parse().ok())
-        .unwrap_or(15);
+        .unwrap_or(3_000_000);
     // 🌟 3未満(点1つ・2つ)では外接円すら作れず自由作図として貧弱すぎるため
     // 最低3(汎用三角形)を保証する。4以上を指定すれば汎用四角形等になる。
     let seed_points: usize = args.iter()
@@ -133,7 +133,7 @@ pub fn run(args: &[String]) {
         egraph.apply_congruence_closure();
         let label = format!("自由点{}個", seed_points);
         let sections = run_one_seed(&label, egraph, sweep_pts, sweep_lines, max_steps, sims_per_step, time_budget_secs,
-            use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
+            use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_steps);
         all_sections.extend(sections);
     } else {
         for name in &seed_names {
@@ -156,7 +156,7 @@ pub fn run(args: &[String]) {
             }
             egraph.apply_congruence_closure();
             let sections = run_one_seed(name, egraph, sweep_pts, sweep_lines, max_steps, sims_per_step, time_budget_secs,
-                use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_time_secs);
+                use_probe, probe_dfs_budget, probe_rounds, top_n, try_prove, prove_steps);
             all_sections.extend(sections);
         }
     }
@@ -181,7 +181,7 @@ fn run_one_seed(
     probe_rounds: usize,
     top_n: usize,
     try_prove: bool,
-    prove_time_secs: u64,
+    prove_steps: u64,
 ) -> Vec<String> {
     // 🌟 target_bias_enabledはtarget=Noneの下では実質何もしない
     // (action_space.rs::target_weight_bonusがtarget=Noneで常に0を返す)が、
@@ -263,7 +263,7 @@ fn run_one_seed(
     // 拾えなかったため、実測で報告0件が続いていた。
     report_sweep_discoveries(&mut engine.prover.egraph, top_n, sweep_pts, sweep_lines);
 
-    let sections = report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_time_secs);
+    let sections = report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_steps);
     report_heat_ranking(&engine.prover.egraph, 10);
     if sections.is_empty() { return Vec::new(); }
     vec![format!("<h2 style=\"font:600 18px sans-serif;margin:32px 0 4px;\">🔭 種配置: {}</h2>\n{}",
@@ -401,7 +401,7 @@ impl PrettyNamer {
 
 /// 🌟 探索中に蓄積されたEGraph::conjectures(数値的な偶然の一致候補)を
 /// 「美しさ」スコアで順位付けして表示する。
-fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_time_secs: u64) -> Vec<String> {
+fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_steps: u64) -> Vec<String> {
     let entries: Vec<((usize, usize), String, u32)> = {
         let map = egraph.conjectures.borrow();
         map.iter().map(|(&k, e)| (k, e.hypothesis.clone(), e.occurrences)).collect()
@@ -498,7 +498,7 @@ fn report_conjectures(egraph: &mut EGraph, top_n: usize, try_prove: bool, prove_
 
     if try_prove
         && let Some(top) = ranked.first() {
-            attempt_proof(egraph, top.a, top.b, prove_time_secs);
+            attempt_proof(egraph, top.a, top.b, prove_steps);
         }
     html_sections
 }
@@ -655,42 +655,49 @@ fn namer_lookup(egraph: &EGraph, namer: &PrettyNamer, id: ClassId) -> String {
     namer.labels.get(&rep).cloned().unwrap_or_else(|| egraph.entities[rep.0].name.clone())
 }
 
+/// --prove の証明1件あたりの壁時計の上限(暴走を止める安全弁。本当の予算は --prove-steps)。
+const PROVE_TIME_CAP_SECS: u64 = 300;
+
 /// 🌟 発見した予想candid(a≡b)について、既存の定理探索エンジンで名前付き
 /// 定理の連鎖による証明を試みる。MCTSは使わない(発見時点で既に構成は
 /// 出揃っているはずで、ここでは"名前付き定理だけで説明できるか"を見たい)。
-fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, time_budget_secs: u64) {
+fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
     let name_a = egraph.entities[a.0].name.clone();
     let name_b = egraph.entities[b.0].name.clone();
-    println!("\n🔍 最有力候補の証明を試みます: {} ≡ {} (時間予算: {}秒、MCTSは使わず名前付き定理の連鎖のみ)",
-        name_a, name_b, time_budget_secs);
+    println!("\n🔍 最有力候補の証明を試みます: {} ≡ {} (予算: {}ステップ、MCTSは使わず名前付き定理の連鎖のみ)",
+        name_a, name_b, steps);
 
     let mut engine = build_full_engine(egraph.clone());
     let open = [("Identical".to_string(), vec![a, b])];
     let recovery = RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
     let mut rotate = 0;
 
+    engine.work_limit = steps;
     engine.schedule_full_sweep();
     let start = Instant::now();
-    let mut solved = false;
-    while start.elapsed() < Duration::from_secs(time_budget_secs) {
+    let mut status = GoalStatus::NotYet;
+    // 予算は仕事量。秒は暴走を止める安全弁。目標の判定(図の崩壊・数値の検算を含む)は solve と共通。
+    while engine.prover.work_done() < steps && start.elapsed() < Duration::from_secs(PROVE_TIME_CAP_SECS) {
         let applied = engine.run_step(10000);
-        if engine.prover.egraph.get_rep(a) == engine.prover.egraph.get_rep(b) {
-            solved = true;
-            break;
-        }
+        status = engine.prover.egraph.goal_status(Some(&open[0]));
+        if status != GoalStatus::NotYet { break; }
         // 回復は serve の証明試行と同じ設定(中点の需要も使う)。
         if !applied && engine.recover(&open, &mut rotate, &recovery) == Recovered::Exhausted {
             break;
         }
     }
 
-    if solved {
+    if let GoalStatus::Collapsed(p, q) = &status {
+        println!("🚨 証明の途中で図が崩壊しました(自由点 {} と {} が同じ同値類に入った)。この試行の結果は信用できません。", p, q);
+    } else if status == GoalStatus::NumericallyFalse {
+        println!("🚨 構造的には導けましたが、前提を満たす座標で検算すると成り立たないため、証明とは認めません。");
+    } else if status == GoalStatus::Reached {
         println!("🎉 名前付き定理の連鎖による証明が見つかりました! (Time: {:.2}s)", start.elapsed().as_secs_f64());
         let proof_text = engine.prover.egraph.generate_proof("Identical", &[a, b]);
         println!("{}", proof_text);
     } else {
-        println!("🤷 名前付き定理の連鎖による証明は{}秒以内には見つかりませんでした。ただし数値的には独立な乱数サンプルでの一致という極めて強い根拠(Schwartz-Zippel補題により偶然の確率は約10億分の1)があるため、真である可能性は非常に高い予想です――時間予算(--prove-time)を増やすか、証明ではなく予想として提示するのも一案です。",
-            time_budget_secs);
+        println!("🤷 名前付き定理の連鎖による証明は{}ステップ以内には見つかりませんでした。ただし数値的には独立な乱数サンプルでの一致という極めて強い根拠(Schwartz-Zippel補題により偶然の確率は約10億分の1)があるため、真である可能性は非常に高い予想です――予算(--prove-steps)を増やすか、証明ではなく予想として提示するのも一案です。",
+            steps);
     }
 }
 

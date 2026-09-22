@@ -55,6 +55,32 @@ pub struct ProverEngine {
     pub branch_tag: u8,
     /// --trace の発火ログ。None なら apply_conclusions は何も記録しない。
     pub trace: Option<crate::trace::TraceLog>,
+    /// --audit-merges の集計。None なら定理の結論を検算しない。
+    pub merge_audit: Option<MergeAudit>,
+}
+
+/// 定理の結論(マージ・接続)を適用する直前に、前提を満たす乱数座標で検算した結果の集計(--audit-merges)。
+/// 定理の書き方の誤りは、結論が数値で裏付けられずにマージされるので、最終目標の検算に引っかかるまで気づけない。
+/// 検算は探索の乱数を消費しないので、付けても探索の結果は変わらない。
+#[derive(Default)]
+pub struct MergeAudit {
+    /// 定理名 -> [真, 偽, 判定不能]。
+    pub per_theorem: std::collections::BTreeMap<String, [u64; 3]>,
+    /// 偽だった結論の例(定理ごとに最初の数件)。
+    pub false_examples: Vec<(String, String)>,
+}
+
+impl MergeAudit {
+    const EXAMPLES_PER_THEOREM: usize = 3;
+
+    fn record(&mut self, theorem: &str, verdict: Option<bool>, describe: impl FnOnce() -> String) {
+        let slot = match verdict { Some(true) => 0, Some(false) => 1, None => 2 };
+        let counts = self.per_theorem.entry(theorem.to_string()).or_default();
+        counts[slot] += 1;
+        if verdict == Some(false) && counts[1] as usize <= Self::EXAMPLES_PER_THEOREM {
+            self.false_examples.push((theorem.to_string(), describe()));
+        }
+    }
 }
 
 /// ProfileStats::branch_counts の添字の意味。
@@ -110,6 +136,7 @@ impl ProverEngine {
             profile: ProfileStats::default(),
             branch_tag: 0,
             trace: None,
+            merge_audit: None,
         }
     }
 
@@ -239,7 +266,12 @@ impl ProverEngine {
 
                     let name1 = self.egraph.entities[r1.0].name.clone();
                     let name2 = self.egraph.entities[r2.0].name.clone();
+                    let verdict = self.merge_audit.as_ref()
+                        .map(|_| self.egraph.without_consuming_rng(|eg| eg.numeric_plausibility_check(r1, r2, 2)));
                     if self.egraph.merge_entities_justified(r1, r2, justification()) {
+                        if let (Some(audit), Some(v)) = (self.merge_audit.as_mut(), verdict) {
+                            audit.record(theorem_name, v, || format!("{} ≡ {}", name1, name2));
+                        }
                         if tracing {
                             traced_merges.push(if r1.0 <= r2.0 { (r1.0, r2.0) } else { (r2.0, r1.0) });
                         }
@@ -253,6 +285,13 @@ impl ProverEngine {
                     let (Some(&child), Some(&parent)) = (bind.get(c), bind.get(p)) else { continue };
                     let c_rep = self.egraph.get_rep(child);
                     let p_rep = self.egraph.get_rep(parent);
+                    if self.merge_audit.is_some() {
+                        let v = self.egraph.without_consuming_rng(|eg| eg.numeric_incidence_check(c_rep, p_rep, 2));
+                        let (cn, pn) = (self.egraph.entities[c_rep.0].name.clone(), self.egraph.entities[p_rep.0].name.clone());
+                        if let Some(audit) = self.merge_audit.as_mut() {
+                            audit.record(theorem_name, v, || format!("{} ∈ {}", cn, pn));
+                        }
+                    }
                     self.egraph.link_logical_incidence_justified(c_rep, p_rep, justification());
                     if tracing {
                         traced_incidences.push(if c_rep.0 <= p_rep.0 { (c_rep.0, p_rep.0) } else { (p_rep.0, c_rep.0) });

@@ -53,7 +53,7 @@
         <label class="field"><span>1段あたりの材料数</span><input id="per_kind" type="number" min="3" max="20" value="8"></label>
         <label class="field"><span>調べる図形の数</span><input id="sweep" type="number" min="8" max="200" value="64"></label>
         <label class="field"><span>報告する件数</span><input id="top" type="number" min="1" max="200" value="30"></label>
-        <label class="field"><span>証明に使う時間 (秒/件)</span><input id="prove_seconds" type="number" min="1" max="120" value="5"></label>
+        <label class="field"><span>証明の仕事量 (ステップ/件)</span><input id="prove_steps" type="number" min="100000" max="50000000" step="100000" value="300000"></label>
         <label class="field"><span>証明を試す件数</span><input id="prove_max" type="number" min="1" max="100" value="20"></label>
         <p class="note">自由作図の段数・実体数・調べる図形の数を上げるほど深い関係に届きますが、時間は急に増えます。時間の上限に達したところで打ち切ります。</p>
       </details>

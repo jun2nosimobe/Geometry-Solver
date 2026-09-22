@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType};
+use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, GoalStatus};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
@@ -133,16 +133,16 @@ struct Config {
     sweep: usize,
     /// 返す発見の最大件数。
     top: usize,
-    /// 1件あたり何秒まで証明を試すか。0なら試さない。
-    prove_seconds: u64,
-    /// 証明を試す件数の上限(件数 × 秒 が待ち時間になるため)。
+    /// 1件あたりの証明の仕事量(solve の --steps と同じ単位。100万でおよそ5秒)。0なら試さない。
+    prove_steps: u64,
+    /// 証明を試す件数の上限(件数 × 仕事量 が待ち時間になるため)。
     prove_max: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config { rounds: 0, cap: 400, per_kind: 8, seconds: 20, sweep: 64, top: 30,
-                 prove_seconds: 0, prove_max: 12 }
+                 prove_steps: 0, prove_max: 12 }
     }
 }
 
@@ -163,7 +163,7 @@ fn split_config(body: &str) -> (Config, String) {
                 "seconds" => cfg.seconds = (n as u64).clamp(1, 600),
                 "sweep" => cfg.sweep = n.clamp(8, 200),
                 "top" => cfg.top = n.clamp(1, 200),
-                "prove_seconds" => cfg.prove_seconds = (n as u64).min(120),
+                "prove_steps" => cfg.prove_steps = (n as u64).min(50_000_000),
                 "prove_max" => cfg.prove_max = n.clamp(1, 100),
                 _ => {}
             }
@@ -535,8 +535,8 @@ fn discover_stream(body: &str, emit: &mut dyn FnMut(&str) -> bool) {
         if !emit(&line) { return; }
     }
 
-    // 🌟 「すぐ証明できるか」を試す(prove_seconds が 0 なら飛ばす)。
-    if cfg.prove_seconds > 0
+    // 🌟 「すぐ証明できるか」を試す(prove_steps が 0 なら飛ばす)。
+    if cfg.prove_steps > 0
         && !prove_and_report(&scored, &shown_ids, &script, &aux_lines, &cfg, emit) { return; }
     emit("stage|\n");
 }
@@ -591,7 +591,7 @@ fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
                 targets.push(t);
             }
         }
-        let done = prove_together(eg, &targets, cfg.prove_seconds);
+        let done = prove_together(eg, &targets, cfg.prove_steps);
         for (k, &i) in shared.iter().enumerate() { result[i] = done[k]; }
     }
     for &i in &chosen {
@@ -613,7 +613,7 @@ fn prove_and_report(scored: &[(Finding, Score)], shown_ids: &[Vec<String>],
                 Some((eg, t))
             });
         if let Some((eg, t)) = refs_and_figure {
-            result[i] = prove_together(eg, &[t], cfg.prove_seconds)[0];
+            result[i] = prove_together(eg, &[t], cfg.prove_steps)[0];
         }
         if !emit(&format!("proof|{}|{}\n", i, result[i].tag())) { return false; }
     }
@@ -783,39 +783,20 @@ fn two_lines(egraph: &mut EGraph, r: &[ClassId], tag: usize) -> Option<(ClassId,
     None
 }
 
-/// その目標が今の図で成り立っているか。
-pub(crate) fn goal_met(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
-    match t.0.as_str() {
-        "Identical" => eg.get_rep(t.1[0]) == eg.get_rep(t.1[1]),
-        "Connected" => eg.is_connected(eg.get_rep(t.1[0]), eg.get_rep(t.1[1])),
-        "Concyclic" => {
-            let reps: Vec<ClassId> = t.1.iter().map(|&i| eg.get_rep(i)).collect();
-            eg.points_share_a_circle(&reps)
-        }
-        _ => false,
-    }
-}
-
-/// 図が退化した結果の「証明」を証明として数えないための最終確認。solve.rs が目標到達時にやっているのと同じ数値
-/// サニティチェック(局所伝播は数値サンプリングだけが根拠なので、図全体が潰れて「矛盾から何でも従う」形になりうる)。
-fn proof_is_sound(eg: &EGraph, t: &(String, Vec<ClassId>)) -> bool {
-    if t.0 != "Identical" { return true; }
-    eg.numeric_plausibility_check(t.1[0], t.1[1], 3) != Some(false)
-}
-
 /// 🌟 目標をまとめて1つの図で解く。1件ずつ解くと、どれも同じ図の同じ基本的な事実をゼロから導き直すが、まとめれば
 /// 導かれた事実が EGraph に溜まり、2件目以降はその続きから始まる。
-/// 定理集合と手詰まりのときの回復は solve と共通(theorems::theorem_set / BlackboardEngine::recover)。
-/// 中点の需要は solve では既定で切っているが、自由作図の主張では中点1つが足りないだけの形が多いので使う。
-/// MCTS は入れない(結果が実行ごとにぶれ、決定的な回復手段で届くならその方が速く確実)。
-fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], seconds: u64)
+/// 定理集合・手詰まりのときの回復・目標の判定は solve と共通(theorems::theorem_set / BlackboardEngine::recover /
+/// EGraph::goal_status)。中点の需要は solve では既定で切っているが、自由作図の主張では中点1つが足りないだけの形が
+/// 多いので使う。MCTS は入れない(結果が実行ごとにぶれ、決定的な回復手段で届くならその方が速く確実)。
+/// 予算は solve と同じく仕事量(steps)で測るので、同じ図なら何度試しても同じ結果になる。秒は暴走を止める安全弁。
+fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], steps: u64)
     -> Vec<Proof>
 {
     egraph.apply_congruence_closure();
     // 定理を1つも使わずに出るもの(作図の定義と接続関係の整理だけで済むもの)は
     // 「作図から自明」として、証明できた件数とは別に数える。そうしないと
     // エンジンの証明能力を過大評価してしまう。
-    let trivial: Vec<bool> = targets.iter().map(|t| goal_met(&egraph, t)).collect();
+    let trivial: Vec<bool> = targets.iter().map(|t| egraph.goal_status(Some(t)) == GoalStatus::Reached).collect();
     let mut done: Vec<bool> = trivial.clone();
     let finish = |done: &[bool], trivial: &[bool]| -> Vec<Proof> {
         done.iter().zip(trivial).map(|(&d, &t)| {
@@ -828,15 +809,20 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], second
     prover.theorems = crate::theorems::theorem_set(&Default::default())
         .into_iter().map(std::rc::Rc::new).collect();
     let mut engine = crate::logic_core::BlackboardEngine::new(prover);
+    engine.work_limit = steps;
     engine.schedule_full_sweep();
     let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(PROVE_TIME_CAP_SECS);
     let mut rotate = 0usize;
-    while std::time::Instant::now() < deadline {
+    while engine.prover.work_done() < steps && std::time::Instant::now() < deadline {
         let applied = engine.run_step(10000);
+        // 図が潰れたら、そこから導いたものは何も信用できない。
+        if engine.prover.egraph.merged_free_points().is_some() {
+            return finish(&trivial, &trivial);
+        }
         let mut all_done = true;
         for (i, t) in targets.iter().enumerate() {
-            if !done[i] && goal_met(&engine.prover.egraph, t) { done[i] = true; }
+            if !done[i] && engine.prover.egraph.goal_reached(t) { done[i] = true; }
             if !done[i] { all_done = false; }
         }
         if all_done { break; }
@@ -846,15 +832,19 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], second
         let open: Vec<(String, Vec<ClassId>)> = targets.iter().zip(&done)
             .filter(|(_, d)| !**d).map(|(t, _)| t.clone()).collect();
         if engine.recover(&open, &mut rotate, &recovery) == crate::logic_core::Recovered::Exhausted {
-            break;   // これ以上は時間を使っても伸びない
+            break;   // これ以上は予算を使っても伸びない
         }
     }
     for (i, t) in targets.iter().enumerate() {
-        if !done[i] { done[i] = goal_met(&engine.prover.egraph, t); }
-        if done[i] && !trivial[i] && !proof_is_sound(&engine.prover.egraph, t) { done[i] = false; }
+        if !trivial[i] {
+            done[i] = engine.prover.egraph.goal_status(Some(t)) == GoalStatus::Reached;
+        }
     }
     finish(&done, &trivial)
 }
+
+/// 証明1回あたりの壁時計の上限(暴走を止める安全弁。本当の予算は仕事量)。
+const PROVE_TIME_CAP_SECS: u64 = 15;
 
 // ============================================================
 // 自由作図で増えた図形を、ブラウザが描ける作図手順に書き戻す
@@ -1189,7 +1179,7 @@ line altC perp AB C";
     #[test]
     fn the_easiest_theorem_is_actually_proved() {
         let out = discover_response(&format!(
-            "config rounds 0{n}config prove_seconds 30{n}config prove_max 4{n}{}",
+            "config rounds 0{n}config prove_steps 6000000{n}config prove_max 4{n}{}",
             ORTHOCENTER, n = "\n"));
         assert!(has(&out, "ok|"), "作図が通らなかった: {}", out);
         let proofs: Vec<&str> = out.lines().filter(|l| l.starts_with("proof|")).collect();
@@ -1244,7 +1234,7 @@ line altC perp AB C";
         let (mut eg, names) = proof_figure(figure, &[], &ids).expect("図が組めるべき");
         let refs: Vec<ClassId> = ids.iter().map(|n| names[n]).collect();
         let target = goal_for(&mut eg, "concurrent", &refs, 0).expect("共点は目標にできるべき");
-        let got = prove_together(eg, &[target], 30)[0];
+        let got = prove_together(eg, &[target], 6_000_000)[0];
         assert_eq!(got, Proof::Proved,
             "中点連結定理の形は証明できるべき(得られたのは {:?})。\
              needed な中点が補われていない可能性が高い。", got.tag());
@@ -1322,7 +1312,7 @@ line CA through C A
 line pb perp BC M
 point Oc inter pb CA";
         let out = discover_response(&format!(
-            "config rounds 0{n}config sweep 40{n}config top 20{n}             config prove_seconds 30{n}config prove_max 10{n}{}", script, n = "
+            "config rounds 0{n}config sweep 40{n}config top 20{n}             config prove_steps 6000000{n}config prove_max 10{n}{}", script, n = "
 "));
         assert!(has(&out, "ok|"), "作図が通らなかった: {}", out);
 

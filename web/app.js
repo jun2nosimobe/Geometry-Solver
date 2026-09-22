@@ -607,7 +607,7 @@ function configLines(withProof) {
     `config per_kind ${v('per_kind')}`,
     `config sweep ${v('sweep')}`,
     `config top ${v('top')}`,
-    `config prove_seconds ${withProof ? v('prove_seconds') : 0}`,
+    `config prove_steps ${withProof ? v('prove_steps') : 0}`,
     `config prove_max ${v('prove_max')}`,
   ].join('\n');
 }

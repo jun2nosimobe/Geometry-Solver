@@ -1229,3 +1229,35 @@ fn an_on_demand_line_and_what_it_drags_in_carry_the_demand_origin() {
     assert!(!egraph.entities[c.0].origin_cascade);
     assert_eq!(egraph.trivial_depth, 0, "apply_trivial_relations の深さが戻っていない");
 }
+
+/// 前提の検算(hypotheses_hold_numerically)が直角を -1 として扱う根拠: 垂直な2方向の有向角は複比で -1 になる。
+#[test]
+fn a_right_angle_evaluates_to_minus_one() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let l = egraph.create_entity("L".into(), Definition::new_line(a, b), EntityType::Line);
+    let d = egraph.create_entity("D".into(), Definition::DirectionOf(l), EntityType::Point);
+    let p = egraph.create_entity("P".into(), Definition::PerpDirectionOf(d), EntityType::Point);
+    let ang = egraph.create_entity("Ang".into(), Definition::AnglePair(d, p), EntityType::Scalar);
+    let mut vars = rustc_hash::FxHashMap::default();
+    for (n, x, y) in [("A", 3, 5), ("B", 11, 2)] {
+        vars.insert(format!("{}_x", n), ModInt::new(x));
+        vars.insert(format!("{}_y", n), ModInt::new(y));
+    }
+    let mut cache = rustc_hash::FxHashMap::default();
+    let v = egraph.evaluate_node(ang, &vars, &mut cache).expect("直角が評価できるべき");
+    assert_eq!(v[0], ModInt::new(-1), "垂直な2方向の有向角は -1 のはず");
+}
+
+/// 直角を前提として定数 Ang90 とマージした問題は、乱数座標では前提が成り立たないと判定される。
+#[test]
+fn a_right_angle_hypothesis_is_detected() {
+    let mut egraph = EGraph::new();
+    let setup = crate::problems::load_problem("test_right_midpoint", &mut egraph);
+    assert!(egraph.hypotheses_hold_numerically(), "前提を与える前は成り立つ");
+    for f in &setup.initial_facts {
+        if let Fact::Identical(x, y) = f { egraph.merge_entities(*x, *y); }
+    }
+    assert!(!egraph.hypotheses_hold_numerically(), "直角の前提は乱数座標では成り立たない");
+}

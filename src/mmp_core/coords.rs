@@ -64,6 +64,26 @@ pub(crate) fn evaluate<G: Geometry>(eg: &EGraph, g: &G, id: ClassId,
     result
 }
 
+/// 構造だけで決まる結果のキャッシュ。EGraph::structure_generation が変わったら丸ごと捨てる。
+/// 健全性チェックは二次曲線の一致判定などから頻繁に呼ばれ、そのたびに図全体を辿り直すと、実体が数百個の図では
+/// 仕事量(dfs_match の回数)に表れない時間の大半をここで使っていた。
+#[derive(Clone, Default)]
+pub(crate) struct StructureCache {
+    generation: u64,
+    extraneous: FxHashMap<usize, std::rc::Rc<Vec<ClassId>>>,
+    ancestors: FxHashMap<usize, std::rc::Rc<Vec<ClassId>>>,
+}
+
+impl StructureCache {
+    fn sync(&mut self, generation: u64) {
+        if self.generation != generation {
+            self.generation = generation;
+            self.extraneous.clear();
+            self.ancestors.clear();
+        }
+    }
+}
+
 /// place_free_points の結果。
 pub(crate) enum Placed {
     /// 全員を置き、前提も満たした。
@@ -214,6 +234,17 @@ impl EGraph {
     /// 曲線をまたいで使い回すと辿る順序で判定が変わる(一度使い回したら solve の結果が1問変わった)。
     pub(crate) fn find_extraneous_incidences(&self, free_point: ClassId) -> Vec<ClassId> {
         let rep = self.get_rep(free_point);
+        {
+            let mut cache = self.structure_cache.borrow_mut();
+            cache.sync(self.structure_generation);
+            if let Some(v) = cache.extraneous.get(&rep.0) { return v.as_ref().clone(); }
+        }
+        let out = self.compute_extraneous_incidences(rep);
+        self.structure_cache.borrow_mut().extraneous.insert(rep.0, std::rc::Rc::new(out.clone()));
+        out
+    }
+
+    fn compute_extraneous_incidences(&self, rep: ClassId) -> Vec<ClassId> {
         let Some(comp) = self.entities[rep.0].components.first() else { return Vec::new() };
         let mut out: Vec<ClassId> = comp.subobjects.iter()
             .map(|&s| self.get_rep(s))
@@ -255,7 +286,38 @@ impl EGraph {
 
     /// 🌟 idの祖先(Definitionの親を再帰的に辿った先)にあるFreePointを全て集める。定数(GivenPoint)はそこで
     /// 打ち切る。マージ後は1つの実体が複数の定義を持ちうるので、安全側に倒して全ての定義の親を辿る。
-    pub(crate) fn collect_free_point_ancestors(&self, id: ClassId, visited: &mut HashSet<usize>, out: &mut Vec<ClassId>) {
+    /// ids それぞれの祖先の自由点を、ids の順に1つの列にまとめる(同じ visited を共有して順に集めたのと同じ結果)。
+    /// 根ごとの結果は構造が変わるまでキャッシュする。
+    pub(crate) fn free_point_ancestors_of(&self, ids: &[ClassId]) -> Vec<ClassId> {
+        let mut out: Vec<ClassId> = Vec::new();
+        for &id in ids {
+            let rep = self.get_rep(id);
+            let cached = {
+                let mut cache = self.structure_cache.borrow_mut();
+                cache.sync(self.structure_generation);
+                cache.ancestors.get(&rep.0).cloned()
+            };
+            let list = match cached {
+                Some(v) => v,
+                None => {
+                    let mut visited = HashSet::new();
+                    let mut v = Vec::new();
+                    self.collect_free_point_ancestors(rep, &mut visited, &mut v);
+                    let v = std::rc::Rc::new(v);
+                    self.structure_cache.borrow_mut().ancestors.insert(rep.0, v.clone());
+                    v
+                }
+            };
+            // 先の根で辿った節点の子孫は全て先の根の結果に入っているので、既に入っている点だけを除けば共有 visited と同じ。
+            let before = out.len();
+            for &fp in list.iter() {
+                if !out[..before].contains(&fp) { out.push(fp); }
+            }
+        }
+        out
+    }
+
+    fn collect_free_point_ancestors(&self, id: ClassId, visited: &mut HashSet<usize>, out: &mut Vec<ClassId>) {
         let rep = self.get_rep(id);
         if !visited.insert(rep.0) { return; }
         let Some(c) = self.entities[rep.0].components.first() else { return };

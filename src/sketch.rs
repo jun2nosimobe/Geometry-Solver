@@ -188,7 +188,7 @@ pub fn status_of(eg: &EGraph, env: &HashMap<String, ClassId>, step: &Step, idx: 
         return Status::Unsupported;
     };
     probe.apply_congruence_closure();
-    if crate::serve::goal_met(&probe, &goal) { return Status::Reached; }
+    if probe.goal_reached(&goal) { return Status::Reached; }
     if holds_numerically(&mut probe, &goal) == Some(false) { return Status::False; }
     Status::NotReached
 }

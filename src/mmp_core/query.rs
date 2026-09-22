@@ -3,7 +3,50 @@
 
 use super::{ClassId, Definition, EntityType, EGraph};
 
+/// 目標の状態(EGraph::goal_status)。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoalStatus {
+    /// まだ導けていない。
+    NotYet,
+    /// 導けていて、数値の検算にも矛盾しない。
+    Reached,
+    /// 自由点どうしが同じ同値類に入った(図が潰れていて、どんな目標も「証明」できてしまう)。値は2つの自由点の名前。
+    Collapsed(String, String),
+    /// 構造的には導けたが、前提を満たす座標で検算すると成り立たない(どこかの局所マージが誤っている)。
+    NumericallyFalse,
+}
+
 impl EGraph {
+    /// 🌟 目標に到達したか。solve・serve・discover の証明試行で共通の判定。
+    /// 図の崩壊は目標に関係なく先に調べる(崩壊した図からは何でも従うので、到達しても証明と認めない)。
+    /// Identical は前提を満たす座標で検算し、明確に矛盾すれば NumericallyFalse(座標を組み立てられない・評価
+    /// できない比較は判定不能なので、構造的な証明をそのまま信用する)。Concyclic と Connected はまだ検算しない。
+    pub fn goal_status(&self, target: Option<&(String, Vec<ClassId>)>) -> GoalStatus {
+        if let Some((p, q)) = self.merged_free_points() {
+            return GoalStatus::Collapsed(p, q);
+        }
+        let Some(target) = target else { return GoalStatus::NotYet };
+        if !self.goal_reached(target) { return GoalStatus::NotYet; }
+        let (kind, args) = target;
+        if kind == "Identical" && self.numeric_plausibility_check(args[0], args[1], 3) == Some(false) {
+            return GoalStatus::NumericallyFalse;
+        }
+        GoalStatus::Reached
+    }
+
+    /// 目標が構造的に導けているか(崩壊と数値の検算は見ない。goal_status の一部)。
+    pub fn goal_reached(&self, (kind, args): &(String, Vec<ClassId>)) -> bool {
+        match kind.as_str() {
+            "Identical" => self.get_rep(args[0]) == self.get_rep(args[1]),
+            "Concyclic" => {
+                let reps: Vec<ClassId> = args.iter().map(|&id| self.get_rep(id)).collect();
+                self.points_share_a_circle(&reps)
+            }
+            "Connected" => self.is_connected(self.get_rep(args[0]), self.get_rep(args[1])),
+            _ => false,
+        }
+    }
+
     /// 🌟 id に接続している実体のうち、型が ty のものの数(代表元で重複除去)。logic_core::cost の estimate_cost が
     /// 「片側だけ束縛された Connected」の分岐数を見積もるのに使う(接続先が2つか12個かで分岐の大きさが全く違う)。
     /// matcher.rs の列挙と同じく subobjects を rep 化して数えるが、厳密な一致は要らない(並べ替えの順序が合えばよい)。
