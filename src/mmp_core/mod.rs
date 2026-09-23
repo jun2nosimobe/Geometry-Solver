@@ -1,4 +1,15 @@
 use std::collections::{HashMap, HashSet};
+
+/// 🌟 型世代(type_generation)を上げた理由。失敗キャッシュの無効化が何で起きているかを
+/// 分けて数えるためだけのもので、無効化の判定そのものには使っていない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BumpCause { Create = 0, Memo = 1, Incidence = 2, Merge = 3 }
+
+/// BumpCause の表示名(generation_bumps の第1添字の順)。
+pub const BUMP_CAUSE_LABELS: [&str; 4] = ["実体の生成", "memoへの登録", "接続関係の追加", "マージ"];
+/// generation_bumps の第2添字の順(ALL_ENTITY_TYPES と同じ)。
+pub const BUMP_TYPE_LABELS: [&str; 4] = ["Point", "Line", "Scalar", "Conic"];
+
 use std::cell::Cell;
 use crate::mmp_math::ModInt;
 
@@ -403,6 +414,9 @@ pub struct EGraph {
     /// 構造(components / subobjects / uses / memo)が変わるたびに増えるカウンタ。4つのゲートウェイの
     /// note_type_changed が上げる。構造だけで決まる計算のキャッシュ(structure_cache)の無効化に使う。
     pub(crate) structure_generation: u64,
+    /// 🌟 型世代を上げた理由の内訳 [理由][型](計測用。失敗キャッシュの無効化が
+    /// 何で起きているかを見るためだけのもので、挙動には影響しない)。
+    pub generation_bumps: [[u64; 4]; 4],
     /// 数値チェックのたびに図を辿り直していた、構造だけで決まる結果のキャッシュ(coords.rs)。
     pub(crate) structure_cache: std::cell::RefCell<StructureCache>,
     /// 数値チェックが使う座標一式と評価結果(eval.rs)。構造が変わるまで使い回す。
@@ -529,6 +543,7 @@ impl EGraph {
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             structure_generation: 0,
+            generation_bumps: [[0; 4]; 4],
             structure_cache: std::cell::RefCell::new(StructureCache::default()),
             numeric_samples: std::cell::RefCell::new(Default::default()),
             rng_state: Cell::new(0x5EED_6E0_5017_E5),
@@ -632,7 +647,7 @@ impl EGraph {
         self.type_index.entry(e_type).or_default().push(id);
         // 🌟 新規エンティティの誕生そのものが「この型の候補集合が変わった」
         // 変化点(note_type_changedのドキュメント参照)。
-        self.note_type_changed(e_type);
+        self.note_type_changed(e_type, BumpCause::Create);
         // 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
         if e_type == EntityType::Scalar {
             self.note_scalar_kind_changed(matches!(norm_def, Definition::AnglePair(_, _)));
@@ -669,9 +684,14 @@ impl EGraph {
     /// 4つのゲートウェイだけがこれを呼ぶ――呼び出し忘れが起きないよう、
     /// 「新しいゲートウェイを追加するときは必ずここも呼ぶ」という単純な
     /// ルール1つに集約している。
-    fn note_type_changed(&mut self, et: EntityType) {
+    fn note_type_changed(&mut self, et: EntityType, cause: BumpCause) {
         *self.type_generation.entry(et).or_insert(0) += 1;
         self.structure_generation += 1;
+        let ti = match et {
+            EntityType::Point => 0, EntityType::Line => 1,
+            EntityType::Scalar => 2, EntityType::Conic => 3,
+        };
+        self.generation_bumps[cause as usize][ti] += 1;
     }
 
     /// 🌟 angle_generation/plain_scalar_generationのドキュメント参照。
@@ -699,7 +719,7 @@ impl EGraph {
             self.note_scalar_kind_changed(matches!(def, Definition::AnglePair(_, _)));
         }
         self.memo.insert(def, id);
-        self.note_type_changed(et);
+        self.note_type_changed(et, BumpCause::Memo);
     }
 
     /// 🌟 type_indexを使い、指定した型を持つ「現在の代表元」だけを列挙する。
@@ -903,8 +923,8 @@ impl EGraph {
         // is_connected判定・subobjects列挙の結果を変え得るので、両側の型に
         // 通知する(実際に何も変わらなかった場合は通知しない)。
         if added_new_link {
-            self.note_type_changed(self.entities[rep1.0].entity_type);
-            self.note_type_changed(self.entities[rep2.0].entity_type);
+            self.note_type_changed(self.entities[rep1.0].entity_type, BumpCause::Incidence);
+            self.note_type_changed(self.entities[rep2.0].entity_type, BumpCause::Incidence);
         }
 
         // 🌟 新しい接続関係(incidence)ができたので、apply_congruence_closure の

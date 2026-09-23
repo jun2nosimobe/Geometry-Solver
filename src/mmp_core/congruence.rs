@@ -4,7 +4,7 @@
 //! マージを確定する前に eval.rs の numeric_plausibility_check で
 //! 数値的な裏付けを取ってから merge_entities_justified を呼ぶ。
 
-use super::{dedup_sorted_ids, ClassId, Definition, EntityType, EGraph, Justification, LogicalComponent, ProofEdge};
+use super::{dedup_sorted_ids, BumpCause, ClassId, Definition, EntityType, EGraph, Justification, LogicalComponent, ProofEdge};
 use rustc_hash::FxHashMap;
 
 impl EGraph {
@@ -92,7 +92,7 @@ impl EGraph {
         // (点は点、円は円としか併合されない)不変条件があるため、root1
         // (生き残った側、今はroot2の内容も統合済み)のentity_typeを見るだけで
         // 「どちらの型で併合が起きたか」を一意に特定できる。
-        self.note_type_changed(self.entities[root1.0].entity_type);
+        self.note_type_changed(self.entities[root1.0].entity_type, BumpCause::Merge);
         // 🌟 mmp_core/mod.rs::angle_generation/plain_scalar_generationの
         // ドキュメント参照。上と同じ理由(常に同じEntityType同士しか
         // 併合されない)で、root1のentity_typeを見るだけで判定できる。

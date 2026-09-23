@@ -147,9 +147,11 @@ impl ProverEngine {
                     || self.egraph.type_generation.get(&ALL_ENTITY_TYPES[i]).copied().unwrap_or(0) == cached_gens[i]
             });
             if still_valid {
+                self.profile.cache_hits += 1;
                 *dep_mask |= cached_mask;
                 return false;
             }
+            self.profile.cache_stale += 1;
         }
 
         let theorem = s.theorem;
@@ -222,6 +224,7 @@ impl ProverEngine {
         };
 
         if !matched_any {
+            self.profile.dep_mask_bits[my_mask.count_ones() as usize] += 1;
             s.failed_paths.insert(state_sig, (my_mask, snapshot_type_generations(&self.egraph)));
         }
         *dep_mask |= my_mask;

@@ -108,6 +108,13 @@ pub struct ProfileStats {
     pub sfs_calls: u64,
     pub sfs_time: std::time::Duration,
     pub sfs_tasks_created: u64,
+    /// 失敗キャッシュで即座に打ち切れた dfs_match 呼び出しの数。
+    pub cache_hits: u64,
+    /// キャッシュに当たったが型世代が変わっていて使えなかった数。
+    pub cache_stale: u64,
+    /// 失敗を記録したときの依存マスクの立っているビット数の分布(0〜8)。
+    /// 8に寄っているなら、部分木の OR で依存が飽和していて粒度を細かくしても効かない。
+    pub dep_mask_bits: [u64; 9],
     pub run_step_time: std::time::Duration,
     pub recovery_time: std::time::Duration,
     pub mcts_time: std::time::Duration,

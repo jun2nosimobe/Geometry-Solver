@@ -446,11 +446,38 @@ fn print_profile(prover: &ProverEngine, total: Duration) {
         if p.sfs_calls > 0 { p.sfs_tasks_created as f64 / p.sfs_calls as f64 } else { 0.0 });
     println!("  --- タスクポップ数とdfs_call消費量の内訳(シード有無別) ---");
     let total_calls = p.seeded_dfs_calls + p.unseeded_dfs_calls;
+    let calls_pct_of = |c: u64, t: u64| -> f64 { if t > 0 { 100.0 * c as f64 / t as f64 } else { 0.0 } };
+    println!("  失敗キャッシュで即打ち切り : {} (dfs_match の{:.1}%) / 世代が違って使えず {} ({:.1}%)",
+        p.cache_hits, calls_pct_of(p.cache_hits, total_calls), p.cache_stale, calls_pct_of(p.cache_stale, total_calls));
     let calls_pct = |c: u64| -> f64 { if total_calls > 0 { 100.0 * c as f64 / total_calls as f64 } else { 0.0 } };
     println!("  シード済みタスク      : {:>8}回ポップ / dfs_call計 {:>10} ({:>5.1}%)",
         p.seeded_pops, p.seeded_dfs_calls, calls_pct(p.seeded_dfs_calls));
     println!("  シードなしタスク      : {:>8}回ポップ / dfs_call計 {:>10} ({:>5.1}%)",
         p.unseeded_pops, p.unseeded_dfs_calls, calls_pct(p.unseeded_dfs_calls));
+    {
+        let h = &p.dep_mask_bits;
+        let total: u64 = h.iter().sum();
+        println!("  --- 失敗を記録したときの依存マスクの幅(立っているビット数 / 全8ビット) ---");
+        print!("  ");
+        for (bits, n) in h.iter().enumerate() {
+            if *n > 0 { print!("{}bit:{} ({:.0}%)  ", bits, n, 100.0 * *n as f64 / total.max(1) as f64); }
+        }
+        println!();
+    }
+    println!("  --- 失敗キャッシュを無効にした型世代の変化(理由 × 型) ---");
+    {
+        let g = &prover.egraph.generation_bumps;
+        let total: u64 = g.iter().flatten().sum();
+        print!("  {:<14}", "");
+        for t in crate::mmp_core::BUMP_TYPE_LABELS { print!("{:>10}", t); }
+        println!("{:>10}", "計");
+        for (ci, row) in g.iter().enumerate() {
+            print!("  {:<14}", crate::mmp_core::BUMP_CAUSE_LABELS[ci]);
+            for v in row { print!("{:>10}", v); }
+            let sub: u64 = row.iter().sum();
+            println!("{:>10} ({:>4.1}%)", sub, if total > 0 { 100.0 * sub as f64 / total as f64 } else { 0.0 });
+        }
+    }
     println!("  --- 枝の出どころ(どのパターンの結合が探索を吐いているか) ---");
     let branch_total: u64 = p.branch_counts.iter().sum();
     let mut rows: Vec<(usize, u64)> = p.branch_counts.iter().copied().enumerate().collect();
