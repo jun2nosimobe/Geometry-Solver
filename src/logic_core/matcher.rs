@@ -54,7 +54,7 @@ pub(crate) struct Search<'a> {
 }
 
 /// DefinedBy で親が全部そろっていて定義がまだ無いとき、その場で作ってよい種類。
-fn created_on_demand(kind: DefKind) -> bool {
+pub(crate) fn created_on_demand(kind: DefKind) -> bool {
     matches!(kind, DefKind::AnglePair | DefKind::DirectionOf | DefKind::LengthSq
         | DefKind::CrossRatio | DefKind::CrossRatioOfLines | DefKind::Product)
 }
@@ -593,7 +593,7 @@ impl ProverEngine {
     }
 
     /// 候補 id が宣言型 et の Connected 変数として受理できるか。
-    fn accepts(&self, id: ClassId, et: EntityType, refinement: Refinement) -> bool {
+    pub(crate) fn accepts(&self, id: ClassId, et: EntityType, refinement: Refinement) -> bool {
         let eg = &self.egraph;
         if eg.entities[id.0].entity_type != et { return false; }
         match et {

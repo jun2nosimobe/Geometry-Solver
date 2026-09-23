@@ -15,6 +15,14 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l58" data-status="shipped">
+  <summary><span class="idx">#58</span><span class="t">関係マッチング(generic join)を別のマッチャとして作った ― 動くが、まだ従来より弱い</span><span class="pill open">試作・既定は無効</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="ledger.html">§04</a> #57 で「部品を1つずつ入れる道は塞がっている」と分かったので、<b>丸ごと別のマッチャ</b>として作った(<code>logic_core/genjoin.rs</code>、<code>--generic-join</code>)。従来の <code>dfs_match</code> は「パターンを1本選んで候補を出し、次のパターンへ」という入れ子ループ結合で、中間結果の爆発を熱capで抑えている。こちらは順番が逆で、<b>次に束縛する変数</b>を選び、その変数に触れる<b>全パターンの候補集合を交差</b>させてから束縛する。交差で抑えるので<b>capを一切使わない</b>。<br><code>Connected</code> / <code>Identical</code> / <code>DefinedBy</code> / <code>Distinct</code> / <code>Order</code> を扱い、AnglePair の向き(Flip)は全変数が決まった後の検査でグループごとに決める。扱えないパターン(<code>Not</code>、現行の定理では未使用)を含む定理は従来の探索に回す。親がそろった <code>DefinedBy</code> のその場生成と、補助作図の需要の記録も移植した。</div>
+          <div class="evidence"><b>いまの実力(9問の抜き取り、既定 → <code>--generic-join</code>):</b> 解けたのは <b>5/9</b>。速くなったのは test_spiral_similarity 19,123→<b>8,885</b>(−54%)だけで、thales 2,794→9,509、circumcenter 1,717→16,297、nine_point 168,041→248,079 と軒並み重い。varignon・miquel・orthocenter・simson は予算内に解けない。<b>まだ従来の置き換えにはならない。</b><br><b>分かった原因(1) capは図の成長も抑えていた:</b> varignon で実体が 41→81行、<code>(Auto)</code> 由来の図形の出現が 329→<b>2,562</b>(8倍)。capが無いと <code>DefinedBy</code> のその場生成に歯止めが掛からず、図そのものが膨らむ。「その変数に決めたときだけ作る」二段階にしても 85→81行で、ほとんど減らなかった ― 生成が起きる<b>組み合わせの数</b>自体が多い。<a class="secref" href="ledger.html">§04</a> #57 で cap を外すと解けた数が合計 −16 になった理由の一端がこれ。<br><b>分かった原因(2) 失敗キャッシュが無い:</b> 従来の探索は定理ごとの失敗パスを持ち越すが、試作にはまだ無い。sweep のたびに一から辿り直す。<br><b>分かった原因(3) 自己束縛のプール区別が無い:</b> 従来は Scalar を「角度」「複比」「それ以外」に分けて候補を出すが、試作は宣言型の全代表元から取る。解は落とさないが候補が増える。</div>
+          <div class="evidence"><b>既定の挙動は変えていない:</b> フラグ無しでは従来の探索をそのまま通り、選抜33問×6設定で結果ファイルがバイト単位で一致。テスト94件通過。<br><b>次にやること(優先順):</b> (1) その場生成に歯止めを付ける(capの代わりになる条件)、(2) 試作用の失敗キャッシュ、(3) 関係ごとの索引 ― いまは <code>subobjects</code> と <code>uses</code> の線形走査で交差しているので、候補集合が大きいと交差そのものが重い。</div>
+  </div>
+</details>
 <details class="item" id="l57" data-status="shipped">
   <summary><span class="idx">#57</span><span class="t">generic join の部品を1つずつ入れても効かない ― cap を外すのも変数順序も、組でも単独でも悪化した</span><span class="pill open">3通りとも不採用</span></summary>
   <div class="body">

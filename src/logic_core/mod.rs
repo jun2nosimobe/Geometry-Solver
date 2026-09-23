@@ -11,11 +11,13 @@
 //! 確認済み)。
 
 mod blackboard;
+mod genjoin;
 mod cost;
 mod matcher;
 mod prover;
 mod theorem;
 
 pub use blackboard::*;
+pub(crate) use genjoin::supported as genjoin_supported;
 pub use prover::*;
 pub use theorem::*;

@@ -287,7 +287,11 @@ impl BlackboardEngine {
             let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
             let all_active: u64 = if theorem.patterns.len() >= 64 { u64::MAX } else { (1u64 << theorem.patterns.len()) - 1 };
             let mut new_binds: Vec<(Bind, FlipStates)> = Vec::new();
-            {
+            if self.prover.generic_join && genjoin_supported(&theorem) {
+                // 🌟 関係マッチング(generic join)。cap を使わず、変数ごとに候補集合を交差させる。
+                let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
+                self.prover.genjoin_match(&theorem, task.bind.clone(), &mut collect);
+            } else {
                 let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
                 let mut search = Search {
                     theorem: &theorem,
