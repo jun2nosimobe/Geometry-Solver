@@ -16,7 +16,7 @@
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
 <details class="item" id="l55" data-status="shipped">
-  <summary><span class="idx">#55</span><span class="t">候補を cap で切る前に、残っている他のパターンで先に絞る ― 仕事量が全設定で2〜3割減</span><span class="pill shipped">既定</span></summary>
+  <summary><span class="idx">#55</span><span class="t">候補を cap で切る前に、残っている他のパターンで先に絞る ― 仕事量が全設定で2〜3割減</span><span class="pill shipped">9d174f5</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="backlog.html">§05</a> b30(入れ子ループ結合をやめて関係マッチングにする)の第一歩。<br><b>それまでの順番:</b> 候補を熱の降順に並べて cap(自己束縛などは5、通常は40)で切り、残ったものを1つずつ束縛してから、深いところで他のパターンに当てて落とす。つまり<b>「他の前提も満たす正しい候補」が、当てられる前に cap の外に落ちる</b>ことがあった。<br><b>変えた順番:</b> 先に他のパターンで絞り、<b>残ったものを cap で切る</b>。使うのは、まだ残っているパターンのうち相手が束縛済みで候補1つを見るだけで判定できる3種類 ― <code>Connected</code>(その図形と接続しているか)・<code>Identical</code>(同じ代表元か)・<code>Distinct</code>(異なるか)。ここで落ちる候補はどのみち後で同じパターンに当たって落ちるので、<b>解は1つも減らない</b>。効くのは cap との順番だけ。関係の言葉でいう semi-join reduction にあたる。<br>semi-join が読む相手の型は、失敗キャッシュの依存ビットにも足してある。</div>
           <div class="evidence"><b>実測(全44問 × 6設定、基準 → 既定):</b> <b>解けた数はどの設定でも不変</b>(32 / 31 / 31 / 32 / 29 / 30)。仕事量は 既定 <b>−23.4%</b>、長さ+中心角+中点 <b>−33.3%</b>、skip-recovery <b>−29.1%</b>、ノイズ5 <b>−30.6%</b>、ノイズ10 <b>−32.6%</b>、ノイズ20 <b>−26.7%</b>。1問ごとでは bench_2005ctstp1 742,344→401,236(−46%)、nine_point_full 807,600→603,665、test_spiral_similarity 27,462→19,481。<br><b>配線の確認:</b> 既定有効の結果が <code>--semijoin</code> を明示したときと完全一致し、<code>--no-semijoin</code> が変更前と6設定すべてで1ステップも違わず一致した。テスト94件通過。<br><b>まだ generic join ではない:</b> これは「1つのパターンから候補を出し、他のパターンで絞る」形。本来の generic join は「パターンではなく<b>変数</b>を選び、その変数に触れる<b>全パターンの候補集合を交差させる</b>」もので、そこまで行くと cap 自体が要らなくなる可能性がある。残りは <a class="secref" href="backlog.html">§05</a> b30。</div>
@@ -419,7 +419,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 失敗キャッシュの無効化の計測まで(358e3fa)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 候補をcapで切る前に絞るところまで(9d174f5)
   </footer>
 </div>
 <script src="atlas.js"></script>
