@@ -15,6 +15,14 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l59" data-status="shipped">
+  <summary><span class="idx">#59</span><span class="t">関係マッチングの試作を詰めた ― 解ける問題では仕事量が3〜6割減、ただし解ける数はまだ半分</span><span class="pill open">試作・既定は無効</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="ledger.html">§04</a> #58 の試作(<code>--generic-join</code>)の詰まり所を1つずつ潰した。<b>効いたのは1つだけで、それが決定的だった。</b><br><b>効いた: <code>DefinedBy</code> の親候補を、既に束縛済みの親と整合する読み方だけに絞る。</b> それまでは定義の親を全位置そのまま候補にしていたので、後の検査で落ちるだけの枝を大量に作っていた。定義の読み方(親の並べ替え・AnglePair の向き)を先に当てて、食い違うものを捨てる。<b>これだけで test_spiral_similarity 10,599→1,747、cyclic_quad 25,780→857。</b></div>
+          <div class="evidence"><b>効かなかった案(どれも戻した/据え置き):</b> (1) その場生成を「最優先」から「従来の見積もりと同じ重み(30)」に下げる ― cyclic_quad 3,812→25,780、orthocenter 247,601→592,437 と軒並み悪化。<b>生成は先にやる方が良い。</b>(2) 「その変数に決めたときだけ作る」二段階 ― 図の実体は 85→81行でほとんど減らず、仕事量もほぼ不変。(3) 需要を見積もりの段階でも記録する ― 結果は1ステップも変わらなかった(より正しいので残した)。(4) 自己束縛プールの角度除外を外す ― 解ける数は変わらず、従来の探索と同じ意味に戻した。</div>
+          <div class="evidence"><b>選抜33問での実力(基準 → <code>--generic-join</code>):</b> 解けた数は 32→<b>15</b> / 31→16 / 31→13 / 32→15 / 29→14 / 30→16。<b>一方、両方が解けた問題での仕事量は −59.9% / −57.0% / −63.0% / −53.7% / −39.1% / −34.2%。</b>9問の抜き取りでは、解けた5問すべてが既定より速い(thales 2,794→1,397、circumcenter 1,717→1,174、cyclic_quad 2,202→857、nine_point 168,041→89,444、test_spiral_similarity 19,123→<b>1,747</b>(−91%))。<br><b>つまり速さはもう出ている。足りないのは網羅性。</b><br><b>次の手がかり:</b> 落ちる問題は有向角(AnglePair)を使うものに偏っており、<b>miquel では定理が1つも発火しない</b>(既定では円周角の定理17回+有向角の加法性2回)。コストではなくマッチの取りこぼしなので、AnglePair まわりの候補生成か検査に穴がある。ここを潰すのが次の一手。<br><b>既定の挙動は変えていない:</b> 選抜33問×6設定で結果ファイルがバイト単位で一致、テスト94件通過。</div>
+  </div>
+</details>
 <details class="item" id="l58" data-status="shipped">
   <summary><span class="idx">#58</span><span class="t">関係マッチング(generic join)を別のマッチャとして作った ― 動くが、まだ従来より弱い</span><span class="pill open">試作・既定は無効</span></summary>
   <div class="body">

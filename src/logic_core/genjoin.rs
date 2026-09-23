@@ -61,20 +61,31 @@ impl ProverEngine {
         // 次に束縛する変数は、交差した候補集合がいちばん小さいもの。
         let theorem = gj.theorem;
         let vars = gj.vars.clone();
+        // 🌟 その場生成は「候補が1個」だが、図そのものを増やす副作用がある。cap を外すと
+        // これに歯止めが無くなり、図が膨らんで探索が重くなる(来歴 #58 で実測)。
+        // 従来の見積もり(estimate_cost)が親のそろった DefinedBy に付けている値と同じ重みで
+        // 扱い、他に安く束縛できる変数があればそちらを先にする。
+        const CREATE_COST: usize = 0;
         let mut best: Option<(String, Vec<ClassId>)> = None;
+        let mut best_len = usize::MAX;
         let mut creatable: Option<String> = None;
         for v in vars {
             if bind.contains_key(&v) { continue; }
             let (cands, can_create) = self.gj_candidates(theorem, &v, &bind, false);
             if can_create {
-                // 親がそろっていて図形がまだ無い変数は、作れば候補が1個に決まるので先に決める。
-                if creatable.is_none() { creatable = Some(v); }
+                if CREATE_COST < best_len {
+                    best_len = CREATE_COST;
+                    creatable = Some(v);
+                    best = None;
+                }
                 continue;
             }
             let Some(c) = cands else { return };
             if c.is_empty() { return; }
-            if best.as_ref().is_none_or(|(_, b)| c.len() < b.len()) {
+            if c.len() < best_len {
+                best_len = c.len();
                 best = Some((v, c));
+                creatable = None;
             }
         }
         if let Some(v) = creatable {
@@ -122,8 +133,25 @@ impl ProverEngine {
         }
         let mut out = match acc {
             Some(a) => a,
-            // どのパターンからも絞れない変数は、型の全代表元から取る。
+            // どのパターンからも絞れない変数は、型の全代表元から取る。Scalar は角度・長さ・
+            // 複比が同居しているので、Identical が指定しているプールがあればそれに合わせる
+            // (従来の探索と同じ候補集合にそろえる)。
             None => match want {
+                Some(EntityType::Scalar) => {
+                    let pool = theorem.patterns.iter().find_map(|p| match p {
+                        Pattern::Identical { a, b, pool } if a == v || b == v => Some(*pool),
+                        _ => None,
+                    });
+                    self.egraph.iter_reps_of_type(EntityType::Scalar)
+                        .filter(|&id| self.egraph.entities[id.0].is_active())
+                        .filter(|&id| match pool {
+                            Some(SelfBindPool::Angle) => self.egraph.is_angle_value(id),
+                            Some(SelfBindPool::CrossRatioOfLines) => self.egraph.is_cross_ratio_of_lines_value(id),
+                            Some(SelfBindPool::Any) => !self.egraph.is_angle_value(id),
+                            None => true,
+                        })
+                        .collect()
+                }
                 Some(et) => self.egraph.iter_reps_of_type(et)
                     .filter(|&id| self.egraph.entities[id.0].is_active())
                     .collect(),
@@ -253,7 +281,7 @@ impl ProverEngine {
                 }
                 Cands::Set(out)
             }
-            Pattern::DefinedBy { kind, parents, result, .. } => {
+            Pattern::DefinedBy { kind, parents, result, flip } => {
                 if result == v {
                     if parents.iter().all(|p| bind.contains_key(p)) {
                         let ids: Vec<ClassId> = parents.iter().map(|p| self.egraph.get_rep(bind[p])).collect();
@@ -263,13 +291,17 @@ impl ProverEngine {
                         }
                         // 親がそろっているのに図形が無い。作ってよい種類ならその場で作り、
                         // そうでなければ補助作図の需要として記録する(従来の探索と同じ扱い)。
-                        if !allow_create {
-                            return if created_on_demand(*kind) { Cands::Creatable } else { Cands::Set(vec![]) };
+                        if !created_on_demand(*kind) {
+                            // 🌟 需要は見積もりの段階で記録する。ここで記録しないと、作れない
+                            // 種類(補助線・交点)の枝は候補が空のまま即座に死ぬので、回復
+                            // フェーズに「2点はあるのに結ぶ直線が無い」が一度も伝わらない。
+                            self.gj_note_demand(*kind, &ids);
+                            return Cands::Set(vec![]);
                         }
+                        if !allow_create { return Cands::Creatable; }
                         if let Some(id) = self.gj_create_on_demand(*kind, &ids, def) {
                             return Cands::Set(vec![id]);
                         }
-                        self.gj_note_demand(*kind, &ids);
                         return Cands::Set(vec![]);
                     }
                     if let Some(&anchor) = parents.iter().find_map(|p| bind.get(p)) {
@@ -286,26 +318,24 @@ impl ProverEngine {
                 }
                 let Some(pos) = parents.iter().position(|p| p == v) else { return Cands::Any };
                 if let Some(&rid) = bind.get(result) {
+                    // 🌟 定義の読み方(親の並べ替え・AnglePair の向き)のうち、既に束縛済みの親と
+                    // 食い違わないものだけを残してから v の位置を読む。全位置をそのまま候補に
+                    // すると、後で検査に落ちるだけの枝を大量に作ることになる。
                     let r = self.egraph.get_rep(rid);
+                    let bound: Vec<Option<ClassId>> = parents.iter()
+                        .map(|p| bind.get(p).map(|&id| self.egraph.get_rep(id)))
+                        .collect();
                     let mut out = Vec::new();
                     for comp in &self.egraph.entities[r.0].components {
                         for d in &comp.definitions {
                             if d.kind() != Some(*kind) { continue; }
-                            let ps = d.get_parents();
+                            let ps: Vec<ClassId> = d.get_parents().iter()
+                                .map(|&x| self.egraph.get_rep(x)).collect();
                             if ps.len() != parents.len() { continue; }
-                            match kind.parent_symmetry() {
-                                ParentSymmetry::Unordered | ParentSymmetry::KleinFour => {
-                                    out.extend(ps.iter().map(|&x| self.egraph.get_rep(x)));
-                                }
-                                ParentSymmetry::Ordered => {
-                                    // AnglePair は向きを反転して読むことがあるので、両方の位置を許す。
-                                    if *kind == DefKind::AnglePair && ps.len() == 2 {
-                                        out.push(self.egraph.get_rep(ps[0]));
-                                        out.push(self.egraph.get_rep(ps[1]));
-                                    } else {
-                                        out.push(self.egraph.get_rep(ps[pos]));
-                                    }
-                                }
+                            for (perm, _) in gj_perms(*kind, &ps, flip) {
+                                if bound.iter().zip(perm.iter())
+                                    .any(|(b, q)| b.is_some_and(|b| b != *q)) { continue; }
+                                out.push(perm[pos]);
                             }
                         }
                     }
