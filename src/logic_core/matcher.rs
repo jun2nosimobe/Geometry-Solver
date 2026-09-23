@@ -180,6 +180,7 @@ impl ProverEngine {
         // 一番安く見積もられたパターンを選ぶ。同じ1周で、束縛済みの範囲だけで既に破れている
         // 順序・相異の制約も検査して枝を早く切る(マスク0 = 型が変化しても有効な失敗)。
         let patterns = s.patterns;
+        let var_sizes = if self.var_order { Some(self.constrained_var_sizes(patterns, theorem, active, &bind)) } else { None };
         let mut best_idx = 0;
         let mut best_cost = f64::INFINITY;
         for (i, pat) in patterns.iter().enumerate() {
@@ -188,7 +189,16 @@ impl ProverEngine {
                 s.failed_paths.insert(state_sig, (0, snapshot_type_generations(&self.egraph)));
                 return false;
             }
-            let cost = self.estimate_cost(pat, &bind, theorem);
+            let mut cost = self.estimate_cost(pat, &bind, theorem);
+            // 他のパターンがその変数を縛っているなら、交差後の候補数はその上界を超えない。
+            if let Some(sizes) = var_sizes.as_ref()
+                && let Some(args) = pat.fact_args() {
+                    let bound = args.iter()
+                        .filter(|v| !bind.contains_key(v.as_str()))
+                        .filter_map(|v| sizes.iter().find(|(k, _)| *k == v.as_str()).map(|(_, n)| *n))
+                        .min();
+                    if let Some(n) = bound { cost = cost.min(n as f64 + 1.0); }
+                }
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
         let next_active = active & !(1u64 << best_idx);
@@ -527,6 +537,51 @@ impl ProverEngine {
             }
         }
         (out, mask)
+    }
+
+    /// 🌟 いま残っているパターンから、各変数の候補数の上界を集める(generic join の
+    /// 「次に束縛する変数の選び方」にあたる)。
+    ///
+    /// 「相手が束縛済みのパターン」はその変数の候補を直接生成できる(接続先の subobjects、
+    /// 同一なら1個、親が全部そろった DefinedBy なら memo の1個)。交差した集合はその中で
+    /// いちばん小さいものより大きくならないので、これが上界になる。見積もり(estimate_cost)は
+    /// パターン1本だけを見るので、他のパターンがきつく縛っていても高く見えてしまう。
+    fn constrained_var_sizes<'p>(&self, patterns: &'p [Pattern], theorem: &TheoremDef, active: u64, bind: &Bind) -> Vec<(&'p str, usize)> {
+        let mut out: Vec<(&'p str, usize)> = Vec::new();
+        fn note<'p>(name: &'p str, size: usize, out: &mut Vec<(&'p str, usize)>) {
+            match out.iter_mut().find(|(k, _)| *k == name) {
+                Some((_, v)) => *v = (*v).min(size),
+                None => out.push((name, size)),
+            }
+        }
+        for (i, pat) in patterns.iter().enumerate() {
+            if active & (1u64 << i) == 0 { continue; }
+            match pat {
+                Pattern::Connected { child, parent, .. } => {
+                    for (v, other) in [(child, parent), (parent, child)] {
+                        if bind.contains_key(v) { continue; }
+                        let Some(&oid) = bind.get(other) else { continue };
+                        let n = match theorem.entities.get(v).copied() {
+                            Some(t) => self.egraph.count_neighbors_of_type(oid, t),
+                            None => self.egraph.entities[self.egraph.get_rep(oid).0]
+                                .components.first().map_or(0, |c| c.subobjects.len()),
+                        };
+                        note(v.as_str(), n, &mut out);
+                    }
+                }
+                Pattern::Identical { a, b, .. } => {
+                    if !bind.contains_key(a) && bind.contains_key(b) { note(a.as_str(), 1, &mut out); }
+                    if !bind.contains_key(b) && bind.contains_key(a) { note(b.as_str(), 1, &mut out); }
+                }
+                Pattern::DefinedBy { parents, result, .. } => {
+                    if !bind.contains_key(result) && parents.iter().all(|p| bind.contains_key(p)) {
+                        note(result.as_str(), 1, &mut out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     fn semijoin_ok(&self, cs: &[SemiConstraint], cand: ClassId) -> bool {

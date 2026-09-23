@@ -15,6 +15,14 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l57" data-status="shipped">
+  <summary><span class="idx">#57</span><span class="t">generic join の部品を1つずつ入れても効かない ― cap を外すのも変数順序も、組でも単独でも悪化した</span><span class="pill open">3通りとも不採用</span></summary>
+  <div class="body">
+<div class="desc">semi-join(<a class="secref" href="ledger.html">§04</a> #55・#56)で仕事量が2〜3割下がったので、<b>候補capはもう要らなくなったのではないか</b>と考えて測った。cap を外す・変数順序を generic join 風にする・その両方の3通りを、選抜33問×6設定で比べた。<b>3通りとも解けた数が減った。</b></div>
+          <div class="evidence"><b>解けた数の合計(6設定・基準との差):</b> <code>--fanout-heat-cap=40</code>(狭いcapを外す)だけで <b>−16</b>、<code>--var-order</code>(他のパターンが縛っている変数から先に束縛する)だけで <b>−1</b>、両方で <b>−13</b>。仕事量は cap を外すと +130〜440%、両方で +180〜590%。<b>cap は外せない ― semi-join の後でも実際に効いている。</b><br><b>変数順序は振れ幅が異常に大きい:</b> 単独での仕事量の変化は 設定ごとに −17.7% / −0.2% / +9.1% / +15.6% / +24.2% / <b>+388.1%</b>。解ける問題も入れ替わる(ノイズ10 で bench_2018silkroadp1 と bench_2022balkanmop1 が解けるようになる一方、bench_2012egmop1 と simson を落とす)。<br><b>埋もれている良い面:</b> <code>--var-order</code> は<b>ノイズ5 で 33/33</b> ― 選抜の全問が解けたのはこれが初めて。<br><b>6問の抜き取りでは逆に見えた:</b> 抜き取りでは「両方」がいちばん良く見え(bench_2018chnwesternmop5 ノイズ10 が 0→1、801,242ステップ)、33問で測ると −13 だった。<b>抜き取りで方向を決めてはいけない</b>という例。</div>
+          <div class="evidence"><b>結論:</b> いまの「パターンを選んで候補を出し、熱の順に cap で切る」探索は、よく釣り合った局所最適になっている。generic join の部品(索引・交差・変数順序・capなし)は<b>互いに前提し合っている</b>ので、1つずつ入れると必ずどれかが足を引っ張る。<a class="secref" href="backlog.html">§05</a> b30 は<b>別のマッチャとして丸ごと作る</b>しかない、というのが3回の計測(#56 と今回)で確定した。<code>--var-order</code> はフラグとして残した(既定は無効)。</div>
+  </div>
+</details>
 <details class="item" id="l56" data-status="shipped">
   <summary><span class="idx">#56</span><span class="t">semi-join を DefinedBy にも広げる ― ついでに「変数の選び方」を generic join 風に変えたら proof が落ちた</span><span class="pill shipped">57b09e9</span></summary>
   <div class="body">

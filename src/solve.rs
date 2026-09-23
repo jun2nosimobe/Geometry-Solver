@@ -55,6 +55,7 @@ pub struct SolveOptions {
     pub fanout_connected: bool,
     pub nogood_core: bool,
     pub semijoin: bool,
+    pub var_order: bool,
     pub widen_first: bool,
     pub widen_first_ceiling: usize,
     pub widen_every: usize,
@@ -102,6 +103,7 @@ impl SolveOptions {
             fanout_connected: flag(args, "--fanout-connected"),
             nogood_core: flag(args, "--nogood-core"),
             semijoin: !flag(args, "--no-semijoin"),
+            var_order: flag(args, "--var-order"),
             widen_first: flag(args, "--widen-first"),
             widen_first_ceiling: value(args, "--widen-first-ceiling=").unwrap_or(40),
             widen_every: value(args, "--widen-every=").unwrap_or(2),
@@ -316,6 +318,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     prover.fanout_connected = opts.fanout_connected;
     prover.nogood_core = opts.nogood_core;
     prover.semijoin = opts.semijoin;
+    prover.var_order = opts.var_order;
     prover.theorems = theorem_set(problem_name, opts).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;

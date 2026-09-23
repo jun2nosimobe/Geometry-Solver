@@ -50,6 +50,10 @@ pub struct ProverEngine {
     /// 落とす候補はどのみち後で同じパターンに当たって落ちるものなので解は減らない。
     /// 効くのは cap との順番で、cap に残るのが「他の前提も満たす候補」になる。
     pub semijoin: bool,
+    /// 🌟 次に消費するパターンを選ぶとき、他のパターンが縛っている変数の候補数の上界も見る
+    /// (generic join の変数選択)。cap があると「どの候補を切り捨てるか」まで変わるので、
+    /// cap の広げ方と組で効果が決まる。
+    pub var_order: bool,
     /// 型だけで結果が決まる候補列挙の、定理をまたいだ共有キャッシュ(値は結果と計算時の型世代)。
     /// Connected 両方未束縛のジョイン。キーは (子の型, 親の型)。
     pub connected_join_cache: FxHashMap<(EntityType, EntityType), (PairList, u64, u64)>,
@@ -154,6 +158,7 @@ impl ProverEngine {
             theorem_var_index: Vec::new(),
             nogood_core: false,
             semijoin: true,
+            var_order: false,
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
             identical_self_bind_angle_cache: None,
