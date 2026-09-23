@@ -567,8 +567,31 @@ impl ProverEngine {
         dep_mask: &mut u8,
     ) -> bool {
         let expected_r_type = s.theorem.entities.get(result_var).copied();
-        let valid_nodes = self.defined_by_valid_nodes(kind, result_var, parent_vars, expected_r_type, bind, dep_mask);
-        let matches = self.defined_by_collect_matches(kind, flip, parent_vars, result_var, &valid_nodes, bind, &flip_states);
+        let mut valid_nodes = self.defined_by_valid_nodes(kind, result_var, parent_vars, expected_r_type, bind, dep_mask);
+        // 🌟 結果が未束縛なら、定義を展開する前に他のパターンで候補を絞る。型の全代表元を
+        // 舐める分岐(defined_by_type_scan_candidates)では、ここで落ちる数がそのまま効く。
+        if self.semijoin && !bind.contains_key(result_var) {
+            let (cs, m) = self.semijoin_constraints(s, active, result_var, bind);
+            *dep_mask |= m;
+            if !cs.is_empty() { valid_nodes.retain(|&c| self.semijoin_ok(&cs, c)); }
+        }
+        let mut matches = self.defined_by_collect_matches(kind, flip, parent_vars, result_var, &valid_nodes, bind, &flip_states);
+        // 🌟 親側もここで絞る。定義から取れた親の組が他の前提と食い違っていれば、
+        // 熱と次数で並べ替える前に落としておく(並べ替えは候補ごとに次数を測るので重い)。
+        if self.semijoin && !matches.is_empty() {
+            let mut per_var: Vec<(&String, Vec<SemiConstraint>)> = Vec::new();
+            for v in parent_vars {
+                if bind.contains_key(v) { continue; }
+                let (cs, m) = self.semijoin_constraints(s, active, v, bind);
+                *dep_mask |= m;
+                if !cs.is_empty() { per_var.push((v, cs)); }
+            }
+            if !per_var.is_empty() {
+                matches.retain(|(b, _)| per_var.iter().all(|(v, cs)| {
+                    b.get(*v).is_none_or(|&id| self.semijoin_ok(cs, id))
+                }));
+            }
+        }
 
         if matches.is_empty() && parent_vars.len() == 2
             && let (Some(&x), Some(&y)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
