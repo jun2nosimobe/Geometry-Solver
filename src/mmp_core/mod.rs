@@ -11,7 +11,7 @@ use crate::mmp_math::ModInt;
 //   query             - is_connected など読み取り専用の問い合わせ
 mod congruence;
 pub(crate) mod coords;
-mod eval;
+pub(crate) mod eval;
 mod proof;
 mod construction;
 mod query;
@@ -405,9 +405,14 @@ pub struct EGraph {
     pub(crate) structure_generation: u64,
     /// 数値チェックのたびに図を辿り直していた、構造だけで決まる結果のキャッシュ(coords.rs)。
     pub(crate) structure_cache: std::cell::RefCell<StructureCache>,
+    /// 数値チェックが使う座標一式と評価結果(eval.rs)。構造が変わるまで使い回す。
+    pub(crate) numeric_samples: std::cell::RefCell<crate::mmp_core::eval::NumericSamples>,
     /// 数値検証・次数測定に使う乱数の状態(EGraph::random_modint)。シード固定なので、
     /// 同じ問題は毎回同じ座標で検算する。
     rng_state: Cell<u64>,
+    /// 次数測定(動点法)が使う乱数の状態。数値チェックとは別の列にしてある ― 同じ列だと、検算の回数が変わる
+    /// だけで次数の測り方が変わり、次数で並べ替えるマッチの候補順、ひいては探索の結果まで動いてしまう。
+    degree_rng_state: Cell<u64>,
     // 🌟 EntityType ごとの生成済み ClassId の一覧。create_entity で追記するだけでマージでは消さないので、
     // 使う側は get_rep で代表元に直す(iter_reps_of_type)。定理マッチングが特定の型の実体を探すときに
     // 全件を走査しないための索引。
@@ -525,7 +530,9 @@ impl EGraph {
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             structure_generation: 0,
             structure_cache: std::cell::RefCell::new(StructureCache::default()),
+            numeric_samples: std::cell::RefCell::new(Default::default()),
             rng_state: Cell::new(0x5EED_6E0_5017_E5),
+            degree_rng_state: Cell::new(0xD_E6_6E_5EED),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
             type_counts: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),

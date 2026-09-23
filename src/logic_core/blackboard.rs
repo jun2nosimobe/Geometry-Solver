@@ -47,6 +47,10 @@ pub struct BlackboardEngine {
     pub bandit_enabled: bool,
     /// 証明された事実で変数を固定したタスクを積むか(既定は無効: 積む量が多すぎて全体が悪化する)。
     pub seeded_rematch_enabled: bool,
+    /// 🌟 1回の run_step の中で結論をすぐ適用せず、全タスクを試してからまとめて適用するか(--batch-conclusions)。
+    /// 既定(false)だと、先に発火した定理のマージが同じ全探索の後続タスクから見えるので、定理を試す順序で
+    /// 探索の進み方が変わる(§05 の順序依存)。true にすると、その全探索の中では全タスクが同じ図を見る。
+    pub batch_conclusions: bool,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -60,6 +64,7 @@ impl BlackboardEngine {
             event_queue: VecDeque::new(),
             bandit_enabled: false,
             seeded_rematch_enabled: false,
+            batch_conclusions: false,
             work_limit: u64::MAX,
         }
     }
@@ -218,6 +223,8 @@ impl BlackboardEngine {
     pub fn run_step(&mut self, budget: usize) -> bool {
         let mut applied_anything = false;
         let mut calls = 0;
+        // --batch-conclusions のとき、この全探索で見つかったマッチを溜めておく(定理・束縛・向き・タスクの出どころ)。
+        let mut pending: Vec<(std::rc::Rc<TheoremDef>, Bind, FlipStates, usize, bool)> = Vec::new();
 
         while calls < budget && self.prover.work_done() < self.work_limit {
             while let Some(event) = self.event_queue.pop_front() {
@@ -286,6 +293,18 @@ impl BlackboardEngine {
                 }
             }
 
+            if self.batch_conclusions {
+                let matched = !new_binds.is_empty();
+                for (bind, flips) in new_binds {
+                    pending.push((theorem.clone(), bind, flips, task_theorem_idx, task_is_seeded));
+                }
+                // マッチが無かったタスクはここで記録する(マッチしたタスクは適用してから記録する)。
+                if !task_is_seeded && !matched {
+                    self.prover.record_theorem_attempt(task_theorem_idx, false, dfs_calls_used);
+                }
+                continue;
+            }
+
             let mut task_succeeded = false;
             for (mut bind, flips) in new_binds {
                 if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) { continue; }
@@ -311,6 +330,32 @@ impl BlackboardEngine {
 
             if !task_is_seeded {
                 self.prover.record_theorem_attempt(task_theorem_idx, task_succeeded, dfs_calls_used);
+            }
+        }
+
+        // 溜めた結論をまとめて適用する。ここまでは全タスクが同じ図を見ている。
+        for (theorem, mut bind, flips, theorem_idx, is_seeded) in pending {
+            let mut succeeded = false;
+            if !self.prover.is_already_proven(&theorem.conclusions, &bind, &flips)
+                && self.prover.execute_constructions(&theorem.constructions, &mut bind)
+                && !self.prover.is_already_proven(&theorem.conclusions, &bind, &flips)
+            {
+                println!("  🎯 [リーチ通知] 定理「{}」の前提条件がすべて満たされました！", theorem.name);
+                for (var_name, class_id) in &bind {
+                    if var_name.starts_with("__") { continue; }
+                    let entity_name = &self.prover.egraph.entities[self.prover.egraph.get_rep(*class_id).0].name;
+                    println!("      - 割り当て: {} = {}", var_name, entity_name);
+                }
+                let (applied, generated_facts) = self.prover.apply_conclusions(&theorem, &bind, &flips);
+                if applied {
+                    applied_anything = true;
+                    succeeded = true;
+                    self.emit(Event::NodeMerged);
+                    for f in generated_facts { self.emit(Event::FactProven(f)); }
+                }
+            }
+            if !is_seeded {
+                self.prover.record_theorem_attempt(theorem_idx, succeeded, 0);
             }
         }
         applied_anything

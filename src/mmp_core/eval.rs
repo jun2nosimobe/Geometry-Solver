@@ -9,6 +9,26 @@ use crate::mmp_calculators;
 use super::{ClassId, ConjectureEntry, ConjectureValue, Definition, EntityType, EGraph, Justification};
 use super::coords::{self, Geometry, Placed, Placement};
 
+/// 数値チェックが使う「図全体に座標を置いた標本」と、その座標での評価結果。構造が変わるまで使い回す。
+/// 一意性の伝播は同じ図の上で何度も検算するので、そのたびに座標を置き直して根から評価し直すと、実体が数百個の
+/// 図では時間の大半をここで使う。
+#[derive(Clone)]
+pub(crate) struct NumericSamples {
+    generation: u64,
+    /// 図全体に座標を置けたか(置けない図ではペアごとに置く従来の経路を使う)。
+    usable: bool,
+    vars: Vec<FxHashMap<String, ModInt>>,
+    cache: Vec<FxHashMap<usize, Vec<ModInt>>>,
+}
+
+impl Default for NumericSamples {
+    fn default() -> Self {
+        // まだどの世代の標本も持っていないことを表す番兵。
+        Self { generation: u64::MAX, usable: true, vars: Vec::new(), cache: Vec::new() }
+    }
+}
+
+
 impl EGraph {
     /// 🌟 数値評価。自由点の座標は vars に名前で入れておく(`{名前}_x`, `{名前}_y`)。
     pub fn evaluate_node(
@@ -255,7 +275,11 @@ impl EGraph {
     /// 祖先の自由点に座標を置く(coords の place_free_points の有限体版)。置けない点や前提を満たさない点が
     /// 残れば false(呼び出し側は判定不能に倒す)。
     fn assign_free_point_coords(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>) -> bool {
-        matches!(self.place_free_points(ancestors, &mut ModIntPlacer { vars }, false), Placed::All)
+        self.assign_free_point_coords_with(ancestors, vars, RngSource::Numeric)
+    }
+
+    fn assign_free_point_coords_with(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>, rng: RngSource) -> bool {
+        matches!(self.place_free_points(ancestors, &mut ModIntPlacer { vars, rng }, false), Placed::All)
     }
 
     /// 🌟 マージを確定する前の数値的な裏付け。祖先の自由点にランダムな座標を割り当て(前提のある点は前提を
@@ -264,6 +288,55 @@ impl EGraph {
     /// congruence.rs の構造的な伝播(propagate_*_uniqueness)が偶然の一致で誤った同一視をしないためのゲートで、
     /// これ自体は何も証明しない。
     pub(crate) fn numeric_plausibility_check(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
+        let (ra, rb) = (self.get_rep(a), self.get_rep(b));
+        let key = if ra.0 <= rb.0 { (ra.0, rb.0) } else { (rb.0, ra.0) };
+        {
+            let mut cache = self.structure_cache.borrow_mut();
+            cache.sync(self.structure_generation);
+            if let Some(&v) = cache.verdicts.get(&key) { return v; }
+        }
+        let verdict = self.numeric_plausibility_check_uncached(a, b, trials);
+        self.structure_cache.borrow_mut().verdicts.insert(key, verdict);
+        verdict
+    }
+
+    /// 図の全ての自由点に座標を置いた標本を trials 個ぶん用意する(構造が変わるまで使い回す)。
+    /// 置けない図(前提が平方根を要する等)では None を返し、呼び出し側はペアごとに置く従来の経路に落ちる。
+    fn shared_samples(&self, trials: usize) -> bool {
+        let mut samples = self.numeric_samples.borrow_mut();
+        if samples.generation != self.structure_generation {
+            *samples = NumericSamples { generation: self.structure_generation, usable: true, vars: Vec::new(), cache: Vec::new() };
+        }
+        if !samples.usable { return false; }
+        while samples.vars.len() < trials {
+            let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+            if !self.assign_free_point_coords(&self.all_free_points(), &mut vars) {
+                samples.usable = false;
+                return false;
+            }
+            samples.vars.push(vars);
+            samples.cache.push(FxHashMap::default());
+        }
+        true
+    }
+
+    fn numeric_plausibility_check_uncached(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
+        if self.shared_samples(trials) {
+            let mut samples = self.numeric_samples.borrow_mut();
+            for i in 0..trials {
+                let NumericSamples { vars, cache, .. } = &mut *samples;
+                let (va, vb) = (self.evaluate_node(a, &vars[i], &mut cache[i]), self.evaluate_node(b, &vars[i], &mut cache[i]));
+                match (va, vb) {
+                    (Some(va), Some(vb)) => if !Self::numeric_values_proportional(&va, &vb) { return Some(false); },
+                    _ => return None,
+                }
+            }
+            return Some(true);
+        }
+        self.numeric_plausibility_check_per_pair(a, b, trials)
+    }
+
+    fn numeric_plausibility_check_per_pair(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
         // 🐛 問題文は「P はこの円の上」のような前提を座標ではなく link_logical_incidence で与えることが多い。
         // そういう自由点に完全な乱数座標を置くと前提を満たさず、正しいマージまで却下してしまうので、
         // assign_free_point_coords は前提を満たす座標を取る。取れないときだけ None に倒す。
@@ -308,7 +381,7 @@ impl EGraph {
             let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
             let (Some(p), Some(c)) = (self.evaluate_node(point, &vars, &mut cache), self.evaluate_node(curve, &vars, &mut cache))
                 else { return None };
-            if !(ModIntPlacer { vars: &mut vars }).lies_on(&p, &c, curve_type) { return Some(false); }
+            if !(ModIntPlacer { vars: &mut vars, rng: RngSource::Numeric }).lies_on(&p, &c, curve_type) { return Some(false); }
         }
         Some(true)
     }
@@ -561,7 +634,8 @@ impl EGraph {
         let mover = *ancestors.iter().find(|&&fp| !self.has_extraneous_incidence(fp))?;
         let others: Vec<ClassId> = ancestors.iter().copied().filter(|&fp| fp != mover).collect();
         let mut base_vars: FxHashMap<String, ModInt> = FxHashMap::default();
-        if !self.assign_free_point_coords(&others, &mut base_vars) { return None; }
+        // 次数測定は自分の乱数の列を使う(数値チェックの回数に結果を左右されないため)。
+        if !self.assign_free_point_coords_with(&others, &mut base_vars, RngSource::Degree) { return None; }
         Some((mover, base_vars))
     }
 
@@ -579,11 +653,20 @@ impl EGraph {
     /// 無作為に選ぶ(moverの座標はx0+t*dx, y0+t*dyとしてtでパラメータ化される)。
     fn random_mover_line(&self) -> (ModInt, ModInt, ModInt, ModInt) {
         (
-            self.random_modint(),
-            self.random_modint(),
-            self.random_modint(),
-            self.random_modint(),
+            self.random_degree_modint(),
+            self.random_degree_modint(),
+            self.random_degree_modint(),
+            self.random_degree_modint(),
         )
+    }
+
+    /// 次数測定用の乱数(数値チェックとは別の列。degree_rng_state 参照)。
+    fn random_degree_modint(&self) -> ModInt {
+        let mut z = self.degree_rng_state.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.degree_rng_state.set(z);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ModInt::new((z ^ (z >> 31)) as i64)
     }
 }
 
@@ -806,12 +889,21 @@ impl Geometry for ModIntVars<'_> {
     }
 }
 
-/// 有限体での自由点の置き方。乱数は EGraph の乱数(random_modint)を使う。
+/// 有限体での自由点の置き方。どちらの乱数の列を使うかを持つ(数値チェックと次数測定は別の列)。
 pub(crate) struct ModIntPlacer<'v> {
     pub vars: &'v mut FxHashMap<String, ModInt>,
+    pub rng: RngSource,
 }
 
+/// 乱数の列。数値チェックの回数が変わっても次数測定の結果が動かないよう、2本に分けてある。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RngSource { Numeric, Degree }
+
 impl ModIntPlacer<'_> {
+    fn random(&self, eg: &EGraph) -> ModInt {
+        match self.rng { RngSource::Numeric => eg.random_modint(), RngSource::Degree => eg.random_degree_modint() }
+    }
+
     fn set(&mut self, eg: &EGraph, point: ClassId, x: ModInt, y: ModInt) {
         let name = &eg.entities[point.0].name;
         self.vars.insert(format!("{}_x", name), x);
@@ -832,8 +924,8 @@ impl Placement for ModIntPlacer<'_> {
         self.vars.contains_key(&format!("{}_x", eg.entities[point.0].name))
     }
     fn place_randomly(&mut self, eg: &EGraph, point: ClassId) {
-        let x = eg.random_modint();
-        let y = eg.random_modint();
+        let x = self.random(eg);
+        let y = self.random(eg);
         self.set(eg, point, x, y);
     }
     fn unplace(&mut self, eg: &EGraph, point: ClassId) {
@@ -852,10 +944,10 @@ impl Placement for ModIntPlacer<'_> {
         if line.len() < 3 { return false; }
         let (a, b, c) = (line[0], line[1], line[2]);
         let (x, y) = if b.0 != 0 {
-            let x = eg.random_modint();
+            let x = self.random(eg);
             (x, -(a * x + c) / b)
         } else if a.0 != 0 {
-            let y = eg.random_modint();
+            let y = self.random(eg);
             (-c / a, y)
         } else {
             return false; // 縮退した直線(0=0)
@@ -872,8 +964,8 @@ impl Placement for ModIntPlacer<'_> {
         let (x1, y1) = (known[0] / known[2], known[1] / known[2]);
         let two = ModInt::new(2);
         for _ in 0..8 {
-            let dx = eg.random_modint();
-            let dy = eg.random_modint();
+            let dx = self.random(eg);
+            let dy = self.random(eg);
             let alpha = a * dx * dx + b * dx * dy + c * dy * dy;
             if alpha.0 == 0 { continue; } // 漸近方向(ごく低確率)。引き直す
             let beta = two * a * x1 * dx + b * (x1 * dy + y1 * dx) + two * c * y1 * dy + d * dx + e * dy;

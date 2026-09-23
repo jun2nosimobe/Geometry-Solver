@@ -72,14 +72,18 @@ pub(crate) struct StructureCache {
     generation: u64,
     extraneous: FxHashMap<usize, std::rc::Rc<Vec<ClassId>>>,
     ancestors: FxHashMap<usize, std::rc::Rc<Vec<ClassId>>>,
+    /// numeric_plausibility_check の結果(キーは代表元の組)。同じ構造なら同じ答えになるので覚えておく ―
+    /// 一意性の伝播は同じ組を何度も検算し、実体が増えるほどそれが時間の大半を占める。
+    pub(crate) verdicts: FxHashMap<(usize, usize), Option<bool>>,
 }
 
 impl StructureCache {
-    fn sync(&mut self, generation: u64) {
+    pub(crate) fn sync(&mut self, generation: u64) {
         if self.generation != generation {
             self.generation = generation;
             self.extraneous.clear();
             self.ancestors.clear();
+            self.verdicts.clear();
         }
     }
 }

@@ -50,6 +50,10 @@ pub struct SolveOptions {
     pub show_trace: bool,
     pub show_origins: bool,
     pub audit_merges: bool,
+    /// 初期作図に足す無関係な作図の数(方針E: ノイズへの頑健性の計測)。
+    pub batch_conclusions: bool,
+    pub noise: usize,
+    pub noise_seed: u64,
 }
 
 impl SolveOptions {
@@ -88,6 +92,9 @@ impl SolveOptions {
             show_trace,
             show_origins: flag(args, "--origins") || show_trace,
             audit_merges: flag(args, "--audit-merges"),
+            batch_conclusions: flag(args, "--batch-conclusions"),
+            noise: value(args, "--noise=").unwrap_or(0),
+            noise_seed: value(args, "--noise-seed=").unwrap_or(12345),
         })
     }
 
@@ -278,6 +285,11 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         }
     };
 
+    if opts.noise > 0 {
+        let added = crate::noise::add_noise(&mut egraph, opts.noise, opts.noise_seed);
+        println!("  🎲 [ノイズ] 証明と無関係な作図を{}個足しました(実体は{}個増えた、seed={})。", opts.noise, added, opts.noise_seed);
+    }
+
     if opts.degen_heat {
         let start = Instant::now();
         let groups = padic_eval::compute_degeneration_groups(&egraph, opts.degen_heat_seed, opts.degen_heat_min_hits);
@@ -293,6 +305,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
     engine.seeded_rematch_enabled = opts.seeded_rematch;
+    engine.batch_conclusions = opts.batch_conclusions;
     engine.work_limit = opts.step_budget;
     if opts.show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
 

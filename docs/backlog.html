@@ -32,7 +32,8 @@
   <summary><span class="idx"></span><span class="t">★ 探索が定理を試す順序に大きく左右される ― 解けるかどうかが順序の運に依存している</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html">§04</a>「同じ優先度のタスクを定理の登録順に取り出し…」の実測で、定理の登録順を変えるだけで両方で解けた問題の仕事量が ±15% 程度振れ、個別には bench_2012egmop1 +358%・nine_point_full +115% のように大きく動き、bench_2018chnwesternmop5 は7通り中3通りで解けなくなった。筋の通った並べ方(逆順・パターン数順・射影先頭)はどれも登録順に勝たず、登録順を詰めても問題が変われば効かない見込み。順序に鈍感な探索にする方が本筋 ― 例えば1回の <code>run_step</code> の途中でマージが起きても、同じ全探索の残りのタスクには古い図の上での結果を使わせない(全タスクを試してから結論を適用する)と、順序の影響がどれだけ減るかを測る。</div>
-          <div class="b-tags"><span class="tag">順序で ±15%・1問が解けたり解けなかったり</span><span class="tag">目安: bench_2018chnwesternmop5 がどの順序でも解ける</span></div>
+          <div class="evidence" style="margin-top:10px"><b>2026-09-23 実測(不採用):</b> 「1回の全探索では結論をすぐ適用せず、全タスクを試してからまとめて適用する」(<code>--batch-conclusions</code>)を実装して6通りで測った ― 既定 32→32(仕事量+35%)、長さ+中心角+中点 30→29(+49%)、skip-recovery 31→30(−7%)、ノイズ5 30→31(+82%)、ノイズ10 28→29(+13%)、ノイズ20 28→25(+18%)。解けた数は増減して合計 −2、仕事量はほとんどの設定で大きく増える。既に分かった事実を同じ全探索の残りに使わせない代償の方が大きい。フラグはA/B用に残し、既定は従来どおり。順序への対処は別の形(まとめる単位を小さくする・優先度を図の変化に追随させる)で試す。</div>
+<div class="b-tags"><span class="tag">順序で ±15%・1問が解けたり解けなかったり</span><span class="tag">目安: bench_2018chnwesternmop5 がどの順序でも解ける</span></div>
   </div>
 </details>
 <details class="item" id="b3" data-status="open">
