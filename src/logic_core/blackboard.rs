@@ -282,6 +282,8 @@ impl BlackboardEngine {
 
             // 失敗パスは定理ごとの共有キャッシュ。dfs_match が &mut self を取るので一時的に取り出す。
             self.prover.ensure_global_failed_paths();
+            self.prover.ensure_theorem_var_index();
+            let var_index = self.prover.theorem_var_index[task.theorem_idx].clone();
             let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
             let all_active: u64 = if theorem.patterns.len() >= 64 { u64::MAX } else { (1u64 << theorem.patterns.len()) - 1 };
             let mut new_binds: Vec<(Bind, FlipStates)> = Vec::new();
@@ -293,6 +295,8 @@ impl BlackboardEngine {
                     scope: 0,
                     failed_paths: &mut failed_paths,
                     on_match: &mut collect,
+                    var_index: &var_index,
+                    pattern_masks: &var_index.per_pattern,
                 };
                 let mut dep_mask: u8 = 0;
                 self.prover.dfs_match(&mut search, all_active, task.bind.clone(), task.flip_states.clone(), &mut dep_mask);

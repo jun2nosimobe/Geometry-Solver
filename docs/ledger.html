@@ -15,6 +15,21 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l53" data-status="shipped">
+  <summary><span class="idx">#53</span><span class="t">定理証明支援系まわりの技術を当てはめて棚卸しし、失敗キャッシュの鍵を核に絞る案を測った</span><span class="pill open">既定にはしない</span></summary>
+  <div class="body">
+<div class="desc">「Lean のような定理証明支援系の技術がここに応用できるか」を検討した。Lean 本体(依存型・カーネル・tactic 言語)から取れるものはほとんど無い ― 向こうの難所は人が書いた証明項の elaborate と検査で、こちらは地の事実からの飽和なので問題が違う。一方、<b>隣にある道具立て</b>(SMT の E-matching、Datalog / egglog、飽和証明器、Sledgehammer の関連度フィルタ)は今の課題にほぼ一対一で対応する。棚卸しの結果を <a class="secref" href="backlog.html">§05</a> b28〜b32 に入れた。<br>そのうち<b>いちばん安く試せる b28 を実装して測った</b>: 失敗キャッシュの鍵(<code>state_signature</code>)は束縛を全部入れて作っていたが、失敗の理由はたいてい数個の変数しか使っていない。鍵を「残っているパターンが実際に見る変数」だけに絞れば(<code>--nogood-core</code>)、無関係な変数の値の数だけ同じ失敗を作り直すのを避けられる ― SAT/SMT の nogood learning にあたる。</div>
+          <div class="evidence"><b>結果(選抜33問、基準 → <code>--nogood-core</code>):</b> 仕事量は全設定で下がる(既定 −1.5%、extras −15.1%、skip −9.4%、ノイズ5 −4.2%、ノイズ10 −5.5%、ノイズ20 −5.3%)が、解けた数は合計 <b>−3</b>(extras・skip・ノイズ5 で bench_2012egmop1、ノイズ20 で bench_2018chnwesternmop5 を落とし、ノイズ10 で bench_2011balkanmop1 を得る)。<b>既定にはせず、フラグとして残した。</b><br><b>落ちる仕組み:</b> 刈りすぎではなく「予算の縁にいる問題が押し出される」。bench_2012egmop1 は <code>--central-angle</code> だけなら解けるが 1,496,033 → 2,083,867 ステップかかるようになり、extras/skip/ノイズ5 の <code>--steps=1500000</code> を超える。<br><b>試して外したこと:</b> 鍵を核に絞るなら候補の並べ替えも核だけで決めるべきと考えて <code>DefinedBy</code> の並べ替えの熱を核に限ったが、<b>6設定すべてで1ステップも変わらなかった</b>ので戻した。<br><b>ついでに測れたこと(b29 の前提):</b> 既定では探索の仕事量の <b>100%</b> が全体sweep由来のタスクで、シード済みタスクの消費は 0。ノイズを足すと sweep の回数が倍増する(bench_2022balkanmop1 で 14回→32回、仕事量 826,498→8,007,052)。マッチングは完全に素朴な積み直しで回っている。</div>
+  </div>
+</details>
+<details class="item" id="l52" data-status="shipped">
+  <summary><span class="idx">#52</span><span class="t">検証を二段にする ― 1手ごとに全ベンチを回すのをやめ、33問の選抜で絞り込む</span><span class="pill shipped">手元の道具</span></summary>
+  <div class="body">
+<div class="desc">ユーザー方針(2026-09-23): 1手ごとに6設定×44問を回していると1回1時間近くかかり、試行が進まない。<b>速い選抜で絞り込み、採用・コミット・記録の直前にだけ全問を回す</b>二段構えにする。<br><b>選抜の作り方:</b> 過去の全結果(6設定・のべ84回の実行)を見ると、<b>11問はどの設定でも一度も解けたことがない</b>(bench_2000usatstp2 / bench_2005usamop3 / bench_2008armog10p6 / bench_2012chnwesternmop5 / bench_2015apmop1 / bench_2016armog10p2 / centroid / desargues / newton_gauss / pappus / pascal)。この11問は毎回ステップ予算を使い切るだけで、仕事量の <b>52〜77%</b> を食っていた。外した33問(<code>bench/tier1.txt</code>)で回すのが選抜の段(<code>quick.sh</code>)、44問全部が確認の段(<code>compare.sh</code>)。<br><b>注意:</b> 選抜は「解けている問題が壊れていないか」しか見ない。<b>新しく解けるようになった</b>のを捕まえられるのは全問の段だけなので、採用の判断は必ず全問で取り直すこと。</div>
+    <div class="evidence"><b>再現性の確認:</b> 選抜の33問は6設定すべてで基準を<b>1ステップも違わず</b>再現した(+0.0%)。所要時間は6設定で <b>8分22秒〜8分44秒</b>、同じ機械での全44問は <b>36分59秒</b> ― <b>約4.3倍</b>速い。全44問の確認も別途通してあり、6設定のうち3つは結果ファイルがバイト単位で一致、残り3つも解けた数・仕事量が変わらなかった。<br><b>途中で見つかった落とし穴2つ(どちらも道具の側):</b> (1) <code>bench/bin/</code> に置いたバイナリが古く、<code>--widen-every=0</code> 相当の挙動のまま測っていた ― 作業ツリーからビルドして置く <code>build.sh</code> を通すようにし、コミットの短縮ハッシュと md5 を出すようにした。(2) 問題リストを Windows 側の Python で書いたため CRLF になり、最後の1問が <code>varignon
+</code> という名前で渡って証明器が異常終了(exit 101)していたのに、<b>静かに「未解決」として数えられていた</b>。0 と 124(時間切れ)以外の終了コードを目立たせるようにし、リストの CR も落とすようにした。</div>
+  </div>
+</details>
 <details class="item" id="l51" data-status="shipped">
   <summary><span class="idx">#51</span><span class="t">候補capを広げるのが遅すぎた ― 行き詰まり2回ごとに需要作図より先に広げる</span><span class="pill shipped">0957282</span></summary>
   <div class="body">

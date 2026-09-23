@@ -41,6 +41,11 @@ pub struct ProverEngine {
     /// theorems と同じ添字で引く。theorems が確定してから ensure_* で遅延初期化する。
     pub theorem_stats: Vec<TheoremBanditStats>,
     pub theorem_required_types: Vec<Vec<EntityType>>,
+    /// 定理ごとの、パターンから変数へのビット索引(失敗キャッシュの鍵を絞るのに使う)。
+    pub theorem_var_index: Vec<Rc<PatternVarIndex>>,
+    /// 🌟 失敗キャッシュの鍵を「残っているパターンが実際に見る変数」だけで作るか。
+    /// 無関係な変数を鍵から外すと、同じ理由の失敗が1つにまとまる。
+    pub nogood_core: bool,
     /// 型だけで結果が決まる候補列挙の、定理をまたいだ共有キャッシュ(値は結果と計算時の型世代)。
     /// Connected 両方未束縛のジョイン。キーは (子の型, 親の型)。
     pub connected_join_cache: FxHashMap<(EntityType, EntityType), (PairList, u64, u64)>,
@@ -135,6 +140,8 @@ impl ProverEngine {
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),
             theorem_required_types: Vec::new(),
+            theorem_var_index: Vec::new(),
+            nogood_core: false,
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
             identical_self_bind_angle_cache: None,
@@ -158,6 +165,19 @@ impl ProverEngine {
         if self.theorem_stats.len() != self.theorems.len() {
             self.theorem_stats.resize(self.theorems.len(), TheoremBanditStats::default());
         }
+    }
+
+    pub(crate) fn ensure_theorem_var_index(&mut self) {
+        if self.theorem_var_index.len() != self.theorems.len() {
+            self.theorem_var_index = self.theorems.iter()
+                .map(|t| Rc::new(PatternVarIndex::build(t)))
+                .collect();
+        }
+    }
+
+    /// 失敗キャッシュに溜まっているエントリの総数(鍵の絞り込みが効いているかの目安)。
+    pub fn failed_path_entries(&self) -> usize {
+        self.global_failed_paths.iter().map(|m| m.len()).sum()
     }
 
     pub(crate) fn ensure_theorem_required_types(&mut self) {

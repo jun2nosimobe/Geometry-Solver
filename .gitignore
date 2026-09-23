@@ -58,3 +58,7 @@ result/
 # OS依存ファイル
 .DS_Store
 Thumbs.db
+
+# ベンチのバイナリと結果(生成物なので追跡しない。実体でも symlink でも無視する)
+bench/bin
+bench/res

@@ -122,6 +122,51 @@ pub(crate) fn collect_pattern_vars<'a>(pat: &'a Pattern, out: &mut Vec<&'a str>)
     }
 }
 
+/// 🌟 定理ごとの「どのパターンがどの変数を見るか」の索引。
+/// 失敗キャッシュの鍵を、残っているパターンが実際に見る変数だけに絞るために使う
+/// (無関係な変数まで鍵に入れると、その値の数だけ同じ失敗を作り直す)。
+pub struct PatternVarIndex {
+    /// 前提に現れる変数名。添字がそのままビット位置になる。
+    pub vars: Vec<String>,
+    /// パターン i が見る変数のビット集合(TheoremDef::patterns と同じ添字)。
+    pub per_pattern: Vec<u64>,
+    /// 変数が64個以下で、ビット集合で表せるか。超える定理では絞り込みを諦める。
+    pub exact: bool,
+}
+
+impl PatternVarIndex {
+    pub fn build(theorem: &TheoremDef) -> Self {
+        let mut vars: Vec<String> = Vec::new();
+        for pat in &theorem.patterns {
+            let mut names = Vec::new();
+            collect_pattern_vars(pat, &mut names);
+            for n in names {
+                if !vars.iter().any(|v| v == n) { vars.push(n.to_string()); }
+            }
+        }
+        let exact = vars.len() <= 64;
+        let per_pattern = theorem.patterns.iter()
+            .map(|p| if exact { mask_of_pattern(&vars, p) } else { u64::MAX })
+            .collect();
+        Self { vars, per_pattern, exact }
+    }
+
+    /// Not の中身のように、パターン列に無い1本だけを見るときの集合。
+    pub fn mask_of(&self, pat: &Pattern) -> u64 {
+        if self.exact { mask_of_pattern(&self.vars, pat) } else { u64::MAX }
+    }
+}
+
+fn mask_of_pattern(vars: &[String], pat: &Pattern) -> u64 {
+    let mut names = Vec::new();
+    collect_pattern_vars(pat, &mut names);
+    let mut m = 0u64;
+    for n in names {
+        if let Some(i) = vars.iter().position(|v| v == n) { m |= 1u64 << i; }
+    }
+    m
+}
+
 /// Identical(v1, v2) の v1・v2 それぞれに、同じ種類の DefinedBy がぶら下がっているか。
 /// そういう定理では自己束縛の候補数がそのまま下流の分岐係数になる。
 pub(crate) fn has_paired_defined_by_fanout(theorem: &TheoremDef, v1: &str, v2: &str) -> bool {

@@ -13,7 +13,44 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">未着手 · 20件</div>
+<div class="group"><div class="group-title">未着手 · 25件</div>
+<details class="item" id="b28" data-status="open">
+  <summary><span class="idx"></span><span class="t">★ 失敗キャッシュの鍵に無関係な束縛まで入っている ― 同じ理由の失敗を、無関係な変数の値の数だけ作り直す</span></summary>
+  <div class="body">
+<div class="desc">失敗した探索状態の鍵(<code>state_signature</code>)は<b>束縛を全部</b>入れて作っていた。ところが失敗の理由はたいてい束縛のうち数個しか使っていないので、無関係な変数 Z, W の値の組み合わせの数だけ、同じ失敗が別物として再発見され別々にキャッシュされる。図が大きいほど Z, W の取りうる値が増えるので、<b>同じ失敗を作り直す回数がノイズの個数に対して掛け算で増える</b>。SAT/SMT や制約充足でいう「nogood を explanation(核)付きで学習する」話にあたる。<br><b>入れた対処(<code>--nogood-core</code>):</b> 鍵を「残っているパターンが実際に見る変数」だけに絞る。失敗する枝が見る束縛はそこに限られる(パターンの選び方も、破れの早期検査も、候補の展開も、残っているパターンの引数しか見ない)ので、核に入らない変数はその部分木の答えを変えられない。ただし枝の打ち切り(<code>dfs_cap</code>)は探索の順序に依存するので、「予算切れで失敗した」かどうかまでは一致しない ― 既存の失敗キャッシュと同じ近似。</div>
+    <div class="evidence"><b>計測(1問ずつ、--profile の「失敗キャッシュのエントリ数」):</b> test_spiral_similarity 22,994→19,861(仕事量 27,462→27,059)、bench_2005ctstp1 313,146→284,708(742,344→736,854)、nine_point_full 626,966→642,825(807,600→780,026)、bench_2018chnwesternmop5 1,199,358→<b>934,328</b>(3,947,844→<b>3,613,826</b>、−8.5%)。ノイズ10では bench_2005ctstp1 427,960→<b>294,105</b>(−31%)、nine_point_full 647,620→540,937。<br><b>結論:</b> 効く向きは一貫している(測った範囲で仕事量が増えた例は無い)が、<b>予想した掛け算の潰れ方にはならなかった</b> ― 仕事量で −1〜−8%。定理が小さく変数が密に絡んでいるので、残っているパターンの変数だけに絞っても核がほとんど束縛全体になってしまう。<br><b>選抜33問での結果(基準 → --nogood-core):</b> 既定 32/32(仕事量 <b>−1.5%</b>)、extras 31→<b>30</b>(−15.1%)、skip 31→<b>30</b>(−9.4%)、ノイズ5 32→<b>31</b>(−4.2%)、ノイズ10 29→<b>30</b>(−5.5%)、ノイズ20 30→<b>29</b>(−5.3%)。仕事量は全設定で下がるが、解けた数は合計 <b>−3</b>。<b>既定にはしない。</b><br><b>落ちる仕組み:</b> 鍵が粗くなると、枝の刈られ方が変わって別の(長い)証明経路をたどることがある。bench_2012egmop1 は <code>--central-angle</code> だけなら解けるが 1,496,033 → <b>2,083,867</b> ステップかかるようになり、extras/skip/ノイズ5 の予算(<code>--steps=1500000</code>)を超えて落ちる。つまり「刈りすぎ」ではなく「予算の縁にいる問題が押し出される」。<br><b>試して外したこと:</b> 鍵を核に絞るなら候補の並べ替えも核だけで決めるべき(核の外の束縛で順序が変わると、鍵が同じなのに予算の切れ方が変わる)と考えて <code>DefinedBy</code> の並べ替えの熱を核に限ったが、<b>6設定すべてで1ステップも変わらなかった</b> ― この定理たちでは核が結局ほぼ束縛全体になる。複雑さだけ増えるので戻した。<br><b>次の案:</b> 「残っているパターンに現れる変数」は構文的な過大評価。深いところで失敗する枝は最初の1本で落ちることが多いので、<b>実際に参照した変数</b>を下から積み上げれば核はもっと小さくなる。ただしそれは鍵を引く前に分からない(ハッシュで引けず、包含判定が要る)ので、実装の形を変える必要がある。</div>
+    <div class="b-tags"><span class="tag">--nogood-core で実装済み・既定にしない</span><span class="tag">仕事量 −1.5〜−15%</span><span class="tag">解けた数は合計 −3</span></div>
+  </div>
+</details>
+<details class="item" id="b29" data-status="open">
+  <summary><span class="idx"></span><span class="t">全体sweepが素朴な積み直しになっている ― 半素朴評価(semi-naive)にできる</span></summary>
+  <div class="body">
+<div class="desc"><code>schedule_full_sweep</code> は全定理を素朴に積み直し、候補capを広げるたびにも呼ばれる。Datalog の半素朴評価の規律は「<b>少なくとも1つは新しいタプルを使うマッチだけ</b>を列挙し、古い×古いは二度と列挙しない」で、これは全体sweepに<b>足す</b>ものではなく<b>置き換える</b>もの。</div>
+    <div class="evidence"><b>計測(2026-09-23、--profile のシード有無別の内訳):</b> 既定では探索の仕事量の <b>100%</b> が全体sweep由来(シードなし)のタスクで、シード済みタスクの消費は <b>0</b> ― 差分起動(<code>schedule_matcher_task</code>)は <code>--seeded-rematch</code> の下でしか動かず、既定では切ってある。<b>マッチングは完全に素朴な積み直しで回っている。</b><br>sweep の回数とタスク数: test_spiral_similarity 3回/54(ノイズ10で 4回/88)、bench_2005ctstp1 11回/238(12回/264)、nine_point_full 5回/106(5回/106)、bench_2018chnwesternmop5 22回/484(<b>30回/660</b>)、bench_2022balkanmop1 14回/304(<b>32回/704</b>、仕事量 826,498→<b>8,007,052</b>)。<b>ノイズを足すと sweep の回数が倍増し、そのたびに全定理を積み直している。</b><br><b>過去6回の失敗との関係:</b> シード経路は6回試して6回とも撤回されている(<a href="#b7">#7</a>、<a class="secref" href="ledger.html">§04</a>)。負け方は毎回同じで「(定理 × 一致するパターン × 順列)の数だけタスクを積む」ファンアウトで、定理単位の許可リストでも効かなかった(Identical(Angle,Angle) という結論形式自体が高頻度だから)。<b>ただし6回とも、シードを全体sweepに「足す」形だった(素朴 + 追加)。</b>全体sweepを減らす側は一度もやっていないので、これらは半素朴評価そのものの反証にはなっていない。<br><b>着手の条件:</b> 先に「どの定理の sweep を省けるか」(= 前回の sweep 以降、その定理が見る型に新しい代表元が増えたか)を決めること。シードを足すのはその後。</div>
+    <div class="b-tags"><span class="tag">仕事量の100%が全体sweep</span><span class="tag">ノイズでsweep回数が倍増</span><span class="tag">足すのではなく減らす側から</span></div>
+  </div>
+</details>
+<details class="item" id="b30" data-status="open">
+  <summary><span class="idx"></span><span class="t">候補capと順序依存の根本 ― 入れ子ループ結合をやめて、関係マッチング+最悪計算量最適結合にする</span></summary>
+  <div class="body">
+<div class="desc"><code>dfs_match</code> は毎ステップ <code>estimate_cost</code> で一番安いパターンを選ぶ<b>貪欲な入れ子ループ結合</b>で、中間結果が爆発するから <code>heat_cap</code> / <code>fanout_heat_cap</code> で打ち切っている ― つまり<b>候補capは入れ子ループ結合の爆発に対する対症療法</b>で、<a href="#b27">b27</a> の「広げる時機」もその調整でしかない。<br>ここに対応するのが e-graph 側の既製技術で、演算子ごとに関係(列は同値類の id)を張り、マッチングを<b>連言クエリ</b>として Generic Join / Leapfrog Triejoin で評価する(relational e-matching、POPL 2022 / egglog)。効く理由が3つある: (1) 中間結果ではなく実際の出力サイズ(AGM 上界)で抑えられるので、capで切り捨てる必要が構造的に減る。(2) <b>変数順序に依存しない</b>保証があるので、方針Bの「定理の順序で±15%動く」問題に別角度から答えが出る。(3) ノイズは関係にタプルを足すだけなので、劣化が掛け算でなく出力サイズなりになる。<br><b>規模:</b> <code>Connected</code> / <code>DefinedBy</code> の候補列挙を索引付きの関係に置き換える大工事。<code>connected_pairs_for_types</code> がすでに型ペアごとの結合結果をキャッシュしているので足がかりはある。<a href="#b28">b28</a>・<a href="#b29">b29</a> で戻らない分を見てから判断する。</div>
+    <div class="b-tags"><span class="tag">大工事</span><span class="tag">capと順序依存の両方に効く</span></div>
+  </div>
+</details>
+<details class="item" id="b31" data-status="open">
+  <summary><span class="idx"></span><span class="t">関連度フィルタ(SInE / MePo)― 「巨大な前提のうちほとんどが無関係」はノイズ問題と同じ形</span></summary>
+  <div class="body">
+<div class="desc">Sledgehammer の MePo と Vampire の SInE は「巨大な公理集合のうちほとんどがゴールと無関係」という、方針E のノイズ問題とまったく同じ状況のために作られたもの。ゴールに現れる記号から出発し、記号の希少性で重み付けしながら反復的に関連する事実を引き込む。<br>いまの <code>heat</code> はその手作り版に見えるが、MePo は「ゴールからの距離」と「記号の希少性」を明示的に分け、<b>行き詰まったら半径を広げる</b>段階構成を持っている。<code>heat</code> の初期値をこの方式で与えるのは今の構造に載せやすい。<br><b>注意:</b> これは問題ごとに定理を手で選ぶ opt-in とは別物(ゴールから自動で導出し、行き詰まりに応じて広げる)。ただし「候補を落とす」機構である点は共通なので、<b>広げ方を先に決めてから</b>入れること。</div>
+    <div class="b-tags"><span class="tag">方針E 直撃</span><span class="tag">opt-in ではない(ゴールから自動導出)</span></div>
+  </div>
+</details>
+<details class="item" id="b32" data-status="open">
+  <summary><span class="idx"></span><span class="t">マージの由来を出す ― 証明付き合同閉包(proof forest / egg の explanation)</span></summary>
+  <div class="body">
+<div class="desc">マージ監査(<a class="secref" href="ledger.html">§04</a>)は数値で真偽を見るところまでで、<b>なぜそのマージが起きたか</b>は出せない。union-find に証明の辺を張る proof forest(Nieuwenhuis–Oliveras)や <code>egg</code> の explanation が既製の答えで、偽マージの由来を機械的に辿れるようになる。定理の書き方の誤りを見つける手間が大きく減る。<br><b>取らないもの:</b> LCF 風カーネル、依存型、tactic 言語、完全な superposition。こちらの主張は地の等式・接続関係なので、その表現力は要らない。</div>
+    <div class="b-tags"><span class="tag">監査の後始末が楽になる</span><span class="tag">小さめ</span></div>
+  </div>
+</details>
 <details class="item" id="b27" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 候補capを広げるのが遅すぎる ― 需要作図が尽きるまで待つので、その間に図が膨らむ</span></summary>
   <div class="body">

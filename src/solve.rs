@@ -53,6 +53,7 @@ pub struct SolveOptions {
     /// 初期作図に足す無関係な作図の数(方針E: ノイズへの頑健性の計測)。
     pub batch_conclusions: bool,
     pub fanout_connected: bool,
+    pub nogood_core: bool,
     pub widen_first: bool,
     pub widen_first_ceiling: usize,
     pub widen_every: usize,
@@ -98,6 +99,7 @@ impl SolveOptions {
             audit_merges: flag(args, "--audit-merges"),
             batch_conclusions: flag(args, "--batch-conclusions"),
             fanout_connected: flag(args, "--fanout-connected"),
+            nogood_core: flag(args, "--nogood-core"),
             widen_first: flag(args, "--widen-first"),
             widen_first_ceiling: value(args, "--widen-first-ceiling=").unwrap_or(40),
             widen_every: value(args, "--widen-every=").unwrap_or(2),
@@ -310,6 +312,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     prover.heat_cap = opts.heat_cap;
     prover.fanout_heat_cap = opts.fanout_heat_cap;
     prover.fanout_connected = opts.fanout_connected;
+    prover.nogood_core = opts.nogood_core;
     prover.theorems = theorem_set(problem_name, opts).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
@@ -433,6 +436,8 @@ fn print_profile(prover: &ProverEngine, total: Duration) {
     println!("  ├─ MCTS               : {:>7.2}s ({:>5.1}%)", p.mcts_time.as_secs_f64(), pct(p.mcts_time));
     println!("  └─ 未計測(数値検証等) : {:>7.2}s ({:>5.1}%)",
         total.saturating_sub(accounted).as_secs_f64(), pct(total.saturating_sub(accounted)));
+    println!("  失敗キャッシュのエントリ数 : {} (鍵の絞り込み{})",
+        prover.failed_path_entries(), if prover.nogood_core { "あり" } else { "なし" });
     println!("  --- schedule_full_sweep自体の内訳 ---");
     println!("  呼び出し回数          : {}", p.sfs_calls);
     println!("  累計所要時間          : {:.3}s ({:.1}% of 合計)", p.sfs_time.as_secs_f64(), pct(p.sfs_time));

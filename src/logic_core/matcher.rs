@@ -17,6 +17,15 @@ use std::rc::Rc;
 use crate::mmp_core::{ClassId, DefKind, Definition, EntityType, ParentSymmetry};
 use super::*;
 
+/// active に残っているパターンが見る変数のビット集合。
+fn core_mask(pattern_masks: &[u64], active: u64) -> u64 {
+    let mut core = 0u64;
+    for (i, m) in pattern_masks.iter().enumerate() {
+        if active & (1u64 << i) != 0 { core |= *m; }
+    }
+    core
+}
+
 /// 1つの定理に対する探索の文脈。
 pub(crate) struct Search<'a> {
     pub theorem: &'a TheoremDef,
@@ -27,6 +36,10 @@ pub(crate) struct Search<'a> {
     pub scope: usize,
     pub failed_paths: &'a mut FailedPaths,
     pub on_match: &'a mut dyn FnMut(&Bind, &FlipStates),
+    /// 定理の変数のビット索引(patterns と同じ添字で引く per_pattern を持つ)。
+    pub var_index: &'a PatternVarIndex,
+    /// patterns の各本が見る変数のビット集合。Not の中身を調べるときは1本分だけ渡す。
+    pub pattern_masks: &'a [u64],
 }
 
 /// DefinedBy で親が全部そろっていて定義がまだ無いとき、その場で作ってよい種類。
@@ -42,7 +55,45 @@ impl ProverEngine {
     /// 残りパターンは数ではなく集合で入れること。数だけだと、同じ束縛で別のパターンが
     /// 残っている状態(タスクの初期束縛が違えば消費の順序も変わる)や、Not の中身を調べた
     /// ときの失敗(残り1本)を、本体の「残り1本」の状態の失敗と取り違えて正しい枝を刈る。
-    fn state_signature(&self, scope: usize, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
+    fn state_signature(&self, s: &Search<'_>, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
+        if self.nogood_core && s.var_index.exact {
+            return self.core_signature(s, active, bind, flip_states);
+        }
+        self.full_signature(s.scope, active, bind, flip_states)
+    }
+
+    /// 🌟 残っているパターンが実際に見る変数(核)だけで作る署名。
+    ///
+    /// 失敗した枝の理由は、たいてい束縛のうち数個しか使っていない。束縛を全部鍵に入れると、
+    /// 無関係な変数の値の組み合わせの数だけ同じ失敗を別物として作り直すことになり、図が
+    /// 大きいほど(= 無関係な作図が増えるほど)その数が掛け算で増える。
+    ///
+    /// 失敗する枝が見る束縛は、残っているパターンに現れる変数に限られる
+    /// (パターンの選び方も、破れの早期検査も、候補の展開も、すべて残っているパターンの
+    /// 引数しか見ない)。核に入らない変数は、この部分木の答えを変えられない。
+    ///
+    /// ただし枝の打ち切り(dfs_cap)は探索の順序に依存するので、核が同じでも「予算切れで
+    /// 失敗した」かどうかまでは一致しない。そこは既存の失敗キャッシュと同じ近似。
+    fn core_signature(&self, s: &Search<'_>, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
+        let core = core_mask(s.pattern_masks, active);
+        let mut hasher = rustc_hash::FxHasher::default();
+        (s.scope, active).hash(&mut hasher);
+        for (i, name) in s.var_index.vars.iter().enumerate() {
+            if core & (1u64 << i) == 0 { continue; }
+            i.hash(&mut hasher);
+            match bind.get(name) {
+                Some(&id) => (1u8, self.egraph.get_rep(id).0).hash(&mut hasher),
+                None => (0u8, 0usize).hash(&mut hasher),
+            }
+            match flip_states.get(name) {
+                Some(&f) => (2u8 + u8::from(f)).hash(&mut hasher),
+                None => 0u8.hash(&mut hasher),
+            }
+        }
+        hasher.finish()
+    }
+
+    fn full_signature(&self, scope: usize, active: u64, bind: &Bind, flip_states: &FlipStates) -> u64 {
         // 定理の変数は多くても20個程度なので、確保を避けてスタック上で並べる。
         // 順序に依らない畳み込み(wrapping_add)は FxHash の撹拌が弱く衝突が増えたので使わない。
         const SIG_CAP: usize = 48;
@@ -89,7 +140,7 @@ impl ProverEngine {
         self.profile.branch_counts[self.branch_tag as usize] += 1;
         if self.dfs_calls > self.dfs_cap { return false; }
 
-        let state_sig = self.state_signature(s.scope, active, &bind, &flip_states);
+        let state_sig = self.state_signature(s, active, &bind, &flip_states);
         if let Some(&(cached_mask, cached_gens)) = s.failed_paths.get(&state_sig) {
             let still_valid = (0..4).all(|i| {
                 (cached_mask & (1 << i)) == 0
@@ -147,6 +198,7 @@ impl ProverEngine {
             }
             Pattern::Not(inner) => {
                 self.branch_tag = 0;
+                let inner_masks = [s.var_index.mask_of(inner)];
                 let inner_matched = {
                     let mut ignore = |_: &Bind, _: &FlipStates| {};
                     let mut inner_search = Search {
@@ -155,6 +207,8 @@ impl ProverEngine {
                         scope: s.scope * 65 + best_idx + 1,
                         failed_paths: &mut *s.failed_paths,
                         on_match: &mut ignore,
+                        var_index: s.var_index,
+                        pattern_masks: &inner_masks,
                     };
                     self.dfs_match(&mut inner_search, 1, bind.clone(), flip_states.clone(), &mut my_mask)
                 };
@@ -686,12 +740,15 @@ mod tests {
         let mut failed_paths = FailedPaths::default();
         let mut found = 0;
         let mut count = |_: &Bind, _: &FlipStates| found += 1;
+        let var_index = PatternVarIndex::build(&theorem);
         let mut search = Search {
             theorem: &theorem,
             patterns: &theorem.patterns,
             scope: 0,
             failed_paths: &mut failed_paths,
             on_match: &mut count,
+            var_index: &var_index,
+            pattern_masks: &var_index.per_pattern,
         };
         let mut dep_mask = 0;
         prover.dfs_match(&mut search, 0b1111, Bind::default(), FlipStates::default(), &mut dep_mask);
