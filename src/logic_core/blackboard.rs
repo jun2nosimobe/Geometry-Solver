@@ -20,6 +20,15 @@ pub struct RecoveryOptions {
     pub midpoint_demands: bool,
     /// 外す手の名前(line, point, angle, second, mid, target)。
     pub skip: Vec<String>,
+    /// 🌟 図を広げる手(有向角・第2交点・中点・目標からの逆算)より先に、候補capの拡大を試すか。
+    /// cap を広げても図は増えず、失敗キャッシュも効くので安い。図が大きいほど「広げるのが遅れる」代償が大きい。
+    pub widen_first: bool,
+    /// 先に広げるのはこの値までとし、それ以上は従来どおり需要作図の後に広げる。
+    /// 小さい図では広げるほど探索が重くなるので、早い拡大は控えめにする。
+    pub widen_first_ceiling: usize,
+    /// 🌟 行き詰まり何回ごとに、需要作図より先に候補capの拡大を試すか(0 なら試さない。solve の既定は2)。
+    /// 需要作図は図が大きいほど尽きにくく、そのままだと cap を広げる番が来る前に図が膨らみ切ってしまう。
+    pub widen_every: usize,
 }
 
 impl RecoveryOptions {
@@ -51,6 +60,8 @@ pub struct BlackboardEngine {
     /// 既定(false)だと、先に発火した定理のマージが同じ全探索の後続タスクから見えるので、定理を試す順序で
     /// 探索の進み方が変わる(§05 の順序依存)。true にすると、その全探索の中では全タスクが同じ図を見る。
     pub batch_conclusions: bool,
+    /// 前回 cap を広げてからの行き詰まりの回数(widen_every の判定に使う)。
+    pub stalls_since_widen: usize,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -65,6 +76,7 @@ impl BlackboardEngine {
             bandit_enabled: false,
             seeded_rematch_enabled: false,
             batch_conclusions: false,
+            stalls_since_widen: 0,
             work_limit: u64::MAX,
         }
     }
@@ -77,8 +89,21 @@ impl BlackboardEngine {
     /// 作図が何も出なければ候補capを広げる: 狭い cap で除外されていただけの候補なら MCTS よりずっと安く届き、
     /// 失敗キャッシュが既に試した候補を再利用するので同じ探索を繰り返さない。
     pub fn recover(&mut self, open_targets: &[(String, Vec<ClassId>)], rotate: &mut usize, opts: &RecoveryOptions) -> Recovered {
+        self.stalls_since_widen += 1;
         let mut recovered = !opts.skipped("line") && self.resolve_demands();
         if !opts.skipped("point") && self.resolve_point_demands() { recovered = true; }
+        // cap の拡大を先に試す(--widen-first)。広げられたらそこで戻り、次の全探索を同じ図でやり直す。
+        // cap が一度も候補を切り捨てていなければ、広げても候補は増えないので先に広げる意味がない。
+        // widen_every 回の行き詰まりごとに、需要作図より先に広げる番を作る(需要作図が尽きるのを待たない)。
+        let due = opts.widen_first || (opts.widen_every > 0 && self.stalls_since_widen >= opts.widen_every);
+        if !recovered && due && self.prover.fanout_truncations > 0
+            && self.prover.fanout_heat_cap < opts.widen_first_ceiling.min(FANOUT_HEAT_CAP_CEILING) {
+            self.prover.fanout_heat_cap = (self.prover.fanout_heat_cap * 2).min(FANOUT_HEAT_CAP_CEILING);
+            self.prover.fanout_truncations = 0;
+            self.stalls_since_widen = 0;
+            self.schedule_full_sweep();
+            return Recovered::WidenedCap(self.prover.fanout_heat_cap);
+        }
         if !recovered && !opts.skipped("angle") && self.resolve_angle_demands() { recovered = true; }
         if !recovered && !opts.skipped("second") && self.resolve_second_intersection_demands() { recovered = true; }
         if !recovered && opts.midpoint_demands && !opts.skipped("mid") && self.resolve_midpoint_demands() { recovered = true; }

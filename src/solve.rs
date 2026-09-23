@@ -52,6 +52,10 @@ pub struct SolveOptions {
     pub audit_merges: bool,
     /// 初期作図に足す無関係な作図の数(方針E: ノイズへの頑健性の計測)。
     pub batch_conclusions: bool,
+    pub fanout_connected: bool,
+    pub widen_first: bool,
+    pub widen_first_ceiling: usize,
+    pub widen_every: usize,
     pub noise: usize,
     pub noise_seed: u64,
 }
@@ -93,13 +97,17 @@ impl SolveOptions {
             show_origins: flag(args, "--origins") || show_trace,
             audit_merges: flag(args, "--audit-merges"),
             batch_conclusions: flag(args, "--batch-conclusions"),
+            fanout_connected: flag(args, "--fanout-connected"),
+            widen_first: flag(args, "--widen-first"),
+            widen_first_ceiling: value(args, "--widen-first-ceiling=").unwrap_or(40),
+            widen_every: value(args, "--widen-every=").unwrap_or(2),
             noise: value(args, "--noise=").unwrap_or(0),
             noise_seed: value(args, "--noise-seed=").unwrap_or(12345),
         })
     }
 
     fn recovery_options(&self) -> RecoveryOptions {
-        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone() }
+        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every }
     }
 }
 
@@ -301,6 +309,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     let mut prover = ProverEngine::new(egraph);
     prover.heat_cap = opts.heat_cap;
     prover.fanout_heat_cap = opts.fanout_heat_cap;
+    prover.fanout_connected = opts.fanout_connected;
     prover.theorems = theorem_set(problem_name, opts).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;

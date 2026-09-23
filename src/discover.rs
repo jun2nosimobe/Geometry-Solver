@@ -669,7 +669,7 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
 
     let mut engine = build_full_engine(egraph.clone());
     let open = [("Identical".to_string(), vec![a, b])];
-    let recovery = RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
+    let recovery = RecoveryOptions { midpoint_demands: true, skip: Vec::new(), widen_first: false, widen_first_ceiling: 40, widen_every: 2 };
     let mut rotate = 0;
 
     engine.work_limit = steps;

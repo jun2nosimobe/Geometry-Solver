@@ -28,6 +28,12 @@ pub struct ProverEngine {
     /// 自己束縛の候補数が下流の分岐係数に掛け算で効く定理向けの、狭い上限。
     /// 需要駆動の作図が尽きた手詰まりのときに main が段階的に広げるので、これは初期値。
     pub fanout_heat_cap: usize,
+    /// 🌟 Connected の片側だけ束縛の候補も、heat_cap(既定40)ではなく fanout_heat_cap(既定5、行き詰まったら
+    /// 広げる)で絞るか。図に無関係な作図が増えると、この分岐の候補が毎段40まで広がって掛け算で爆発する。
+    pub fanout_connected: bool,
+    /// 🌟 熱の cap が実際に候補を切り捨てた回数(前回 cap を広げてからの分)。0 なら cap を広げても候補は
+    /// 増えないので、広げる意味がない ― 「広げるのを先にするか」の判断に使う。
+    pub fanout_truncations: u64,
     /// 「2点はあるのに結ぶ直線が無い」需要(点の組 → 回数)。resolve_demands が消費する。
     pub construction_demands: FxHashMap<(ClassId, ClassId), f64>,
     /// 「2直線はあるのに交点が無い」需要(ソート済みの直線の組 → 回数)。resolve_point_demands が消費する。
@@ -123,6 +129,8 @@ impl ProverEngine {
             dfs_cap: 100_000,
             heat_cap: 40,
             fanout_heat_cap: 5,
+            fanout_connected: false,
+            fanout_truncations: 0,
             construction_demands: FxHashMap::default(),
             point_construction_demands: FxHashMap::default(),
             theorem_stats: Vec::new(),

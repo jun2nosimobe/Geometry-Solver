@@ -116,15 +116,19 @@ impl ProverEngine {
 
     /// Connected の局所スキャン((Some,None)/(None,Some))向けの熱量駆動cap。普段は候補が
     /// 少ないので全件試し、多くの点が乗る円のような「ハブ」のときだけ熱の高い順に絞る。
-    pub(crate) fn heat_capped_connected_candidates(&self, candidates: rustc_hash::FxHashSet<ClassId>) -> Vec<ClassId> {
+    pub(crate) fn heat_capped_connected_candidates(&mut self, candidates: rustc_hash::FxHashSet<ClassId>) -> Vec<ClassId> {
+        let cap = if self.fanout_connected { self.fanout_heat_cap } else { self.heat_cap };
         let mut v: Vec<ClassId> = candidates.into_iter().collect();
-        if v.len() > self.heat_cap {
+        if v.len() > cap {
+            // 数えるのは狭い方(fanout_heat_cap)で切ったときだけ。heat_cap で切った分を数えると、
+            // きれいな図でも条件が成立してしまい「cap を広げても候補が増えない場面」で広げることになる。
+            if self.fanout_connected { self.fanout_truncations += 1; }
             v.sort_by(|&a, &b| {
                 let ha = self.egraph.entities[a.0].heat();
                 let hb = self.egraph.entities[b.0].heat();
                 hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal)
             });
-            v.truncate(self.heat_cap);
+            v.truncate(cap);
         }
         v
     }

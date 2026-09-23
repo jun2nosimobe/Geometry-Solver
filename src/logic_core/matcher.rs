@@ -235,7 +235,9 @@ impl ProverEngine {
                 }).count();
                 let squared_fanout = self_bind_pattern_count >= 2
                     || has_paired_defined_by_fanout(theorem, v1, v2);
-                reps.truncate(if squared_fanout { self.fanout_heat_cap } else { self.heat_cap });
+                let cap = if squared_fanout { self.fanout_heat_cap } else { self.heat_cap };
+                if squared_fanout && reps.len() > cap { self.fanout_truncations += 1; }
+                reps.truncate(cap);
                 *dep_mask |= expected_type.map_or(ALL_TYPES_MASK, entity_type_bit);
 
                 let mut any = false;

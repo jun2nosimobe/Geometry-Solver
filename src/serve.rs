@@ -811,7 +811,7 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], steps:
     let mut engine = crate::logic_core::BlackboardEngine::new(prover);
     engine.work_limit = steps;
     engine.schedule_full_sweep();
-    let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, skip: Vec::new() };
+    let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, skip: Vec::new(), widen_first: false, widen_first_ceiling: 40, widen_every: 2 };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(PROVE_TIME_CAP_SECS);
     let mut rotate = 0usize;
     while engine.prover.work_done() < steps && std::time::Instant::now() < deadline {
