@@ -15,6 +15,13 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l50" data-status="shipped">
+  <summary><span class="idx">#50</span><span class="t">ノイズを足した図で測れるようにし、数値チェックを速くして乱数の列を分ける</span><span class="pill shipped">19c0101</span></summary>
+  <div class="body">
+<div class="desc"><b>ノイズ(<code>--noise=N</code>):</b> 問題の初期作図に、証明と無関係な作図をN個足す(2点を通る直線・中点・垂線・交点・外接円)。材料は既にある有限の点と直線だけで、新しい自由点は置かない ― 図が大きくなるだけで主張の真偽は変わらないので、解けなくなるなら探索が図の大きさに弱いということ(方針E)。<code>--noise-seed</code> で同じ図を再現できる。<br><b>数値チェックの高速化:</b> 判定結果を代表元の組で覚え、図全体に座標を置いた標本とその評価結果を、構造が変わるまで使い回す(置けない図では従来どおりペアごとに置く)。<br><b>乱数の分離:</b> 次数測定(動点法)の乱数を数値チェックと別の列にした。同じ列だと、検算の回数が変わるだけで次数の測り方が変わり、次数で並べ替えるマッチの候補順、ひいては探索の結果まで動く。</div>
+          <div class="evidence"><b>ノイズ耐性(既定設定・44問):</b> ノイズ0で32/44(仕事量50.0M)、5個で30/44(79.1M)、10個で28/44(108.6M)、20個で28/44(129.3M)。<b>無関係な作図を5個足すだけで2問落ちる。</b><br><b>高速化の効果:</b> 既定・長さ+中心角+中点・skip-recovery の3設定は変更前と完全に一致(解けた問題・仕事量・推論ログ)。ノイズ付きでも解けた問題ごとの仕事量は一致し、ノイズ10では時間の安全弁までに探索が届いて 28→29/44、ノイズ20では 28→27/44(test_involution が予算内に収まらなくなった)。<br><b>まとめ適用(<a class="secref" href="backlog.html">§05</a> 順序依存の実験、不採用):</b> <code>--batch-conclusions</code> は6通りで解けた数が合計 −2、仕事量は大半の設定で増えた。</div>
+  </div>
+</details>
 <details class="item" id="l49" data-status="shipped">
   <summary><span class="idx">#49</span><span class="t">目標の判定を3つの入口で共通にし、結論のマージの数値監査と仕事量での証明予算を入れる</span><span class="pill shipped">fe6247a</span></summary>
   <div class="body">
@@ -376,7 +383,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 目標判定の共通化・結論のマージの数値監査・証明予算の仕事量化まで(fe6247a)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: ノイズを足した図でのベンチと数値チェックの高速化まで(19c0101)
   </footer>
 </div>
 <script src="atlas.js"></script>
