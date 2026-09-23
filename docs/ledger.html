@@ -23,7 +23,7 @@
   </div>
 </details>
 <details class="item" id="l52" data-status="shipped">
-  <summary><span class="idx">#52</span><span class="t">検証を二段にする ― 1手ごとに全ベンチを回すのをやめ、33問の選抜で絞り込む</span><span class="pill shipped">手元の道具</span></summary>
+  <summary><span class="idx">#52</span><span class="t">検証を二段にする ― 1手ごとに全ベンチを回すのをやめ、33問の選抜で絞り込む</span><span class="pill shipped">5a833c7</span></summary>
   <div class="body">
 <div class="desc">ユーザー方針(2026-09-23): 1手ごとに6設定×44問を回していると1回1時間近くかかり、試行が進まない。<b>速い選抜で絞り込み、採用・コミット・記録の直前にだけ全問を回す</b>二段構えにする。<br><b>選抜の作り方:</b> 過去の全結果(6設定・のべ84回の実行)を見ると、<b>11問はどの設定でも一度も解けたことがない</b>(bench_2000usatstp2 / bench_2005usamop3 / bench_2008armog10p6 / bench_2012chnwesternmop5 / bench_2015apmop1 / bench_2016armog10p2 / centroid / desargues / newton_gauss / pappus / pascal)。この11問は毎回ステップ予算を使い切るだけで、仕事量の <b>52〜77%</b> を食っていた。外した33問(<code>bench/tier1.txt</code>)で回すのが選抜の段(<code>quick.sh</code>)、44問全部が確認の段(<code>compare.sh</code>)。<br><b>注意:</b> 選抜は「解けている問題が壊れていないか」しか見ない。<b>新しく解けるようになった</b>のを捕まえられるのは全問の段だけなので、採用の判断は必ず全問で取り直すこと。</div>
     <div class="evidence"><b>再現性の確認:</b> 選抜の33問は6設定すべてで基準を<b>1ステップも違わず</b>再現した(+0.0%)。所要時間は6設定で <b>8分22秒〜8分44秒</b>、同じ機械での全44問は <b>36分59秒</b> ― <b>約4.3倍</b>速い。全44問の確認も別途通してあり、6設定のうち3つは結果ファイルがバイト単位で一致、残り3つも解けた数・仕事量が変わらなかった。<br><b>途中で見つかった落とし穴2つ(どちらも道具の側):</b> (1) <code>bench/bin/</code> に置いたバイナリが古く、<code>--widen-every=0</code> 相当の挙動のまま測っていた ― 作業ツリーからビルドして置く <code>build.sh</code> を通すようにし、コミットの短縮ハッシュと md5 を出すようにした。(2) 問題リストを Windows 側の Python で書いたため CRLF になり、最後の1問が <code>varignon
@@ -405,7 +405,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 候補capを広げる時機の修正まで(0957282)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: ベンチの二段化と失敗キャッシュの鍵の絞り込みまで(5a833c7)
   </footer>
 </div>
 <script src="atlas.js"></script>
