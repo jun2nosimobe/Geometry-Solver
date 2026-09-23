@@ -16,7 +16,7 @@
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
 <details class="item" id="l54" data-status="shipped">
-  <summary><span class="idx">#54</span><span class="t">半素朴評価を追いかけたら、本丸は「失敗キャッシュを捨てすぎていること」だった ― 仕事量の半分が歩き直し</span><span class="pill open">計測のみ・2案とも不発</span></summary>
+  <summary><span class="idx">#54</span><span class="t">半素朴評価を追いかけたら、本丸は「失敗キャッシュを捨てすぎていること」だった ― 仕事量の半分が歩き直し</span><span class="pill open">358e3fa · 2案とも不発</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="backlog.html">§05</a> b29(全体sweepを半素朴評価にする)の着手条件は「どの定理の sweep を省けるか決めること」だった。やってみると、<b>その道は塞がっていて、代わりにもっと大きな穴が見つかった</b>。<br><b>計測を3つ足した</b>(<code>--profile</code> のみに出る。探索の挙動は全44問×6設定で変わらないことを確認済み): 失敗キャッシュの当たり/無駄になった当たりの数、型世代を上げた理由の内訳、失敗を記録したときの依存マスクの幅。</div>
           <div class="evidence"><b>分かったこと:</b> <code>dfs_match</code> の呼び出しのうち、キャッシュに当たったのに<b>型世代が変わっていて使えなかった</b>ものが、bench_2022balkanmop1 ノイズ10 で <b>51.3%</b>(当たり 9.9% の5倍)。ノイズ無しでも 20.2%、bench_2005ctstp1 で 38.7%。<b>探索の2〜5割が、すでに失敗と分かっている枝の歩き直しに消えている。</b><br>無効化の原因は<b>接続関係の追加が57〜59%</b>(うち Point が約半分)、memo登録 18〜22%、実体の生成 12〜13%、マージ 8〜9%。<br><b>2案とも不発:</b> (1) 型世代を「候補集合(生成・memo・マージ)」と「接続関係(接続・マージ)」に分けて8ビットにした ― 接続関係が6割を占めるので効くと見込んだが、仕事量は −0.05%(bench_2005ctstp1 742,344→741,964)。理由は3つ目の計測で分かった: 依存マスクは<b>1〜3ビットで98%</b>と元々細く、問題は細さではなく、<b>1本のビットが「その型のどこかで何かが起きた」という全体の通し番号であること</b>。link(Point) だけで数千回上がるので、1ビットしか立っていないエントリも普通に死ぬ。(2) 「前回走査し切ってから読む型も cap も変わっていない定理は sweep で積まない」 ― <b>省けたタスクは全設定で0件</b>。sweep と sweep のあいだに何百ものタスクが結論を適用するので、4つの型世代は必ず全部動く。<br><b>結論:</b> 残る軸は「どの型か」ではなく「<b>どの実体か</b>」。枝が実際に読んだ代表元を覚えて、それが変わったときだけ捨てる形が要る。これは索引を持つ関係マッチング(<a class="secref" href="backlog.html">§05</a> b30)と同じ構造を要求するので、<b>b30 を先にやるべき根拠が1つ増えた</b>。2案のコードは戻し、計測だけ残した。</div>
@@ -412,7 +412,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: ベンチの二段化と失敗キャッシュの鍵の絞り込みまで(5a833c7)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 失敗キャッシュの無効化の計測まで(358e3fa)
   </footer>
 </div>
 <script src="atlas.js"></script>
