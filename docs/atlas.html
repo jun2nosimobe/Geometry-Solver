@@ -16,7 +16,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> 19c0101</span>
+      <span><b>最新コミット</b> 0957282</span>
     </div>
   </div>
   <div class="stats">
@@ -58,7 +58,7 @@
 <details class="item" id="track-5" data-status="open">
   <summary><span class="idx">方針E</span><span class="t">無駄な作図のノイズを足しても解ける頑健性</span><span class="pill open">方針として決定・計測はこれから</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針E 頑健性</b></div><div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に、証明と無関係な作図をノイズとして加えても解けるぐらいの頑健性を目指す。難しい問題では探索そのものが大量の補助図形を作るので、最小限のきれいな図でしか解けないソルバーは難問に届かない。<br><b>判断の基準:</b> 改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先する(定理の順序に鈍感な探索、無関係な実体で増えないコスト、図が最小であることに頼らないヒューリスティック)。特定の問題の作図の並びに合わせた調整は採らない(問題ごとの opt-in をしない方針と同じ理由)。<br><b>計測(<code>--noise=N</code>、<a class="secref" href="ledger.html">§04</a> #50):</b> 証明と無関係な作図をN個足して解けるかを測る。既定設定・44問で ノイズ0: 32問 / 5個: 30問 / 10個: 28問 / 20個: 28問 ― <b>5個足すだけで2問落ちる</b>。仕事量も 50M→79M→109M→129M と増える。<br><b>既に見えている弱さ:</b> 定理の登録順を変えるだけで仕事量が±15%動き、1問が解けたり解けなかったりする(<a class="secref" href="backlog.html">§05</a>)。作図画面で射影の定理を足すと、円の図の証明が1件減った(<a class="secref" href="ledger.html">§04</a> #47)。数値チェックのコストが実体の数に比例して効く(<a class="secref" href="backlog.html">§05</a>)。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針E 頑健性</b></div><div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に、証明と無関係な作図をノイズとして加えても解けるぐらいの頑健性を目指す。難しい問題では探索そのものが大量の補助図形を作るので、最小限のきれいな図でしか解けないソルバーは難問に届かない。<br><b>判断の基準:</b> 改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先する(定理の順序に鈍感な探索、無関係な実体で増えないコスト、図が最小であることに頼らないヒューリスティック)。特定の問題の作図の並びに合わせた調整は採らない(問題ごとの opt-in をしない方針と同じ理由)。<br><b>計測(<code>--noise=N</code>、<a class="secref" href="ledger.html">§04</a> #50):</b> 証明と無関係な作図をN個足して解けるかを測る。既定設定・44問で、対処前は ノイズ0: 32問 / 5個: 30問 / 10個: 28問 / 20個: 28問 ― 5個足すだけで2問落ちていた。capを広げる時機を直して(<a class="secref" href="ledger.html">§04</a> #51)<b>ノイズ5で32問・10個で29問・20個で30問</b>まで戻した。仕事量は依然として 50M→87M→117M→122M と増える。<br><b>既に見えている弱さ:</b> 定理の登録順を変えるだけで仕事量が±15%動き、1問が解けたり解けなかったりする(<a class="secref" href="backlog.html">§05</a>)。作図画面で射影の定理を足すと、円の図の証明が1件減った(<a class="secref" href="ledger.html">§04</a> #47)。数値チェックのコストが実体の数に比例して効く(<a class="secref" href="backlog.html">§05</a>)。</div>
   </div>
 </details>
 </div>
@@ -159,7 +159,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: ノイズを足した図でのベンチと数値チェックの高速化まで(19c0101)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 候補capを広げる時機の修正まで(0957282)
   </footer>
 </div>
 <script src="atlas.js"></script>

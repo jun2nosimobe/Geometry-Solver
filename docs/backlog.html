@@ -13,7 +13,14 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">未着手 · 19件</div>
+<div class="group"><div class="group-title">未着手 · 20件</div>
+<details class="item" id="b27" data-status="open">
+  <summary><span class="idx"></span><span class="t">★ 候補capを広げるのが遅すぎる ― 需要作図が尽きるまで待つので、その間に図が膨らむ</span></summary>
+  <div class="body">
+<div class="desc">行き詰まったときの手は「補助線・交点 → 有向角 → 第2交点 → 中点 → 目標からの逆算 → 候補capの拡大」の順で、候補capの拡大は需要作図が全部尽きてからになる。ところが図が大きいほど需要作図は尽きにくく、cap を広げる番が来る頃には図が膨らみ切っている。<br><b>実例(test_spiral_similarity + ノイズ5):</b> 既定では有向角の需要が78回走り、cap は3回広がったものの手遅れで、2,813,981ステップ使って解けない。最初から <code>--fanout-heat-cap=40</code> にすると <b>11,014ステップで解ける</b>。<code>--skip-recovery=angle,second,mid</code>(図を広げる手を外す)でも19,891ステップで解ける。<br><b>試した対処:</b> <code>--widen-first</code>(需要作図より先に広げる)はノイズ下で +5問(ノイズ5で30→32、10で28→29、20で28→30)だが、きれいな既定設定では仕事量 +72%。「cap が実際に候補を切り捨てたときだけ先に広げる」条件を足しても、自己束縛の切り捨てはきれいな図でも普通に起きるので同じ結果。<code>--widen-every=N</code>(行き詰まりN回ごとに先に広げる)の N=2 は、きれいな図で +35%、ノイズ5の対象問題は解ける。<br><b>次の案:</b> 広げる対象を全体ではなく「切り捨てが実際に起きた型・定理」に絞る。あるいは需要作図の側に上限を設け、同じ種類の需要を何度も繰り返さない。</div>
+    <div class="b-tags"><span class="tag">ノイズ5で2問・ノイズ10で4問が落ちる主因</span><span class="tag">きれいな図での増加を抑えるのが課題</span></div>
+  </div>
+</details>
 <details class="item" id="b26" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 仕事量に数えられない数値チェックが、実体が増えると時間の大半を占める ― 仕事量予算が時間を抑えられない</span></summary>
   <div class="body">
@@ -271,7 +278,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: ノイズを足した図でのベンチと数値チェックの高速化まで(19c0101)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 候補capを広げる時機の修正まで(0957282)
   </footer>
 </div>
 <script src="atlas.js"></script>
