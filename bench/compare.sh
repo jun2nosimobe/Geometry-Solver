@@ -11,9 +11,9 @@ run() { name="$1"; base="$2"; shift 2; printf '%-18s ' "$name"; "$S/bench.sh" "$
     }
   fi
 }
-run default   every2_default
-run extras    every2_extras   --steps=1500000 --length-theorems --central-angle --midpoint-demands
-run skip      every2_skip     --steps=1500000 --skip-recovery=angle,target
-run noise5    every2_noise5   --noise=5
-run noise10   every2_noise10  --noise=10
-run noise20   every2_noise20  --noise=20
+run default   baseline_default
+run extras    baseline_extras   --steps=1500000 --length-theorems --central-angle --midpoint-demands
+run skip      baseline_skip     --steps=1500000 --skip-recovery=angle,target
+run noise5    baseline_noise5   --noise=5
+run noise10   baseline_noise10  --noise=10
+run noise20   baseline_noise20  --noise=20

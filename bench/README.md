@@ -25,10 +25,21 @@ bench/quick.sh mychange "--my-flag"   # 全設定に足すフラグ
 bench/compare.sh mychange
 ```
 
-## 基準の作り方
+## 基準の作り方と更新
 
-`bench/res/<label>_<config>.tsv` が結果。選抜の基準 `qbase_<config>.tsv` は、
-全問の結果を `tier1.txt` の33問に絞れば作れる(回し直す必要はない)。
+`bench/res/<label>_<config>.tsv` が結果。基準は固定名で、
+段2が `baseline_<config>.tsv`(44問)、段1が `qbase_<config>.tsv`(33問)。
+
+**変更を採用したら基準も更新する。** 忘れると、以後ずっと「採用済みの改善分だけ
+良く見える」比較になってしまう。採用した版の44問の結果を `baseline_*` に写し、
+`qbase_*` はそれを `tier1.txt` の33問に絞るだけで作れる(回し直す必要はない):
+
+```sh
+for c in default extras skip noise5 noise10 noise20; do
+  cp bench/res/<採用した label>_$c.tsv bench/res/baseline_$c.tsv
+  grep -Ff bench/tier1.txt bench/res/baseline_$c.tsv > bench/res/qbase_$c.tsv
+done
+```
 
 ## 落とし穴
 
