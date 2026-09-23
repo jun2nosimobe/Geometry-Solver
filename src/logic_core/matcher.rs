@@ -17,6 +17,17 @@ use std::rc::Rc;
 use crate::mmp_core::{ClassId, DefKind, Definition, EntityType, ParentSymmetry};
 use super::*;
 
+/// 🌟 いま束縛しようとしている変数に、まだ残っている他のパターンが課している制約のうち、
+/// 候補1つを見るだけで判定できるもの。関係の言葉でいう semi-join に使う。
+enum SemiConstraint {
+    /// 束縛済みの図形と接続していること。
+    ConnectedTo(ClassId),
+    /// 束縛済みの図形と同じ代表元であること。
+    SameAs(ClassId),
+    /// 束縛済みの図形と異なる代表元であること。
+    NotSameAs(ClassId),
+}
+
 /// active に残っているパターンが見る変数のビット集合。
 fn core_mask(pattern_masks: &[u64], active: u64) -> u64 {
     let mut core = 0u64;
@@ -292,6 +303,14 @@ impl ProverEngine {
                 }).count();
                 let squared_fanout = self_bind_pattern_count >= 2
                     || has_paired_defined_by_fanout(theorem, v1, v2);
+                if self.semijoin {
+                    let (mut cs, mut m) = self.semijoin_constraints(s, active, v1, bind);
+                    let (cs2, m2) = self.semijoin_constraints(s, active, v2, bind);
+                    cs.extend(cs2);
+                    m |= m2;
+                    *dep_mask |= m;
+                    if !cs.is_empty() { reps.retain(|&c| self.semijoin_ok(&cs, c)); }
+                }
                 let cap = if squared_fanout { self.fanout_heat_cap } else { self.heat_cap };
                 if squared_fanout && reps.len() > cap { self.fanout_truncations += 1; }
                 reps.truncate(cap);
@@ -353,6 +372,11 @@ impl ProverEngine {
                     }
                 }
                 *dep_mask |= expected_p_type.map_or(ALL_TYPES_MASK, entity_type_bit);
+                if self.semijoin {
+                    let (cs, m) = self.semijoin_constraints(s, active, parent_var, bind);
+                    *dep_mask |= m;
+                    if !cs.is_empty() { candidates.retain(|&c| self.semijoin_ok(&cs, c)); }
+                }
                 let mut any = false;
                 for p_rep in self.heat_capped_connected_candidates(candidates) {
                     let mut next_bind = bind.clone();
@@ -375,6 +399,11 @@ impl ProverEngine {
                     expected_c_type.is_none_or(|et| self.accepts(c_rep, et, child_ref))
                 });
                 *dep_mask |= expected_c_type.map_or(ALL_TYPES_MASK, entity_type_bit);
+                if self.semijoin {
+                    let (cs, m) = self.semijoin_constraints(s, active, child_var, bind);
+                    *dep_mask |= m;
+                    if !cs.is_empty() { child_candidates.retain(|&c| self.semijoin_ok(&cs, c)); }
+                }
                 let mut any = false;
                 for c_rep in self.heat_capped_connected_candidates(child_candidates) {
                     let mut next_bind = bind.clone();
@@ -456,6 +485,56 @@ impl ProverEngine {
                 any
             }
         }
+    }
+
+    /// 🌟 var をこれから束縛するとき、まだ残っているパターンのうち「相手が束縛済みで、
+    /// 候補1つを見るだけで判定できる」ものを集める。あわせて、その判定が読む型の
+    /// 依存ビットを返す(失敗キャッシュの無効化に必要)。
+    ///
+    /// ここで落ちる候補は、どのみち後でそのパターンに当たって落ちるものなので、解は減らない。
+    /// 効くのは cap との順番で、今までは熱の順に cap で切ってから深いところで他のパターンに
+    /// 当てていたため、他の前提を満たす「正しい候補」が cap の外に落ちることがあった。
+    fn semijoin_constraints(&self, s: &Search<'_>, active: u64, var: &str, bind: &Bind) -> (Vec<SemiConstraint>, u8) {
+        let mut out = Vec::new();
+        let mut mask = 0u8;
+        for (i, pat) in s.patterns.iter().enumerate() {
+            if active & (1u64 << i) == 0 { continue; }
+            match pat {
+                Pattern::Connected { child, parent, .. } => {
+                    let other = if child == var { parent } else if parent == var { child } else { continue };
+                    if let Some(&oid) = bind.get(other) {
+                        let o_rep = self.egraph.get_rep(oid);
+                        mask |= entity_type_bit(self.egraph.entities[o_rep.0].entity_type);
+                        out.push(SemiConstraint::ConnectedTo(o_rep));
+                    }
+                }
+                Pattern::Identical { a, b, .. } => {
+                    let other = if a == var { b } else if b == var { a } else { continue };
+                    if let Some(&oid) = bind.get(other) {
+                        out.push(SemiConstraint::SameAs(self.egraph.get_rep(oid)));
+                    }
+                }
+                Pattern::Distinct(vars) => {
+                    if !vars.iter().any(|v| v == var) { continue; }
+                    for v in vars {
+                        if v == var { continue; }
+                        if let Some(&oid) = bind.get(v) {
+                            out.push(SemiConstraint::NotSameAs(self.egraph.get_rep(oid)));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        (out, mask)
+    }
+
+    fn semijoin_ok(&self, cs: &[SemiConstraint], cand: ClassId) -> bool {
+        cs.iter().all(|c| match c {
+            SemiConstraint::ConnectedTo(o) => self.egraph.is_connected(cand, *o),
+            SemiConstraint::SameAs(o) => self.egraph.get_rep(cand) == *o,
+            SemiConstraint::NotSameAs(o) => self.egraph.get_rep(cand) != *o,
+        })
     }
 
     /// 候補 id が宣言型 et の Connected 変数として受理できるか。

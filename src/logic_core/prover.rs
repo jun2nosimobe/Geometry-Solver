@@ -46,6 +46,10 @@ pub struct ProverEngine {
     /// 🌟 失敗キャッシュの鍵を「残っているパターンが実際に見る変数」だけで作るか。
     /// 無関係な変数を鍵から外すと、同じ理由の失敗が1つにまとまる。
     pub nogood_core: bool,
+    /// 🌟 候補を cap で切る前に、まだ残っているパターンで先に絞る(semi-join)。既定で有効。
+    /// 落とす候補はどのみち後で同じパターンに当たって落ちるものなので解は減らない。
+    /// 効くのは cap との順番で、cap に残るのが「他の前提も満たす候補」になる。
+    pub semijoin: bool,
     /// 型だけで結果が決まる候補列挙の、定理をまたいだ共有キャッシュ(値は結果と計算時の型世代)。
     /// Connected 両方未束縛のジョイン。キーは (子の型, 親の型)。
     pub connected_join_cache: FxHashMap<(EntityType, EntityType), (PairList, u64, u64)>,
@@ -149,6 +153,7 @@ impl ProverEngine {
             theorem_required_types: Vec::new(),
             theorem_var_index: Vec::new(),
             nogood_core: false,
+            semijoin: true,
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
             identical_self_bind_angle_cache: None,

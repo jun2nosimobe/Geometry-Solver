@@ -105,6 +105,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に「どの定理がどの優先度で発火し、うち証明に残ったのはどれか」と、熱・参照数・退化関係数の分布を表示する" },
     Opt { name: "--widen-first", arg: Switch, default: "無効", mode: Solve,
           help: "行き詰まったとき、図を広げる需要作図より先に候補capの拡大を試す" },
+    Opt { name: "--no-semijoin", arg: Arg::None, default: "semijoin は既定で有効", mode: Solve,
+          help: "候補をcapで切る前に他のパターンで絞るのをやめる(従来の振る舞い)" },
     Opt { name: "--nogood-core", arg: Arg::None, default: "無効", mode: Solve,
           help: "失敗キャッシュの鍵を、残っているパターンが見る変数だけに絞る" },
     Opt { name: "--widen-every", arg: Value("回"), default: "2", mode: Solve,
