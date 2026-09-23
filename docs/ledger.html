@@ -16,7 +16,7 @@
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
 <details class="item" id="l56" data-status="shipped">
-  <summary><span class="idx">#56</span><span class="t">semi-join を DefinedBy にも広げる ― ついでに「変数の選び方」を generic join 風に変えたら proof が落ちた</span><span class="pill shipped">既定</span></summary>
+  <summary><span class="idx">#56</span><span class="t">semi-join を DefinedBy にも広げる ― ついでに「変数の選び方」を generic join 風に変えたら proof が落ちた</span><span class="pill shipped">57b09e9</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html">§04</a> #55 の semi-join は <code>Connected</code> と <code>Identical</code> の候補にしか掛かっておらず、<b><code>DefinedBy</code> の候補だけ素通し</b>だった。2か所に足した: (1) 結果が未束縛なら、定義を展開する前に候補を絞る(型の全代表元を舐める分岐ではここで落ちる数がそのまま効く)。(2) 定義から取れた親の組も、熱と次数で並べ替える前に絞る(並べ替えは候補ごとに次数を測るので重い)。</div>
           <div class="evidence"><b>実測(選抜33問、semi-join 既定との差分):</b> 全設定で <b>−0.5〜−1.0%</b>、解けた数は不変。全44問でも解けた数はどの設定でも不変で、#55 以前からの累計では 既定 <b>−24.0%</b> / 長さ+中心角+中点 <b>−34.0%</b> / skip-recovery <b>−29.7%</b> / ノイズ5 <b>−31.1%</b> / ノイズ10 <b>−33.3%</b> / ノイズ20 <b>−27.1%</b>。テスト94件通過。</div>
@@ -427,7 +427,7 @@
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 候補をcapで切る前に絞るところまで(9d174f5)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: semi-join を DefinedBy に広げるところまで(57b09e9)
   </footer>
 </div>
 <script src="atlas.js"></script>
