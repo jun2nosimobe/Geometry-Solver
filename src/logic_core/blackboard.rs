@@ -287,7 +287,33 @@ impl BlackboardEngine {
             let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
             let all_active: u64 = if theorem.patterns.len() >= 64 { u64::MAX } else { (1u64 << theorem.patterns.len()) - 1 };
             let mut new_binds: Vec<(Bind, FlipStates)> = Vec::new();
-            if self.prover.generic_join && genjoin_supported(&theorem) {
+            if self.prover.gj_audit && genjoin_supported(&theorem) {
+                // 🌟 監査: 従来の探索を先に走らせ(こちらが正)、同じ状態で試作を走らせて
+                // 見つけたマッチの数を比べる。食い違った定理を名指しするための一時的な道具。
+                {
+                    let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
+                    let mut search = Search {
+                        theorem: &theorem,
+                        patterns: &theorem.patterns,
+                        scope: 0,
+                        failed_paths: &mut failed_paths,
+                        on_match: &mut collect,
+                        var_index: &var_index,
+                        pattern_masks: &var_index.per_pattern,
+                    };
+                    let mut dep_mask: u8 = 0;
+                    self.prover.dfs_match(&mut search, all_active, task.bind.clone(), task.flip_states.clone(), &mut dep_mask);
+                }
+                let mut gj_binds: Vec<(Bind, FlipStates)> = Vec::new();
+                {
+                    let mut collect = |bind: &Bind, flips: &FlipStates| gj_binds.push((bind.clone(), flips.clone()));
+                    self.prover.genjoin_match(&theorem, task.bind.clone(), &mut collect);
+                }
+                if gj_binds.len() != new_binds.len() {
+                    println!("  🔍 [マッチャ監査] 定理「{}」: 従来 {} 件 / 試作 {} 件",
+                        theorem.name, new_binds.len(), gj_binds.len());
+                }
+            } else if self.prover.generic_join && genjoin_supported(&theorem) {
                 // 🌟 関係マッチング(generic join)。cap を使わず、変数ごとに候補集合を交差させる。
                 let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
                 self.prover.genjoin_match(&theorem, task.bind.clone(), &mut collect);

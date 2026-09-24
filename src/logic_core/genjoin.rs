@@ -26,6 +26,8 @@ pub(crate) struct GenJoin<'a> {
     pub vars: Vec<String>,
     pub on_match: &'a mut dyn FnMut(&Bind, &FlipStates),
     pub matched: bool,
+    /// 通知したマッチの数。上限に達したら探索を打ち切る。
+    pub emitted: usize,
 }
 
 /// この定理を generic join で扱えるか。
@@ -49,14 +51,14 @@ impl ProverEngine {
         for n in names {
             if !vars.iter().any(|v| v == n) { vars.push(n.to_string()); }
         }
-        let mut gj = GenJoin { theorem, vars, on_match, matched: false };
+        let mut gj = GenJoin { theorem, vars, on_match, matched: false, emitted: 0 };
         self.gj_solve(&mut gj, seed, FlipStates::default());
         gj.matched
     }
 
     fn gj_solve(&mut self, gj: &mut GenJoin, bind: Bind, flips: FlipStates) {
         self.dfs_calls += 1;
-        if self.dfs_calls > self.dfs_cap { return; }
+        if self.dfs_calls > self.dfs_cap || gj.emitted >= self.heat_cap { return; }
 
         // 次に束縛する変数は、交差した候補集合がいちばん小さいもの。
         let theorem = gj.theorem;
@@ -89,7 +91,7 @@ impl ProverEngine {
             }
         }
         if let Some(v) = creatable {
-            // ここで初めて作る(需要の記録も commit のときだけ)。
+            // ここで初めて作る。
             let (cands, _) = self.gj_candidates(theorem, &v, &bind, true);
             let Some(c) = cands else { return };
             if c.is_empty() { return; }
@@ -106,7 +108,10 @@ impl ProverEngine {
             let mut next = bind.clone();
             next.insert(var.clone(), c);
             self.gj_solve(gj, next, flips.clone());
-            if self.dfs_calls > self.dfs_cap { return; }
+            // 🌟 絞るのは中間結果ではなく出力の方。従来の探索は候補を cap で切るので
+            // 「どの候補が落ちるか」が順序に左右されるが、こちらは全部の解を同じ順で
+            // 出しつつ、適用する数だけを上限で止める。
+            if self.dfs_calls > self.dfs_cap || gj.emitted >= self.heat_cap { return; }
         }
     }
 
@@ -179,6 +184,13 @@ impl ProverEngine {
         });
         out.sort_unstable_by_key(|c| c.0);
         out.dedup();
+        // 🌟 出す順は熱の高い順。上限(heat_cap)で打ち切るのは候補ではなくマッチの方なので、
+        // 「直近のマージに関わった図形から先に試す」という従来の優先順をここで効かせないと、
+        // 上限に入るのが図形IDの若い順という無意味な選び方になる。同点は ID 順で決定的にする。
+        out.sort_by(|&a, &b| {
+            let (ha, hb) = (self.egraph.entities[a.0].heat(), self.egraph.entities[b.0].heat());
+            hb.partial_cmp(&ha).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0))
+        });
         (Some(out), false)
     }
 
@@ -286,9 +298,21 @@ impl ProverEngine {
                     if parents.iter().all(|p| bind.contains_key(p)) {
                         let ids: Vec<ClassId> = parents.iter().map(|p| self.egraph.get_rep(bind[p])).collect();
                         let Some(def) = self.egraph.build_definition(*kind, &ids) else { return Cands::Set(vec![]) };
+                        // 🌟 AnglePair は正規化で順序が入れ替わらない(normalize_definition 参照)ので、
+                        // ∠(d1,d2) と ∠(d2,d1) は別のエントリになる。向きが固定でない限り、従来の
+                        // 探索は反転した向きでも同じ角として拾うので、memo も両方を引く。
+                        // これを片方しか引かないと、既にある角の半分を見落として定理が発火しない。
+                        let mut hits = Vec::new();
                         if let Some(&e) = self.egraph.memo.get(&def) {
-                            return Cands::Set(vec![self.egraph.get_rep(e)]);
+                            hits.push(self.egraph.get_rep(e));
                         }
+                        if *kind == DefKind::AnglePair && *flip != Flip::Fixed && ids.len() == 2
+                            && let Some(rev) = self.egraph.build_definition(*kind, &[ids[1], ids[0]])
+                            && let Some(&e) = self.egraph.memo.get(&rev) {
+                                let r = self.egraph.get_rep(e);
+                                if !hits.contains(&r) { hits.push(r); }
+                            }
+                        if !hits.is_empty() { return Cands::Set(hits); }
                         // 親がそろっているのに図形が無い。作ってよい種類ならその場で作り、
                         // そうでなければ補助作図の需要として記録する(従来の探索と同じ扱い)。
                         if !created_on_demand(*kind) {
@@ -369,38 +393,45 @@ impl ProverEngine {
 
     /// 全部束縛できた割り当てについて、前提を1本ずつ検査する。
     /// AnglePair の向き(Flip)はここで決める ― グループが未決なら両方の向きを試す。
-    fn gj_verify(&mut self, gj: &mut GenJoin, bind: &Bind, flips: FlipStates, idx: usize) {
+    ///
+    /// 🌟 通知するのは<b>束縛1つにつき1回だけ</b>。同じ束縛が別の向きでも成り立つことは
+    /// (∠(d1,d2) と ∠(d2,d1) が併合されている等で)普通に起きるが、従来の探索も
+    /// 束縛の文字列で重複除去して1件にしている。ここを1件に絞らないと、同じ結論を
+    /// 何度も適用することになり、有向角の加法性では60件が784件に膨れた。
+    /// 戻り値は「この呼び出しで通知したか」。
+    fn gj_verify(&mut self, gj: &mut GenJoin, bind: &Bind, flips: FlipStates, idx: usize) -> bool {
         self.dfs_calls += 1;
-        if self.dfs_calls > self.dfs_cap { return; }
+        if self.dfs_calls > self.dfs_cap { return false; }
         if idx >= gj.theorem.patterns.len() {
             gj.matched = true;
+            gj.emitted += 1;
             (gj.on_match)(bind, &flips);
-            return;
+            return true;
         }
         let pat = gj.theorem.patterns[idx].clone();
         match &pat {
             Pattern::Identical { a, b, .. } => {
-                if self.egraph.get_rep(bind[a]) != self.egraph.get_rep(bind[b]) { return; }
-                self.gj_verify(gj, bind, flips, idx + 1);
+                if self.egraph.get_rep(bind[a]) != self.egraph.get_rep(bind[b]) { return false; }
+                self.gj_verify(gj, bind, flips, idx + 1)
             }
             Pattern::Connected { child, parent, .. } => {
-                if !self.egraph.is_connected(bind[child], bind[parent]) { return; }
-                self.gj_verify(gj, bind, flips, idx + 1);
+                if !self.egraph.is_connected(bind[child], bind[parent]) { return false; }
+                self.gj_verify(gj, bind, flips, idx + 1)
             }
             Pattern::Distinct(vars) => {
                 let mut seen = rustc_hash::FxHashSet::default();
                 for x in vars {
-                    if !seen.insert(self.egraph.get_rep(bind[x])) { return; }
+                    if !seen.insert(self.egraph.get_rep(bind[x])) { return false; }
                 }
-                self.gj_verify(gj, bind, flips, idx + 1);
+                self.gj_verify(gj, bind, flips, idx + 1)
             }
             Pattern::Order(vars) | Pattern::OrderNonStrict(vars) => {
                 let strict = matches!(pat, Pattern::Order(_));
                 for w in vars.windows(2) {
                     let (l, r) = (self.egraph.get_rep(bind[&w[0]]).0, self.egraph.get_rep(bind[&w[1]]).0);
-                    if (strict && l >= r) || (!strict && l > r) { return; }
+                    if (strict && l >= r) || (!strict && l > r) { return false; }
                 }
-                self.gj_verify(gj, bind, flips, idx + 1);
+                self.gj_verify(gj, bind, flips, idx + 1)
             }
             Pattern::DefinedBy { kind, parents, result, flip } => {
                 let r = self.egraph.get_rep(bind[result]);
@@ -425,12 +456,14 @@ impl ProverEngine {
                                 None => { next.insert(g.clone(), fv); }
                             }
                         }
-                        self.gj_verify(gj, bind, next, idx + 1);
-                        if self.dfs_calls > self.dfs_cap { return; }
+                        // 1つ通ればこの束縛は通知済み。別の向きや別の定義で重ねて通知しない。
+                        if self.gj_verify(gj, bind, next, idx + 1) { return true; }
+                        if self.dfs_calls > self.dfs_cap { return false; }
                     }
                 }
+                false
             }
-            Pattern::Not(_) => {}
+            Pattern::Not(_) => false,
         }
     }
 }

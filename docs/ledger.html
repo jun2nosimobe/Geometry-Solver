@@ -15,6 +15,16 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l60" data-status="shipped">
+  <summary><span class="idx">#60</span><span class="t">関係マッチングの AnglePair まわりを直し、詰まりの正体を突き止めた ― 足りないのは定理ではなく補助線</span><span class="pill open">試作・既定は無効</span></summary>
+  <div class="body">
+<div class="desc">#59 の「落ちる問題は有向角に偏る / miquel では定理が1つも発火しない」を追った。<b>両方のマッチャを同じ状態で走らせてマッチ数を突き合わせる監査(<code>--gj-audit</code>)</b>を足したところ、予想と逆のことが分かった ― <b>試作は少なくではなく、多くマッチしていた</b>。</div>
+          <div class="evidence"><b>直したこと:</b> (1) <b>AnglePair の memo 逆引き。</b> <code>normalize_definition</code> は AnglePair の順序を入れ替えないので ∠(d1,d2) と ∠(d2,d1) は別エントリになる。従来の探索は向きを反転して同じ角として拾うが、試作は片方しか引いておらず、既にある角の半分を見落としていた。(2) <b>通知は束縛1つにつき1回だけ</b>にした(向き違いで二重に通知していた)。(3) <b>上限を候補ではなくマッチの方に移した</b> ― 中間結果を切るのではなく、適用する数を <code>heat_cap</code> 件で止める。(4) 候補を熱の高い順に出す。</div>
+          <div class="evidence"><b>監査で分かったこと(miquel):</b> 円周角の定理 従来16件 / 試作32件、有向角の加法性 従来60件 / 試作<b>784件</b>、有向角の交替律 36件 / 96件。<b>試作は完全で、従来は cap で絞られている。</b>従来側の cap を広げると 60→168件、36→48件と近づく(試作は976件/96件)。つまりこの証明器は<b>絞られていることに依存して</b>焦点を保っている ― cap は探索の枝刈りであると同時に、適用する結論の関連度フィルタでもある。</div>
+          <div class="evidence"><b>本当の詰まり所(決定打):</b> 既定の miquel は最初に <code>[オンデマンド作図] 要請により Line_A_E_(Demand) を生成</code> から始まり、補助線を<b>7本</b>引く。試作は<b>補助線の需要が0件</b>で、1本も引かない。理由は束縛の順序で、試作は候補集合の小さい<b>直線を先に</b>束縛して点を後から導くため、「2点はあるのに結ぶ直線が無い」という状態に辿り着かない。<b>落ちているのは定理のマッチではなく補助作図</b>で、来歴が「解けている問題の約半分はこの路線が支えている」と書いている当の仕組み。<br><b>試して外した:</b> 作れない種類の DefinedBy の結果を親より後に束縛する ― 需要は0件のままで、simson が 21,943→<b>330,542</b>、nine_point が 33,029→69,687 と悪化したので戻した。順序をずらすだけでは届かない。</div>
+          <div class="evidence"><b>いまの実力(選抜33問、基準 → <code>--generic-join</code>):</b> 解けた数 32→14 / 31→15 / 31→13 / 32→14 / 29→14 / 30→16。両方が解けた問題の仕事量は <b>−64.5% / +43.8% / −59.9% / −78.8% / −58.2% / −48.9%</b>。9問の抜き取りでは解けた5問すべてが既定より速く、nine_point 168,041→<b>33,029</b>(−80%)、test_spiral_similarity 19,123→<b>1,574</b>(−92%)。<br><b>次の一手:</b> 需要が立つようにする。束縛の順序を変える案は外れたので、<b>「その定理のどの DefinedBy が図に無いか」を束縛の途中ではなく別に数える</b>(例: 全変数が決まった後の検査で落ちた DefinedBy を需要として記録する)方向で試す。<br><b>既定の挙動は変えていない:</b> 選抜33問×6設定で結果ファイルがバイト単位で一致、テスト94件通過。</div>
+  </div>
+</details>
 <details class="item" id="l59" data-status="shipped">
   <summary><span class="idx">#59</span><span class="t">関係マッチングの試作を詰めた ― 解ける問題では仕事量が3〜6割減、ただし解ける数はまだ半分</span><span class="pill open">試作・既定は無効</span></summary>
   <div class="body">
