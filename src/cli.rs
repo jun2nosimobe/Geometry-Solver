@@ -105,6 +105,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に「どの定理がどの優先度で発火し、うち証明に残ったのはどれか」と、熱・参照数・退化関係数の分布を表示する" },
     Opt { name: "--widen-first", arg: Switch, default: "無効", mode: Solve,
           help: "行き詰まったとき、図を広げる需要作図より先に候補capの拡大を試す" },
+    Opt { name: "--coincidence-demands", arg: Arg::None, default: "無効", mode: Solve,
+          help: "補助作図の需要を、座標で試作して既存の点が何個乗るかで並べ直す" },
     Opt { name: "--gj-audit", arg: Arg::None, default: "無効", mode: Solve,
           help: "従来の探索と関係マッチングのマッチ数を照らし合わせる(診断用)" },
     Opt { name: "--generic-join", arg: Arg::None, default: "無効", mode: Solve,

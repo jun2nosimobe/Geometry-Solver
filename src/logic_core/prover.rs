@@ -58,6 +58,8 @@ pub struct ProverEngine {
     pub generic_join: bool,
     /// 🌟 両方のマッチャを走らせて、見つけたマッチの数が食い違う定理を名指しする(一時的な診断)。
     pub gj_audit: bool,
+    /// 🌟 補助作図の需要を、回数ではなく「座標で試作したとき既存の点が何個乗るか」で並べ直す。
+    pub coincidence_demands: bool,
     /// 型だけで結果が決まる候補列挙の、定理をまたいだ共有キャッシュ(値は結果と計算時の型世代)。
     /// Connected 両方未束縛のジョイン。キーは (子の型, 親の型)。
     pub connected_join_cache: FxHashMap<(EntityType, EntityType), (PairList, u64, u64)>,
@@ -165,6 +167,7 @@ impl ProverEngine {
             var_order: false,
             generic_join: false,
             gj_audit: false,
+            coincidence_demands: false,
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
             identical_self_bind_angle_cache: None,

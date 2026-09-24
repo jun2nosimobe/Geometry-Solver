@@ -13,7 +13,22 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">未着手 · 25件</div>
+<div class="group"><div class="group-title">未着手 · 26件</div>
+<details class="item" id="b33" data-status="open">
+  <summary><span class="idx"></span><span class="t">★ 補助作図の需要の立て方 ― 探索の副作用ではなく、図の性質として立てる</span></summary>
+  <div class="body">
+<div class="desc">いまの需要は <code>construction_demands[(A,B)] += 1.0</code>、つまり「マッチがこの図形を欲しがって空振りした<b>回数</b>」で、順位には <code>measure_line_affinity</code> の<b>代数的次数の差</b>(直線ABの次数が 次数A+次数B より小さい分)を加点している。文献の言葉でいえば<b>失敗駆動のアブダクション</b>(証明を通すために足りない前提を逆算する)に代数的な事前分布を掛けたもので、筋は悪くない ― 解けている問題の約半分がこれに支えられている(<a class="secref" href="ledger.html">§04</a>)。<br><b>弱さは「どこで数えるか」。</b> 需要は探索の副作用として立つ(マッチャが親を先に束縛したときだけ)。関係マッチングの試作では歩き方が変わった途端に<b>需要が0件</b>になり、補助線が1本も引かれなくなった(<a class="secref" href="ledger.html">§04</a> #60)。需要は「この図に何が足りないか」という<b>図の性質</b>のはずで、探索の順序に依存してはいけない。</div>
+    <div class="evidence"><b>取れる技術(検討した順):</b><br>
+<b>(1) アブダクションを検査側に移す。</b> 「あと1つ何があればこの定理が通るか」は1ルール分のアブダクションで、束縛が進んだ状態から直接計算できる。親がそろっていて結果が図に無い <code>DefinedBy</code> を、探索がその枝を選んだかどうかに関係なく需要として数える。順序をずらす案は外れている(#60: 需要0件のまま simson が15倍に悪化)ので、数える場所そのものを動かす。<br>
+<b>(2) 数値で「面白い構成」を選ぶ(CEGAR の発想)。</b> 回数は「多くのマッチが欲しがった」の代理指標でしかない。本当に効く補助線は<b>引いた結果として新しい一致が生まれる</b>もの。この証明器は乱数座標の評価器を持っているので、e-graph に実体を作らずに<b>座標だけで試作</b>し、第3の点を通るか・既存の円に乗るか・既存の角と一致するかを確かめてから作る。モデル検査の CEGAR(反例が示す情報で抽象化を精緻化する)と同じ構図で、次数アフィニティは既にその弱い近似。<b>方針E との相性も良い</b>: 無関係な作図から引いた補助線は一致を生まないので自然に順位が下がる。<br>
+<b>(3) マジックセット。</b> 前向きの飽和は目標と無関係なものまで作る。Datalog のマジックセット変換は前向き評価を自動的にゴール指向にする標準技法で、関係マッチャ(<a href="#b30">b30</a>)が実用になれば載せやすい。<code>resolve_target_demands</code> が一度も効いていないのは素朴なゴール駆動だからで、マジックセットはその原理的な版。<br>
+<b>(4) AlphaGeometry の教訓。</b> 記号エンジンはすぐ飽和し、難しいのは補助構成だけ ― だから彼らはそこだけを言語モデルに提案させた。モデル抜きで取れるのは2つ: 補助構成の<b>語彙を小さく固定する</b>(いまの6種類は既にその形)、記号エンジンを<b>候補の高速フィルタ</b>として使う(提案→数ステップ回す→伸びなければ捨てる)。<br>
+<b>(5) 項の重み制限。</b> 飽和証明器(Vampire/E)は項の重み上限で生成を抑える。「作ってよい種類」を無制限に作る今のやり方に深さ・次数の上限を入れる(複比の <code>CR_DEGREE_CAP</code> の一般化)。<a href="#b30">b30</a> の試作で図が膨らんだ件に直接効く。<br>
+<b>(6) 需要の種類へのバンディット。</b> 6種類の需要への予算配分は多腕バンディットそのもの(定理側には既に <code>--bandit</code> がある)。ただし順位付けの話で、立て方の問題は解かない。</div>
+    <div class="evidence"><b>(1)(2) を実装した結果(<a class="secref" href="ledger.html">§04</a> #61):</b> (1) は挙動が変わらなかった ― 既存の候補生成が実質同じ状態を見ていた。(2) は <code>--coincidence-demands</code> として入れ、<b>きれいな図で仕事量 −12.7%/−15.5%/−27.5%</b>、ただし<b>ノイズ下で悪化</b>(ノイズ10 で +275.3%、ノイズ5 で1問落ちる)。解けた数は合計 ±0 なので<b>既定にはしない</b>。<br><b>ノイズで壊れる仕組み:</b> 無関係な作図も既存の点から中点・交点を作るので、本物だが役に立たない一致を生んで信号を薄める ― 「方針E と相性が良い」という当初の読みは<b>外れ</b>だった。<br><b>次:</b> 数える点を「熱い点・目標に現れる点」に絞る(関連度フィルタ <a href="#b31">b31</a> をここに適用する)。それで直らなければ (3) マジックセットへ。</div>
+    <div class="b-tags"><span class="tag">(2) は --coincidence-demands で実装済み</span><span class="tag">きれいな図で −13〜−28%</span><span class="tag">ノイズ下の悪化が残課題</span></div>
+  </div>
+</details>
 <details class="item" id="b28" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 失敗キャッシュの鍵に無関係な束縛まで入っている ― 同じ理由の失敗を、無関係な変数の値の数だけ作り直す</span></summary>
   <div class="body">

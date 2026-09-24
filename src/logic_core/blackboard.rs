@@ -528,6 +528,32 @@ impl BlackboardEngine {
                 .then_with(|| (a.0).1.0.cmp(&(b.0).1.0))
         });
 
+        // 🌟 上位だけ、座標で試作して「既存の点が何個乗るか」を数え、加点する(--coincidence-demands)。
+        // 回数は「多くのマッチが欲しがった」の代理指標でしかないが、3点目が乗る補助線は
+        // 引いた瞬間に新しい共線関係を生むので、当たりかどうかを直接見たことになる。
+        //
+        // 一致の数を「加点」にとどめる版も測ったが、きれいな図での利きが消えたうえ
+        // skip-recovery で1問落ちた(来歴 #61)。一致があるなら回数より優先してよい。
+        // 全部に掛けると重いので、既存の順位の上位だけに掛けてから並べ直す。
+        if self.prover.coincidence_demands {
+            const RERANK_TOP: usize = 20;
+            const COINCIDENCE_TRIALS: usize = 2;
+            let top = demands.len().min(RERANK_TOP);
+            let mut scored: Vec<(usize, Demand)> = demands[..top].iter()
+                .map(|d| {
+                    let n = self.prover.egraph
+                        .count_points_on_new_line((d.0).0, (d.0).1, COINCIDENCE_TRIALS)
+                        .unwrap_or(0);
+                    (n, d.clone())
+                })
+                .collect();
+            scored.sort_by(|x, y| y.0.cmp(&x.0)
+                .then_with(|| priority(&y.1).partial_cmp(&priority(&x.1)).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| ((x.1).0).0.0.cmp(&((y.1).0).0.0))
+                .then_with(|| ((x.1).0).1.0.cmp(&((y.1).0).1.0)));
+            for (i, (_, d)) in scored.into_iter().enumerate() { demands[i] = d; }
+        }
+
         let mut count = 0;
         for ((p1, p2), score, affinity) in demands {
             let def = Definition::new_line(p1, p2);

@@ -59,6 +59,7 @@ impl ProverEngine {
     fn gj_solve(&mut self, gj: &mut GenJoin, bind: Bind, flips: FlipStates) {
         self.dfs_calls += 1;
         if self.dfs_calls > self.dfs_cap || gj.emitted >= self.heat_cap { return; }
+        self.gj_collect_demands(gj.theorem, &bind);
 
         // 次に束縛する変数は、交差した候補集合がいちばん小さいもの。
         let theorem = gj.theorem;
@@ -112,6 +113,27 @@ impl ProverEngine {
             // 「どの候補が落ちるか」が順序に左右されるが、こちらは全部の解を同じ順で
             // 出しつつ、適用する数だけを上限で止める。
             if self.dfs_calls > self.dfs_cap || gj.emitted >= self.heat_cap { return; }
+        }
+    }
+
+    /// 🌟 いまの束縛から立つ補助作図の需要を全部拾う。
+    ///
+    /// 需要を「探索がその枝を選んだとき」に数えると、束縛の順序が変わっただけで
+    /// 一度も立たなくなる(関係マッチングの試作で実際にそうなった)。需要は
+    /// 「この図に何が足りないか」という図の性質なので、<b>いまの束縛の状態</b>から
+    /// 直接数える ― 親がそろっていて結果が図に無い DefinedBy を、その枝を辿ったか
+    /// どうかに関係なく記録する。1ルール分のアブダクションにあたる。
+    fn gj_collect_demands(&mut self, theorem: &TheoremDef, bind: &Bind) {
+        for pat in &theorem.patterns {
+            let Pattern::DefinedBy { kind, parents, result, .. } = pat else { continue };
+            // その場で作れる種類は需要にならない(作れば済む)。
+            if created_on_demand(*kind) { continue; }
+            if bind.contains_key(result) { continue; }
+            if !parents.iter().all(|p| bind.contains_key(p)) { continue; }
+            let ids: Vec<ClassId> = parents.iter().map(|p| self.egraph.get_rep(bind[p])).collect();
+            let Some(def) = self.egraph.build_definition(*kind, &ids) else { continue };
+            if self.egraph.memo.contains_key(&def) { continue; }
+            self.gj_note_demand(*kind, &ids);
         }
     }
 

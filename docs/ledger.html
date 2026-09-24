@@ -15,6 +15,13 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l61" data-status="shipped">
+  <summary><span class="idx">#61</span><span class="t">補助作図の需要を「回数」から「座標で試作して点が何個乗るか」に変える ― きれいな図で1〜3割減、ノイズ下は悪化</span><span class="pill open">フラグ・既定は無効</span></summary>
+  <div class="body">
+<div class="desc">需要の立て方を見直した(<a class="secref" href="backlog.html">§05</a> b33)。いまの需要は「マッチがこの図形を欲しがって空振りした<b>回数</b>」で、順位に代数的次数の差を加点している ― 失敗駆動のアブダクションに代数的な事前分布を掛けた形。<br><b>(1) 需要を束縛の状態から立てる:</b> 需要が探索の副作用として立つと、歩き方を変えただけで一度も立たなくなる(#60 で実際にそうなった)。関係マッチングの側に、親がそろっていて結果が図に無い <code>DefinedBy</code> をその枝を辿ったかに関係なく数える経路を明示的に置いた。<b>挙動は変わらなかった</b> ― 既存の候補生成が実質同じ状態を見ていたため。miquel で需要が0件なのは別の理由(探索がその深さまで届いていない)。<br><b>(2) 数値で「面白い構成」を選ぶ:</b> 回数は「多くのマッチが欲しがった」の代理指標でしかない。本当に効く補助線は<b>引いた結果として新しい一致が生まれる</b>もの。e-graph に実体を作らず<b>乱数座標だけで補助線を試作</b>し、既存の有限点が何個その上に乗るかを数えて順位にする(<code>count_points_on_new_line</code>、<code>--coincidence-demands</code>)。モデルで候補を確かめてから抽象を広げる CEGAR と同じ形。探索の乱数は消費しないので、計測を入れただけでは結果は変わらない。</div>
+          <div class="evidence"><b>実測(選抜33問、基準 → <code>--coincidence-demands</code>):</b> きれいな図では効く ― 既定 32/32(仕事量 <b>−12.7%</b>)、長さ+中心角+中点 31/31(<b>−15.5%</b>)、skip-recovery 31/31(<b>−27.5%</b>)。<b>ノイズ下では悪化</b> ― ノイズ5 32→<b>31</b>(−2.4%)、ノイズ10 29→<b>30</b>(<b>+275.3%</b>)、ノイズ20 30/30(+12.7%)。解けた数は合計 <b>±0</b>。<br><b>ノイズで壊れる仕組み:</b> 無関係な作図も既存の点から中点・交点・直線を作るので、<b>本物だが役に立たない一致</b>を生んで信号を薄める。方針E に反する向きなので<b>既定にはしない</b>。<br><b>試して外した:</b> 一致の数で順位を上書きせず、次数アフィニティと同じく<b>加点</b>にとどめる版。きれいな図での利きが消え(既定 −12.7%→<b>+16.8%</b>、extras −15.5%→+0.4%)、skip-recovery で bench_2012egmop1 を落とした。<b>一致があるなら回数より優先してよい</b>と分かったので上書き版を残した。<br><b>次の refinement:</b> 数える点を「熱い点・目標に現れる点」に絞る ― 関連度フィルタ(<a class="secref" href="backlog.html">§05</a> b31)をここに適用する形。ノイズ由来の点が一致に数えられるのを止められる。</div>
+  </div>
+</details>
 <details class="item" id="l60" data-status="shipped">
   <summary><span class="idx">#60</span><span class="t">関係マッチングの AnglePair まわりを直し、詰まりの正体を突き止めた ― 足りないのは定理ではなく補助線</span><span class="pill open">試作・既定は無効</span></summary>
   <div class="body">

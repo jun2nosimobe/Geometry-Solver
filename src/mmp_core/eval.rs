@@ -366,6 +366,46 @@ impl EGraph {
         out
     }
 
+    /// 🌟 A と B を結ぶ補助線を「座標だけで試作」して、既存の有限点が何個その上に乗るかを数える。
+    ///
+    /// e-graph には何も作らない。3点目が乗る組は、引いた瞬間に新しい共線関係が生まれるので、
+    /// 「何回欲しがられたか」で選ぶより当たりやすい ― 補助作図の需要の順位付けに使う。
+    /// モデル(乱数座標)で候補を確かめてから抽象(e-graph)を広げる、CEGAR と同じ形。
+    ///
+    /// 探索の乱数は消費しないので、この計測を入れても探索そのものの結果は変わらない。
+    pub fn count_points_on_new_line(&self, a: ClassId, b: ClassId, trials: usize) -> Option<usize> {
+        self.without_consuming_rng(|eg| {
+            let (a, b) = (eg.get_rep(a), eg.get_rep(b));
+            if a == b { return None; }
+            // 無限遠直線上の点(方向)は「乗る」の意味が違うので外す。
+            let mut roster: Vec<ClassId> = eg.iter_reps_of_type(EntityType::Point)
+                .filter(|&p| p != a && p != b && eg.entities[p.0].is_active())
+                .filter(|&p| !eg.is_connected(p, eg.line_infinity))
+                .collect();
+            if roster.is_empty() { return Some(0); }
+            let mut seed: Vec<ClassId> = vec![a, b];
+            seed.extend(roster.iter().copied());
+            let ancestors = eg.free_point_ancestors_of(&seed);
+            if ancestors.is_empty() { return None; }
+            for _ in 0..trials {
+                let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+                if !eg.assign_free_point_coords(&ancestors, &mut vars) { return None; }
+                let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+                let (Some(pa), Some(pb)) =
+                    (eg.evaluate_node(a, &vars, &mut cache), eg.evaluate_node(b, &vars, &mut cache))
+                    else { return None };
+                let line = crate::mmp_calculators::calc_line_through_points(&pa, &pb);
+                if line.len() < 3 { return None; }
+                roster.retain(|&p| match eg.evaluate_node(p, &vars, &mut cache) {
+                    Some(v) if v.len() >= 3 => (line[0] * v[0] + line[1] * v[1] + line[2] * v[2]).0 == 0,
+                    _ => false,
+                });
+                if roster.is_empty() { break; }
+            }
+            Some(roster.len())
+        })
+    }
+
     /// 点 point が曲線 curve(直線・二次曲線)に乗っているかの数値的な裏付け(numeric_plausibility_check の接続版)。
     /// 判定できなければ None。
     pub(crate) fn numeric_incidence_check(&self, point: ClassId, curve: ClassId, trials: usize) -> Option<bool> {
