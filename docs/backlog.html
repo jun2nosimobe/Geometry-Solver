@@ -160,7 +160,8 @@ bench_2022balkanmop1 ノイズ10 で <b>当たり 9.9% に対して無駄にな�
           <div class="desc"><b>これは今までの改善の位置づけを変える。</b> <a class="secref" href="ledger.html">§04</a>で積んだマッチングの高速化(見積もりの修正で全体−12.8%、射影の課税回収、バンディット無効化で−20%)は、どれも「<b>速く行き詰まる</b>」方向の改善であって、届く範囲は1ミリも広げていない。予算が余っている以上、探索の速度はもう律速ではない。
           <br><br><b>MCTSを足すと「ネタ切れ」が「予算切れ」に変わるだけだった。</b> 需要が尽きた後の受け皿であるMCTSを有効にして測ると、<code>bench_2008armog10p6</code> は 8,046,561 ステップ、<code>bench_2012chnwesternmop5</code> は 8,467,597 ステップで<b>予算を使い切る</b>(MCTSは8〜27回起動している)が、どれも解けない。つまり作図の供給量が足りないのではなく、<b>供給されるものが当たっていない</b> ― 無方向なMCTSは予算をいくらでも消費できるが、必要な補助対象を引き当てない。
           <br><br><b>次に効くのはここ。</b> 「何を作図するか」を目標から逆算する側(<code>resolve_target_demands</code> / MCTSの行動選択)。<a class="secref" href="backlog.html">§05</a>-#1(空振り75〜79%)や#10(部分マッチ共有)は速度の話なので、予算が余っている今は優先度が下がる。</div>
-          <div class="b-tags"><span class="tag">13/13が作図のネタ切れ・予算切れ0</span><span class="tag">MCTSは量を出すが当たらない</span></div>
+          <div class="evidence"><b>追記 ― ネタ切れは2種類ある(<a class="secref" href="ledger.html">§04</a> #64):</b> 降参する問題に候補capを上げて(<code>--heat-cap</code> 40→200)測ったところ、<b>centroid 106,128 / desargues 50,303 / pappus 33,735 / pascal 1,576,569 は1ステップも変わらなかった</b>(<code>--midpoint-demands</code> を足しても同じ)。cap は何も切り捨てていない ― <b>手駒で動かせる状態が1つも残っていない</b>。この4問については、残り98%の予算は機会ではなく<b>手の種類が足りないことの症状</b>で、探索の改善では届かない(<a href="#b3">b3</a>)。<br>一方 bench_2000usatstp2(130,446→<b>1,763,993</b>)と newton_gauss(52,820→<b>5,804,054</b>)は中点を解禁すると探索が10〜100倍に広がるが届かない ― こちらは手はあるが選べていない。<b>対策が正反対なので分けて扱うこと。</b></div>
+    <div class="b-tags"><span class="tag">13/13が作図のネタ切れ・予算切れ0</span><span class="tag">4問は何を足しても不動(定理不足)</span><span class="tag">2問は中点で広がるが届かない</span><span class="tag">capにはもう余地が無い</span></div>
   </div>
 </details>
 <details class="item" id="b10" data-status="open">
