@@ -527,37 +527,23 @@ impl BlackboardEngine {
                 .then_with(|| (a.0).0.0.cmp(&(b.0).0.0))
                 .then_with(|| (a.0).1.0.cmp(&(b.0).1.0))
         });
-
-        // 🌟 上位だけ、座標で試作して「既存の点が何個乗るか」を数え、加点する(--coincidence-demands)。
-        // 回数は「多くのマッチが欲しがった」の代理指標でしかないが、3点目が乗る補助線は
-        // 引いた瞬間に新しい共線関係を生むので、当たりかどうかを直接見たことになる。
-        //
-        // 一致の数を「加点」にとどめる版も測ったが、きれいな図での利きが消えたうえ
-        // skip-recovery で1問落ちた(来歴 #61)。一致があるなら回数より優先してよい。
-        // 全部に掛けると重いので、既存の順位の上位だけに掛けてから並べ直す。
-        if self.prover.coincidence_demands {
-            const RERANK_TOP: usize = 20;
-            const COINCIDENCE_TRIALS: usize = 2;
-            let top = demands.len().min(RERANK_TOP);
-            let mut scored: Vec<(usize, Demand)> = demands[..top].iter()
-                .map(|d| {
-                    let n = self.prover.egraph
-                        .count_points_on_new_line((d.0).0, (d.0).1, COINCIDENCE_TRIALS)
-                        .unwrap_or(0);
-                    (n, d.clone())
-                })
-                .collect();
-            scored.sort_by(|x, y| y.0.cmp(&x.0)
-                .then_with(|| priority(&y.1).partial_cmp(&priority(&x.1)).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| ((x.1).0).0.0.cmp(&((y.1).0).0.0))
-                .then_with(|| ((x.1).0).1.0.cmp(&((y.1).0).1.0)));
-            for (i, (_, d)) in scored.into_iter().enumerate() { demands[i] = d; }
-        }
-
+        // 🌟 需要の補助線には、性質の違う2種類が混ざっている(既定で分ける。--no-collinear-extra で戻せる)。
+        //   既に2点が同じ直線上にある組: 作った直線は即座に既存の直線へ併合される。
+        //     図は1つも増えず、残るのは定理が欲しがっていた Line(A,B) という呼び名と、
+        //     その併合が生む事実だけ ― つまり「ほぼ無料」。
+        //   それ以外: 本当に図が増える。
+        // 同じ枠(LINES_PER_STALL)を奪い合わせると、ノイズで前者が増えたときに
+        // 後者が引かれなくなる。枠を分ければ図の大きさに影響されない(来歴 #62)。
         let mut count = 0;
+        let mut free_count = 0;
         for ((p1, p2), score, affinity) in demands {
             let def = Definition::new_line(p1, p2);
             if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let free = self.prover.collinear_extra
+                && self.prover.egraph.find_common_line(&[p1, p2]).is_some();
+            if free {
+                if free_count >= LINES_PER_STALL { continue; }
+            } else if count >= LINES_PER_STALL { continue; }
             let name = format!("Line_{}_{}_(Demand)", self.prover.egraph.entities[p1.0].name, self.prover.egraph.entities[p2.0].name);
             match affinity {
                 Some((da, db, dab)) if da + db > dab => {
@@ -566,9 +552,12 @@ impl BlackboardEngine {
                 _ => println!("  💡 [オンデマンド作図] 要請により {} を生成 (需要: {:.1})", name, score),
             }
             self.add_aux(name, def, EntityType::Line, EntityOrigin::LineDemand, Some(0.5));
-            count += 1;
-            if count >= LINES_PER_STALL { break; }
+            if free { free_count += 1; } else { count += 1; }
+            if count >= LINES_PER_STALL && (!self.prover.collinear_extra || free_count >= LINES_PER_STALL) {
+                break;
+            }
         }
+        let count = count + free_count;
 
         self.prover.construction_demands.clear();
         if count > 0 { self.settle_and_resweep(); }

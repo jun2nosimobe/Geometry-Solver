@@ -16,7 +16,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> d44c8dd</span>
+      <span><b>最新コミット</b> #62・#63(補助線の枠分けと長さの定理を既定に)</span>
     </div>
   </div>
   <div class="stats">
@@ -46,19 +46,19 @@
 <details class="item" id="track-3" data-status="open">
   <summary><span class="idx">方針C</span><span class="t">個別の定理より、汎用の補助作図を優先</span><span class="pill open">需要駆動の作図が主力</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針C 補助作図</b></div><div class="desc">行き詰まったときの手は需要駆動の作図(補助線 → 交点 → 有向角 → もう一方の交点 → 中点 → 目標からの逆算)で、尽きたら候補capを広げる。この手順は solve・作図画面(serve)・discover の証明試行で共通の<code>BlackboardEngine::recover</code>に1本化した(以前は3か所が別々に持っていて、serve だけ射影の定理を使わない・回復を打ち切るといった食い違いがあった)。需要駆動の補助線を外すと31→15問、交点を外すと31→29問で、解けている問題の約半分はこの路線が支えている。中点の需要は solve では既定で切っている(bench_2012egmop1 が落ちる)が、作図画面と discover では使う。<br><b>現状の課題:</b> 目標から逆算する作図は一度も効いておらず、「何を作図するか」を目標側から決める手が実質無い。MCTS は既定で無効 ― 予算を仕事量にした後で測り直すと、解ける問題は1問も増えずに時間が12倍になった。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針C 補助作図</b></div><div class="desc">行き詰まったときの手は需要駆動の作図(補助線 → 交点 → 有向角 → もう一方の交点 → 中点 → 目標からの逆算)で、尽きたら候補capを広げる。<b>補助線の需要は2種類に分けて別々の枠で引く</b>(<a class="secref" href="ledger.html">§04</a> #62)― 「既に2点が同じ直線上にある」組は作った直線が即座に併合されるので図を増やさず、同じ枠を奪い合わせると図が大きいほどこちらが本物の補助線を餓死させる。交点・第2交点・中点の需要はまだ単一の枠のまま(同じ分け方が効くはず)。この手順は solve・作図画面(serve)・discover の証明試行で共通の<code>BlackboardEngine::recover</code>に1本化した(以前は3か所が別々に持っていて、serve だけ射影の定理を使わない・回復を打ち切るといった食い違いがあった)。需要駆動の補助線を外すと31→15問、交点を外すと31→29問で、解けている問題の約半分はこの路線が支えている。中点の需要は solve では既定で切っている(bench_2012egmop1 が落ちる)が、作図画面と discover では使う。<br><b>現状の課題:</b> 目標から逆算する作図は一度も効いておらず、「何を作図するか」を目標側から決める手が実質無い。MCTS は既定で無効 ― 予算を仕事量にした後で測り直すと、解ける問題は1問も増えずに時間が12倍になった。</div>
   </div>
 </details>
 <details class="item" id="track-4" data-status="backlog">
   <summary><span class="idx">方針D</span><span class="t">定理の追加は最小限に、問題ごとの opt-in はしない</span><span class="pill backlog">診断で詰まり所を名指し済み</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 例外は暫定の中心角の定理(<code>CENTRAL_ANGLE_PROBLEMS</code>)だけで、長さを橋渡しする定理は全問題一律のスイッチ(<code>--length-theorems</code>)にしてある。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。足りないのは作図より「長さ・中心・垂直二等分線」の橋渡しで、これを課税なしに既定へ入れる方法がまだ無い(<a class="secref" href="backlog.html">§05</a>)。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 例外は暫定の中心角の定理(<code>CENTRAL_ANGLE_PROBLEMS</code>)だけで、長さを橋渡しする定理は<b>既定になった</b>(<a class="secref" href="ledger.html">§04</a> #63、外すのは <code>--no-length-theorems</code>)― 単独では大きい図で+37〜40%の課税だが、補助線の枠分け(#62)と組むと相殺される。<b>単独では採れなかった定理が、頑健性の改善で採れるようになった</b>形で、他の橋渡し定理にも同じ経路が使えるかもしれない。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。残る詰まり所(九点円の中心 AH=2OM、二辺夾角の合同)は<b>そもそも定理として存在しない</b>ので、探索の改善では届かない(<a class="secref" href="backlog.html">§05</a> b3)。</div>
   </div>
 </details>
 <details class="item" id="track-5" data-status="open">
   <summary><span class="idx">方針E</span><span class="t">無駄な作図のノイズを足しても解ける頑健性</span><span class="pill open">ノイズ5で32問まで回復</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針E 頑健性</b></div><div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に、証明と無関係な作図をノイズとして加えても解けるぐらいの頑健性を目指す。難しい問題では探索そのものが大量の補助図形を作るので、最小限のきれいな図でしか解けないソルバーは難問に届かない。<br><b>判断の基準:</b> 改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先する(定理の順序に鈍感な探索、無関係な実体で増えないコスト、図が最小であることに頼らないヒューリスティック)。特定の問題の作図の並びに合わせた調整は採らない(問題ごとの opt-in をしない方針と同じ理由)。<br><b>計測(<code>--noise=N</code>、<a class="secref" href="ledger.html">§04</a> #50):</b> 証明と無関係な作図をN個足して解けるかを測る。既定設定・44問で、対処前は ノイズ0: 32問 / 5個: 30問 / 10個: 28問 / 20個: 28問 ― 5個足すだけで2問落ちていた。capを広げる時機を直して(<a class="secref" href="ledger.html">§04</a> #51)<b>ノイズ5で32問・10個で29問・20個で30問</b>まで戻した。仕事量は 50M→84M→114M→113M と増える(<a class="secref" href="ledger.html">§04</a> #55 の semi-join で全体が2〜3割下がった後の値)。<br><b>既に見えている弱さ:</b> マッチングは完全に素朴な積み直しで回っており(仕事量の100%が全体sweep由来)、<b>ノイズを足すと sweep の回数そのものが倍増する</b> ― bench_2022balkanmop1 で 14回→32回、仕事量 826,498→8,007,052(<a class="secref" href="backlog.html">§05</a> b29)。定理の登録順を変えるだけで仕事量が±15%動き、1問が解けたり解けなかったりする(<a class="secref" href="backlog.html">§05</a> b30)。作図画面で射影の定理を足すと、円の図の証明が1件減った(<a class="secref" href="ledger.html">§04</a> #47)。数値チェックのコストが実体の数に比例して効く(<a class="secref" href="backlog.html">§05</a>)。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針E 頑健性</b></div><div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に、証明と無関係な作図をノイズとして加えても解けるぐらいの頑健性を目指す。難しい問題では探索そのものが大量の補助図形を作るので、最小限のきれいな図でしか解けないソルバーは難問に届かない。<br><b>判断の基準:</b> 改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先する(定理の順序に鈍感な探索、無関係な実体で増えないコスト、図が最小であることに頼らないヒューリスティック)。特定の問題の作図の並びに合わせた調整は採らない(問題ごとの opt-in をしない方針と同じ理由)。<br><b>計測(<code>--noise=N</code>、<a class="secref" href="ledger.html">§04</a> #50):</b> 証明と無関係な作図をN個足して解けるかを測る。既定設定・44問で、対処前は ノイズ0: 32問 / 5個: 30問 / 10個: 28問 / 20個: 28問 ― 5個足すだけで2問落ちていた。capを広げる時機を直して(<a class="secref" href="ledger.html">§04</a> #51)ノイズ5で32問・10個で29問・20個で30問まで戻し、補助線の枠分けと長さの定理(#62・#63)で<b>ノイズ5で33問・10個で30問・20個で30問</b>になった(ノイズ10の仕事量は −26.1%、ノイズ20 の varignon は 4,851,560 → 12,409)。仕事量は 50M→84M→114M→113M と増える(<a class="secref" href="ledger.html">§04</a> #55 の semi-join で全体が2〜3割下がった後の値)。<br><b>既に見えている弱さ:</b> マッチングは完全に素朴な積み直しで回っており(仕事量の100%が全体sweep由来)、<b>ノイズを足すと sweep の回数そのものが倍増する</b> ― bench_2022balkanmop1 で 14回→32回、仕事量 826,498→8,007,052(<a class="secref" href="backlog.html">§05</a> b29)。定理の登録順を変えるだけで仕事量が±15%動き、1問が解けたり解けなかったりする(<a class="secref" href="backlog.html">§05</a> b30)。作図画面で射影の定理を足すと、円の図の証明が1件減った(<a class="secref" href="ledger.html">§04</a> #47)。数値チェックのコストが実体の数に比例して効く(<a class="secref" href="backlog.html">§05</a>)。</div>
   </div>
 </details>
 </div>
@@ -159,7 +159,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 補助作図の需要の立て方を見直すところまで(d44c8dd)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 補助線の需要を枠分けし、長さの定理を既定にするところまで(来歴 #62・#63)
   </footer>
 </div>
 <script src="atlas.js"></script>

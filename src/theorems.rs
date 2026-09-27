@@ -93,7 +93,7 @@ pub struct TheoremSetOptions {
 
 impl Default for TheoremSetOptions {
     fn default() -> Self {
-        Self { projective: true, length_bridge: false, central_angle: false }
+        Self { projective: true, length_bridge: true, central_angle: false }
     }
 }
 
@@ -782,10 +782,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
     ]
 }
 
-/// 🌟 長さを橋渡しする定理(既定の定理集合には入れていない。--length-theorems で入る)。
-/// 未解決問題の詰まり所の手順は自力で出せるようになったが、既定に入れると解ける問題は増えずに他の問題の
-/// 仕事量が大きく増える(増えた長さの事実に探索が引っ張られる)。問題ごとの opt-in は新しい問題に効かない
-/// ので持たず、課税をスケジューラ側で自動的に抑えられるようになるまでは全問題一律のスイッチにしておく。
+/// 🌟 長さを橋渡しする定理(既定で入る。--no-length-theorems で外せる)。
+/// 単独では大きい図で+37〜40%の課税になるが、補助線の枠分け(blackboard::resolve_demands)と
+/// 組むと相殺され、解ける問題が3問増えて後退が無くなった(来歴 #62)。
 pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
     vec![
         // ==========================================

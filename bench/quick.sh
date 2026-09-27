@@ -5,11 +5,14 @@
 set -u
 S=$(cd "$(dirname "$0")" && pwd)
 L="$1"; B="$S/bin/$L"; EXTRA="${2:-}"
-run() { name="$1"; base="$2"; shift 2; printf '%-18s ' "$name"; "$S/qbench.sh" "$B" "$S/res/${L}_q$name.tsv" "$EXTRA $*";
+run() { name="$1"; base="$2"; shift 2; out="$S/res/${L}_q$name.tsv"; printf '%-18s ' "$name"
+  # BENCH_RESUME=1 なら、既に結果のある設定は回さずに飛ばす(中断からの再開用)。
+  if [ "${BENCH_RESUME:-0}" = 1 ] && [ -s "$out" ]; then echo "(済み・再利用)"
+  else "$S/qbench.sh" "$B" "$out" "$EXTRA $*"; fi
   if [ -f "$S/res/$base.tsv" ]; then
-    diff "$S/res/$base.tsv" "$S/res/${L}_q$name.tsv" > /dev/null && echo "  identical to $base" || {
+    diff "$S/res/$base.tsv" "$out" > /dev/null && echo "  identical to $base" || {
       awk -F'\t' 'NR==FNR{s[$1]=$2; w[$1]=$3; next} {ds+=$2-s[$1]; if(s[$1]==1&&$2==1){bw+=$3; bs+=w[$1]} if(s[$1]!=$2) print "  solved change: " $1 " " s[$1] "->" $2}
-        END{printf "  solved diff %+d / both-solved work %d -> %d (%+.1f%%)\n", ds, bs, bw, (bw-bs)*100.0/bs}' "$S/res/$base.tsv" "$S/res/${L}_q$name.tsv"
+        END{printf "  solved diff %+d / both-solved work %d -> %d (%+.1f%%)\n", ds, bs, bw, (bw-bs)*100.0/bs}' "$S/res/$base.tsv" "$out"
     }
   fi
 }

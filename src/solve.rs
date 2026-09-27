@@ -58,7 +58,7 @@ pub struct SolveOptions {
     pub var_order: bool,
     pub generic_join: bool,
     pub gj_audit: bool,
-    pub coincidence_demands: bool,
+    pub collinear_extra: bool,
     pub widen_first: bool,
     pub widen_first_ceiling: usize,
     pub widen_every: usize,
@@ -84,7 +84,7 @@ impl SolveOptions {
             heat_cap: value(args, "--heat-cap=").unwrap_or(40),
             fanout_heat_cap: value(args, "--fanout-heat-cap=").unwrap_or(5),
             midpoint_demands: flag(args, "--midpoint-demands"),
-            length_theorems: flag(args, "--length-theorems"),
+            length_theorems: !flag(args, "--no-length-theorems"),
             central_angle: flag(args, "--central-angle"),
             no_projective: flag(args, "--no-projective"),
             degen_heat: flag(args, "--degen-heat"),
@@ -109,7 +109,7 @@ impl SolveOptions {
             var_order: flag(args, "--var-order"),
             generic_join: flag(args, "--generic-join"),
             gj_audit: flag(args, "--gj-audit"),
-            coincidence_demands: flag(args, "--coincidence-demands"),
+            collinear_extra: !flag(args, "--no-collinear-extra"),
             widen_first: flag(args, "--widen-first"),
             widen_first_ceiling: value(args, "--widen-first-ceiling=").unwrap_or(40),
             widen_every: value(args, "--widen-every=").unwrap_or(2),
@@ -327,7 +327,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     prover.var_order = opts.var_order;
     prover.generic_join = opts.generic_join;
     prover.gj_audit = opts.gj_audit;
-    prover.coincidence_demands = opts.coincidence_demands;
+    prover.collinear_extra = opts.collinear_extra;
     prover.theorems = theorem_set(problem_name, opts).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
