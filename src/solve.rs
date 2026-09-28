@@ -282,7 +282,8 @@ impl Recovery {
     }
 }
 
-pub fn run(problem_name: &str, opts: &SolveOptions) {
+/// 戻り値は証明できたか。定理の証人テスト(theorem_lint)がこれを見る。
+pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     println!("🚀 幾何ソルバーを起動します (対象問題: {}, 時間予算: {}秒, UCB1バンディット: {}, MCTS目標バイアス: {}, heat-cap: {}/{})",
         problem_name, opts.time_budget_secs,
         if opts.bandit { "有効" } else { "無効" },
@@ -296,11 +297,11 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         Some(rung) => {
             let Some(text) = problems::sketch_for(problem_name) else {
                 println!("⚠️ 「{}」には証明の筋書き(SKETCH)がまだありません。", problem_name);
-                return;
+                return false;
             };
             match sketch::prepare(&mut egraph, text, rung) {
                 Ok(p) => { sketch::check_before_search(&egraph, &p); Some(p) }
-                Err(e) => { println!("⚠️ {}", e); return; }
+                Err(e) => { println!("⚠️ {}", e); return false; }
             }
         }
     };
@@ -358,6 +359,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     let hypotheses_hold = opts.audit_merges && engine.prover.egraph.hypotheses_hold_numerically();
     if opts.audit_merges { engine.prover.merge_audit = Some(logic_core::MergeAudit::default()); }
 
+    let mut proved = false;
     let start_time = Instant::now();
     engine.schedule_full_sweep();
     while engine.prover.work_done() < opts.step_budget
@@ -370,7 +372,8 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
         engine.process_pending_conjectures(&problem.target_fact);
 
         match goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time) {
-            Goal::Proved | Goal::Abort => break,
+            Goal::Proved => { proved = true; break; }
+            Goal::Abort => break,
             Goal::NotYet => {}
         }
         if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) {
@@ -402,6 +405,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) {
     if opts.show_profile {
         print_profile(&engine.prover, start_time.elapsed());
     }
+    proved
 }
 
 /// --audit-merges の集計。`MERGE_AUDIT\t問題\t定理\t真\t偽\t判定不能\t前提` の行は全問の掃引で集計しやすいように出す

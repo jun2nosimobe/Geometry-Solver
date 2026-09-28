@@ -597,7 +597,10 @@ impl ProverEngine {
         let eg = &self.egraph;
         if eg.entities[id.0].entity_type != et { return false; }
         match et {
+            EntityType::Point if refinement == Refinement::CircularPoint =>
+                id == eg.get_rep(eg.circ_i) || id == eg.get_rep(eg.circ_j),
             EntityType::Point => eg.is_connected(id, eg.line_infinity) == (refinement == Refinement::Direction),
+            EntityType::Line => refinement != Refinement::InfinityLine || id == eg.get_rep(eg.line_infinity),
             EntityType::Conic => {
                 let is_circle = eg.is_connected(id, eg.circ_i) && eg.is_connected(id, eg.circ_j);
                 is_circle == (refinement == Refinement::Circle)
@@ -649,7 +652,7 @@ impl ProverEngine {
             }
         }
 
-        if matches.is_empty() && parent_vars.len() == 2
+        if matches.is_empty() && role == DefRole::Demand && parent_vars.len() == 2
             && let (Some(&x), Some(&y)) = (bind.get(&parent_vars[0]), bind.get(&parent_vars[1])) {
                 let (r1, r2) = (self.egraph.get_rep(x), self.egraph.get_rep(y));
                 match kind {

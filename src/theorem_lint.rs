@@ -34,6 +34,8 @@ pub enum Kind {
     Oversized,
     /// 需要を消費する側はあるのに、それを立てる定理が1つも無い。
     UnsuppliedDemand,
+    /// この定理が発火することを確かめる問題が無い。
+    NoWitness,
     /// 使われていない語彙。
     DeadVocabulary,
 }
@@ -47,6 +49,7 @@ impl Kind {
             Kind::UnbrokenSymmetry => "対称性が残っている",
             Kind::Oversized => "規模が大きい",
             Kind::UnsuppliedDemand => "需要の供給元が無い",
+            Kind::NoWitness => "証人が無い",
             Kind::DeadVocabulary => "使われない語彙",
         }
     }
@@ -56,6 +59,29 @@ impl Kind {
 /// 探索の費用は未束縛の変数の数に対して指数的なので、大きい定理は1本で探索を食い潰す。
 const VAR_BUDGET: usize = 20;
 const PATTERN_BUDGET: usize = 20;
+
+/// 🌟 定理の証人: その定理が発火しないと解けない問題。
+///
+/// 今回の教訓(来歴 §04):定理を書き換えたとき、規模・役割・束縛の閉包といった**静的な検査は
+/// 全部通るのに、必要な形の実体が図に供給されないせいで一度も発火しない**ということが起きる。
+/// 供給は実行時の性質なので、静的には捕まえられない ― 実際に解かせるのが唯一の確実な検査。
+///
+/// 問題名がその定理を名指ししているものだけを載せている。証人の無い定理は
+/// lint の「証人が無い」欄に出るので、新しい問題を足すときに埋めること。
+const WITNESS: &[(&str, &str)] = &[
+    ("スパイラル相似の中点対応", "test_spiral_similarity"),
+    ("共点二弦の相似(方冪の定理の基礎)", "test_power_of_point"),
+    ("シュタイナーの定理(二次曲線上の6点の複比不変性)", "test_steiner"),
+    ("シュタイナーの定理の逆(射影版・円周角の定理の逆)", "test_steiner_converse"),
+    ("シュタイナーの定理(接線版)/接弦定理(射影版)", "test_steiner_tangent"),
+    ("複比の透視射影不変性(点→線束)/対合定理(共点4直線+横断線)", "test_involution"),
+    ("複比の透視射影不変性(線束→点)", "test_cross_ratio"),
+    ("二等辺三角形の底角の逆", "test_isosceles_converse"),
+    ("直角三角形の斜辺の中線", "test_right_midpoint"),
+    ("同位角による平行判定(右共通)", "test_parallel"),
+    ("中点連結定理", "varignon"),
+    ("円周角の定理", "thales"),
+];
 
 /// 🌟 いま上限を超えている定理。分割の検討は §05 b34。
 /// **新しい定理をここに足さないこと** ― 足す前に分割できないかを考える。
@@ -69,12 +95,6 @@ const OVERSIZED_KNOWN: &[&str] = &[
 /// マッチャが親を全部束縛した時点で需要を立てる DefKind(logic_core::matcher)。
 fn raises_demand(kind: DefKind) -> bool {
     matches!(kind, DefKind::LineThroughPoints | DefKind::Intersection)
-}
-
-/// マッチャがその場で作る DefKind(logic_core::matcher の created_on_demand と同じ並び)。
-fn builds_on_demand(kind: DefKind) -> bool {
-    matches!(kind, DefKind::AnglePair | DefKind::DirectionOf | DefKind::LengthSq
-        | DefKind::CrossRatio | DefKind::CrossRatioOfLines | DefKind::Product)
 }
 
 /// 定理全体を、変数名だけを取り替えられる正規形の文字列にする。
@@ -155,16 +175,11 @@ pub fn lint(t: &TheoremDef) -> Vec<Finding> {
     for (i, p) in t.patterns.iter().enumerate() {
         match p {
             Pattern::DefinedBy { kind, parents, role, .. } => {
-                // 宣言した役割が、その種類で実際に起きることと食い違っていないか。
-                let can_build = builds_on_demand(*kind);
-                let can_demand = raises_demand(*kind) && parents.len() == 2;
+                // demand_by は、その需要を消費する resolve_* がある種類にしか書けない。
+                let consumed = raises_demand(*kind) && parents.len() == 2;
                 match role {
-                    DefRole::Build if !can_build =>
-                        add(Kind::RoleMismatch, format!("#{} build_by({:?}) だが、この種類はその場で作られない", i, kind)),
-                    DefRole::Demand if !can_demand =>
-                        add(Kind::RoleMismatch, format!("#{} demand_by({:?}) だが、この種類は需要を立てない", i, kind)),
-                    DefRole::Lookup if can_build =>
-                        add(Kind::RoleMismatch, format!("#{} match_by({:?}) と書いてあるが、実際はその場で作る", i, kind)),
+                    DefRole::Demand if !consumed =>
+                        add(Kind::RoleMismatch, format!("#{} demand_by({:?}) だが、この需要を消費する resolve_* が無い", i, kind)),
                     DefRole::Build => add(Kind::BuildsOnDemand, format!("#{} {:?}", i, kind)),
                     DefRole::Demand => add(Kind::RaisesDemand, format!("#{} {:?}({})", i, kind, parents.join(","))),
                     DefRole::Lookup => {}
@@ -173,6 +188,10 @@ pub fn lint(t: &TheoremDef) -> Vec<Finding> {
             Pattern::Not(_) => add(Kind::DeadVocabulary, format!("#{} Pattern::Not", i)),
             _ => {}
         }
+    }
+
+    if !WITNESS.iter().any(|(name, _)| *name == t.name) {
+        add(Kind::NoWitness, "発火を確かめる問題が紐づいていない".to_string());
     }
 
     if t.entities.len() > VAR_BUDGET {
@@ -204,7 +223,7 @@ pub fn report(theorems: &[TheoremDef]) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     let all: Vec<Finding> = theorems.iter().flat_map(lint).collect();
-    let kinds = [Kind::RoleMismatch, Kind::UnsuppliedDemand, Kind::UnbrokenSymmetry, Kind::Oversized,
+    let kinds = [Kind::RoleMismatch, Kind::UnsuppliedDemand, Kind::NoWitness, Kind::UnbrokenSymmetry, Kind::Oversized,
                  Kind::BuildsOnDemand, Kind::RaisesDemand, Kind::DeadVocabulary];
 
     let _ = writeln!(s, "定理 {} 件を検査した。", theorems.len());
@@ -282,6 +301,21 @@ mod tests {
         assert!(bad.is_empty(),
             "上限(変数{}・パターン{})を超える定理が増えた。分割できないか検討すること:\n{}",
             VAR_BUDGET, PATTERN_BUDGET, bad.join("\n"));
+    }
+
+    /// 🌟 証人の問題が今も解けること。定理を書き換えて「静的には正しいが一度も発火しない」
+    /// 形になっていないかを、実際に解かせて確かめる唯一の検査。
+    #[test]
+    fn every_witnessed_theorem_still_fires() {
+        let names: Vec<String> = all_theorems().iter().map(|t| t.name.clone()).collect();
+        let opts = crate::solve::SolveOptions::parse(&["--steps=600000".to_string()])
+            .expect("既定のオプションは読めるはず");
+        for (theorem, problem) in WITNESS {
+            assert!(names.iter().any(|n| n == theorem),
+                "証人の表に、もう存在しない定理「{}」が載っている", theorem);
+            assert!(crate::solve::run(problem, &opts),
+                "「{}」の証人 {} が解けない。定理が一度も発火していない可能性が高い", theorem, problem);
+        }
     }
 
     /// 🌟 OVERSIZED_KNOWN が実態と合っていること(分割して収まったら消す)。

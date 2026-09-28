@@ -32,6 +32,12 @@ fn on_circle(point: &str, circle: &str) -> Pattern {
     connected(point, circle, Refinement::Default, Refinement::Circle)
 }
 
+/// 🌟 円周点(I か J)と無限遠直線を同時に束縛する。どちらも図に固定の基準の実体なので、
+/// 候補は I と J の2つだけ。同じ変数を使い続ける限り、どちらに束縛されても一貫する。
+fn circular_point(point: &str, inf_line: &str) -> Pattern {
+    connected(point, inf_line, Refinement::CircularPoint, Refinement::InfinityLine)
+}
+
 fn identical(a: &str, b: &str, pool: SelfBindPool) -> Pattern {
     Pattern::Identical { a: a.to_string(), b: b.to_string(), pool }
 }
@@ -40,33 +46,30 @@ fn same(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::Any) }
 fn same_angle(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::Angle) }
 fn same_cross_ratio_of_lines(a: &str, b: &str) -> Pattern { identical(a, b, SelfBindPool::CrossRatioOfLines) }
 
-fn defined_by(kind: DefKind, args: &[&str], flip: Flip) -> Pattern {
+fn defined_by(kind: DefKind, args: &[&str], flip: Flip, role: DefRole) -> Pattern {
     let (result, parents) = args.split_last().expect("DefinedBy には結果の変数が要る");
-    Pattern::DefinedBy {
-        kind, parents: strings(parents), result: result.to_string(), flip,
-        role: DefRole::default_for(kind),
-    }
+    Pattern::DefinedBy { kind, parents: strings(parents), result: result.to_string(), flip, role }
 }
 
 /// 🌟 DefinedBy の書き方は役割ごとに関数を分けてある(theorem_lint.rs が食い違いを見る)。
 /// args の最後が結果、それより前が親。
 ///
 /// match_by: 図にあるものだけを照合する。無ければその枝は失敗。
-fn match_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+fn match_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed, DefRole::Lookup) }
 
 /// build_by: 親が揃っていればその場で作る。1回の探索で数千個できる種類があるので、
 /// 本当にその定理の前提として要るものだけに使うこと(§05 b7)。
-fn build_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+fn build_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed, DefRole::Build) }
 
 /// demand_by: 無ければ補助作図の需要を立てる(2点を結ぶ直線・2直線の交点)。
-fn demand_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+fn demand_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed, DefRole::Demand) }
 
 /// 有向角 [D1, D2, Ang] を両方の向きで読む。
-fn angle_free(args: &[&str]) -> Pattern { defined_by(DefKind::AnglePair, args, Flip::Free) }
+fn angle_free(args: &[&str]) -> Pattern { defined_by(DefKind::AnglePair, args, Flip::Free, DefRole::Build) }
 
 /// 有向角 [D1, D2, Ang] を両方の向きで読むが、同じ group の角とは向きをそろえる。
 fn angle_grouped(args: &[&str], group: &str) -> Pattern {
-    defined_by(DefKind::AnglePair, args, Flip::Grouped(group.to_string()))
+    defined_by(DefKind::AnglePair, args, Flip::Grouped(group.to_string()), DefRole::Build)
 }
 
 fn distinct(args: &[&str]) -> Pattern {

@@ -37,6 +37,11 @@ pub enum Refinement {
     Direction,
     /// 円周点 I, J を両方通る二次曲線(=円)。
     Circle,
+    /// 🌟 円周点 I か J そのもの。図に2つしかない基準の点で、ここを起点にすると
+    /// 「I を中心とする線束の複比」が書ける(角度と比を1つの値に載せた不変量)。
+    CircularPoint,
+    /// 🌟 無限遠直線そのもの。図に1つしかない。
+    InfinityLine,
 }
 
 /// DefinedBy(AnglePair) で有向角の向きをどう扱うか。
@@ -63,18 +68,6 @@ pub enum DefRole {
     Build,
     /// 無ければ補助作図の需要を立てる(2点を結ぶ直線・2直線の交点)。
     Demand,
-}
-
-impl DefRole {
-    /// 種類から決まる既定の役割。いまの matcher の挙動をそのまま写したもの。
-    pub fn default_for(kind: DefKind) -> DefRole {
-        match kind {
-            DefKind::AnglePair | DefKind::DirectionOf | DefKind::LengthSq
-            | DefKind::CrossRatio | DefKind::CrossRatioOfLines | DefKind::Product => DefRole::Build,
-            DefKind::LineThroughPoints | DefKind::Intersection => DefRole::Demand,
-            _ => DefRole::Lookup,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

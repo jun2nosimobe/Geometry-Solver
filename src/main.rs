@@ -84,7 +84,7 @@ fn main() {
         "discover" => discover::run(&args),
         "discover-degenerate" => discover_degenerate::run(&args),
         problem_name => match solve::SolveOptions::parse(&args) {
-            Ok(opts) => solve::run(problem_name, &opts),
+            Ok(opts) => { solve::run(problem_name, &opts); }
             Err(e) => println!("⚠️ {}", e),
         },
     }

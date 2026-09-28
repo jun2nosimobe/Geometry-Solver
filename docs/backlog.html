@@ -14,6 +14,14 @@
 <p class="section-note">検証を通じて分かった「まだ手が付いていない」項目。★は着手前に踏むべき前提条件を示す。上位5件は<code>--trace</code>の実測(<a class="secref" href="ledger.html">§04</a>)から出た新しい項目。#6以降は仕事量予算・37問ベンチに移行する前の診断で、スコア表記(<code>NN/96</code>)と時間予算(5秒)は当時のもの ― <b>2026-09-16 に全項目を今の状態で測り直し、各項目に「再検証」の欄を足した</b>。結果、#14と#15は解決/反証、#6は結論そのものが誤りと判明、#11は初めて数値化できた。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="group"><div class="group-title">未着手 · 26件</div>
+<details class="item" id="b34" data-status="open">
+  <summary><span class="idx"></span><span class="t">定理の規模を本当に小さくするには、語彙ではなく「供給」を変える必要がある</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="ledger.html">§04</a> #65 で分かったこと: <b>定理の規模は語彙の表現力ではなく、何が図に供給されているかで決まっている</b>。旧版のスパイラル相似の定理が動くのは有向角が大量に供給されているから(<a href="#b7">b7</a> の2,517個)で、射影の語彙で書き直した版が動かないのは等方直線が1本も供給されていないから。<b>b7 が「無駄」と呼んでいる大量供給が、大きい定理を動かしている唯一の理由</b>でもある。<br>上限(変数20・パターン20)を超えたまま残っている定理: 円周角の定理(パターン22)、共点二弦の相似(変数21・パターン24)、シュタイナーの定理の逆(パターン22)。<code>OVERSIZED_KNOWN</code> に明示してある。</div>
+    <div class="evidence"><b>取れる道:</b> (1) <b>等方直線の供給を足す</b> ― 点ごとに <code>Line(I, P)</code> を作る(<code>DirectionOf</code> が直線ごとに方向を作るのと同じ形)。点 n 個に対し 2n 本増えるので、方針E(図が大きくても壊れない)の観点では危険。部品(<code>Refinement::CircularPoint</code>)は #65 で入れてある。<br>(2) <b>束縛の骨組みだけ残す</b> ― 変数24・パターン15程度にしかならず、上限を満たさないうえ複比の計算コストが骨組みの上に乗る。<br>(3) <b>共通部分を Rust の関数に括り出す</b> ― 「共点二弦の相似」と旧スパイラル相似はほぼ同一の前提の形(<code>same_angle</code> → <code>angle_grouped</code>×2 → <code>distinct</code> → <code>has_direction</code>×4 → <code>on</code>×4)を持つ。<b>書きやすさは上がるが実行時の規模は1つも減らない</b>ので、上限の検査は通らない。<br><b>どれを採るにせよ、証人テスト(#65)を先に通すこと。</b>「静的には正しいが一度も発火しない」書き換えを0.4秒で捕まえる。<br><b>証人の無い定理が12件ある</b>(lint の「証人が無い」欄)。新しい <code>test_*</code> 問題を足すときに埋めていく。</div>
+    <div class="b-tags"><span class="tag">規模は語彙でなく供給で決まる</span><span class="tag">上限超過は3定理</span><span class="tag">証人が無い定理が12件</span></div>
+  </div>
+</details>
 <details class="item" id="b33" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 補助作図の需要の立て方 ― 探索の副作用ではなく、図の性質として立てる</span></summary>
   <div class="body">
