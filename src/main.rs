@@ -4,6 +4,7 @@ mod noise;
 mod logic_core;
 mod mmp_calculators;
 mod theorems;
+mod theorem_lint;
 mod action_space;
 mod mcts;
 mod problems;

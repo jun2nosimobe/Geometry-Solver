@@ -50,12 +50,39 @@ pub enum Flip {
     Grouped(String),
 }
 
+/// 🌟 DefinedBy パターンが、図に無かったときに何をするか。
+///
+/// 同じ `def_by(...)` の見た目で、ある種類は黙って図形を作り、ある種類は補助作図の需要を
+/// 立て、ある種類は何もしない ― という食い違いが定理のソースから読めなかったので、
+/// 役割を定理の側に書くことにした(§04 の来歴、theorem_lint.rs)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefRole {
+    /// 図にあるものだけを照合する。無ければその枝は失敗。
+    Lookup,
+    /// 親が揃っていればその場で作る(AnglePair・LengthSq など、数が出る派生量)。
+    Build,
+    /// 無ければ補助作図の需要を立てる(2点を結ぶ直線・2直線の交点)。
+    Demand,
+}
+
+impl DefRole {
+    /// 種類から決まる既定の役割。いまの matcher の挙動をそのまま写したもの。
+    pub fn default_for(kind: DefKind) -> DefRole {
+        match kind {
+            DefKind::AnglePair | DefKind::DirectionOf | DefKind::LengthSq
+            | DefKind::CrossRatio | DefKind::CrossRatioOfLines | DefKind::Product => DefRole::Build,
+            DefKind::LineThroughPoints | DefKind::Intersection => DefRole::Demand,
+            _ => DefRole::Lookup,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Pattern {
     Identical { a: String, b: String, pool: SelfBindPool },
     Connected { child: String, parent: String, child_ref: Refinement, parent_ref: Refinement },
     /// parents から kind で作られた図形が result。
-    DefinedBy { kind: DefKind, parents: Vec<String>, result: String, flip: Flip },
+    DefinedBy { kind: DefKind, parents: Vec<String>, result: String, flip: Flip, role: DefRole },
     Distinct(Vec<String>),
     /// 代表元IDの厳密な昇順。同じ候補プールから選ぶ変数の並べ替えを1通りに絞る。
     Order(Vec<String>),

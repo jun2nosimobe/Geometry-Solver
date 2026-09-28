@@ -216,8 +216,8 @@ impl ProverEngine {
             Pattern::Connected { child, parent, child_ref, parent_ref } => {
                 self.match_connected(s, child, parent, *child_ref, *parent_ref, next_active, &bind, flip_states, &mut my_mask)
             }
-            Pattern::DefinedBy { kind, parents, result, flip } => {
-                self.match_defined_by(s, *kind, parents, result, flip, next_active, &bind, flip_states, &mut my_mask)
+            Pattern::DefinedBy { kind, parents, result, flip, role } => {
+                self.match_defined_by(s, *kind, parents, result, flip, *role, next_active, &bind, flip_states, &mut my_mask)
             }
             Pattern::Not(inner) => {
                 self.branch_tag = 0;
@@ -616,13 +616,14 @@ impl ProverEngine {
         parent_vars: &[String],
         result_var: &String,
         flip: &Flip,
+        role: DefRole,
         active: u64,
         bind: &Bind,
         flip_states: FlipStates,
         dep_mask: &mut u8,
     ) -> bool {
         let expected_r_type = s.theorem.entities.get(result_var).copied();
-        let mut valid_nodes = self.defined_by_valid_nodes(kind, result_var, parent_vars, expected_r_type, bind, dep_mask);
+        let mut valid_nodes = self.defined_by_valid_nodes(kind, result_var, parent_vars, expected_r_type, role, bind, dep_mask);
         // 🌟 結果が未束縛なら、定義を展開する前に他のパターンで候補を絞る。型の全代表元を
         // 舐める分岐(defined_by_type_scan_candidates)では、ここで落ちる数がそのまま効く。
         if self.semijoin && !bind.contains_key(result_var) {
@@ -707,6 +708,7 @@ impl ProverEngine {
         result_var: &String,
         parent_vars: &[String],
         expected_r_type: Option<EntityType>,
+        role: DefRole,
         bind: &Bind,
         dep_mask: &mut u8,
     ) -> Vec<ClassId> {
@@ -724,7 +726,7 @@ impl ProverEngine {
 
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
-            } else if created_on_demand(kind) {
+            } else if role == DefRole::Build {
                 // 無関係な4点・4直線の複比は次数が積み上がるので、高すぎるものは作らない。
                 if let Definition::CrossRatio(a, b, c, d) | Definition::CrossRatioOfLines(a, b, c, d) = temp_def {
                     const CR_DEGREE_CAP: usize = 8;

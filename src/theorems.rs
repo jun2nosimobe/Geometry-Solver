@@ -1,5 +1,5 @@
 use crate::mmp_core::{DefKind, EntityType};
-use crate::logic_core::{Conclusion, Construction, Flip, Pattern, Refinement, SelfBindPool, TheoremDef};
+use crate::logic_core::{Conclusion, DefRole, Construction, Flip, Pattern, Refinement, SelfBindPool, TheoremDef};
 use rustc_hash::FxHashMap;
 
 // --- 定理を書くための補助 ---
@@ -42,11 +42,24 @@ fn same_cross_ratio_of_lines(a: &str, b: &str) -> Pattern { identical(a, b, Self
 
 fn defined_by(kind: DefKind, args: &[&str], flip: Flip) -> Pattern {
     let (result, parents) = args.split_last().expect("DefinedBy には結果の変数が要る");
-    Pattern::DefinedBy { kind, parents: strings(parents), result: result.to_string(), flip }
+    Pattern::DefinedBy {
+        kind, parents: strings(parents), result: result.to_string(), flip,
+        role: DefRole::default_for(kind),
+    }
 }
 
+/// 🌟 DefinedBy の書き方は役割ごとに関数を分けてある(theorem_lint.rs が食い違いを見る)。
 /// args の最後が結果、それより前が親。
-fn def_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+///
+/// match_by: 図にあるものだけを照合する。無ければその枝は失敗。
+fn match_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+
+/// build_by: 親が揃っていればその場で作る。1回の探索で数千個できる種類があるので、
+/// 本当にその定理の前提として要るものだけに使うこと(§05 b7)。
+fn build_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
+
+/// demand_by: 無ければ補助作図の需要を立てる(2点を結ぶ直線・2直線の交点)。
+fn demand_by(kind: DefKind, args: &[&str]) -> Pattern { defined_by(kind, args, Flip::Fixed) }
 
 /// 有向角 [D1, D2, Ang] を両方の向きで読む。
 fn angle_free(args: &[&str]) -> Pattern { defined_by(DefKind::AnglePair, args, Flip::Free) }
@@ -140,12 +153,12 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
                 
                 // 🌟 FIX: Connected から DefinedBy に変更し、作図需要(Demand)を発生させる
-                def_by(DefKind::LineThroughPoints, &["Apex1", "Base1", "L_A1_B1"]),
-                def_by(DefKind::LineThroughPoints, &["Apex1", "Base2", "L_A1_B2"]),
+                demand_by(DefKind::LineThroughPoints, &["Apex1", "Base1", "L_A1_B1"]),
+                demand_by(DefKind::LineThroughPoints, &["Apex1", "Base2", "L_A1_B2"]),
                 distinct(&["L_A1_B1", "L_A1_B2"]),
                 
-                def_by(DefKind::LineThroughPoints, &["Apex2", "Base1", "L_A2_B1"]),
-                def_by(DefKind::LineThroughPoints, &["Apex2", "Base2", "L_A2_B2"]),
+                demand_by(DefKind::LineThroughPoints, &["Apex2", "Base1", "L_A2_B1"]),
+                demand_by(DefKind::LineThroughPoints, &["Apex2", "Base2", "L_A2_B2"]),
                 
                 on("Apex2", "L_A2_B1"),
                 on("Base1", "L_A2_B1"),
@@ -153,10 +166,10 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on("Base2", "L_A2_B2"),
                 distinct(&["L_A2_B1", "L_A2_B2"]),
                 
-                def_by(DefKind::DirectionOf, &["L_A1_B1", "Dir_A1_B1"]),
-                def_by(DefKind::DirectionOf, &["L_A1_B2", "Dir_A1_B2"]),
-                def_by(DefKind::DirectionOf, &["L_A2_B1", "Dir_A2_B1"]),
-                def_by(DefKind::DirectionOf, &["L_A2_B2", "Dir_A2_B2"]),
+                build_by(DefKind::DirectionOf, &["L_A1_B1", "Dir_A1_B1"]),
+                build_by(DefKind::DirectionOf, &["L_A1_B2", "Dir_A1_B2"]),
+                build_by(DefKind::DirectionOf, &["L_A2_B1", "Dir_A2_B1"]),
+                build_by(DefKind::DirectionOf, &["L_A2_B2", "Dir_A2_B2"]),
                 
                 angle_grouped(&["Dir_A1_B1", "Dir_A1_B2", "Ang1"], "Cyclic"),
                 angle_grouped(&["Dir_A2_B1", "Dir_A2_B2", "Ang2"], "Cyclic"),
@@ -179,9 +192,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("LineBC", EntityType::Line), ("PerpMid", EntityType::Line), ("P", EntityType::Point),
             ]),
             patterns: vec![
-                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
-                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
-                def_by(DefKind::PerpendicularLine, &["LineBC", "Mid_BC", "PerpMid"]),
+                match_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                match_by(DefKind::PerpendicularLine, &["LineBC", "Mid_BC", "PerpMid"]),
                 on("P", "PerpMid"),
                 distinct(&["B", "C", "P"]),
             ],
@@ -209,8 +222,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_PB", EntityType::Scalar), ("Dist_PC", EntityType::Scalar),
             ]),
             patterns: vec![
-                def_by(DefKind::LengthSq, &["P", "B", "Dist_PB"]),
-                def_by(DefKind::LengthSq, &["P", "C", "Dist_PC"]),
+                build_by(DefKind::LengthSq, &["P", "B", "Dist_PB"]),
+                build_by(DefKind::LengthSq, &["P", "C", "Dist_PC"]),
                 same("Dist_PB", "Dist_PC"),
                 distinct(&["B", "C", "P"]),
             ],
@@ -234,14 +247,14 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("DirBC", EntityType::Point), ("DirM1M2", EntityType::Point),
             ]),
             patterns: vec![
-                def_by(DefKind::Midpoint, &["A", "B", "M1"]),
-                def_by(DefKind::Midpoint, &["A", "C", "M2"]),
+                match_by(DefKind::Midpoint, &["A", "B", "M1"]),
+                match_by(DefKind::Midpoint, &["A", "C", "M2"]),
                 distinct(&["A", "B", "C", "M1", "M2"]),
                 
-                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
-                def_by(DefKind::LineThroughPoints, &["M1", "M2", "LineM1M2"]),
-                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
-                def_by(DefKind::DirectionOf, &["LineM1M2", "DirM1M2"]),
+                demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                demand_by(DefKind::LineThroughPoints, &["M1", "M2", "LineM1M2"]),
+                build_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
+                build_by(DefKind::DirectionOf, &["LineM1M2", "DirM1M2"]),
             ],
             constructions: vec![],
             conclusions: vec![
@@ -261,17 +274,17 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ]),
             patterns: vec![
                 same("Dist_AB", "Dist_AC"),
-                def_by(DefKind::LengthSq, &["A", "B", "Dist_AB"]),
-                def_by(DefKind::LengthSq, &["A", "C", "Dist_AC"]),
+                build_by(DefKind::LengthSq, &["A", "B", "Dist_AB"]),
+                build_by(DefKind::LengthSq, &["A", "C", "Dist_AC"]),
                 distinct(&["A", "B", "C"]),
                 
-                def_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
-                def_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
-                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
+                demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 
-                def_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
-                def_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
-                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
+                build_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
+                build_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
+                build_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
                 distinct(&["DirAB", "DirAC", "DirBC"]),
                 
                 // 🌟 フリップ同期グループ "Isosceles" を適用
@@ -457,12 +470,12 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // 前提2: 比の一致 EA・EC=EB・ED (共点二弦の相似と同じ形)。
                 // E,A,B,D,Cはここまでで既に確定しているので、これは新規探索
                 // ではなく「本当にこの比が成り立っているか」の確認になる。
-                def_by(DefKind::LengthSq, &["E", "A", "LenSqEA"]),
-                def_by(DefKind::LengthSq, &["E", "C", "LenSqEC"]),
-                def_by(DefKind::Product, &["LenSqEA", "LenSqEC", "ProdEAEC"]),
-                def_by(DefKind::LengthSq, &["E", "B", "LenSqEB"]),
-                def_by(DefKind::LengthSq, &["E", "D", "LenSqED"]),
-                def_by(DefKind::Product, &["LenSqEB", "LenSqED", "ProdEBED"]),
+                build_by(DefKind::LengthSq, &["E", "A", "LenSqEA"]),
+                build_by(DefKind::LengthSq, &["E", "C", "LenSqEC"]),
+                build_by(DefKind::Product, &["LenSqEA", "LenSqEC", "ProdEAEC"]),
+                build_by(DefKind::LengthSq, &["E", "B", "LenSqEB"]),
+                build_by(DefKind::LengthSq, &["E", "D", "LenSqED"]),
+                build_by(DefKind::Product, &["LenSqEB", "LenSqED", "ProdEBED"]),
                 same("ProdEAEC", "ProdEBED"),
             ],
             constructions: vec![
@@ -495,18 +508,18 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("AngTan", EntityType::Scalar), ("AngBCA", EntityType::Scalar),
             ]),
             patterns: vec![
-                def_by(DefKind::Circumcircle, &["A", "B", "C", "Circ"]),
-                def_by(DefKind::TangentLine, &["Circ", "A", "TanA"]),
+                match_by(DefKind::Circumcircle, &["A", "B", "C", "Circ"]),
+                match_by(DefKind::TangentLine, &["Circ", "A", "TanA"]),
                 distinct(&["A", "B", "C"]),
                 
-                def_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
-                def_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
-                def_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
+                demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 
-                def_by(DefKind::DirectionOf, &["TanA", "DirTan"]),
-                def_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
-                def_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
-                def_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
+                build_by(DefKind::DirectionOf, &["TanA", "DirTan"]),
+                build_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
+                build_by(DefKind::DirectionOf, &["LineAC", "DirAC"]),
+                build_by(DefKind::DirectionOf, &["LineBC", "DirBC"]),
                 
                 // 接線とABのなす角 ≡ 弧ABに対する円周角(C)
                 angle_grouped(&["DirTan", "DirAB", "AngTan"], "TanGrp"),
@@ -672,13 +685,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ]),
             patterns: vec![
                 // 爆速化: まず中点を探す
-                def_by(DefKind::Midpoint, &["A", "C", "M"]),
+                match_by(DefKind::Midpoint, &["A", "C", "M"]),
                 
                 same_angle("Ang_AH_CH", "Ang90"),
-                def_by(DefKind::AnglePair, &["Dir_AH", "Dir_CH", "Ang_AH_CH"]),
+                build_by(DefKind::AnglePair, &["Dir_AH", "Dir_CH", "Ang_AH_CH"]),
                 
-                def_by(DefKind::DirectionOf, &["L_AH", "Dir_AH"]),
-                def_by(DefKind::DirectionOf, &["L_CH", "Dir_CH"]),
+                build_by(DefKind::DirectionOf, &["L_AH", "Dir_AH"]),
+                build_by(DefKind::DirectionOf, &["L_CH", "Dir_CH"]),
                 
                 // CommonEntity の代用: Hが両方の直線に乗っていること
                 on("H", "L_AH"),
@@ -717,13 +730,13 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
-                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                match_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
                 same_angle("Ang_A", "Ang90"),
                 // 🌟 allow_flip = true
                 angle_free(&["Dir1", "Dir2", "Ang_A"]),
                 
-                def_by(DefKind::DirectionOf, &["L1", "Dir1"]),
-                def_by(DefKind::DirectionOf, &["L2", "Dir2"]),
+                build_by(DefKind::DirectionOf, &["L1", "Dir1"]),
+                build_by(DefKind::DirectionOf, &["L2", "Dir2"]),
                 on("A", "L1"),
                 on("A", "L2"),
                 on("B", "L1"),
@@ -762,9 +775,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 ("Dist_MB", EntityType::Scalar), ("Dist_MA", EntityType::Scalar),
             ]),
             patterns: vec![
-                def_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
-                def_by(DefKind::LengthSq, &["Mid_BC", "B", "Dist_MB"]),
-                def_by(DefKind::LengthSq, &["Mid_BC", "A", "Dist_MA"]),
+                match_by(DefKind::Midpoint, &["B", "C", "Mid_BC"]),
+                build_by(DefKind::LengthSq, &["Mid_BC", "B", "Dist_MB"]),
+                build_by(DefKind::LengthSq, &["Mid_BC", "A", "Dist_MA"]),
                 same("Dist_MB", "Dist_MA"),
                 distinct(&["A", "B", "C"]),
             ],
@@ -803,9 +816,9 @@ pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
                 ("LenMid", EntityType::Scalar), ("LenHalf", EntityType::Scalar),
             ]),
             patterns: vec![
-                def_by(DefKind::Midpoint, &["A", "B", "Mab"]),
-                def_by(DefKind::Midpoint, &["A", "C", "Mac"]),
-                def_by(DefKind::Midpoint, &["B", "C", "Mbc"]),
+                match_by(DefKind::Midpoint, &["A", "B", "Mab"]),
+                match_by(DefKind::Midpoint, &["A", "C", "Mac"]),
+                match_by(DefKind::Midpoint, &["B", "C", "Mbc"]),
                 distinct(&["A", "B", "C", "Mab", "Mac", "Mbc"]),
             ],
             constructions: vec![
@@ -838,29 +851,29 @@ pub fn get_central_angle_theorem() -> Vec<TheoremDef> {
             ]),
             patterns: vec![
                 // 前提: OA=OB=OC (Oは外心)
-                def_by(DefKind::LengthSq, &["O", "A", "LenOA"]),
-                def_by(DefKind::LengthSq, &["O", "B", "LenOB"]),
+                build_by(DefKind::LengthSq, &["O", "A", "LenOA"]),
+                build_by(DefKind::LengthSq, &["O", "B", "LenOB"]),
                 same("LenOA", "LenOB"),
-                def_by(DefKind::LengthSq, &["O", "C", "LenOC"]),
+                build_by(DefKind::LengthSq, &["O", "C", "LenOC"]),
                 same("LenOA", "LenOC"),
                 distinct(&["O", "A", "B", "C"]),
 
                 // 円周角∠BAC(A→B, A→C)と中心角∠BOC(O→B, O→C)を同じ
                 // 向き(B側→C側)で構成する。
-                def_by(DefKind::LineThroughPoints, &["A", "B", "L_AB"]),
-                def_by(DefKind::LineThroughPoints, &["A", "C", "L_AC"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "B", "L_AB"]),
+                demand_by(DefKind::LineThroughPoints, &["A", "C", "L_AC"]),
                 distinct(&["L_AB", "L_AC"]),
-                def_by(DefKind::LineThroughPoints, &["O", "B", "L_OB"]),
-                def_by(DefKind::LineThroughPoints, &["O", "C", "L_OC"]),
+                demand_by(DefKind::LineThroughPoints, &["O", "B", "L_OB"]),
+                demand_by(DefKind::LineThroughPoints, &["O", "C", "L_OC"]),
                 distinct(&["L_OB", "L_OC"]),
 
-                def_by(DefKind::DirectionOf, &["L_AB", "Dir_AB"]),
-                def_by(DefKind::DirectionOf, &["L_AC", "Dir_AC"]),
-                def_by(DefKind::DirectionOf, &["L_OB", "Dir_OB"]),
-                def_by(DefKind::DirectionOf, &["L_OC", "Dir_OC"]),
+                build_by(DefKind::DirectionOf, &["L_AB", "Dir_AB"]),
+                build_by(DefKind::DirectionOf, &["L_AC", "Dir_AC"]),
+                build_by(DefKind::DirectionOf, &["L_OB", "Dir_OB"]),
+                build_by(DefKind::DirectionOf, &["L_OC", "Dir_OC"]),
 
-                def_by(DefKind::AnglePair, &["Dir_AB", "Dir_AC", "AngBAC"]),
-                def_by(DefKind::AnglePair, &["Dir_OB", "Dir_OC", "AngBOC"]),
+                build_by(DefKind::AnglePair, &["Dir_AB", "Dir_AC", "AngBAC"]),
+                build_by(DefKind::AnglePair, &["Dir_OB", "Dir_OC", "AngBOC"]),
             ],
             constructions: vec![
                 build(DefKind::Product, &["AngBAC", "AngBAC"], "AngBAC_Sq"),
@@ -944,7 +957,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 前提は2つ: L1..L4 が1点 O で交わる(線束である)こと、Ap..Dp が同じ直線 T の上で
                 // それぞれ L1..L4 と交わること。どちらが欠けても線束の複比と点の複比は一致しない
                 // (DefinedBy は線束の複比を任意の4直線に対してその場で作るので、共点は明示が要る)。
-                def_by(DefKind::CrossRatioOfLines, &["L1", "L2", "L3", "L4", "CRL"]),
+                build_by(DefKind::CrossRatioOfLines, &["L1", "L2", "L3", "L4", "CRL"]),
                 distinct(&["L1", "L2", "L3", "L4"]),
                 on("O", "L1"),
                 on("O", "L2"),
@@ -990,23 +1003,23 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 🌟 シード: 既存の二次曲線自身の定義からP1..P5とConicを直接
                 // 束縛する(「複比の透視射影不変性(線束→点)」がCrossRatioOfLines
                 // からL1..L4を直接束縛するのと全く同じ発想)。
-                def_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
+                match_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
                 // 二次曲線上のもう1点Qを局所スキャンで見つける(唯一の
                 // 「新規に探す」変数)。
                 on("Q", "Conic"),
                 distinct(&["P1", "P2", "P3", "P4", "P5", "Q"]),
                 // P1から見たP2,P3,P4,Qへの4直線(既存のものが無ければ
                 // 円周角の定理のL_A1_B1等と同じ「DefinedBy+作図需要」で作る)。
-                def_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
-                def_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
-                def_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
-                def_by(DefKind::LineThroughPoints, &["P1", "Q", "L1_Q"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "Q", "L1_Q"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
                 // P5から見た同じP2,P3,P4,Qへの4直線。
-                def_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "Q", "L5_Q"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "Q", "L5_Q"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
             ],
             constructions: vec![
@@ -1037,25 +1050,25 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
             patterns: vec![
                 // 🌟 シード: シュタイナーの定理と全く同じ発想で、二次曲線自身の
                 // 定義からP1..P5とConicを直接束縛する(全件スキャン不要)。
-                def_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
+                match_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
                 distinct(&["P1", "P2", "P3", "P4", "P5"]),
 
                 // P1における接線T1(円周角の定理の逆の"TanA"と同じ発想の
                 // DefinedBy+作図需要)。
-                def_by(DefKind::TangentLine, &["Conic", "P1", "T1"]),
+                match_by(DefKind::TangentLine, &["Conic", "P1", "T1"]),
 
                 // P1から見たP2,P3,P4への3直線。
-                def_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
-                def_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
-                def_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P3", "L1_P3"]),
+                demand_by(DefKind::LineThroughPoints, &["P1", "P4", "L1_P4"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4"]),
 
                 // P5から見たP2,P3,P4,P1への4直線(P1は接点ではなく"ただの弦"
                 // として、シュタイナーの定理のQと同じ役割で扱う)。
-                def_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
-                def_by(DefKind::LineThroughPoints, &["P5", "P1", "L5_P1"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P2", "L5_P2"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P3", "L5_P3"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P4", "L5_P4"]),
+                demand_by(DefKind::LineThroughPoints, &["P5", "P1", "L5_P1"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_P1"]),
             ],
             constructions: vec![
@@ -1087,8 +1100,8 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // same_cross_ratio_of_lines は自己束縛の候補を CrossRatioOfLines 由来の Scalar だけに絞る
                 // (長さ・積・点の複比まで含むプールから無関係な値を試さない)。
                 same_cross_ratio_of_lines("CR_P1", "CR_P5"),
-                def_by(DefKind::CrossRatioOfLines, &["L1_P2", "L1_P3", "L1_P4", "L1_Q", "CR_P1"]),
-                def_by(DefKind::CrossRatioOfLines, &["L5_P2", "L5_P3", "L5_P4", "L5_Q", "CR_P5"]),
+                build_by(DefKind::CrossRatioOfLines, &["L1_P2", "L1_P3", "L1_P4", "L1_Q", "CR_P1"]),
+                build_by(DefKind::CrossRatioOfLines, &["L5_P2", "L5_P3", "L5_P4", "L5_Q", "CR_P5"]),
                 distinct(&["L1_P2", "L1_P3", "L1_P4", "L1_Q"]),
                 distinct(&["L5_P2", "L5_P3", "L5_P4", "L5_Q"]),
 

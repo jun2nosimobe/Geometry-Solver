@@ -315,7 +315,7 @@ impl ProverEngine {
                 }
                 Cands::Set(out)
             }
-            Pattern::DefinedBy { kind, parents, result, flip } => {
+            Pattern::DefinedBy { kind, parents, result, flip, role: _ } => {
                 if result == v {
                     if parents.iter().all(|p| bind.contains_key(p)) {
                         let ids: Vec<ClassId> = parents.iter().map(|p| self.egraph.get_rep(bind[p])).collect();
@@ -455,7 +455,7 @@ impl ProverEngine {
                 }
                 self.gj_verify(gj, bind, flips, idx + 1)
             }
-            Pattern::DefinedBy { kind, parents, result, flip } => {
+            Pattern::DefinedBy { kind, parents, result, flip, role: _ } => {
                 let r = self.egraph.get_rep(bind[result]);
                 let want: Vec<ClassId> = parents.iter().map(|p| self.egraph.get_rep(bind[p])).collect();
                 let group = match flip { Flip::Grouped(g) => Some(g.clone()), _ => None };
