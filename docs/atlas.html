@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";mermaid.initialize({startOnLoad:true, theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral"});</script>
-<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html" aria-current="page">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes/README.md">設計ノート</a></div></nav>
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html" aria-current="page">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html">設計ノート §06</a></div></nav>
 <div class="wrap">
   <div class="masthead">
     <div class="eyebrow">geom_solver — 内部リファレンス</div>
@@ -40,7 +40,7 @@
 <details class="item" id="track-2" data-status="shipped">
   <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">32/44・決定的</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針B マッチングと探索の制御</b></div><div class="desc">予算は壁時計の秒ではなく仕事量(<code>dfs_match</code>の呼び出し回数)で測り、数値検証とMCTSの乱数もシード固定にしたので、同じ設定なら何度流しても結果が1ステップも変わらない。失敗キャッシュは個々の失敗状態ごとの依存マスクを持つ定理単位の永続キャッシュ(鍵に無関係な束縛まで入っている問題は <a class="secref" href="backlog.html">§05</a> b28、<b>無効化が大雑把すぎて仕事量の2〜5割が歩き直しになっている</b>のが <a class="secref" href="backlog.html">§05</a> b29)、候補capは狭い値(5)から始めて手詰まりのときだけ広げる。型をまとめるときは、候補プールの混ざり方だけでなくキャッシュの無効化の粒度(<code>angle_generation</code>)も点検すること。<br>候補は cap で切る前に他の前提で絞る(<a class="secref" href="ledger.html">§04</a> #55)。<b>現状の課題:</b> 探索が定理を試す順序に大きく左右される(登録順を変えるだけで仕事量が±15%、1問が解けたり解けなかったりする)。筋の通った並べ方はどれも登録順に勝たなかったので、順序に鈍感な探索にする方が本筋。<code>dfs_match</code> は貪欲な<b>入れ子ループ結合</b>で、候補capはその爆発に対する対症療法 ― 関係として張り直して最悪計算量最適結合で評価すれば、順序非依存もcapの不要化も同時に付いてくる(<a class="secref" href="backlog.html">§05</a> b30)。未解決12問のうち5問は予算を使い切って止まる。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針B マッチングと探索の制御</b></div><div class="desc">予算は壁時計の秒ではなく仕事量(<code>dfs_match</code>の呼び出し回数)で測り、数値検証とMCTSの乱数もシード固定にしたので、同じ設定なら何度流しても結果が1ステップも変わらない。失敗キャッシュは個々の失敗状態ごとの依存マスクを持つ定理単位の永続キャッシュ(鍵に無関係な束縛まで入っている問題は <a class="secref" href="backlog.html">§05</a> b28、無効化は大雑把だが、<b>上界を測ると直しても仕事量は減らない</b>と分かったのが <a class="secref" href="backlog.html">§05</a> b29)、候補capは狭い値(5)から始めて手詰まりのときだけ広げる。型をまとめるときは、候補プールの混ざり方だけでなくキャッシュの無効化の粒度(<code>angle_generation</code>)も点検すること。<br>候補は cap で切る前に他の前提で絞る(<a class="secref" href="ledger.html">§04</a> #55)。<b>現状の課題:</b> 探索が定理を試す順序に大きく左右される(登録順を変えるだけで仕事量が±15%、1問が解けたり解けなかったりする)。筋の通った並べ方はどれも登録順に勝たなかったので、順序に鈍感な探索にする方が本筋。<code>dfs_match</code> は貪欲な<b>入れ子ループ結合</b>。関係として張り直して最悪計算量最適結合で評価する案(<a class="secref" href="backlog.html">§05</a> b30)の動機のうち、<b>capの不要化と b29 の解決は実測で消えた</b> ― cap を 40→200 にしても降参する4問は1ステップも動かず(<a class="secref" href="ledger.html">§04</a> #64)、失敗キャッシュの無効化を止めても仕事量は減らず16問落ちる(#66)。<b>残る動機は順序非依存だけ。</b>未解決12問のうち5問は予算を使い切って止まる。</div>
   </div>
 </details>
 <details class="item" id="track-3" data-status="open">
@@ -154,6 +154,7 @@ flowchart TD
       <div class="gterm"><b>パターンのビットマスク</b><p>「まだ消費していないパターン」は<code>u64</code>のビットで持つ。定理のパターン列は不変なので実体は借りるだけで、分岐のたびのヒープ確保が要らない。</p></div>
       <div class="gterm"><b>順序/相異の前倒し</b><p><code>Order</code>/<code>Distinct</code>は全変数が揃うまで<code>estimate_cost</code>が無限大を返すので最後まで選ばれない。束縛済みの範囲だけで毎回検査し、最も早い時点で枝を切る。</p></div>
       <div class="gterm"><b>UCB1バンディット</b><p>シードなし全探索タスクの優先度を、定理ごとの過去の成功率+探索ボーナスで決める(<code>--bandit</code>、既定は無効)。未試行の定理は常に一度は試す。</p></div>
+      <div class="gterm"><b>定理の書き方の規約</b><p>DefinedBy は役割を宣言して書く(<code>match_by</code> 照合のみ / <code>build_by</code> その場で作る / <code>demand_by</code> 需要を立てる)。<code>theorem_lint.rs</code> がテストで、役割の食い違い・需要の供給元が無い種類・規模の上限(変数20・パターン20)・対称性・<b>証人</b>(その定理が発火しないと解けない問題を実際に解く)を見る。静的な検査は「必要な形の実体が図に供給されず一度も発火しない」書き換えを通してしまうので、証人だけが確実(<a class="secref" href="ledger.html">§04</a> #65)。</p></div>
       <div class="gterm"><b>4つのゲートウェイ</b><p><code>create_entity</code> / <code>merge_entities</code> / <code>link_logical_incidence</code> / <code>insert_memo</code>。e-graphの生の構造を書き換える経路をここに集約し、<code>type_generation</code> の更新漏れを構造的に防いでいる。</p></div>
     </div>
   </section>

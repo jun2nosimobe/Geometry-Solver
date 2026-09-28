@@ -1,5 +1,9 @@
 # 設計ノート
 
+> [Atlas §06 設計ノート](../notes.html) から、この索引と各ノートをそのまま読める。
+> `file://` で開くと読み込めないので、その場合はリポジトリ直下で `python3 -m http.server 8000` を
+> 実行して `http://localhost:8000/docs/notes.html` を開く(根を `docs/` にすると `bench/README.md` が辿れない)。
+
 ソースのコメントから移した、設計の経緯・実測・直したバグ・試して採らなかった案の記録。
 
 | ノート | 対象 |
@@ -9,6 +13,7 @@
 | [discover.md](discover.md) | `src/discover.rs`・`src/padic*.rs`・`src/serve.rs`・`src/discover_viz.rs`(自由探索による発見と作図画面) |
 | [mcts.md](mcts.md) | `src/action_space.rs`・`src/mcts.rs`(MCTS、既定では無効) |
 | [diagnostics.md](diagnostics.md) | `src/trace.rs`・`src/sketch.rs`・`src/sweep.rs`・`src/cli.rs`・問題ファイル |
+| [../../bench/README.md](../../bench/README.md) | ベンチの回し方(二段構え・再開可能な長時間実行・落とし穴) |
 
 各項目の引用は移した時点の原文のまま。ファイル名(`main.rs`・`logic_core.rs`)や数値(`NN/96`・`37問` など)は当時のもので、今のコードとは食い違うことがある。今の挙動はソースのコメントとコードを正とする。
 

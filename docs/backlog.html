@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 
-<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html" aria-current="page">改善候補 §05</a><a href="notes/README.md">設計ノート</a></div></nav>
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html" aria-current="page">改善候補 §05</a><a href="notes.html">設計ノート §06</a></div></nav>
 <div class="wrap">
   <section id="backlog">
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
@@ -46,7 +46,7 @@
   </div>
 </details>
 <details class="item" id="b29" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 失敗キャッシュの無効化が大雑把すぎる ― 仕事量の2〜5割が「一度失敗と分かった枝を、無関係な変化のせいで捨てて歩き直す」ことに消えている</span></summary>
+  <summary><span class="idx"></span><span class="t">失敗キャッシュの無効化は大雑把だが、直しても得るものが無い ― 上界を測ったら仕事量は減らず16問落ちた</span></summary>
   <div class="body">
 <div class="desc">失敗キャッシュは各エントリに「この枝の結果はどの型に依存するか」(<code>dep_mask</code>)を持ち、その型の<b>世代</b>が変わると捨てる。世代は型ごとに1つの通し番号なので、<b>その型の実体がどこかで1つでも変われば、その型に触れた全エントリが一斉に無効になる</b>。</div>
     <div class="evidence"><b>計測1(2026-09-23、--profile):</b> <code>dfs_match</code> の呼び出しのうち、キャッシュに当たって即座に打ち切れた割合と、<b>当たったのに世代が違って使えなかった</b>割合:<br>
@@ -55,9 +55,10 @@ bench_2022balkanmop1 ノイズ10 で <b>当たり 9.9% に対して無駄にな�
 <b>計測3(依存マスクの幅):</b> 失敗を記録するときのマスクは <b>1〜3ビットで98%</b>、全ビットが立つことは無い。<b>つまりマスクは既に細い。</b></div>
     <div class="evidence"><b>試して外したこと(1) 型世代を「候補集合」と「接続関係」に分ける:</b> 候補プールの列挙・memo検索は実体の生成/memo登録/マージで、<code>is_connected</code> と subobjects の列挙は接続関係/マージで無効化されるように、世代とマスクを8ビットに割った。接続関係が無効化の6割を占めるので効くと見込んだが、<b>仕事量はほぼ動かなかった</b>(bench_2005ctstp1 742,344→741,964、−0.05%)。計測3 の通りマスクは元々細く、問題は<b>細さではなく、1本1本のビットが「その型のどこかで何かが起きた」という全体の通し番号であること</b>。link(Point) だけでも数千回上がるので、1ビットしか立っていないエントリでも普通に死ぬ。複雑さと記憶量([u64;4]→[u64;8])に見合わないので戻した。<br>
 <b>試して外したこと(2) 変化の無い定理の全探索タスクを積まない:</b> 「前回その定理を最後まで走査したときから、その定理が読む型の世代も cap も変わっていなければ積まない」を入れたが、<b>省けたタスクは全設定で0件</b>。sweep と sweep のあいだに何百ものタスクが実行され結論が適用されるので、4つの型世代は必ず全部動いている。粒度が sweep 単位では粗すぎる。</div>
-    <div class="evidence"><b>次にやるべきこと:</b> 残る軸は「<b>どの型か</b>」ではなく「<b>どの実体か</b>」。その枝が実際に読んだ代表元を覚えて、<b>それらが変わったときだけ</b>捨てる。型ごとの通し番号を実体ごとの版番号に落とす形になり、索引を持つ関係マッチング(<a href="#b30">b30</a>)と同じ構造を要求する ― b30 を先にやるべき根拠がここで1つ増えた。<br>
+    <div class="evidence"><b>次にやるべきこと(当時の見立て。上の追記で否定された):</b> 残る軸は「<b>どの型か</b>」ではなく「<b>どの実体か</b>」。その枝が実際に読んだ代表元を覚えて、<b>それらが変わったときだけ</b>捨てる。型ごとの通し番号を実体ごとの版番号に落とす形になり、索引を持つ関係マッチング(<a href="#b30">b30</a>)と同じ構造を要求する ― b30 を先にやるべき根拠がここで1つ増えた。<br>
 <b>関連:</b> シード経路(差分起動)は過去6回試して6回とも撤回されている(<a href="#b7">#7</a>)。ただし6回とも全体sweepに「足す」形で、減らす側は上の(2)が初めてで、それも空振りだった。</div>
-    <div class="b-tags"><span class="tag">ノイズ10で仕事量の51%が歩き直し</span><span class="tag">型ではなく実体の単位が要る</span><span class="tag">b30 の根拠</span></div>
+    <div class="evidence"><b>追記 ― この項目はサイズを見誤っていた(<a class="secref" href="ledger.html">§04</a> #66):</b> 実体単位の追跡を作る前に上界を測った。失敗キャッシュを<b>一切無効化しない</b>版(得られる削減の最大値)で選抜33問を回すと、<b>16〜17問が落ちたうえ仕事量も減らない</b>(既定 +14.6%、ノイズ5 +157.0%、skip −13.8%)。<br><b>「51%が歩き直し」は dfs_match の参照回数</b>であって、その節点で打ち切れていれば省けた部分木の大きさではなかった。実際にはほぼ葉の近くで、無効化そのものは<b>図が変われば失敗が失敗でなくなる</b>という本質的な仕事をしている。<b>実体単位の依存追跡を作る価値は無い。</b>下の「試して外したこと(1)」が −0.05% だったのは、この乖離の最初の兆候だった。</div>
+    <div class="b-tags"><span class="tag">上界を測ったら仕事量は減らない</span><span class="tag">51%は参照回数で仕事量ではない</span><span class="tag">実体単位は不要と判明</span></div>
   </div>
 </details>
 <details class="item" id="b30" data-status="open">
@@ -65,7 +66,8 @@ bench_2022balkanmop1 ノイズ10 で <b>当たり 9.9% に対して無駄にな�
   <div class="body">
 <div class="desc"><code>dfs_match</code> は毎ステップ <code>estimate_cost</code> で一番安いパターンを選ぶ<b>貪欲な入れ子ループ結合</b>で、中間結果が爆発するから <code>heat_cap</code> / <code>fanout_heat_cap</code> で打ち切っている ― つまり<b>候補capは入れ子ループ結合の爆発に対する対症療法</b>で、<a href="#b27">b27</a> の「広げる時機」もその調整でしかない。<br>対応するのが e-graph 側の既製技術で、演算子ごとに関係(列は同値類の id)を張り、マッチングを<b>連言クエリ</b>として Generic Join / Leapfrog Triejoin で評価する(relational e-matching、POPL 2022 / egglog)。効く理由が3つある: (1) 中間結果ではなく実際の出力サイズ(AGM 上界)で抑えられるので、capで切り捨てる必要が構造的に減る。(2) <b>変数順序に依存しない</b>保証があるので、方針Bの「定理の順序で±15%動く」問題に別角度から答えが出る。(3) ノイズは関係にタプルを足すだけなので、劣化が掛け算でなく出力サイズなりになる。</div>
     <div class="evidence"><b>第一歩(投入済み、<a class="secref" href="ledger.html">§04</a> #55):</b> 候補を cap で切る<b>前に</b>、まだ残っているパターンのうち相手が束縛済みのもの(<code>Connected</code> / <code>Identical</code> / <code>Distinct</code>)で絞る semi-join reduction。解は1つも減らず、全44問×6設定で仕事量 <b>−23.4〜−33.3%</b>。既定にした(<code>--no-semijoin</code> で戻せる)。<br><b>まだやっていない本体:</b> 「パターンを選んで候補を出す」のをやめ、<b>変数を選んで、その変数に触れる全パターンの候補集合を交差させる</b>形にする。semi-join は1本のパターンから出した候補を他で絞るだけなので、<b>最初に選んだパターンの候補数がそのまま上限</b>になる(例: <code>Connected(P,L1) ∧ Connected(P,L2)</code> は L1 の subobjects を全部出してから L2 で絞る)。交差にすれば小さい方から当たれるうえ、出力サイズで抑えられるので cap 自体が要らなくなる可能性がある。<br><b>要る部品:</b> (1) 関係ごとの索引(いまは <code>components[].subobjects</code> の線形走査と <code>connected_pairs_for_types</code> の型ペアキャッシュしかない)、(2) 変数順序の決め方、(3) <a href="#b29">b29</a> で必要と分かった<b>実体単位の依存追跡</b> ― 索引を持つとこれも自然に載る。<br><b>部品を1つずつ入れる道は塞がっている(<a class="secref" href="ledger.html">§04</a> #56・#57):</b> 選抜33問×6設定で、cap を外すだけで解けた数 <b>合計 −16</b>、変数順序だけで <b>−1</b>(仕事量は −17.7%〜<b>+388%</b> と乱高下)、両方で <b>−13</b>。<b>cap は semi-join の後でも実際に効いていて外せない。</b>いまの「パターンを選んで候補を出し、熱の順に cap で切る」探索はよく釣り合った局所最適で、generic join の部品(索引・交差・変数順序・capなし)は互いに前提し合っているため、1つずつ入れると必ずどれかが足を引っ張る。<br><b>作り始めた(<a class="secref" href="ledger.html">§04</a> #58):</b> <code>logic_core/genjoin.rs</code> に <code>--generic-join</code> として別のマッチャを置いた。変数を選んで全パターンの候補集合を交差させる形で、capを一切使わない。<code>Connected</code>/<code>Identical</code>/<code>DefinedBy</code>/<code>Distinct</code>/<code>Order</code> と AnglePair の向き、その場生成と需要の記録まで動く。<b>いまの実力は9問中5問</b>で、速いのは test_spiral_similarity(−54%)だけ。既定の挙動は変えていない(選抜33問×6設定でバイト単位で一致)。<br><b>いまの実力(<a class="secref" href="ledger.html">§04</a> #59、選抜33問):</b> 解けた数は 32→<b>15</b>(設定により13〜16)だが、<b>両方が解けた問題での仕事量は −34%〜−63%</b>。抜き取り9問では解けた5問すべてが既定より速く、test_spiral_similarity は 19,123→<b>1,747</b>(−91%)。<b>速さはもう出ている。足りないのは網羅性。</b><br><b>詰まりの正体は補助作図だった(<a class="secref" href="ledger.html">§04</a> #60):</b> AnglePair の memo 逆引きなどを直した上で両マッチャのマッチ数を突き合わせると、試作は<b>少なくではなく多く</b>マッチしていた(有向角の加法性で従来60件 / 試作784件)。試作は完全で、従来は cap で絞られている ― この証明器は<b>絞られていることに依存して</b>焦点を保っている。<br>本当に落ちているのは<b>補助線の需要</b>で、既定が miquel で補助線を7本引くのに対し試作は<b>0件</b>。試作は候補集合の小さい直線を先に束縛して点を後から導くため、「2点はあるのに結ぶ直線が無い」状態に辿り着かない。束縛の順序をずらす案は外れた(需要0件のまま、simson が15倍に悪化)。<b>次は「全変数が決まった後の検査で落ちた DefinedBy を需要として記録する」方向。</b><br><b>その後:</b> 試作用の失敗キャッシュ(いまは sweep のたびに一から辿り直す)、関係ごとの索引(いまは <code>subobjects</code>/<code>uses</code> の線形走査で交差しているので候補集合が大きいと重い)。<br><b>埋もれている手がかり:</b> <code>--var-order</code> は<b>ノイズ5 で 33/33</b>(選抜の全問)を出した ― 選抜でこれが出たのは初めてで、変数順序そのものには伸びしろがある。</div>
-    <div class="b-tags"><span class="tag">第一歩で仕事量 −23〜−33%</span><span class="tag">capと順序依存の両方に効く</span><span class="tag">b29 の答えでもある</span></div>
+    <div class="evidence"><b>追記 ― 動機が2つとも実測で消えた:</b> この項目の売りは「順序非依存」と「capの不要化」、それに「<a href="#b29">b29</a> の答えでもある」ことだった。<br>(1) <b>capの不要化</b>: 降参する問題に <code>--heat-cap</code> を 40→200 にしても、centroid・desargues・pappus・pascal は<b>1ステップも変わらない</b>(<a class="secref" href="ledger.html">§04</a> #64)。cap は何も切り捨てておらず、上限側に余地が無い。<br>(2) <b>b29 の答え</b>: 失敗キャッシュの無効化を止めた上界を測ると、仕事量は減らず16問落ちる(#66)。直す価値のある問題ではなかった。<br><b>残る動機は順序非依存だけ</b>(定理の登録順を変えると仕事量が±15%動き、1問が解けたり解けなかったりする)。規模に対する見返りは以前の見積もりより小さい。</div>
+    <div class="b-tags"><span class="tag">第一歩で仕事量 −23〜−33%</span><span class="tag">cap・b29 の動機は実測で消えた</span><span class="tag">残るのは順序非依存だけ</span></div>
   </div>
 </details>
 <details class="item" id="b31" data-status="open">
@@ -260,7 +262,8 @@ bench_2022balkanmop1 ノイズ10 で <b>当たり 9.9% に対して無駄にな�
   <div class="body">
 <div class="desc">「スパイラル相似の中点対応」定理を実測診断した結果、以前の「前提がStallで確立されない」という推測は不正確だったと判明。本問題ではE=AC∩BD(円に内接する四角形ABCDの対角線の交点)で、実際にログ上でも方冪の定理相当の積の等式(EA・EC=EB・ED)は正しく確立されている――問題は前提の未確立ではなく、<b>定理の構造そのものがこの配置に噛み合わない</b>こと。定理は<code>LineEA,LineEB,LineED,LineEC</code>という4本の"Eを通る互いに異なる直線"を要求する(distinct制約)。これは一般の(円で結ばれていない)スパイラル相似中心のような「4方向に開いた頂点」を想定した設計だが、bench_2011balkanmop1のE=AC∩BDでは、Eを通る直線は実際にはAC・BDの2本しかなく(A,E,Cが共線、B,E,Dが共線)、4本のdistinct制約を原理的に満たせない。必要なのは4直線版ではなく、「共点二弦の相似」と同じ2直線配置(LineAB,LineCDがPを通り、LineAD,LineCBは通らない、という非対称な4直線)に相当する、"2直線が交わる点における中点対応"専用の新しい定理――既存定理の使い回しでは届かず、新規のTheoremDef設計(角度対応の一般化+中点という特定の対応点への相似の遺伝)が必要。<b>方針D(<a class="secref" href="atlas.html#tracks">§00</a>)が「最終手段として温存」する具体案の1つ。</b></div>
 <div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 診断は今も有効。冗長な distinct を削除した際にこの定理からも部分集合側(<code>["LineEA","LineEB"]</code>など)は消えたが、<b>診断の根拠である4本版 <code>distinct(["LineEA","LineEB","LineED","LineEC"])</code> はそのまま残っている</b>。bench_2011balkanmop1 は現在も未解決。</div>
-          <div class="b-tags"><span class="tag">診断は今も有効</span><span class="tag">要・新定理設計</span></div>
+          <div class="evidence"><b>追記 ― この定理は現状むしろ害かもしれない(<a class="secref" href="ledger.html">§04</a> #65 の副産物):</b> 「スパイラル相似の中点対応」を書き換えて<b>一度も発火しない</b>状態にしたとき(=実質この定理を外したのと同じ)、選抜33問のノイズ10で <b>bench_2018silkroadp1 と bench_2022balkanmop1 が解けるようになった</b>(仕事量も −56.9%)。もちろん test_spiral_similarity は落ちる。<br><b>測るべきこと:</b> この定理を明示的に外した A/B を取り、「1問(test_spiral_similarity)のために2問を失っていないか」を確かめる。24定理中いちばん大きい定理(変数33・パターン26)なので、課税も最大のはず。安くて当たりそうな計測。</div>
+    <div class="b-tags"><span class="tag">診断は今も有効</span><span class="tag">要・新定理設計</span><span class="tag">外すと ノイズ10 で2問増えるかもしれない</span></div>
   </div>
 </details>
 <details class="item" id="b22" data-status="open">

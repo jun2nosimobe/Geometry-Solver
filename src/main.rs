@@ -5,6 +5,46 @@ mod logic_core;
 mod mmp_calculators;
 mod theorems;
 mod theorem_lint;
+
+/// 🌟 リポジトリの Markdown が、Atlas の設計ノート(docs/notes.html)から全部読めること。
+/// ノートを足したのに Atlas から辿れない、という状態を作らないための見張り。
+#[cfg(test)]
+mod docs_tests {
+    use std::path::Path;
+
+    fn collect_md(dir: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if p.is_dir() {
+                if name != "target" && name != ".git" { collect_md(&p, out); }
+            } else if name.ends_with(".md") {
+                out.push(p.to_string_lossy().trim_start_matches("./").to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn every_markdown_is_listed_in_the_atlas_notes_page() {
+        let page = std::fs::read_to_string("docs/notes.html")
+            .expect("docs/notes.html が読めない");
+        let mut found = Vec::new();
+        collect_md(Path::new("."), &mut found);
+        assert!(found.len() >= 5, "Markdown が見つからない(作業ディレクトリが違う?): {:?}", found);
+
+        let missing: Vec<&String> = found.iter()
+            .filter(|f| {
+                // notes.html の DOCS は docs/ からの相対パスで書いてある。
+                let rel = f.strip_prefix("docs/").map(|r| r.to_string())
+                    .unwrap_or_else(|| format!("../{}", f));
+                !page.contains(&format!("path: \"{}\"", rel))
+            })
+            .collect();
+        assert!(missing.is_empty(),
+            "Atlas の設計ノート(docs/notes.html の DOCS)に載っていない Markdown がある: {:?}", missing);
+    }
+}
 mod action_space;
 mod mcts;
 mod problems;

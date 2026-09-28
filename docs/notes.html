@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas · 設計ノート</title>
+<link rel="stylesheet" href="atlas.css">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html" aria-current="page">設計ノート §06</a></div></nav>
+
+<div class="wrap">
+  <section id="notes">
+<div class="section-head"><span class="section-num">06</span><h2>設計ノートと、リポジトリの Markdown</h2></div>
+<p class="section-note">ソースのコメントから移した設計の経緯・実測・直したバグ・試して採らなかった案。
+<b>引用は移した時点の原文のまま</b>で、ファイル名や数値は当時のもの ― 今の挙動はソースとコード、そして
+<a class="secref" href="ledger.html">§04 来歴</a>を正とする。下の一覧から選ぶとこのページ内に表示される。</p>
+
+<div id="picker" class="b-tags"></div>
+<div id="fallback" style="display:none"></div>
+<article id="view" class="mdview"></article>
+  </section>
+</div>
+
+<style>
+  .mdview { margin-top: 18px; }
+  .mdview:empty { display: none; }
+  .mdview h1, .mdview h2 { border-bottom: 1px solid var(--rule, #ddd); padding-bottom: .2em; }
+  .mdview table { border-collapse: collapse; margin: 10px 0; }
+  .mdview td, .mdview th { border: 1px solid var(--rule, #ddd); padding: 3px 10px; text-align: left; }
+  .mdview pre { overflow-x: auto; padding: 10px; background: rgba(127,127,127,.12); border-radius: 6px; }
+  .mdview code { font-family: "IBM Plex Mono", monospace; }
+  #picker .tag { cursor: pointer; user-select: none; }
+  #picker .tag[aria-pressed="true"] { outline: 2px solid currentColor; }
+  .mdnote { padding: 12px 14px; border-radius: 8px; background: rgba(200,140,0,.12); margin-top: 14px; }
+</style>
+
+<script type="module">
+import { marked } from "https://cdn.jsdelivr.net/npm/marked@12/lib/marked.esm.js";
+
+// 🌟 ここに載っていない Markdown をリポジトリに足したら、この表にも足すこと
+// (docs/notes/README.md の一覧と揃える)。
+const DOCS = [
+  { path: "notes/README.md",      label: "ノートの索引",     desc: "ノートの一覧と、コメント・ノート・来歴・改善候補の書き分け" },
+  { path: "notes/mmp_core.md",    label: "mmp_core",        desc: "e-graph・合同閉包・数値評価・証明の抽出と mmp_calculators" },
+  { path: "notes/theorems.md",    label: "theorems",        desc: "定理の定義(src/theorems.rs)" },
+  { path: "notes/discover.md",    label: "discover",        desc: "自由探索による発見・p進の退化解析・作図画面" },
+  { path: "notes/mcts.md",        label: "mcts",            desc: "行動空間と MCTS(既定では無効)" },
+  { path: "notes/diagnostics.md", label: "diagnostics",     desc: "trace・sketch・sweep・cli と問題ファイル" },
+  { path: "../bench/README.md",   label: "bench",           desc: "ベンチの回し方(二段構え・再開可能な長時間実行・落とし穴)" },
+];
+
+const picker = document.getElementById("picker");
+const view = document.getElementById("view");
+const fallback = document.getElementById("fallback");
+
+for (const d of DOCS) {
+  const b = document.createElement("span");
+  b.className = "tag";
+  b.setAttribute("role", "button");
+  b.setAttribute("aria-pressed", "false");
+  b.textContent = d.label;
+  b.title = d.desc;
+  b.addEventListener("click", () => show(d));
+  picker.appendChild(b);
+}
+
+async function show(d) {
+  for (const el of picker.children) el.setAttribute("aria-pressed", String(el.textContent === d.label));
+  view.innerHTML = "<p>読み込み中…</p>";
+  try {
+    const res = await fetch(d.path);
+    if (!res.ok) throw new Error(res.status + " " + res.statusText);
+    const text = await res.text();
+    view.innerHTML = marked.parse(text);
+    // ノート内の相対リンク(*.md)は、このページ内での表示に繋ぎ直す。
+    for (const a of view.querySelectorAll('a[href$=".md"]')) {
+      const target = DOCS.find(x => x.path.endsWith(a.getAttribute("href").replace(/^\.\//, "")));
+      if (target) { a.addEventListener("click", e => { e.preventDefault(); show(target); }); a.href = "#"; }
+    }
+    view.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    view.innerHTML = "";
+    showFallback(e);
+  }
+}
+
+// file:// で開くとブラウザが fetch を拒むので、そのときは開き方を案内する。
+function showFallback(e) {
+  fallback.style.display = "";
+  fallback.innerHTML =
+    '<div class="mdnote"><b>このページからは読めませんでした</b>(' + String(e) + ')。<br>' +
+    'ブラウザは <code>file://</code> で開いたページからの読み込みを拒みます。' +
+    'リポジトリ直下で次を実行し、<code>http://localhost:8000/docs/notes.html</code> を開いてください:' +
+    '<pre>python3 -m http.server 8000</pre>' +
+    'そのままファイルを開く場合はこちら: ' +
+    DOCS.map(d => '<a href="' + d.path + '">' + d.label + '</a>').join(" · ") + '</div>';
+}
+
+// 索引を最初に出す。読めない環境ならその場で案内に切り替わる。
+show(DOCS[0]);
+</script>
+</html>

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 
-<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html" aria-current="page">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes/README.md">設計ノート</a></div></nav>
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html" aria-current="page">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html">設計ノート §06</a></div></nav>
 <div class="wrap">
   <section id="ledger">
 <div class="section-head"><span class="section-num">04</span><h2>最適化の来歴</h2></div>
@@ -15,6 +15,13 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l66" data-status="reverted">
+  <summary><span class="idx">#66</span><span class="t">失敗キャッシュの無効化は無駄ではなかった ― b29 の上界を測ったら、得られる仕事量はほぼゼロだった</span><span class="pill rev">撤回(計測のみ)</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="backlog.html">§05</a> b29 は「無効化が大雑把すぎて<b>仕事量の2〜5割</b>が、一度失敗と分かった枝の歩き直しに消えている」として、実体単位の依存追跡を次の一手に挙げていた。実体単位の機構を作る前に<b>上界を直接測った</b> ― 失敗キャッシュを一切無効化しない版(<code>--cache-never-stale</code>、健全ではないが取りこぼしが出るだけで偽の証明は作れない)。</div>
+    <div class="evidence"><b>いまの数字(今日の変更後、--profile):</b> nine_point_full 当たり0.6%/無効9.3%、bench_2005ctstp1 0.8%/25.4%、bench_2018chnwesternmop5 4.5%/<b>38.9%</b>、bench_2022balkanmop1 ノイズ10 3.8%/<b>49.1%</b>。無効化の内訳は<b>接続関係の追加が65.5%</b>(うち Point が半分)、依存マスクは1〜2ビットが80%。ここまでは b29 の記述どおり。<br><b>上界(選抜33問、<code>--cache-never-stale</code>):</b> 既定 32→<b>16</b>(仕事量 +14.6%)、長さ+中心角+中点 31→<b>15</b>(−0.0%)、skip 31→<b>15</b>(−13.8%)、ノイズ5 32→<b>17</b>(+157.0%)、ノイズ10 29→<b>21</b>(+0.3%)。<b>16〜17問が落ちたうえ、仕事量は減りもしない。</b><br><b>結論:</b> (1) <b>無効化は無駄ではなく本質的な仕事</b>だった ― 図が変われば失敗は失敗でなくなるので、捨てるのが正しい。(2) <b>「世代違いで破棄49.1%」は参照回数であって仕事量ではない</b>。その節点で打ち切れていれば省けたはずの部分木は、実際にはほぼ空(葉の近く)だった。b29 が「型世代を候補集合と接続関係に分けても −0.05% しか動かなかった」と記録していたのは、この乖離の最初の兆候だった。<br><b>影響:</b> 実体単位の依存追跡を作る価値は無い。<a href="backlog.html#b30">b30</a>(関係マッチング)の動機は2つあったが、<b>両方とも今日の測定で消えた</b> ― capの不要化は <a class="secref" href="#l64">#64</a>(cap 40→200 で降参する4問が1ステップも動かない)、b29 の前提はここ。残るのは順序非依存だけ。</div>
+  </div>
+</details>
 <details class="item" id="l65" data-status="shipped">
   <summary><span class="idx">#65</span><span class="t">定理の書き方に規約を入れ、最後は「実際に発火するか」で守る ― 射影の語彙での書き換えは撤回</span><span class="pill">既定</span></summary>
   <div class="body">
