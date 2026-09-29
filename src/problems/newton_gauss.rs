@@ -37,3 +37,15 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。三角形 EBC で A ∈ EB、D ∈ EC、F ∈ BC は共線(メネラウスの横断線)。EB・EC・BC の
+/// 中点を N1・N2・N3 とすると、M1・M2・M3 は中点三角形の各辺の上に乗る。乗る比が A・D・F の比と同じなので、
+/// メネラウスの逆で M1・M2・M3 は共線。
+pub const SKETCH: &str = r#"
+aux point N1 mid E B
+aux point N2 mid E C
+aux point N3 mid B C
+step collinear M1 N2 N3               | C を中心とする 1/2 の相似: CA の中点は中点連結 N2N3 上
+step collinear M2 N1 N3               | B を中心とする 1/2 の相似: BD の中点は中点連結 N1N3 上
+step collinear M3 N1 N2               | E を中心とする 1/2 の相似: EF の中点は中点連結 N1N2 上
+"#;

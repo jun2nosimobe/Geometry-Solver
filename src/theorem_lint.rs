@@ -68,8 +68,9 @@ const PATTERN_BUDGET: usize = 20;
 ///
 /// 問題名がその定理を名指ししているものだけを載せている。証人の無い定理は
 /// lint の「証人が無い」欄に出るので、新しい問題を足すときに埋めること。
-const WITNESS: &[(&str, &str)] = &[
-    ("スパイラル相似の中点対応", "test_spiral_similarity"),
+pub(crate) const WITNESS: &[(&str, &str)] = &[
+    ("スパイラル相似(同じ向き)", "test_spiral_circles"),
+    ("交わる弦の相似(逆向きのスパイラル相似)", "bench_2011balkanmop1"),
     ("共点二弦の相似(方冪の定理の基礎)", "test_power_of_point"),
     ("シュタイナーの定理(二次曲線上の6点の複比不変性)", "test_steiner"),
     ("シュタイナーの定理の逆(射影版・円周角の定理の逆)", "test_steiner_converse"),
@@ -81,6 +82,8 @@ const WITNESS: &[(&str, &str)] = &[
     ("同位角による平行判定(右共通)", "test_parallel"),
     ("中点連結定理", "varignon"),
     ("円周角の定理", "thales"),
+    ("等しい円周角に対する弦は等しい", "bench_2015apmop1"),
+    ("平行四辺形の対角線は互いに二等分する", "test_parallelogram"),
 ];
 
 /// 🌟 いま上限を超えている定理。分割の検討は §05 b34。
@@ -88,8 +91,10 @@ const WITNESS: &[(&str, &str)] = &[
 const OVERSIZED_KNOWN: &[&str] = &[
     "円周角の定理",
     "共点二弦の相似(方冪の定理の基礎)",
-    "スパイラル相似の中点対応",
+    "スパイラル相似(同じ向き)",
+    "交わる弦の相似(逆向きのスパイラル相似)",
     "シュタイナーの定理の逆(射影版・円周角の定理の逆)",
+    "等しい円周角に対する弦は等しい",
 ];
 
 /// マッチャが親を全部束縛した時点で需要を立てる DefKind(logic_core::matcher)。
@@ -122,10 +127,10 @@ fn canonical(t: &TheoremDef, swap: Option<(&str, &str)>) -> String {
                 if kind.parent_symmetry() == ParentSymmetry::Unordered { ps.sort(); }
                 format!("DefinedBy {:?} {:?} {} {:?} {:?}", kind, ps, rename(result), flip, role)
             }
-            Pattern::Distinct(vs) => {
+            Pattern::Distinct(vs) | Pattern::NonDegenerate(vs) => {
                 let mut xs: Vec<String> = vs.iter().map(rename).collect();
                 xs.sort();
-                format!("Distinct {:?}", xs)
+                format!("{} {:?}", if matches!(p, Pattern::NonDegenerate(_)) { "NonDegenerate" } else { "Distinct" }, xs)
             }
             Pattern::Order(vs) => format!("Order {:?}", vs.iter().map(rename).collect::<Vec<_>>()),
             Pattern::OrderNonStrict(vs) => format!("OrderLe {:?}", vs.iter().map(rename).collect::<Vec<_>>()),
@@ -265,7 +270,7 @@ mod tests {
 
     fn all_theorems() -> Vec<TheoremDef> {
         crate::theorems::theorem_set(&crate::theorems::TheoremSetOptions {
-            projective: true, length_bridge: true, central_angle: true,
+            projective: true, length_bridge: true, central_angle: true, chord: true, parallelogram: true, spiral: true, spiral_opp: true,
         })
     }
 
@@ -308,11 +313,19 @@ mod tests {
     #[test]
     fn every_witnessed_theorem_still_fires() {
         let names: Vec<String> = all_theorems().iter().map(|t| t.name.clone()).collect();
-        let opts = crate::solve::SolveOptions::parse(&["--steps=600000".to_string()])
-            .expect("既定のオプションは読めるはず");
+        // 既定外の定理(--rules)は、その規則だけを足して解かせる(全部を同時に足すと、他の規則の課税で予算から押し出される)。
+        let rule_of = |theorem: &str| -> Option<&str> {
+            if theorem.starts_with("等しい円周角") { Some("chord") }
+            else if theorem.starts_with("平行四辺形") { Some("parallelogram") }
+            else if theorem.starts_with("スパイラル相似(同じ向き)") { Some("spiral") }
+            else { None }
+        };
         for (theorem, problem) in WITNESS {
             assert!(names.iter().any(|n| n == theorem),
                 "証人の表に、もう存在しない定理「{}」が載っている", theorem);
+            let mut args = vec!["--steps=600000".to_string()];
+            if let Some(r) = rule_of(theorem) { args.push(format!("--rules={}", r)); }
+            let opts = crate::solve::SolveOptions::parse(&args).expect("既定のオプションは読めるはず");
             assert!(crate::solve::run(problem, &opts),
                 "「{}」の証人 {} が解けない。定理が一度も発火していない可能性が高い", theorem, problem);
         }

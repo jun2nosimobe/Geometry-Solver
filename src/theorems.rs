@@ -76,6 +76,11 @@ fn distinct(args: &[&str]) -> Pattern {
     Pattern::Distinct(strings(args))
 }
 
+/// 非退化条件(相異に加えて、図の上でも一致しないこと)。一致すると結論が偽になる相異にだけ使う(Pattern::NonDegenerate)。
+fn nondegenerate(args: &[&str]) -> Pattern {
+    Pattern::NonDegenerate(strings(args))
+}
+
 /// 代表元IDの厳密な昇順。同じ候補プールから選ぶ変数の並べ替えを1通りに絞る。
 /// 変数の割り当て順序が結論の成否に影響しない場合にだけ使うこと。
 fn order(args: &[&str]) -> Pattern {
@@ -103,18 +108,26 @@ pub struct TheoremSetOptions {
     pub projective: bool,
     /// 長さを橋渡しする定理(--length-theorems)。
     pub length_bridge: bool,
-    /// 中心角の定理(--central-angle)。
+    /// 中心角の定理(既定で入る。--no-central-angle で外せる)。
     pub central_angle: bool,
+    /// 円周角と弦の長さの定理(--rules=chord)。
+    pub chord: bool,
+    /// 平行四辺形の対角線の定理(--rules=parallelogram)。
+    pub parallelogram: bool,
+    /// スパイラル相似・同じ向き(--rules=spiral)。既定では入れない(来歴 #71・#74)。
+    pub spiral: bool,
+    /// 交わる弦の相似(逆向きのスパイラル相似)。既定で入る(--no-spiral-opp で外せる。来歴 #74)。
+    pub spiral_opp: bool,
 }
 
 impl Default for TheoremSetOptions {
     fn default() -> Self {
-        Self { projective: true, length_bridge: true, central_angle: false }
+        Self { projective: true, length_bridge: true, central_angle: true, chord: false, parallelogram: false, spiral: false, spiral_opp: true }
     }
 }
 
 /// 証明に使う定理集合。solve・serve・discover の証明試行は全てここから取る。
-/// 同じ優先度のタスクは定理の登録順に取り出されるので、並び(基本 → 長さ → 中心角 → 射影)を変えると探索も変わる。
+/// 同じ優先度のタスクは定理の登録順に取り出されるので、並び(基本 → 長さ → 中心角 → 射影 → 弦)を変えると探索も変わる。
 pub fn theorem_set(opts: &TheoremSetOptions) -> Vec<TheoremDef> {
     let mut all = get_all_theorems();
     if opts.length_bridge {
@@ -125,6 +138,17 @@ pub fn theorem_set(opts: &TheoremSetOptions) -> Vec<TheoremDef> {
     }
     if opts.projective {
         all.extend(get_projective_theorems());
+    }
+    if opts.chord {
+        all.extend(get_chord_theorems());
+    }
+    if opts.parallelogram {
+        all.extend(get_parallelogram_theorems());
+    }
+    if opts.spiral || opts.spiral_opp {
+        all.extend(get_spiral_theorems().into_iter().filter(|th| {
+            if th.name.contains("逆向き") { opts.spiral_opp } else { opts.spiral }
+        }));
     }
     all
 }
@@ -154,6 +178,9 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on_circle("Base1", "Circ"),
                 on_circle("Base2", "Circ"),
                 distinct(&["Apex1", "Apex2", "Base1", "Base2"]),
+                // 非退化: 頂点と弦の端点が重なると直線が定まらない(2つの頂点が重なるのは自明に成り立つので許す)。
+                nondegenerate(&["Apex1", "Base1", "Base2"]),
+                nondegenerate(&["Apex2", "Base1", "Base2"]),
                 
                 // 🌟 FIX: Connected から DefinedBy に変更し、作図需要(Demand)を発生させる
                 demand_by(DefKind::LineThroughPoints, &["Apex1", "Base1", "L_A1_B1"]),
@@ -199,7 +226,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 match_by(DefKind::PerpendicularLine, &["LineBC", "Mid_BC", "PerpMid"]),
                 on("P", "PerpMid"),
-                distinct(&["B", "C", "P"]),
+                nondegenerate(&["B", "C", "P"]),
             ],
             constructions: vec![
                 build(DefKind::LengthSq, &["P", "B"], "Dist_PB"),
@@ -228,7 +255,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 build_by(DefKind::LengthSq, &["P", "B", "Dist_PB"]),
                 build_by(DefKind::LengthSq, &["P", "C", "Dist_PC"]),
                 same("Dist_PB", "Dist_PC"),
-                distinct(&["B", "C", "P"]),
+                nondegenerate(&["B", "C", "P"]),
             ],
             constructions: vec![
                 build(DefKind::Midpoint, &["B", "C"], "Mid_BC"),
@@ -252,7 +279,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             patterns: vec![
                 match_by(DefKind::Midpoint, &["A", "B", "M1"]),
                 match_by(DefKind::Midpoint, &["A", "C", "M2"]),
-                distinct(&["A", "B", "C", "M1", "M2"]),
+                nondegenerate(&["A", "B", "C", "M1", "M2"]),
                 
                 demand_by(DefKind::LineThroughPoints, &["B", "C", "LineBC"]),
                 demand_by(DefKind::LineThroughPoints, &["M1", "M2", "LineM1M2"]),
@@ -279,7 +306,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 same("Dist_AB", "Dist_AC"),
                 build_by(DefKind::LengthSq, &["A", "B", "Dist_AB"]),
                 build_by(DefKind::LengthSq, &["A", "C", "Dist_AC"]),
-                distinct(&["A", "B", "C"]),
+                nondegenerate(&["A", "B", "C"]),
                 
                 demand_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
                 demand_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
@@ -326,7 +353,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 has_direction("LineAB", "DirAB"),
                 has_direction("LineBC", "DirBC"),
                 has_direction("LineAC", "DirAC"),
-                distinct(&["LineAB", "LineBC", "LineAC"]),
+                nondegenerate(&["LineAB", "LineBC", "LineAC"]),
 
                 // A = LineAB ∩ LineAC, B = LineAB ∩ LineBC, C = LineBC ∩ LineAC
                 on("A", "LineAB"),
@@ -335,7 +362,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on("B", "LineBC"),
                 on("C", "LineBC"),
                 on("C", "LineAC"),
-                distinct(&["A", "B", "C"]),
+                nondegenerate(&["A", "B", "C"]),
             ],
             constructions: vec![
                 build(DefKind::LengthSq, &["A", "B"], "Dist_AB"),
@@ -394,16 +421,16 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 // B,D探索まで持ち越してしまう無駄を防ぐ。
                 on("P", "LineAB"),
                 on("P", "LineCD"),
-                distinct(&["A", "C", "P"]),
+                nondegenerate(&["A", "C", "P"]),
                 // B = LineAB ∩ LineCB (弦ABのもう一端。LineCBの上にもある点として一意に特定)
                 on("B", "LineAB"),
                 on("B", "LineCB"),
-                distinct(&["A", "P", "B"]),
+                nondegenerate(&["A", "P", "B"]),
                 // D = LineCD ∩ LineAD (弦CDのもう一端)
                 on("D", "LineCD"),
-                distinct(&["C", "P", "D"]),
+                nondegenerate(&["C", "P", "D"]),
                 on("D", "LineAD"),
-                distinct(&["A", "B", "C", "D"]),
+                nondegenerate(&["A", "B", "C", "D"]),
             ],
             constructions: vec![
                 build(DefKind::LengthSq, &["P", "A"], "LenPA"),
@@ -415,89 +442,6 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             ],
             conclusions: vec![
                 concl_same("ProdAB", "ProdCD")
-            ],
-        },
-
-        // 🌟 スパイラル相似の中点対応
-        // 前提: ∠AEB=∠DEC かつ EA・EC=EB・ED(Eを中心とするスパイラル相似でA→D, B→C)。
-        // 結論: M=Midpoint(A,B), N=Midpoint(D,C) について ∠AEM=∠DEN かつ EA・EN=EM・ED
-        // (同じスパイラル相似が A,B の中点を D,C の中点に写す、を角と比に分解したもの)。
-        // 射影的には「E中心の線束の複比(角)と円周点I中心の線束の複比(比)が両方一致する」ことと同値
-        // (mmp_core/tests.rs の test_spiral_similarity_characterized_by_two_pencil_cross_ratios)で、
-        // これが既存の語彙 AnglePair / LengthSq / Product だけで足りる根拠になっている。
-        TheoremDef {
-            name: "スパイラル相似の中点対応".to_string(),
-            entities: entities(&[
-                ("E", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("D", EntityType::Point), ("C", EntityType::Point),
-                ("M", EntityType::Point), ("N", EntityType::Point),
-                ("LineEA", EntityType::Line), ("LineEB", EntityType::Line), ("LineED", EntityType::Line), ("LineEC", EntityType::Line),
-                ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
-                ("DirEA", EntityType::Point), ("DirEB", EntityType::Point), ("DirED", EntityType::Point), ("DirEC", EntityType::Point),
-                ("DirEM", EntityType::Point), ("DirEN", EntityType::Point),
-                ("AngE_AB", EntityType::Scalar), ("AngE_DC", EntityType::Scalar), ("AngE_AM", EntityType::Scalar), ("AngE_DN", EntityType::Scalar),
-                ("LenSqEA", EntityType::Scalar), ("LenSqEB", EntityType::Scalar), ("LenSqEC", EntityType::Scalar), ("LenSqED", EntityType::Scalar),
-                ("LenSqEM", EntityType::Scalar), ("LenSqEN", EntityType::Scalar),
-                ("ProdEAEC", EntityType::Scalar), ("ProdEBED", EntityType::Scalar),
-                ("ProdEAEN", EntityType::Scalar), ("ProdEMED", EntityType::Scalar),
-            ]),
-            patterns: vec![
-                // 角度の一致 ∠AEB = ∠DEC(A→D, B→C の向きをそろえた相似)から4方向を束縛する。
-                // 2つの角は同じ向きで読む(向きが食い違うと ∠AEB = -∠DEC になり、相似ではない)。
-                same_angle("AngE_AB", "AngE_DC"),
-                angle_grouped(&["DirEA", "DirEB", "AngE_AB"], "SpiralSim"),
-                angle_grouped(&["DirED", "DirEC", "AngE_DC"], "SpiralSim"),
-                distinct(&["DirEA", "DirEB"]),
-                distinct(&["DirED", "DirEC"]),
-
-                has_direction("LineEA", "DirEA"),
-                has_direction("LineEB", "DirEB"),
-                has_direction("LineED", "DirED"),
-                has_direction("LineEC", "DirEC"),
-                distinct(&["LineEA", "LineEB", "LineED", "LineEC"]),
-
-                // E = LineEA ∩ LineEB (∠AEBの頂点)であり、かつLineED,LineEC
-                // 両方の上にもある(=△EDCの頂点も同じE、というスパイラル
-                // 相似の前提そのもの)。
-                on("E", "LineEA"),
-                on("E", "LineEB"),
-                on("E", "LineED"),
-                on("E", "LineEC"),
-
-                // A,B,D,C = それぞれの直線上のEでない方の点
-                on("A", "LineEA"),
-                on("B", "LineEB"),
-                on("D", "LineED"),
-                on("C", "LineEC"),
-                distinct(&["E", "A", "B", "D", "C"]),
-
-                // 前提2: 比の一致 EA・EC=EB・ED (共点二弦の相似と同じ形)。
-                // E,A,B,D,Cはここまでで既に確定しているので、これは新規探索
-                // ではなく「本当にこの比が成り立っているか」の確認になる。
-                build_by(DefKind::LengthSq, &["E", "A", "LenSqEA"]),
-                build_by(DefKind::LengthSq, &["E", "C", "LenSqEC"]),
-                build_by(DefKind::Product, &["LenSqEA", "LenSqEC", "ProdEAEC"]),
-                build_by(DefKind::LengthSq, &["E", "B", "LenSqEB"]),
-                build_by(DefKind::LengthSq, &["E", "D", "LenSqED"]),
-                build_by(DefKind::Product, &["LenSqEB", "LenSqED", "ProdEBED"]),
-                same("ProdEAEC", "ProdEBED"),
-            ],
-            constructions: vec![
-                build(DefKind::Midpoint, &["A", "B"], "M"),
-                build(DefKind::Midpoint, &["D", "C"], "N"),
-                build(DefKind::LineThroughPoints, &["E", "M"], "LineEM"),
-                build(DefKind::LineThroughPoints, &["E", "N"], "LineEN"),
-                build(DefKind::DirectionOf, &["LineEM"], "DirEM"),
-                build(DefKind::DirectionOf, &["LineEN"], "DirEN"),
-                build(DefKind::AnglePair, &["DirEA", "DirEM"], "AngE_AM"),
-                build(DefKind::AnglePair, &["DirED", "DirEN"], "AngE_DN"),
-                build(DefKind::LengthSq, &["E", "M"], "LenSqEM"),
-                build(DefKind::LengthSq, &["E", "N"], "LenSqEN"),
-                build(DefKind::Product, &["LenSqEA", "LenSqEN"], "ProdEAEN"),
-                build(DefKind::Product, &["LenSqEM", "LenSqED"], "ProdEMED"),
-            ],
-            conclusions: vec![
-                concl_same("AngE_AM", "AngE_DN"),
-                concl_same("ProdEAEN", "ProdEMED"),
             ],
         },
 
@@ -513,7 +457,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
             patterns: vec![
                 match_by(DefKind::Circumcircle, &["A", "B", "C", "Circ"]),
                 match_by(DefKind::TangentLine, &["Circ", "A", "TanA"]),
-                distinct(&["A", "B", "C"]),
+                nondegenerate(&["A", "B", "C"]),
                 
                 demand_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
                 demand_by(DefKind::LineThroughPoints, &["A", "C", "LineAC"]),
@@ -555,7 +499,8 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 has_direction("L2", "Dir_L2"),
                 has_direction("L3", "Dir_L3"),
                 has_direction("L4", "Dir_L4"),
-                distinct(&["L1", "L2", "L3", "L4"]),
+                // 非退化: 円を作る3点が共線でない(直線が図の上でも別)。2つの頂点が重なる場合も除くが、そのときの結論は自明。
+                nondegenerate(&["L1", "L2", "L3", "L4"]),
                 
                 on("P_Apex1", "L1"),
                 on("P_Apex1", "L2"),
@@ -565,7 +510,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on("P_Base1", "L3"),
                 on("P_Base2", "L2"),
                 on("P_Base2", "L4"),
-                distinct(&["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"]),
+                nondegenerate(&["P_Apex1", "P_Apex2", "P_Base1", "P_Base2"]),
             ],
             // 🌟 Concyclicという専用Factで結論するのをやめ、P_Apex1,P_Base1,P_Base2
             // を通る円を作図し、P_Apex2もその円にConnectedである、という形で結論する。
@@ -703,7 +648,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on("A", "L_AH"),
                 on("C", "L_CH"),
                 
-                distinct(&["A", "C", "H", "M"]),
+                nondegenerate(&["A", "C", "H", "M"]),
                 distinct(&["L_AH", "L_CH"]),
             ],
             constructions: vec![
@@ -744,7 +689,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 on("A", "L2"),
                 on("B", "L1"),
                 on("C", "L2"),
-                distinct(&["A", "B", "C"]),
+                nondegenerate(&["A", "B", "C"]),
             ],
             constructions: vec![
                 // 🌟 FIX: 直線と方向をE-Graphに物理的に作図し、他の定理への架け橋を作る
@@ -782,7 +727,7 @@ pub fn get_all_theorems() -> Vec<TheoremDef> {
                 build_by(DefKind::LengthSq, &["Mid_BC", "B", "Dist_MB"]),
                 build_by(DefKind::LengthSq, &["Mid_BC", "A", "Dist_MA"]),
                 same("Dist_MB", "Dist_MA"),
-                distinct(&["A", "B", "C"]),
+                nondegenerate(&["A", "B", "C"]),
             ],
             constructions: vec![
                 build(DefKind::LineThroughPoints, &["A", "B"], "L1"),
@@ -822,7 +767,7 @@ pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
                 match_by(DefKind::Midpoint, &["A", "B", "Mab"]),
                 match_by(DefKind::Midpoint, &["A", "C", "Mac"]),
                 match_by(DefKind::Midpoint, &["B", "C", "Mbc"]),
-                distinct(&["A", "B", "C", "Mab", "Mac", "Mbc"]),
+                nondegenerate(&["A", "B", "C", "Mab", "Mac", "Mbc"]),
             ],
             constructions: vec![
                 build(DefKind::LengthSq, &["Mab", "Mac"], "LenMid"),
@@ -835,12 +780,216 @@ pub fn get_length_bridge_theorems() -> Vec<TheoremDef> {
     ]
 }
 
+/// 🌟 スパイラル相似(--rules=spiral)。E を中心とする相似が A→D, B→C に写す(△EAB ∽ △EDC)ことを、有向角の2組の一致で書く。
+/// 以前は比の前提(EA・EC=EB・ED)で書いていたが、その積の等式を作れる定理が無く、単体テスト以外で一度も発火しなかった(来歴 #74)。
+/// 角の前提は円周角の定理などが供給する。2組目の角は、両辺に同じ変数を使う(Identical で2つを結ぶと、無関係な角の同値類を
+/// もう1つ選ぶ組み合わせを舐める)。経緯: docs/notes/theorems.md「追加の規則(--rules)と、書かなかった規則の理由」
+pub fn get_spiral_theorems() -> Vec<TheoremDef> {
+    vec![
+        // 同じ向き: ∠(EA,EB) = ∠(ED,EC) かつ ∠(AE,AB) = ∠(DE,DC)。
+        // 結論は、中点の対応 ∠(EA,EM) = ∠(ED,EN)・∠(EM,AB) = ∠(EN,DC) と、対になる相似 △EAD ∽ △EBC の角 ∠(AE,AD) = ∠(BE,BC)
+        // (もう一方の角 ∠(EA,ED) = ∠(EB,EC) は有向角の交替律で出る)。
+        TheoremDef {
+            name: "スパイラル相似(同じ向き)".to_string(),
+            entities: entities(&[
+                ("E", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("D", EntityType::Point), ("C", EntityType::Point),
+                ("M", EntityType::Point), ("N", EntityType::Point),
+                ("LineEA", EntityType::Line), ("LineEB", EntityType::Line), ("LineED", EntityType::Line), ("LineEC", EntityType::Line),
+                ("LineAB", EntityType::Line), ("LineDC", EntityType::Line), ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
+                ("LineAD", EntityType::Line), ("LineBC", EntityType::Line),
+                ("DirEA", EntityType::Point), ("DirEB", EntityType::Point), ("DirED", EntityType::Point), ("DirEC", EntityType::Point),
+                ("DirAB", EntityType::Point), ("DirDC", EntityType::Point), ("DirEM", EntityType::Point), ("DirEN", EntityType::Point),
+                ("DirAD", EntityType::Point), ("DirBC", EntityType::Point),
+                ("AngE_AB", EntityType::Scalar), ("AngE_DC", EntityType::Scalar), ("AngA", EntityType::Scalar),
+                ("AngE_AM", EntityType::Scalar), ("AngE_DN", EntityType::Scalar), ("AngM", EntityType::Scalar), ("AngN", EntityType::Scalar),
+                ("AngA_AD", EntityType::Scalar), ("AngB_BC", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                same_angle("AngE_AB", "AngE_DC"),
+                angle_grouped(&["DirEA", "DirEB", "AngE_AB"], "SpiralE"),
+                angle_grouped(&["DirED", "DirEC", "AngE_DC"], "SpiralE"),
+                distinct(&["DirEA", "DirEB"]),
+                distinct(&["DirED", "DirEC"]),
+                has_direction("LineEA", "DirEA"),
+                has_direction("LineEB", "DirEB"),
+                has_direction("LineED", "DirED"),
+                has_direction("LineEC", "DirEC"),
+                distinct(&["LineEA", "LineEB", "LineED", "LineEC"]),
+                on("E", "LineEA"), on("E", "LineEB"), on("E", "LineED"), on("E", "LineEC"),
+                on("A", "LineEA"), on("B", "LineEB"), on("D", "LineED"), on("C", "LineEC"),
+                nondegenerate(&["E", "A", "B", "D", "C"]),
+                match_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                match_by(DefKind::LineThroughPoints, &["D", "C", "LineDC"]),
+                build_by(DefKind::DirectionOf, &["LineAB", "DirAB"]),
+                build_by(DefKind::DirectionOf, &["LineDC", "DirDC"]),
+                angle_grouped(&["DirEA", "DirAB", "AngA"], "SpiralA"),
+                angle_grouped(&["DirED", "DirDC", "AngA"], "SpiralA"),
+            ],
+            constructions: vec![
+                build(DefKind::Midpoint, &["A", "B"], "M"),
+                build(DefKind::Midpoint, &["D", "C"], "N"),
+                build(DefKind::LineThroughPoints, &["E", "M"], "LineEM"),
+                build(DefKind::LineThroughPoints, &["E", "N"], "LineEN"),
+                build(DefKind::DirectionOf, &["LineEM"], "DirEM"),
+                build(DefKind::DirectionOf, &["LineEN"], "DirEN"),
+                build(DefKind::AnglePair, &["DirEA", "DirEM"], "AngE_AM"),
+                build(DefKind::AnglePair, &["DirED", "DirEN"], "AngE_DN"),
+                build(DefKind::AnglePair, &["DirEM", "DirAB"], "AngM"),
+                build(DefKind::AnglePair, &["DirEN", "DirDC"], "AngN"),
+                build(DefKind::LineThroughPoints, &["A", "D"], "LineAD"),
+                build(DefKind::LineThroughPoints, &["B", "C"], "LineBC"),
+                build(DefKind::DirectionOf, &["LineAD"], "DirAD"),
+                build(DefKind::DirectionOf, &["LineBC"], "DirBC"),
+                build(DefKind::AnglePair, &["DirEA", "DirAD"], "AngA_AD"),
+                build(DefKind::AnglePair, &["DirEB", "DirBC"], "AngB_BC"),
+            ],
+            conclusions: vec![
+                concl_same("AngE_AM", "AngE_DN"),
+                concl_same("AngM", "AngN"),
+                concl_same("AngA_AD", "AngB_BC"),
+            ],
+        },
+        // 逆向き(共円で書く): 円に内接する四角形 ABCD の対角線 AC・BD の交点を E とすると、△EAB と △EDC は逆向きに相似
+        // (A→D, B→C)。角の前提で一般に書くと、E を通る直線が2本だけの配置で E での角の一致が自明に成り立ち、
+        // 2直線の交点すべてで点の組を総当たりして重かった(来歴 #74)。共円の4点と対角線の交点から直接始める。
+        // 結論は中点の対応 ∠(EA,EM) = ∠(EN,ED)・∠(EM,AB) = ∠(DC,EN)(M = AB の中点、N = DC の中点)。
+        TheoremDef {
+            name: "交わる弦の相似(逆向きのスパイラル相似)".to_string(),
+            entities: entities(&[
+                ("Circ", EntityType::Conic),
+                ("E", EntityType::Point), ("A", EntityType::Point), ("B", EntityType::Point), ("D", EntityType::Point), ("C", EntityType::Point),
+                ("M", EntityType::Point), ("N", EntityType::Point),
+                ("L1", EntityType::Line), ("L2", EntityType::Line),
+                ("LineAB", EntityType::Line), ("LineDC", EntityType::Line), ("LineEM", EntityType::Line), ("LineEN", EntityType::Line),
+                ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
+                ("DirAB", EntityType::Point), ("DirDC", EntityType::Point), ("DirEM", EntityType::Point), ("DirEN", EntityType::Point),
+                ("AngE_AM", EntityType::Scalar), ("AngE_ND", EntityType::Scalar), ("AngM", EntityType::Scalar), ("AngN", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 対角線の交点 E と、E を通る2本の対角線 L1 ∋ A, C と L2 ∋ B, D。
+                on("E", "L1"), on("E", "L2"),
+                distinct(&["L1", "L2"]),
+                on("A", "L1"), on("C", "L1"),
+                on("B", "L2"), on("D", "L2"),
+                nondegenerate(&["E", "A", "B", "D", "C"]),
+                // 4点が同じ円の上にある。
+                on_circle("A", "Circ"), on_circle("B", "Circ"), on_circle("C", "Circ"), on_circle("D", "Circ"),
+                // 辺の直線と中点は図にあるものだけ(無ければ発火しない)。中点を作る形にすると、円周上の4点の組と
+                // ラベルの付け方ごとに中点・直線・角を作って図を膨らませ、無関係な問題が最大14倍重くなった(来歴 #74)。
+                match_by(DefKind::LineThroughPoints, &["A", "B", "LineAB"]),
+                match_by(DefKind::LineThroughPoints, &["D", "C", "LineDC"]),
+                match_by(DefKind::Midpoint, &["A", "B", "M"]),
+                match_by(DefKind::Midpoint, &["D", "C", "N"]),
+            ],
+            constructions: vec![
+                build(DefKind::DirectionOf, &["L1"], "Dir1"),
+                build(DefKind::DirectionOf, &["L2"], "Dir2"),
+                build(DefKind::DirectionOf, &["LineAB"], "DirAB"),
+                build(DefKind::DirectionOf, &["LineDC"], "DirDC"),
+                build(DefKind::LineThroughPoints, &["E", "M"], "LineEM"),
+                build(DefKind::LineThroughPoints, &["E", "N"], "LineEN"),
+                build(DefKind::DirectionOf, &["LineEM"], "DirEM"),
+                build(DefKind::DirectionOf, &["LineEN"], "DirEN"),
+                build(DefKind::AnglePair, &["Dir1", "DirEM"], "AngE_AM"),
+                build(DefKind::AnglePair, &["DirEN", "Dir2"], "AngE_ND"),
+                build(DefKind::AnglePair, &["DirEM", "DirAB"], "AngM"),
+                build(DefKind::AnglePair, &["DirDC", "DirEN"], "AngN"),
+            ],
+            conclusions: vec![
+                concl_same("AngE_AM", "AngE_ND"),
+                concl_same("AngM", "AngN"),
+            ],
+        },
+    ]
+}
+
+/// 🌟 平行四辺形の対角線は互いに二等分する(--rules=parallelogram)。四角形 ABCD で AB ∥ DC かつ BC ∥ AD なら、
+/// AC の中点と BD の中点は一致する(A + C = B + D)。辺が平行な2組の直線と、4点が相異なることだけを要求する。
+/// 中点は同値類として合流するので、中点を通る直線どうしの交点の一意性などが続けてはたらく。
+pub fn get_parallelogram_theorems() -> Vec<TheoremDef> {
+    vec![
+        TheoremDef {
+            name: "平行四辺形の対角線は互いに二等分する".to_string(),
+            entities: entities(&[
+                ("A", EntityType::Point), ("B", EntityType::Point), ("C", EntityType::Point), ("D", EntityType::Point),
+                ("LAB", EntityType::Line), ("LBC", EntityType::Line), ("LCD", EntityType::Line), ("LDA", EntityType::Line),
+                ("Dir1", EntityType::Point), ("Dir2", EntityType::Point),
+                ("MidAC", EntityType::Point), ("MidBD", EntityType::Point),
+            ]),
+            patterns: vec![
+                // AB ∥ CD(方向 Dir1 を共有)と BC ∥ DA(方向 Dir2 を共有)。
+                has_direction("LAB", "Dir1"), has_direction("LCD", "Dir1"),
+                has_direction("LBC", "Dir2"), has_direction("LDA", "Dir2"),
+                distinct(&["LAB", "LCD"]), distinct(&["LBC", "LDA"]), distinct(&["Dir1", "Dir2"]),
+                on("A", "LAB"), on("B", "LAB"), on("B", "LBC"), on("C", "LBC"),
+                on("C", "LCD"), on("D", "LCD"), on("D", "LDA"), on("A", "LDA"),
+                nondegenerate(&["A", "B", "C", "D"]),
+                // 平行四辺形の付け方は8通り(回転・裏返し)あるので、A が最小で B < D の1通りだけ残す。
+                order(&["A", "B"]), order(&["A", "C"]), order(&["A", "D"]), order(&["B", "D"]),
+            ],
+            constructions: vec![
+                build(DefKind::Midpoint, &["A", "C"], "MidAC"),
+                build(DefKind::Midpoint, &["B", "D"], "MidBD"),
+            ],
+            conclusions: vec![concl_same("MidAC", "MidBD")],
+        },
+    ]
+}
+
+/// 🌟 円周角と弦の長さの定理(--rules=chord)。角度の世界(有向角 mod π)から長さの世界への橋渡しの1つ。
+/// 同じ円の上で、2つの弦を見込む円周角が等しければ、その2つの弦の長さは等しい。
+/// 弦² = 4R²sin²θ は θ の符号にも π の周期にも依らないので、有向角の等式だけで健全に言える(向きは両方読む)。
+/// 二辺夾角の合同は同じ形では書けない: 有向角(mod π)は θ と π−θ を区別できず、不健全になる。
+pub fn get_chord_theorems() -> Vec<TheoremDef> {
+    vec![
+        TheoremDef {
+            name: "等しい円周角に対する弦は等しい".to_string(),
+            entities: entities(&[
+                ("Circ", EntityType::Conic),
+                ("XA", EntityType::Point), ("PA", EntityType::Point), ("QA", EntityType::Point),
+                ("XB", EntityType::Point), ("PB", EntityType::Point), ("QB", EntityType::Point),
+                ("LA1", EntityType::Line), ("LA2", EntityType::Line), ("LB1", EntityType::Line), ("LB2", EntityType::Line),
+                ("DirA1", EntityType::Point), ("DirA2", EntityType::Point), ("DirB1", EntityType::Point), ("DirB2", EntityType::Point),
+                ("AngA", EntityType::Scalar), ("AngB", EntityType::Scalar),
+                ("LenA", EntityType::Scalar), ("LenB", EntityType::Scalar),
+            ]),
+            patterns: vec![
+                // 頂点 XA から弦 PA-QA を見込む角と、頂点 XB から弦 PB-QB を見込む角が等しい。
+                same_angle("AngA", "AngB"),
+                angle_free(&["DirA1", "DirA2", "AngA"]),
+                angle_free(&["DirB1", "DirB2", "AngB"]),
+                has_direction("LA1", "DirA1"),
+                has_direction("LA2", "DirA2"),
+                has_direction("LB1", "DirB1"),
+                has_direction("LB2", "DirB2"),
+                on("XA", "LA1"), on("XA", "LA2"), on("PA", "LA1"), on("QA", "LA2"),
+                nondegenerate(&["XA", "PA", "QA"]),
+                on("XB", "LB1"), on("XB", "LB2"), on("PB", "LB1"), on("QB", "LB2"),
+                nondegenerate(&["XB", "PB", "QB"]),
+                // 2つの弦の長さが図に既にあり、しかもまだ別物であること。長さは誰かが欲しがったときだけ図にあるので
+                // (目標や他の定理が作る)、この定理は使い道のある弦にしか発火しない。同じ弦を別の頂点から見た円周角の
+                // 一致(円周角の定理が絶えず出す)もここで落ちる。作る形(build_by)にすると、円の上の全ての弦の組を
+                // 試して仕事量が +22〜34% になった(来歴 #68)。
+                match_by(DefKind::LengthSq, &["PA", "QA", "LenA"]),
+                match_by(DefKind::LengthSq, &["PB", "QB", "LenB"]),
+                distinct(&["LenA", "LenB"]),
+                // 6点が同じ円の上にある。
+                on_circle("XA", "Circ"), on_circle("PA", "Circ"), on_circle("QA", "Circ"),
+                on_circle("XB", "Circ"), on_circle("PB", "Circ"), on_circle("QB", "Circ"),
+                // A と B を入れ替えても同じ定理なので、頂点の順序で片方だけ残す。
+                order_le(&["XA", "XB"]),
+            ],
+            constructions: vec![],
+            conclusions: vec![concl_same("LenA", "LenB")],
+        },
+    ]
+}
+
 /// 🌟 中心角の定理: OがA,B,Cから等距離(=外接円の中心)であるとき、中心角∠BOCは円周角∠BACの2倍。
 /// 有向角(mod π)は円周点との複比 k=e^{2iθ} として評価されるので、角の2倍は k² になる。つまり「2倍」は
 /// 既存の Product(AngBAC と自分自身の積)で表せ、新しい計算プリミティブは要らない。
-/// 既定の定理集合には入れていない: 外心を持つ問題では前提がほぼ常に満たされるので、無関係な問題にも
-/// 試行のコストが乗り、既定に入れると他の問題が解けなくなった。現状は solve.rs の CENTRAL_ANGLE_PROBLEMS
-/// (暫定の問題名リスト)と --central-angle で入る。
+/// 既定で入る(--no-central-angle で外せる)。以前は課税を恐れて問題名のリストで bench_2012egmop1 にだけ入れていたが、
+/// semi-join と補助線の枠分けの後に測り直すと課税は無い(幾何平均 −1〜−2%、中央値 +0.2〜0.8%)ので、リストをやめた(来歴 #70)。
 pub fn get_central_angle_theorem() -> Vec<TheoremDef> {
     vec![
         TheoremDef {
@@ -859,7 +1008,7 @@ pub fn get_central_angle_theorem() -> Vec<TheoremDef> {
                 same("LenOA", "LenOB"),
                 build_by(DefKind::LengthSq, &["O", "C", "LenOC"]),
                 same("LenOA", "LenOC"),
-                distinct(&["O", "A", "B", "C"]),
+                nondegenerate(&["O", "A", "B", "C"]),
 
                 // 円周角∠BAC(A→B, A→C)と中心角∠BOC(O→B, O→C)を同じ
                 // 向き(B側→C側)で構成する。
@@ -975,7 +1124,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 on("Dp", "L4"),
                 on("Dp", "T"),
                 // 交点が中心 O そのものなら T は O を通っていて、複比は定まらない。
-                distinct(&["O", "Ap", "Bp", "Cp", "Dp"]),
+                nondegenerate(&["O", "Ap", "Bp", "Cp", "Dp"]),
             ],
             constructions: vec![
                 build(DefKind::CrossRatio, &["Ap", "Bp", "Cp", "Dp"], "CR2"),
@@ -1010,7 +1159,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 二次曲線上のもう1点Qを局所スキャンで見つける(唯一の
                 // 「新規に探す」変数)。
                 on("Q", "Conic"),
-                distinct(&["P1", "P2", "P3", "P4", "P5", "Q"]),
+                nondegenerate(&["P1", "P2", "P3", "P4", "P5", "Q"]),
                 // P1から見たP2,P3,P4,Qへの4直線(既存のものが無ければ
                 // 円周角の定理のL_A1_B1等と同じ「DefinedBy+作図需要」で作る)。
                 demand_by(DefKind::LineThroughPoints, &["P1", "P2", "L1_P2"]),
@@ -1054,7 +1203,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // 🌟 シード: シュタイナーの定理と全く同じ発想で、二次曲線自身の
                 // 定義からP1..P5とConicを直接束縛する(全件スキャン不要)。
                 match_by(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5", "Conic"]),
-                distinct(&["P1", "P2", "P3", "P4", "P5"]),
+                nondegenerate(&["P1", "P2", "P3", "P4", "P5"]),
 
                 // P1における接線T1(円周角の定理の逆の"TanA"と同じ発想の
                 // DefinedBy+作図需要)。
@@ -1127,7 +1276,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 on("P4", "L5_P4"),
                 on("Q", "L1_Q"),
                 on("Q", "L5_Q"),
-                distinct(&["P1", "P5", "P2", "P3", "P4", "Q"]),
+                nondegenerate(&["P1", "P5", "P2", "P3", "P4", "Q"]),
             ],
             constructions: vec![
                 build(DefKind::ConicThrough5Points, &["P1", "P2", "P3", "P4", "P5"], "Conic_New"),
@@ -1147,6 +1296,9 @@ mod tests {
         all.extend(get_projective_theorems());
         all.extend(get_central_angle_theorem());
         all.extend(get_length_bridge_theorems());
+        all.extend(get_chord_theorems());
+        all.extend(get_parallelogram_theorems());
+        all.extend(get_spiral_theorems());
         all
     }
 
@@ -1159,7 +1311,7 @@ mod tests {
     fn every_constrained_variable_is_also_bound_by_a_fact() {
         fn vars_of(pat: &Pattern, out: &mut Vec<String>) {
             match pat {
-                Pattern::Order(v) | Pattern::OrderNonStrict(v) | Pattern::Distinct(v) => out.extend(v.iter().cloned()),
+                Pattern::Order(v) | Pattern::OrderNonStrict(v) | Pattern::Distinct(v) | Pattern::NonDegenerate(v) => out.extend(v.iter().cloned()),
                 Pattern::Not(inner) => vars_of(inner, out),
                 _ => out.extend(pat.fact_args().into_iter().flatten().cloned()),
             }
@@ -1170,7 +1322,7 @@ mod tests {
             let mut constrained: Vec<String> = Vec::new();
             for p in &t.patterns {
                 match p {
-                    Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) | Pattern::Not(_) => vars_of(p, &mut constrained),
+                    Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) | Pattern::NonDegenerate(_) | Pattern::Not(_) => vars_of(p, &mut constrained),
                     _ => vars_of(p, &mut fact_vars),
                 }
             }

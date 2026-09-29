@@ -29,6 +29,8 @@ pub struct RecoveryOptions {
     /// 🌟 行き詰まり何回ごとに、需要作図より先に候補capの拡大を試すか(0 なら試さない。solve の既定は2)。
     /// 需要作図は図が大きいほど尽きにくく、そのままだと cap を広げる番が来る前に図が膨らみ切ってしまう。
     pub widen_every: usize,
+    /// 🌟 決定的な手が全部尽きたとき、最後に熱い点どうしの中点と熱い直線どうしの交点を足すか(--generic-aux)。
+    pub generic_aux: bool,
 }
 
 impl RecoveryOptions {
@@ -56,12 +58,10 @@ pub struct BlackboardEngine {
     pub bandit_enabled: bool,
     /// 証明された事実で変数を固定したタスクを積むか(既定は無効: 積む量が多すぎて全体が悪化する)。
     pub seeded_rematch_enabled: bool,
-    /// 🌟 1回の run_step の中で結論をすぐ適用せず、全タスクを試してからまとめて適用するか(--batch-conclusions)。
-    /// 既定(false)だと、先に発火した定理のマージが同じ全探索の後続タスクから見えるので、定理を試す順序で
-    /// 探索の進み方が変わる(§05 の順序依存)。true にすると、その全探索の中では全タスクが同じ図を見る。
-    pub batch_conclusions: bool,
     /// 前回 cap を広げてからの行き詰まりの回数(widen_every の判定に使う)。
     pub stalls_since_widen: usize,
+    /// resolve_generic_aux が今までに足した作図の数(上限 GENERIC_AUX_TOTAL)。
+    pub generic_aux_added: usize,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -75,8 +75,8 @@ impl BlackboardEngine {
             event_queue: VecDeque::new(),
             bandit_enabled: false,
             seeded_rematch_enabled: false,
-            batch_conclusions: false,
             stalls_since_widen: 0,
+            generic_aux_added: 0,
             work_limit: u64::MAX,
         }
     }
@@ -124,6 +124,7 @@ impl BlackboardEngine {
             self.schedule_full_sweep();
             return Recovered::WidenedCap(self.prover.fanout_heat_cap);
         }
+        if opts.generic_aux && self.resolve_generic_aux() { return Recovered::Construction; }
         Recovered::Exhausted
     }
 
@@ -248,8 +249,6 @@ impl BlackboardEngine {
     pub fn run_step(&mut self, budget: usize) -> bool {
         let mut applied_anything = false;
         let mut calls = 0;
-        // --batch-conclusions のとき、この全探索で見つかったマッチを溜めておく(定理・束縛・向き・タスクの出どころ)。
-        let mut pending: Vec<(std::rc::Rc<TheoremDef>, Bind, FlipStates, usize, bool)> = Vec::new();
 
         while calls < budget && self.prover.work_done() < self.work_limit {
             while let Some(event) = self.event_queue.pop_front() {
@@ -287,37 +286,7 @@ impl BlackboardEngine {
             let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
             let all_active: u64 = if theorem.patterns.len() >= 64 { u64::MAX } else { (1u64 << theorem.patterns.len()) - 1 };
             let mut new_binds: Vec<(Bind, FlipStates)> = Vec::new();
-            if self.prover.gj_audit && genjoin_supported(&theorem) {
-                // 🌟 監査: 従来の探索を先に走らせ(こちらが正)、同じ状態で試作を走らせて
-                // 見つけたマッチの数を比べる。食い違った定理を名指しするための一時的な道具。
-                {
-                    let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
-                    let mut search = Search {
-                        theorem: &theorem,
-                        patterns: &theorem.patterns,
-                        scope: 0,
-                        failed_paths: &mut failed_paths,
-                        on_match: &mut collect,
-                        var_index: &var_index,
-                        pattern_masks: &var_index.per_pattern,
-                    };
-                    let mut dep_mask: u8 = 0;
-                    self.prover.dfs_match(&mut search, all_active, task.bind.clone(), task.flip_states.clone(), &mut dep_mask);
-                }
-                let mut gj_binds: Vec<(Bind, FlipStates)> = Vec::new();
-                {
-                    let mut collect = |bind: &Bind, flips: &FlipStates| gj_binds.push((bind.clone(), flips.clone()));
-                    self.prover.genjoin_match(&theorem, task.bind.clone(), &mut collect);
-                }
-                if gj_binds.len() != new_binds.len() {
-                    println!("  🔍 [マッチャ監査] 定理「{}」: 従来 {} 件 / 試作 {} 件",
-                        theorem.name, new_binds.len(), gj_binds.len());
-                }
-            } else if self.prover.generic_join && genjoin_supported(&theorem) {
-                // 🌟 関係マッチング(generic join)。cap を使わず、変数ごとに候補集合を交差させる。
-                let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
-                self.prover.genjoin_match(&theorem, task.bind.clone(), &mut collect);
-            } else {
+            {
                 let mut collect = |bind: &Bind, flips: &FlipStates| new_binds.push((bind.clone(), flips.clone()));
                 let mut search = Search {
                     theorem: &theorem,
@@ -352,18 +321,6 @@ impl BlackboardEngine {
                 }
             }
 
-            if self.batch_conclusions {
-                let matched = !new_binds.is_empty();
-                for (bind, flips) in new_binds {
-                    pending.push((theorem.clone(), bind, flips, task_theorem_idx, task_is_seeded));
-                }
-                // マッチが無かったタスクはここで記録する(マッチしたタスクは適用してから記録する)。
-                if !task_is_seeded && !matched {
-                    self.prover.record_theorem_attempt(task_theorem_idx, false, dfs_calls_used);
-                }
-                continue;
-            }
-
             let mut task_succeeded = false;
             for (mut bind, flips) in new_binds {
                 if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) { continue; }
@@ -392,38 +349,17 @@ impl BlackboardEngine {
             }
         }
 
-        // 溜めた結論をまとめて適用する。ここまでは全タスクが同じ図を見ている。
-        for (theorem, mut bind, flips, theorem_idx, is_seeded) in pending {
-            let mut succeeded = false;
-            if !self.prover.is_already_proven(&theorem.conclusions, &bind, &flips)
-                && self.prover.execute_constructions(&theorem.constructions, &mut bind)
-                && !self.prover.is_already_proven(&theorem.conclusions, &bind, &flips)
-            {
-                println!("  🎯 [リーチ通知] 定理「{}」の前提条件がすべて満たされました！", theorem.name);
-                for (var_name, class_id) in &bind {
-                    if var_name.starts_with("__") { continue; }
-                    let entity_name = &self.prover.egraph.entities[self.prover.egraph.get_rep(*class_id).0].name;
-                    println!("      - 割り当て: {} = {}", var_name, entity_name);
-                }
-                let (applied, generated_facts) = self.prover.apply_conclusions(&theorem, &bind, &flips);
-                if applied {
-                    applied_anything = true;
-                    succeeded = true;
-                    self.emit(Event::NodeMerged);
-                    for f in generated_facts { self.emit(Event::FactProven(f)); }
-                }
-            }
-            if !is_seeded {
-                self.prover.record_theorem_attempt(theorem_idx, succeeded, 0);
-            }
-        }
         applied_anything
     }
 
     /// 補助作図を1つ図に足す。出どころを刻み(--origins 用)、importance が与えられれば
-    /// 重要度を下げて推論の主軸がぶれないようにする。
-    fn add_aux(&mut self, name: String, def: Definition, ty: EntityType, origin: EntityOrigin, importance: Option<f64>) -> ClassId {
+    /// 重要度を下げて推論の主軸がぶれないようにする。図の上で値の定まらない作図(同じ2点を通る直線など)は作らず None。
+    fn add_aux(&mut self, name: String, def: Definition, ty: EntityType, origin: EntityOrigin, importance: Option<f64>) -> Option<ClassId> {
         let eg = &mut self.prover.egraph;
+        if eg.nondegeneracy && !matches!(def, Definition::DirectionOf(_)) && eg.without_consuming_rng(|g| g.definition_is_degenerate(&def)) {
+            println!("  📐 [退化した作図を見送り] {}", name);
+            return None;
+        }
         let prev = eg.set_origin(origin);
         let id = eg.create_entity(name, def.clone(), ty);
         if let Some(imp) = importance {
@@ -431,7 +367,7 @@ impl BlackboardEngine {
         }
         eg.apply_trivial_relations(id, &def);
         eg.set_origin(prev);
-        id
+        Some(id)
     }
 
     /// 作図の直後に既存の図形と合流させてから、全定理を試し直す。
@@ -502,6 +438,7 @@ impl BlackboardEngine {
         }
         let name = format!("Dir_{}_(Fallback)", self.prover.egraph.entities[line_id.0].name);
         self.add_aux(name, def, EntityType::Point, EntityOrigin::AngleDemand, None)
+            .expect("直線の方向は退化の検査をしないので必ず作れる")
     }
 
     /// 定理のマッチが「2点を結ぶ直線」を欲しがって空振りした組に、補助線を引く(1回に3本まで)。
@@ -793,6 +730,87 @@ impl BlackboardEngine {
             };
             println!("  💡 [オンデマンド作図] 要請により {} (もう一方の交点)を生成 (熱: {:.1})", name, heat);
             self.add_aux(name, def, EntityType::Point, EntityOrigin::SecondDemand, Some(0.5));
+            applied = true;
+        }
+        if applied { self.settle_and_resweep(); }
+        applied
+    }
+
+    /// 🌟 最後の手(--generic-aux)。ここまでの手が全部尽きたとき、熱い点どうしの中点と、熱い直線どうしの交点を少しずつ足す
+    /// (1回に交点6・中点8まで、候補は熱い上位だけ)。人間の証明が要る補助作図は中点と交点がほとんどで(来歴 #68)、
+    /// 需要から出る手はそのどちらも一部しか作らない。手が尽きて止まる問題にしか効かないので、今解けている問題の探索は変わらない。
+    pub fn resolve_generic_aux(&mut self) -> bool {
+        const HOT_LINES: usize = 14;
+        const HOT_POINTS: usize = 12;
+        const INTERSECTIONS_PER_STALL: usize = 6;
+        const MIDPOINTS_PER_STALL: usize = 8;
+        // 図が膨らみ続けると1回の run_step が時間の安全弁(--time)より長くなる(数値チェックが仕事量に数えられない)ので、総数に上限を置く。
+        const GENERIC_AUX_TOTAL: usize = 60;
+        if self.generic_aux_added >= GENERIC_AUX_TOTAL { return false; }
+        let eg = &self.prover.egraph;
+        let linf = eg.line_infinity;
+        let hot = |ty: EntityType| -> Vec<ClassId> {
+            let mut v: Vec<(f64, ClassId)> = (0..eg.entities.len()).map(ClassId)
+                .filter(|&id| eg.get_rep(id) == id && eg.entities[id.0].entity_type == ty && eg.entities[id.0].is_active())
+                .filter(|&id| id != linf && !(ty == EntityType::Point && eg.is_connected(id, linf)))
+                .map(|id| (eg.entities[id.0].heat(), id)).collect();
+            v.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.0.cmp(&b.1.0)));
+            v.into_iter().map(|(_, id)| id).collect()
+        };
+        let mut lines = hot(EntityType::Line);
+        lines.truncate(HOT_LINES);
+        let mut points = hot(EntityType::Point);
+        points.truncate(HOT_POINTS);
+        let shares_a_point = |l1: ClassId, l2: ClassId| -> bool {
+            eg.entities[l1.0].components.iter().flat_map(|c| c.subobjects.iter())
+                .map(|&s| eg.get_rep(s))
+                .any(|p| eg.entities[p.0].entity_type == EntityType::Point && eg.is_connected(p, l2))
+        };
+
+        let mut inters: Vec<(f64, Definition)> = Vec::new();
+        for i in 0..lines.len() {
+            for j in (i + 1)..lines.len() {
+                let (l1, l2) = (lines[i], lines[j]);
+                let def = eg.normalize_definition(&Definition::Intersection(l1, l2));
+                if eg.memo.contains_key(&def) || shares_a_point(l1, l2) { continue; }
+                // 平行な2直線の交点は無限遠点(既存の方向)なので作らない。
+                if let (Some(&d1), Some(&d2)) = (
+                    eg.memo.get(&eg.normalize_definition(&Definition::DirectionOf(l1))),
+                    eg.memo.get(&eg.normalize_definition(&Definition::DirectionOf(l2))),
+                ) && eg.get_rep(d1) == eg.get_rep(d2) { continue; }
+                inters.push((eg.entities[l1.0].heat() + eg.entities[l2.0].heat(), def));
+            }
+        }
+        let mut mids: Vec<(f64, Definition)> = Vec::new();
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                let def = eg.normalize_definition(&Definition::Midpoint(points[i], points[j]));
+                if eg.memo.contains_key(&def) { continue; }
+                mids.push((eg.entities[points[i].0].heat() + eg.entities[points[j].0].heat(), def));
+            }
+        }
+        let by_score = |a: &(f64, Definition), b: &(f64, Definition)|
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| format!("{:?}", a.1).cmp(&format!("{:?}", b.1)));
+        inters.sort_by(by_score);
+        mids.sort_by(by_score);
+
+        let mut applied = false;
+        for (_, def) in inters.into_iter().take(INTERSECTIONS_PER_STALL) {
+            let Definition::Intersection(l1, l2) = def else { continue };
+            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let name = format!("Pt_{}_{}_(GenericAux)", self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
+            println!("  💡 [汎用の補助作図] {} (熱い直線どうしの交点)を生成", name);
+            self.add_aux(name, def, EntityType::Point, EntityOrigin::PointDemand, Some(0.5));
+            self.generic_aux_added += 1;
+            applied = true;
+        }
+        for (_, def) in mids.into_iter().take(MIDPOINTS_PER_STALL) {
+            let Definition::Midpoint(a, b) = def else { continue };
+            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            let name = format!("Mid_{}_{}_(GenericAux)", self.prover.egraph.entities[a.0].name, self.prover.egraph.entities[b.0].name);
+            println!("  💡 [汎用の補助作図] {} (熱い点どうしの中点)を生成", name);
+            self.add_aux(name, def, EntityType::Point, EntityOrigin::MidDemand, Some(0.5));
+            self.generic_aux_added += 1;
             applied = true;
         }
         if applied { self.settle_and_resweep(); }

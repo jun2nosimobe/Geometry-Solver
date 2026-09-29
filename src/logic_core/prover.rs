@@ -54,10 +54,6 @@ pub struct ProverEngine {
     /// (generic join の変数選択)。cap があると「どの候補を切り捨てるか」まで変わるので、
     /// cap の広げ方と組で効果が決まる。
     pub var_order: bool,
-    /// 🌟 関係マッチング(genjoin.rs)を使う。cap を使わず変数ごとに候補集合を交差させる試作。
-    pub generic_join: bool,
-    /// 🌟 両方のマッチャを走らせて、見つけたマッチの数が食い違う定理を名指しする(一時的な診断)。
-    pub gj_audit: bool,
     /// 🌟 「既に2点が同じ直線上にある」需要の補助線を、図を増やす補助線とは別枠で引く。
     /// 既定で有効(--no-collinear-extra で外せる)。
     pub collinear_extra: bool,
@@ -83,6 +79,17 @@ pub struct ProverEngine {
     pub trace: Option<crate::trace::TraceLog>,
     /// --audit-merges の集計。None なら定理の結論を検算しない。
     pub merge_audit: Option<MergeAudit>,
+    /// 🌟 定理の結論をマージの前に数値で確かめ、偽なら却下する。定理の「相異なる」は e-graph 上でしか見ないので、
+    /// 数値的には同じ点が別の実体のまま残ると退化した図形で偽の結論を出す(来歴 #76)。前提が乱数座標で成り立つ問題でだけ
+    /// 有効にする(前提を座標への制約として与える問題では、乱数座標で「偽」が誤警報になる)。
+    pub guard_conclusions: bool,
+    /// guard_conclusions で却下した結論の数。
+    pub rejected_conclusions: u64,
+    /// 🌟 非退化条件: 定理の「相異なる」で結ばれた図形(点・方向・直線・二次曲線)が図の上で数値的に一致するマッチは、
+    /// 退化した配置として捨てる(e-graph がまだ一致を証明していないだけの同じ図形を、別物として扱わないため)。
+    pub numeric_distinct: bool,
+    /// numeric_distinct で捨てたマッチの数。
+    pub degenerate_matches: u64,
 }
 
 /// 定理の結論(マージ・接続)を適用する直前に、前提を満たす乱数座標で検算した結果の集計(--audit-merges)。
@@ -104,7 +111,10 @@ impl MergeAudit {
         let counts = self.per_theorem.entry(theorem.to_string()).or_default();
         counts[slot] += 1;
         if verdict == Some(false) && counts[1] as usize <= Self::EXAMPLES_PER_THEOREM {
-            self.false_examples.push((theorem.to_string(), describe()));
+            let example = describe();
+            // その場にも出す(最初に偽が出た位置と、その直前のマージを突き合わせるため)。
+            println!("MERGE_AUDIT_FALSE\t{}\t{}", theorem, example);
+            self.false_examples.push((theorem.to_string(), example));
         }
     }
 }
@@ -144,7 +154,7 @@ impl ProverEngine {
     /// これまでに消費した仕事量(dfs_match の呼び出し回数の累計)。探索の予算はこれで測るので、
     /// 同じ問題は機械の混み具合に関係なく同じ結果になる。
     pub fn work_done(&self) -> u64 {
-        self.profile.seeded_dfs_calls + self.profile.unseeded_dfs_calls
+        self.profile.seeded_dfs_calls + self.profile.unseeded_dfs_calls + self.egraph.spiral_prop_work
     }
 
     pub fn new(egraph: EGraph) -> Self {
@@ -166,8 +176,6 @@ impl ProverEngine {
             nogood_core: false,
             semijoin: true,
             var_order: false,
-            generic_join: false,
-            gj_audit: false,
             collinear_extra: true,
             connected_join_cache: FxHashMap::default(),
             identical_self_bind_cache: FxHashMap::default(),
@@ -179,6 +187,10 @@ impl ProverEngine {
             branch_tag: 0,
             trace: None,
             merge_audit: None,
+            guard_conclusions: false,
+            rejected_conclusions: 0,
+            numeric_distinct: true,
+            degenerate_matches: 0,
         }
     }
 
@@ -267,6 +279,9 @@ impl ProverEngine {
 
             let new_id = if let Some(&existing_id) = self.egraph.memo.get(&def) {
                 self.egraph.get_rep(existing_id)
+            } else if self.egraph.nondegeneracy && self.egraph.without_consuming_rng(|eg| eg.definition_is_degenerate(&def)) {
+                // 図の上で値の定まらない作図(共線な3点の外接円など)からは結論を出さない。
+                return false;
             } else {
                 // 名前は実際に束縛された親の名前から作る(どの図形から作ったか辿れるように)。
                 let parent_names: Vec<String> = parent_ids.iter()
@@ -321,8 +336,13 @@ impl ProverEngine {
 
                     let name1 = self.egraph.entities[r1.0].name.clone();
                     let name2 = self.egraph.entities[r2.0].name.clone();
-                    let verdict = self.merge_audit.as_ref()
-                        .map(|_| self.egraph.without_consuming_rng(|eg| eg.numeric_plausibility_check(r1, r2, 2)));
+                    let verdict = (self.merge_audit.is_some() || self.guard_conclusions)
+                        .then(|| self.egraph.without_consuming_rng(|eg| eg.numeric_plausibility_check(r1, r2, 2)));
+                    if self.guard_conclusions && verdict == Some(Some(false)) {
+                        self.rejected_conclusions += 1;
+                        println!("  🛡️ [結論の数値チェック] {} ≡ {} は数値的に成り立たないので却下 (理由: {})", name1, name2, theorem_name);
+                        continue;
+                    }
                     if self.egraph.merge_entities_justified(r1, r2, justification()) {
                         if let (Some(audit), Some(v)) = (self.merge_audit.as_mut(), verdict) {
                             audit.record(theorem_name, v, || format!("{} ≡ {}", name1, name2));
@@ -340,11 +360,16 @@ impl ProverEngine {
                     let (Some(&child), Some(&parent)) = (bind.get(c), bind.get(p)) else { continue };
                     let c_rep = self.egraph.get_rep(child);
                     let p_rep = self.egraph.get_rep(parent);
-                    if self.merge_audit.is_some() {
+                    if self.merge_audit.is_some() || self.guard_conclusions {
                         let v = self.egraph.without_consuming_rng(|eg| eg.numeric_incidence_check(c_rep, p_rep, 2));
                         let (cn, pn) = (self.egraph.entities[c_rep.0].name.clone(), self.egraph.entities[p_rep.0].name.clone());
                         if let Some(audit) = self.merge_audit.as_mut() {
                             audit.record(theorem_name, v, || format!("{} ∈ {}", cn, pn));
+                        }
+                        if self.guard_conclusions && v == Some(false) {
+                            self.rejected_conclusions += 1;
+                            println!("  🛡️ [結論の数値チェック] {} ∈ {} は数値的に成り立たないので却下 (理由: {})", cn, pn, theorem_name);
+                            continue;
                         }
                     }
                     self.egraph.link_logical_incidence_justified(c_rep, p_rep, justification());

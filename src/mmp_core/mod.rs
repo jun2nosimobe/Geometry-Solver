@@ -20,11 +20,16 @@ use crate::mmp_math::ModInt;
 //   proof / raw_proof - 証明の復元と出力
 //   construction      - 調和共役点など、複数の実体を作る補助構成
 //   query             - is_connected など読み取り専用の問い合わせ
+//   census            - 全てのマージ・接続の数値監査(--audit-merges)
 mod congruence;
+mod census;
+pub use census::MergeCensus;
+mod fixed_coords;
 pub(crate) mod coords;
 pub(crate) mod eval;
 mod proof;
 mod construction;
+mod spiral_prop;
 mod query;
 mod raw_proof;
 pub use raw_proof::{RawProof, DeepProof};
@@ -460,6 +465,33 @@ pub struct EGraph {
     /// apply_trivial_relations の入れ子の深さ。0 より大きい間に作られた図形は
     /// 「付随して生えたもの」として印を付ける。
     pub trivial_depth: u32,
+    /// 🌟 スパイラル相似を合同閉包の局所伝播として適用するか(--rules=spiral-prop、spiral_prop.rs)。
+    pub spiral_propagation: bool,
+    /// その探索の手数。仕事量の予算に含める(ProverEngine::work_done)。
+    pub spiral_prop_work: u64,
+    /// 既に結論を適用した (E, A, B, D, C) の組。
+    pub spiral_fired: rustc_hash::FxHashSet<[usize; 5]>,
+    /// 🌟 差分評価: 代表元ごとの「まだ他の定義と組にしていない」角の定義。マージで合流してきた側の定義を積み、
+    /// propagate_spiral はこれと同値類の定義の組だけを見る(同値類の定義の組を毎回全部見直すと、1回の合同閉包で
+    /// 予算の100倍の手数を使った)。
+    pub spiral_pending: rustc_hash::FxHashMap<usize, Vec<(ClassId, ClassId)>>,
+    /// 局所伝播の手数の上限(探索の予算と同じ値)。超えたら局所伝播を止める。
+    pub spiral_work_limit: u64,
+    /// マージ前の数値チェック(局所伝播の「数値的に別物なら結合しない」)を行うか。規則が正しければ偽のマージは
+    /// 起きないはずなので、切っても(`--no-merge-checks`)同じ結果になるのが目標。
+    pub merge_checks: bool,
+    /// `--audit-merges`: 全てのマージ・接続を直前に数値で確かめ、出どころごとに数える(census.rs)。
+    pub merge_census: Option<MergeCensus>,
+    /// 局所伝播が非退化条件で見送った回数 [交点の一意性, 二次曲線の一意性, 複比の一意性](診断用)。
+    pub nondegenerate_skips: [u64; 3],
+    /// 非退化条件(局所伝播の条件と、値の定まらない作図の見送り)を使うか。A/B 用に --no-nondegeneracy で外せる(ノイズの作図は常に見送る)。
+    pub nondegeneracy: bool,
+    /// 自由点を置くときの前提の曲線(自由点, 曲線)。探索の前に freeze_premise_incidences で固める。None なら、その時点の
+    /// 接続を全て前提として扱う(作図画面・発見)。探索中に規則が導いた接続は前提ではない: 前提に数えると、偽の接続を
+    /// 満たすように点を置いて検算が偽を見逃し、導いた接続が積み重なると点を置けなくなって検算が全て判定不能になる(pascal)。
+    pub premise_incidences: Option<Vec<(ClassId, ClassId)>>,
+    /// 固定座標の数値モデル(fixed_coords.rs)。Some なら数値チェックはこれを使う。
+    pub(crate) fixed_coords: std::cell::RefCell<Option<fixed_coords::FixedCoords>>,
 }
 
 /// 🌟 1つの予想候補(数値的な偶然の一致)の記録。
@@ -557,6 +589,17 @@ impl EGraph {
             degeneration_heat_factor: 0.5,
             current_origin: EntityOrigin::Given,
             trivial_depth: 0,
+            spiral_propagation: false,
+            spiral_prop_work: 0,
+            spiral_fired: rustc_hash::FxHashSet::default(),
+            spiral_pending: rustc_hash::FxHashMap::default(),
+            spiral_work_limit: u64::MAX,
+            merge_checks: true,
+            merge_census: None,
+            nondegenerate_skips: [0; 3],
+            nondegeneracy: true,
+            premise_incidences: None,
+            fixed_coords: std::cell::RefCell::new(None),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
         egraph.ang90 = egraph.create_entity("Ang90".to_string(), Definition::GivenPoint, EntityType::Scalar);
@@ -941,6 +984,9 @@ impl EGraph {
     /// incidence_provenanceに記録する版。Concyclicの証明復元(explain_concyclic)
     /// で使う。既に記録済みなら上書きしない(最初に見つかった経路を採用する)。
     pub fn link_logical_incidence_justified(&mut self, id1: ClassId, id2: ClassId, justification: Justification) {
+        if self.merge_census.is_some() && !self.is_connected(self.get_rep(id1), self.get_rep(id2)) {
+            self.census_record(id1, id2, true, &justification);
+        }
         self.link_logical_incidence(id1, id2);
         let rep1 = self.get_rep(id1);
         let rep2 = self.get_rep(id2);

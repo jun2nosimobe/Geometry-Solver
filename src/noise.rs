@@ -50,6 +50,9 @@ pub fn add_noise(egraph: &mut EGraph, count: usize, seed: u64) -> usize {
                 }
                 _ => continue,
             };
+            // 図の上で値の定まらない作図(図の上で同じ2直線の交点など)は足さない(ノイズは入力の一部なので、
+            // --no-nondegeneracy でも常に見送る)。
+            if egraph.without_consuming_rng(|eg| eg.definition_is_degenerate(&def)) { continue; }
             let n = egraph.entities.len();
             egraph.create_entity(format!("Noise{}", i + 1), def, ty);
             if egraph.entities.len() > n { break; }   // 新しく作れた

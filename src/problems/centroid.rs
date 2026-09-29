@@ -36,3 +36,16 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。G = Med_B ∩ Med_C とし、BG・CG の中点を X・Y とする。McMbYX が平行四辺形になり、
+/// 対角線 XMb・McY の交点が G なので BG = 2 GMb。同じ比の点は中線上で一意だから、中線 A も G を通る。
+pub const SKETCH: &str = r#"
+aux point G inter Med_B Med_C
+aux point X mid B G
+aux point Y mid C G
+step parallel X Y B C              | △GBC の中点連結: XY ∥ BC
+step equal_length Mc Mb X Y        | 中点連結: McMb = BC/2 = XY
+step parallel Mc X Mb Y            | どちらも AG に平行(△ABG, △ACG の中点連結)
+step equal_length G X G Mb         | 平行四辺形 McMbYX の対角線 XMb は G で二等分される(BG = 2 GMb)
+step coincide G1 G                 | Med_B 上で B から 2:1 の点は一意 ⇒ 中線 A も G を通る
+"#;

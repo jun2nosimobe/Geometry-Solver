@@ -10,7 +10,8 @@ export BIN FLAGS WORK
 one() {
   p="$1"; d="$WORK/$p"; mkdir -p "$d"; cd "$d" || return
   t0=$(date +%s.%N)
-  timeout 900 "$BIN" "$p" $FLAGS > out.txt 2>&1
+  # 1問の暴走(メモリを食い尽くす)で WSL ごと落ちないよう、1プロセスのアドレス空間を 2.5GB に制限する(来歴 #75)。
+  ( ulimit -v 2500000; timeout 900 "$BIN" "$p" $FLAGS > out.txt 2>&1 )
   rc=$?
   t1=$(date +%s.%N)
   # 問題名の打ち間違いなどで証明器が異常終了したら、静かに「未解決」として数えず目立たせる。

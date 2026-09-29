@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";mermaid.initialize({startOnLoad:true, theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral"});</script>
-<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html" aria-current="page">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html">設計ノート §06</a></div></nav>
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html" aria-current="page">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html">設計ノート §06</a><a href="theorems.html">定理 §07</a></div></nav>
 <div class="wrap">
   <div class="masthead">
     <div class="eyebrow">geom_solver — 内部リファレンス</div>
@@ -16,17 +16,17 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新コミット</b> #62・#63(補助線の枠分けと長さの定理を既定に)</span>
+      <span><b>最新の来歴</b> #67〜#79(未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
-    <div class="stat"><div class="n">32/44</div><div class="l">既定設定の掃引。仕事量予算なので何度流しても同じ結果になる</div></div>
-    <div class="stat"><div class="n">22</div><div class="l">既定で有効な定理(基本17 + 射影5、射影も全問題で既定)。中心角の定理だけ問題名で入れる(暫定)</div></div>
+    <div class="stat"><div class="n">33/44</div><div class="l">既定設定の掃引。仕事量予算なので、壁時計の安全弁(600秒)に当たる重い問題を除けば何度流しても同じ結果になる。交わる弦の相似で 2011 バルカンが解け(#74)、2018 CHN Western の「解けた」は数値で検証できない書き方の上だった(#76)。非退化条件で centroid が厳密な証明で解け、pappus の以前の証明は誤った推論だった(#78)</div></div>
+    <div class="stat"><div class="n">24</div><div class="l">既定で有効な定理(基本16 + 長さ1 + 中心角1 + 射影5 + 交わる弦の相似1)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理の主張・作図の需要・見積もり・実測・問題点は <a class="secref" href="theorems.html">§07</a></div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
   </div>
-  <div class="cards"><a class="card" href="ledger.html"><b>§04 来歴</b><span>試した最適化と修正を、新しい順に折り畳みで</span></a><a class="card" href="backlog.html"><b>§05 改善候補</b><span>未着手の項目と、解決・不発になった項目</span></a><a class="card" href="notes/README.md"><b>設計ノート</b><span>ソースのコメントから移した経緯と設計判断</span></a></div>
+  <div class="cards"><a class="card" href="ledger.html"><b>§04 来歴</b><span>試した最適化と修正を、新しい順に折り畳みで</span></a><a class="card" href="backlog.html"><b>§05 改善候補</b><span>未着手の項目と、解決・不発になった項目</span></a><a class="card" href="notes.html"><b>§06 設計ノート</b><span>ソースのコメントから移した経緯と設計判断</span></a><a class="card" href="theorems.html"><b>§07 定理</b><span>登録されている全定理の主張・作図の需要・見積もりの順序・実測・問題点</span></a></div>
   <section id="tracks">
 <div class="section-head"><span class="section-num">00</span><h2>今、並行して走っている5つの方針</h2></div>
 <p class="section-note">性質の違う作業を混ぜて着手しないための一覧(2026-09-17 時点の状態に書き直した)。数字は既定設定・44問・仕事量予算8,000,000での値。変更ごとの詳細は<a class="secref" href="ledger.html">§04</a>、未着手の項目は<a class="secref" href="backlog.html">§05</a>。</p>
@@ -34,11 +34,11 @@
 <details class="item" id="track-1" data-status="shipped">
   <summary><span class="idx">方針A</span><span class="t">射影幾何への移行と、定理の健全性</span><span class="pill shipped">型の統一は完了・射影の定理は既定</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針A 射影幾何</b></div><div class="desc">原則: 「本質的には普通の図形の特殊ケース」には専用の<code>EntityType</code>を作らず、標準の型と基準の実体への接続で表す。<code>Direction→Point</code>(無限遠直線への接続)、<code>Circle→Conic</code>(円周点I,Jへの接続)、<code>Angle→Scalar</code>(無限遠直線上の複比)の3種は撤廃済み。射影の定理5つ(複比の透視射影不変性2つ・シュタイナーの定理3つ)は全問題で既定になった(<code>--no-projective</code>で外せる)。<br><b>現状の課題:</b> 定理の書き方の誤りは、結論のマージを数値で監査するまで見えない。線束→点(偽の等式3,525件)と共点二弦の相似(偽6件)は、どちらも一時的な監査で初めて見つかった ― 監査を常設する案が<a class="secref" href="backlog.html">§05</a>にある。方冪・直角三角形・二等辺三角形の定理を射影の形に移す作業は、記録上まだ手を付けていない。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針A 射影幾何</b></div><div class="desc">原則: 「本質的には普通の図形の特殊ケース」には専用の<code>EntityType</code>を作らず、標準の型と基準の実体への接続で表す。<code>Direction→Point</code>(無限遠直線への接続)、<code>Circle→Conic</code>(円周点I,Jへの接続)、<code>Angle→Scalar</code>(無限遠直線上の複比)の3種は撤廃済み。射影の定理5つ(複比の透視射影不変性2つ・シュタイナーの定理3つ)は全問題で既定になった(<code>--no-projective</code>で外せる)。<br><b>現状の課題:</b> 定理の書き方の誤りは、結論のマージを数値で監査するまで見えない。線束→点(偽の等式3,525件)と共点二弦の相似(偽6件)は、どちらも一時的な監査で初めて見つかった ― <b>規則に非退化条件を書き(#78)、数値の検算を固定座標にした(#79)ので、座標を置ける問題ではマージ前の検査を外しても偽のマージが1件も起きない</b>(検査は安全網として残す)。<b>残る穴:</b> 座標を置けない8問では数値の検算が効かない(<a class="secref" href="backlog.html#b46">§05 b46</a>)。証明の各ステップの数値検算は未実施(<a class="secref" href="backlog.html#b44">§05 b44</a>)。方冪・直角三角形・二等辺三角形の定理を射影の形に移す作業は、記録上まだ手を付けていない。</div>
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
-  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">32/44・決定的</span></summary>
+  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">33/44・決定的</span></summary>
   <div class="body">
 <div class="desc" style="margin-bottom:6px"><b>方針B マッチングと探索の制御</b></div><div class="desc">予算は壁時計の秒ではなく仕事量(<code>dfs_match</code>の呼び出し回数)で測り、数値検証とMCTSの乱数もシード固定にしたので、同じ設定なら何度流しても結果が1ステップも変わらない。失敗キャッシュは個々の失敗状態ごとの依存マスクを持つ定理単位の永続キャッシュ(鍵に無関係な束縛まで入っている問題は <a class="secref" href="backlog.html">§05</a> b28、無効化は大雑把だが、<b>上界を測ると直しても仕事量は減らない</b>と分かったのが <a class="secref" href="backlog.html">§05</a> b29)、候補capは狭い値(5)から始めて手詰まりのときだけ広げる。型をまとめるときは、候補プールの混ざり方だけでなくキャッシュの無効化の粒度(<code>angle_generation</code>)も点検すること。<br>候補は cap で切る前に他の前提で絞る(<a class="secref" href="ledger.html">§04</a> #55)。<b>現状の課題:</b> 探索が定理を試す順序に大きく左右される(登録順を変えるだけで仕事量が±15%、1問が解けたり解けなかったりする)。筋の通った並べ方はどれも登録順に勝たなかったので、順序に鈍感な探索にする方が本筋。<code>dfs_match</code> は貪欲な<b>入れ子ループ結合</b>。関係として張り直して最悪計算量最適結合で評価する案(<a class="secref" href="backlog.html">§05</a> b30)の動機のうち、<b>capの不要化と b29 の解決は実測で消えた</b> ― cap を 40→200 にしても降参する4問は1ステップも動かず(<a class="secref" href="ledger.html">§04</a> #64)、失敗キャッシュの無効化を止めても仕事量は減らず16問落ちる(#66)。<b>残る動機は順序非依存だけ。</b>未解決12問のうち5問は予算を使い切って止まる。</div>
   </div>
@@ -46,13 +46,13 @@
 <details class="item" id="track-3" data-status="open">
   <summary><span class="idx">方針C</span><span class="t">個別の定理より、汎用の補助作図を優先</span><span class="pill open">需要駆動の作図が主力</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針C 補助作図</b></div><div class="desc">行き詰まったときの手は需要駆動の作図(補助線 → 交点 → 有向角 → もう一方の交点 → 中点 → 目標からの逆算)で、尽きたら候補capを広げる。<b>補助線の需要は2種類に分けて別々の枠で引く</b>(<a class="secref" href="ledger.html">§04</a> #62)― 「既に2点が同じ直線上にある」組は作った直線が即座に併合されるので図を増やさず、同じ枠を奪い合わせると図が大きいほどこちらが本物の補助線を餓死させる。交点・第2交点・中点の需要はまだ単一の枠のまま(同じ分け方が効くはず)。この手順は solve・作図画面(serve)・discover の証明試行で共通の<code>BlackboardEngine::recover</code>に1本化した(以前は3か所が別々に持っていて、serve だけ射影の定理を使わない・回復を打ち切るといった食い違いがあった)。需要駆動の補助線を外すと31→15問、交点を外すと31→29問で、解けている問題の約半分はこの路線が支えている。中点の需要は solve では既定で切っている(bench_2012egmop1 が落ちる)が、作図画面と discover では使う。<br><b>現状の課題:</b> 目標から逆算する作図は一度も効いておらず、「何を作図するか」を目標側から決める手が実質無い。MCTS は既定で無効 ― 予算を仕事量にした後で測り直すと、解ける問題は1問も増えずに時間が12倍になった。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針C 補助作図</b></div><div class="desc">行き詰まったときの手は需要駆動の作図(補助線 → 交点 → 有向角 → もう一方の交点 → 中点 → 目標からの逆算)で、尽きたら候補capを広げる。<b>補助線の需要は2種類に分けて別々の枠で引く</b>(<a class="secref" href="ledger.html">§04</a> #62)― 「既に2点が同じ直線上にある」組は作った直線が即座に併合されるので図を増やさず、同じ枠を奪い合わせると図が大きいほどこちらが本物の補助線を餓死させる。交点・第2交点・中点の需要はまだ単一の枠のまま(同じ分け方が効くはず)。この手順は solve・作図画面(serve)・discover の証明試行で共通の<code>BlackboardEngine::recover</code>に1本化した(以前は3か所が別々に持っていて、serve だけ射影の定理を使わない・回復を打ち切るといった食い違いがあった)。需要駆動の補助線を外すと31→15問、交点を外すと31→29問で、解けている問題の約半分はこの路線が支えている。中点の需要は solve では既定で切っている(bench_2012egmop1 が落ちる)が、作図画面と discover では使う。<br><b>現状の課題:</b> 目標から逆算する作図は一度も効いておらず、「何を作図するか」を目標側から決める手が実質無い。MCTS は既定で無効 ― 予算を仕事量にした後で測り直すと、解ける問題は1問も増えずに時間が12倍になった。<b>一方、手が全部尽きたときの最後の手として、問題に依らない補助作図(熱い点どうしの中点と熱い直線どうしの交点、総数60まで)を足すと、pappus と重心が解けた</b>(#72)。</div>
   </div>
 </details>
 <details class="item" id="track-4" data-status="backlog">
   <summary><span class="idx">方針D</span><span class="t">定理の追加は最小限に、問題ごとの opt-in はしない</span><span class="pill backlog">診断で詰まり所を名指し済み</span></summary>
   <div class="body">
-<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 例外は暫定の中心角の定理(<code>CENTRAL_ANGLE_PROBLEMS</code>)だけで、長さを橋渡しする定理は<b>既定になった</b>(<a class="secref" href="ledger.html">§04</a> #63、外すのは <code>--no-length-theorems</code>)― 単独では大きい図で+37〜40%の課税だが、補助線の枠分け(#62)と組むと相殺される。<b>単独では採れなかった定理が、頑健性の改善で採れるようになった</b>形で、他の橋渡し定理にも同じ経路が使えるかもしれない。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。残る詰まり所(九点円の中心 AH=2OM、二辺夾角の合同)は<b>そもそも定理として存在しない</b>ので、探索の改善では届かない(<a class="secref" href="backlog.html">§05</a> b3)。</div>
+<div class="desc" style="margin-bottom:6px"><b>方針D 定理追加</b></div><div class="desc">定理を増やすと、無関係な問題にも試行の仕事量が乗る(射影の定理5つで平均+29%)。問題名で定理を入れる opt-in は新しい問題に効かないので使わない ― 最後の例外だった中心角の定理のリスト(<code>CENTRAL_ANGLE_PROBLEMS</code>)も撤去して既定にした(#70、課税は無かった)。長さを橋渡しする定理は<b>既定になった</b>(<a class="secref" href="ledger.html">§04</a> #63、外すのは <code>--no-length-theorems</code>)― 単独では大きい図で+37〜40%の課税だが、補助線の枠分け(#62)と組むと相殺される。<b>単独では採れなかった定理が、頑健性の改善で採れるようになった</b>形で、他の橋渡し定理にも同じ経路が使えるかもしれない。未解決の問題は、人間の証明の筋書き(<code>SKETCH</code>)と診断(<code>diagnose</code>)でどの手順で詰まっているかを名指しできるようにした。残る詰まり所(九点円の中心 AH=2OM、二辺夾角の合同)は<b>そもそも定理として存在しない</b>ので、探索の改善では届かない(<a class="secref" href="backlog.html">§05</a> b3)。<b>2026-09-28 の診断(#67)で、残る詰まり所は「規則が無い」ことだと分かった。弦の規則と平行四辺形の規則を足して測ったが、定理として書くと課税が大きく(弦は幾何平均 +23%、平行四辺形はノイズ10で最大30倍)、どちらも既定にしていない(#68)。次は合同閉包の局所伝播として安く書く。</b>スパイラル相似の中点対応は、探索の仕事量の約半分を食うのに、これを要する問題が単体テスト以外に無いので既定から外した(#71)。</div>
   </div>
 </details>
 <details class="item" id="track-5" data-status="open">
@@ -160,7 +160,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 補助線の需要を枠分けし、長さの定理を既定にするところまで(来歴 #62・#63)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-28(来歴 #67〜#73)
   </footer>
 </div>
 <script src="atlas.js"></script>

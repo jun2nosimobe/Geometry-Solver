@@ -1,12 +1,13 @@
 bench_2005ctstp1
+bench_2005usamop3
 bench_2010g1
 bench_2011armog10p6
 bench_2011balkanmop1
 bench_2012egmop1
-bench_2018chnwesternmop5
 bench_2018silkroadp1
 bench_2019g1
 bench_2022balkanmop1
+centroid
 circumcenter
 cyclic_quad
 miquel
@@ -24,7 +25,6 @@ test_isosceles_converse
 test_parallel
 test_power_of_point
 test_right_midpoint
-test_spiral_similarity
 test_steiner
 test_steiner_converse
 test_steiner_tangent

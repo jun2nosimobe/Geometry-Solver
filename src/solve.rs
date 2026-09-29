@@ -35,8 +35,22 @@ pub struct SolveOptions {
     pub heat_cap: usize,
     pub fanout_heat_cap: usize,
     pub midpoint_demands: bool,
+    /// 手が尽きたとき最後に、熱い点どうしの中点と熱い直線どうしの交点を足す(既定で有効。--no-generic-aux で外す)。
+    pub generic_aux: bool,
     pub length_theorems: bool,
-    pub central_angle: bool,
+    pub no_central_angle: bool,
+    /// 追加の規則(--rules=chord,parallelogram,spiral,spiral-prop)。既定では入らない。
+    pub rules: Vec<String>,
+    /// 交わる弦の相似(既定で入る)を外す。
+    pub no_spiral_opp: bool,
+    /// 定理の結論の数値チェック(既定で有効、前提が乱数座標で成り立つ問題だけ)を外す。
+    pub no_conclusion_check: bool,
+    /// マージ前の数値チェック(局所伝播の却下と定理の結論の検算)を全て外す。規則だけで健全かを確かめるため。
+    pub no_merge_checks: bool,
+    /// 非退化条件(定理の NonDegenerate・局所伝播の条件・値の定まらない作図の見送り)を全て外す(A/B 用)。
+    pub no_nondegeneracy: bool,
+    /// 固定座標の数値モデルを使わず、従来の(構造が変わるたびに置き直す)経路で検算する(A/B 用)。
+    pub no_fixed_coords: bool,
     pub no_projective: bool,
     pub degen_heat: bool,
     pub degen_heat_seed: u64,
@@ -45,19 +59,18 @@ pub struct SolveOptions {
     /// 行き詰まったときの手のうち外すもの(line, point, second, mid, angle, target)。
     pub skip_recovery: Vec<String>,
     pub sketch: Option<sketch::Rung>,
+    /// 問題ファイルの筋書きの代わりに読む筋書き(コンパイルし直さずに試すため)。
+    pub sketch_file: Option<String>,
     pub show_stats: bool,
     pub show_profile: bool,
     pub show_trace: bool,
     pub show_origins: bool,
     pub audit_merges: bool,
     /// 初期作図に足す無関係な作図の数(方針E: ノイズへの頑健性の計測)。
-    pub batch_conclusions: bool,
     pub fanout_connected: bool,
     pub nogood_core: bool,
     pub semijoin: bool,
     pub var_order: bool,
-    pub generic_join: bool,
-    pub gj_audit: bool,
     pub collinear_extra: bool,
     pub widen_first: bool,
     pub widen_first_ceiling: usize,
@@ -84,8 +97,19 @@ impl SolveOptions {
             heat_cap: value(args, "--heat-cap=").unwrap_or(40),
             fanout_heat_cap: value(args, "--fanout-heat-cap=").unwrap_or(5),
             midpoint_demands: flag(args, "--midpoint-demands"),
+            generic_aux: !flag(args, "--no-generic-aux"),
             length_theorems: !flag(args, "--no-length-theorems"),
-            central_angle: flag(args, "--central-angle"),
+            no_central_angle: flag(args, "--no-central-angle"),
+            no_spiral_opp: flag(args, "--no-spiral-opp"),
+            no_conclusion_check: flag(args, "--no-conclusion-check"),
+            no_merge_checks: flag(args, "--no-merge-checks"),
+            no_nondegeneracy: flag(args, "--no-nondegeneracy"),
+            no_fixed_coords: flag(args, "--no-fixed-coords"),
+            rules: args.iter()
+                .filter_map(|a| a.strip_prefix("--rules="))
+                .flat_map(|v| v.split(',').map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect(),
             no_projective: flag(args, "--no-projective"),
             degen_heat: flag(args, "--degen-heat"),
             degen_heat_seed: value(args, "--degen-heat-seed=").unwrap_or(12345),
@@ -97,18 +121,16 @@ impl SolveOptions {
                 .filter(|s| !s.is_empty())
                 .collect(),
             sketch,
+            sketch_file: args.iter().find_map(|a| a.strip_prefix("--sketch-file=")).map(str::to_string),
             show_stats: flag(args, "--stats"),
             show_profile: flag(args, "--profile"),
             show_trace,
             show_origins: flag(args, "--origins") || show_trace,
             audit_merges: flag(args, "--audit-merges"),
-            batch_conclusions: flag(args, "--batch-conclusions"),
             fanout_connected: flag(args, "--fanout-connected"),
             nogood_core: flag(args, "--nogood-core"),
             semijoin: !flag(args, "--no-semijoin"),
             var_order: flag(args, "--var-order"),
-            generic_join: flag(args, "--generic-join"),
-            gj_audit: flag(args, "--gj-audit"),
             collinear_extra: !flag(args, "--no-collinear-extra"),
             widen_first: flag(args, "--widen-first"),
             widen_first_ceiling: value(args, "--widen-first-ceiling=").unwrap_or(40),
@@ -119,18 +141,19 @@ impl SolveOptions {
     }
 
     fn recovery_options(&self) -> RecoveryOptions {
-        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every }
+        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every, generic_aux: self.generic_aux }
     }
 }
 
-/// 中心角の定理を既定で入れる問題。問題名で決めるのは暫定で、新しい問題には効かない。
-const CENTRAL_ANGLE_PROBLEMS: &[&str] = &["bench_2012egmop1"];
-
-fn theorem_set(problem_name: &str, opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
+fn theorem_set(opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
     theorems::theorem_set(&theorems::TheoremSetOptions {
         projective: !opts.no_projective,
         length_bridge: opts.length_theorems,
-        central_angle: opts.central_angle || CENTRAL_ANGLE_PROBLEMS.contains(&problem_name),
+        central_angle: !opts.no_central_angle,
+        chord: opts.rules.iter().any(|r| r == "chord"),
+        parallelogram: opts.rules.iter().any(|r| r == "parallelogram"),
+        spiral: opts.rules.iter().any(|r| r == "spiral"),
+        spiral_opp: !opts.no_spiral_opp,
     })
 }
 
@@ -295,17 +318,18 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     let sketch_ctx = match opts.sketch {
         None => None,
         Some(rung) => {
-            let Some(text) = problems::sketch_for(problem_name) else {
+            let Some(text) = sketch::text_for(problem_name, opts.sketch_file.as_deref()) else {
                 println!("⚠️ 「{}」には証明の筋書き(SKETCH)がまだありません。", problem_name);
                 return false;
             };
-            match sketch::prepare(&mut egraph, text, rung) {
+            match sketch::prepare(&mut egraph, &text, rung) {
                 Ok(p) => { sketch::check_before_search(&egraph, &p); Some(p) }
                 Err(e) => { println!("⚠️ {}", e); return false; }
             }
         }
     };
 
+    egraph.nondegeneracy = !opts.no_nondegeneracy;
     if opts.noise > 0 {
         let added = crate::noise::add_noise(&mut egraph, opts.noise, opts.noise_seed);
         println!("  🎲 [ノイズ] 証明と無関係な作図を{}個足しました(実体は{}個増えた、seed={})。", opts.noise, added, opts.noise_seed);
@@ -319,6 +343,20 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         egraph.degeneration_heat_factor = opts.degen_heat_factor;
     }
 
+    if opts.rules.iter().any(|r| r == "spiral-prop") {
+        // 局所伝播は変化した角の同値類でしか走らないので、最初に今ある角の同値類を全部積んで一巡させる。
+        egraph.spiral_propagation = true;
+        egraph.spiral_work_limit = opts.step_budget;
+        let angles: Vec<ClassId> = (0..egraph.entities.len()).map(ClassId)
+            .filter(|&id| egraph.get_rep(id) == id && egraph.is_angle_value(id)).collect();
+        for &a in &angles {
+            let defs: Vec<(ClassId, ClassId)> = egraph.entities[a.0].components.iter().flat_map(|c| c.definitions.iter())
+                .filter_map(|d| if let mmp_core::Definition::AnglePair(x, y) = d { Some((*x, *y)) } else { None }).collect();
+            if defs.len() >= 2 { egraph.spiral_pending.insert(a.0, defs); }
+        }
+        egraph.worklist.extend(angles);
+        egraph.apply_congruence_closure();
+    }
     let mut prover = ProverEngine::new(egraph);
     prover.heat_cap = opts.heat_cap;
     prover.fanout_heat_cap = opts.fanout_heat_cap;
@@ -326,14 +364,11 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     prover.nogood_core = opts.nogood_core;
     prover.semijoin = opts.semijoin;
     prover.var_order = opts.var_order;
-    prover.generic_join = opts.generic_join;
-    prover.gj_audit = opts.gj_audit;
     prover.collinear_extra = opts.collinear_extra;
-    prover.theorems = theorem_set(problem_name, opts).into_iter().map(std::rc::Rc::new).collect();
+    prover.theorems = theorem_set(opts).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
     engine.seeded_rematch_enabled = opts.seeded_rematch;
-    engine.batch_conclusions = opts.batch_conclusions;
     engine.work_limit = opts.step_budget;
     if opts.show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
 
@@ -355,9 +390,20 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         engine.emit(logic_core::Event::FactProven(fact.clone()));
     }
 
-    // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」は誤警報になりうる。
-    let hypotheses_hold = opts.audit_merges && engine.prover.egraph.hypotheses_hold_numerically();
-    if opts.audit_merges { engine.prover.merge_audit = Some(logic_core::MergeAudit::default()); }
+    // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」や結論の数値チェックは誤警報になりうる。
+    engine.prover.egraph.freeze_premise_incidences();
+    let hypotheses_hold = engine.prover.egraph.hypotheses_hold_numerically();
+    // 前提が数値的に成り立つなら、座標をここで固定して以後の検算に使う(マージに依存せず、構造が変わっても捨てない)。
+    let fixed = hypotheses_hold && !opts.no_fixed_coords && engine.prover.egraph.fix_coordinates();
+    if !fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
+    engine.prover.egraph.merge_checks = !opts.no_merge_checks;
+    engine.prover.numeric_distinct = !opts.no_nondegeneracy;
+    engine.prover.guard_conclusions = !opts.no_merge_checks && !opts.no_conclusion_check && hypotheses_hold;
+    if !hypotheses_hold { println!("🛡️ 結論の数値チェックは無効(前提どおりに座標を置けない図)"); }
+    if opts.audit_merges {
+        engine.prover.merge_audit = Some(logic_core::MergeAudit::default());
+        engine.prover.egraph.merge_census = Some(mmp_core::MergeCensus::default());
+    }
 
     let mut proved = false;
     let start_time = Instant::now();
@@ -382,6 +428,16 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
 
     // 解けたかどうかに関わらず、後から extract-proof で監査できるようマージ履歴を残す。
+    let sk = engine.prover.egraph.nondegenerate_skips;
+    if sk.iter().any(|&n| n > 0) {
+        println!("📐 局所伝播が非退化条件で見送った回数: 交点の一意性 {} / 二次曲線の一意性 {} / 複比の一意性 {}", sk[0], sk[1], sk[2]);
+    }
+    if engine.prover.degenerate_matches > 0 {
+        println!("📐 図の上で退化した配置(「相異なる」図形が数値的に一致)のマッチを {} 件捨てました。", engine.prover.degenerate_matches);
+    }
+    if engine.prover.rejected_conclusions > 0 {
+        println!("🛡️ 数値的に成り立たない定理の結論を {} 件却下しました。", engine.prover.rejected_conclusions);
+    }
     println!("🧮 消費した仕事量: {} ステップ (予算 {})", engine.prover.work_done(), opts.step_budget);
     output_raw_proof(&engine.prover.egraph, problem_name);
     engine.prover.egraph.dump_state();
@@ -392,6 +448,9 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
     if let Some(audit) = &engine.prover.merge_audit {
         print_merge_audit(audit, problem_name, hypotheses_hold);
+    }
+    if let Some(census) = &engine.prover.egraph.merge_census {
+        print_merge_census(census, problem_name, hypotheses_hold);
     }
     if opts.show_origins {
         trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);
@@ -426,16 +485,27 @@ fn print_merge_audit(audit: &logic_core::MergeAudit, problem_name: &str, hypothe
     println!("=============================\n");
 }
 
+/// --audit-merges の、全てのマージ・接続の監査(出どころ別)。`MERGE_CENSUS\t問題\t出どころ\t真\t偽\t判定不能\t前提` の行も出す。
+fn print_merge_census(census: &mmp_core::MergeCensus, problem_name: &str, hypotheses_hold: bool) {
+    println!("\n=== 🔍 全てのマージ・接続の数値監査 (--audit-merges、{} 件) ===", census.seq);
+    let tag = if hypotheses_hold { "ok" } else { "hypothesis" };
+    for (source, [t, f, u]) in &census.per_source {
+        println!("  真 {:>6} / 偽 {:>5} / 判定不能 {:>6} : {}", t, f, u, source);
+        println!("MERGE_CENSUS\t{}\t{}\t{}\t{}\t{}\t{}", problem_name, source, t, f, u, tag);
+    }
+    println!("=============================\n");
+}
+
 /// 定理ごとの試行回数・cap到達・平均dfs_call・平均報酬(1回あたりの消費が大きい順に20件)。
 fn print_stats(prover: &ProverEngine) {
-    println!("\n=== 📊 定理ごとのUCB1統計 (試行回数の多い順、上位20件) ===");
+    println!("\n=== 📊 定理ごとのUCB1統計 (1回あたりの消費が大きい順、全件) ===");
     let mut rows: Vec<(String, u64, u64, u64, f64)> = prover.theorem_stats.iter().enumerate()
         .filter(|(_, s)| s.attempts > 0)
         .map(|(idx, s)| (prover.theorems[idx].name.clone(), s.attempts, s.cap_hits, s.total_dfs_calls, s.total_reward / s.attempts as f64))
         .collect();
     // 平均どうしの比較を交差乗算で行う(丸め誤差を避ける)。
     rows.sort_by(|a, b| (b.3 as u128 * a.1 as u128).cmp(&(a.3 as u128 * b.1 as u128)));
-    for (name, attempts, cap_hits, total_dfs_calls, avg_reward) in rows.iter().take(20) {
+    for (name, attempts, cap_hits, total_dfs_calls, avg_reward) in rows.iter() {
         let avg_dfs = *total_dfs_calls as f64 / *attempts as f64;
         println!("  {:>6}回試行 (うちcap到達{:>3}回) / 平均dfs_call {:>9.0} / 平均報酬 {:>+6.3} : {}", attempts, cap_hits, avg_dfs, avg_reward, name);
     }

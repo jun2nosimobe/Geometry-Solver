@@ -242,18 +242,42 @@ pub fn report(eg: &EGraph, p: &Prepared) {
     println!("=============================\n");
 }
 
+/// 図にある直線どうしの交点を全部補助作図として与える筋書き(手順は claim の1つだけ)。供給が律速かを見る検査で、
+/// 与えても解けなければ、詰まりは補助作図ではなく推論の側にある。
+pub fn with_all_intersections(lines: &[&str], claim: &str) -> String {
+    let mut text = String::new();
+    let mut k = 0;
+    for (i, a) in lines.iter().enumerate() {
+        for b in &lines[i + 1..] {
+            k += 1;
+            text.push_str(&format!("aux point I{} inter {} {}\n", k, a, b));
+        }
+    }
+    text.push_str(&format!("step {}\n", claim));
+    text
+}
+
+/// 問題の筋書きの文面。`--sketch-file=<パス>` があればそのファイル(コンパイルし直さずに試すため)、無ければ問題ファイルのもの。
+pub fn text_for(problem: &str, file: Option<&str>) -> Option<String> {
+    match file {
+        Some(path) => std::fs::read_to_string(path).ok(),
+        None => crate::problems::sketch_for(problem),
+    }
+}
+
 /// `geom_solver diagnose <問題名> [オプション]`: 梯子の全段を子プロセスで回して表にする。
 pub fn diagnose(args: &[String]) {
     let Some(problem) = args.get(2) else {
         println!("使い方: geom_solver diagnose <問題名> [--steps=N などの探索オプション]");
         return;
     };
-    let Some(text) = crate::problems::sketch_for(problem) else {
+    let file = args.iter().find_map(|a| a.strip_prefix("--sketch-file="));
+    let Some(text) = text_for(problem, file) else {
         println!("⚠️ 「{}」には証明の筋書き(SKETCH)がまだありません。", problem);
         println!("   筋書きのある問題: {}", crate::problems::PROBLEMS_WITH_SKETCH.join(", "));
         return;
     };
-    let sketch = match parse(text) {
+    let sketch = match parse(&text) {
         Ok(s) => s,
         Err(e) => { println!("⚠️ {}", e); return; }
     };
@@ -336,7 +360,9 @@ pub fn diagnose(args: &[String]) {
 
     // 判定: 手順 k は「補助作図 + 手順1..k-1 を前提」の段で自力で出たか。
     println!("\n=== 🔎 判定(各手順を、手前を全部認めた段で見る) ===");
-    let at = |k: usize| rows.iter().find(|r| r.0 == Rung::Assume(k));
+    // 補助作図が無い筋書きでは「補助作図だけ」の段が無いので、手順1は素の図の段で見る。
+    let at = |k: usize| rows.iter().find(|r| r.0 == Rung::Assume(k))
+        .or_else(|| if k == 0 && sketch.aux.is_empty() { rows.iter().find(|r| r.0 == Rung::Pure) } else { None });
     let mut blockers = Vec::new();
     for (i, step) in sketch.steps.iter().enumerate() {
         // 探索は発見的なので単調ではない: 手前を前提として与えると探索の向きが変わり、

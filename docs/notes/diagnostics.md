@@ -6,6 +6,7 @@
 
 - [診断ツール(trace / sketch / sweep / cli)](#診断ツールtrace--sketch--sweep--cli)
 - [問題ファイルの経緯](#問題ファイルの経緯)
+- [HAGeo-409 の取り込みと語彙の被覆率](#hageo-409-の取り込みと語彙の被覆率)
 
 ## 診断ツール(trace / sketch / sweep / cli)
 
@@ -161,3 +162,43 @@
 > 直接の述語は無いので、どちらも既存の numeric_plausibility_check に
 > 帰着させる: 共線は「MYとMZの方向が一致する」、共円は
 > 「3点で決まる円が、4点目を替えても同じ」。
+
+## HAGeo-409 の取り込みと語彙の被覆率
+
+来歴 #69 で入れた。`src/hageo.rs` が [HAGeo-409](https://huggingface.co/datasets/HAGeo-IMO/HAGeo-409)(MIT、409問)の作図スクリプトをそのまま問題として読む。
+データは `data/hageo409.tsv`(ID・難易度・スクリプト)。手で写した `bench_*.rs` と違って、写し間違いが入らず、調整に使っていない問題を機械的に増やせる。
+
+```sh
+geom_solver hageo-list                 # 読める問題と、読めない理由の内訳
+geom_solver hageo:2019SilkRoadp1       # 1問を解く(問題名は hageo:<Problem_ID>)
+bench/heldout.sh <label>               # 保留問題(bench/heldout.txt)を既定とノイズ5で回す
+```
+
+### 語彙の被覆率(2026-09-28)
+
+**このエンジンの作図語彙で書ける HAGeo-409 の問題は、409問のうち29問(7%)だけ**。作図に使われる語の集計(409問中の出現問題数)と、語彙を段階的に足したときの読める問題数:
+
+| 段階 | 足すもの | 読める問題 |
+|---|---|---|
+| 今 | 自由点・直線・直線どうしの交点・外心・中点・垂線の足・垂線・平行線・直線上の点・垂心・重心・垂直二等分線 | 29(実測。目標の種類も語彙内) |
+| B | + 円の定義(`circle_center_point`・`circle`・`circle_diameter`・`circle_center_radius`) | 129 |
+| C | + 平行四辺形・反射・二等辺/直角三角形・接線など有理な作図 | 198 |
+| D | + 平方根の要る作図(内心・角の二等分線・傍心・弧の中点・等角) | 387 |
+
+**最大の壁は `circle_center_point`(中心と円周上の1点で決まる円)**: 232問が使い、これだけを足すと読める問題が今より71問増える。次いで `circle`(23問)・`incenter`(13問)・`angle_equal1`(9問)。
+内心・角の二等分線・傍心・弧の中点は、有限体上の有理的な作図では書けない(半角の正接に平方根が要る)ので、語彙を足す道が別に要る。
+読めない理由の内訳(`hageo-list` の出力の集計): circle_center_point 115・incenter 87・circle 41・angle_bisector 16・angle_equal1 16・reflect_point_wrt_line 15・isos_triangle 14・parallelogram 12 …(1問が複数の理由を持つので、先頭の理由だけを数えている)。
+
+### 読み込みの規則
+
+- 円との交点は読まない(平方根が要る。片方の交点が既知の第2交点は、円の定義を足したときに扱う)。
+- `triangle` / `acute_triangle` / `obtuse_triangle` は自由点3つ(鋭角などの条件は無視する ― 有限体に大小は無い)。
+- 目標の `equal_angle` は向きを見ない等角なので、有向角(mod π)で乱数座標に合う向きを選ぶ。どちらの向きでも合わなければ読まない。
+- 目標の `collinear` は3点(PQ と PR が同じ直線)か4点(PQ と RS が同じ直線)。`parallel` / `perpendicular` は直線2本か点4つ。
+- 読めた問題の目標が乱数座標で偽になっていないことは `hageo::tests::importable_targets_do_not_fail_numeric_check` が見る(判定不能の件数も出す)。
+
+### 保留問題
+
+`bench/heldout.txt` は、読める29問から手で写した6問(2005CTSTp1・2008ARMOg10p6・2011ARMOg10p6・2012CHNWesternMOp5・2012EGMOp1・2018SilkRoadp1)を除いた23問。
+難易度は 2.5〜6.8 で易しい問題が無く、今のエンジンでは大半が解けない見込み。**易しい保留問題を得るには、円の定義(段階 B)が要る**(b41)。
+保留問題は調整に使わない。解けなかった理由を調べて規則や語彙を足したら、その問題は保留ではなくなる(`heldout.txt` から外して別の問題で置き換える)。

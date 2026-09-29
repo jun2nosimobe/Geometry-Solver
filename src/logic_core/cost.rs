@@ -29,7 +29,7 @@ impl ProverEngine {
                 }
                 false
             }
-            Pattern::Distinct(vars) => {
+            Pattern::Distinct(vars) | Pattern::NonDegenerate(vars) => {
                 let mut seen = rustc_hash::FxHashSet::default();
                 for v in vars {
                     if let Some(&id) = bind.get(v)
@@ -52,7 +52,7 @@ impl ProverEngine {
 
     pub(crate) fn estimate_cost(&self, pat: &Pattern, bind: &Bind, theorem: &TheoremDef) -> f64 {
         let args = match pat {
-            Pattern::Order(vars) | Pattern::Distinct(vars) | Pattern::OrderNonStrict(vars) => {
+            Pattern::Order(vars) | Pattern::Distinct(vars) | Pattern::NonDegenerate(vars) | Pattern::OrderNonStrict(vars) => {
                 return if vars.iter().any(|v| !bind.contains_key(v)) { f64::INFINITY } else { 0.0 };
             }
             // 中の変数がそろう前に評価すると「どの割り当てでも中身が成り立たない」という

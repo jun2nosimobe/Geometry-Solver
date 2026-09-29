@@ -59,6 +59,8 @@ mod padic_eval;
 mod discover_degenerate;
 mod trace;
 mod sketch;
+mod hageo;
+mod theorem_atlas;
 
 use std::env;
 use std::fs;
@@ -120,6 +122,8 @@ fn main() {
         "sweep" => sweep::run(&args),
         "serve" => serve::run(&args),
         "diagnose" => sketch::diagnose(&args),
+        "hageo-list" => hageo::list(),
+        "theorem-atlas" => theorem_atlas::run(&args),
         "extract-proof" => run_extract_proof(&args),
         "discover" => discover::run(&args),
         "discover-degenerate" => discover_degenerate::run(&args),

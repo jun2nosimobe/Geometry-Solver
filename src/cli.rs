@@ -55,11 +55,10 @@ use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
 /// 探索の既定の予算(dfs_match の呼び出し回数)。
 /// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
 ///
-/// 値の根拠: 32問すべてを予算無制限に近い状態で流して、解けた問題が実際に
-/// 使った仕事量を測った。一番重いのが bench_2012egmop1 の約224万ステップ、
-/// 次が bench_2005ctstp1 の約88万。そこに3倍以上の余裕を見て800万にしてある。
-/// (解けない問題はこの予算に達する前に探索が尽きて自分から止まるので、
-/// この値を上げても実行時間は延びない。)
+/// 値の根拠: 解けた問題が実際に使った仕事量を測ると、既定でいちばん重いのが bench_2018chnwesternmop5 の約215万ステップで、
+/// そこに3倍以上の余裕を見て800万にしてある。
+/// (解けない問題には、手が尽きて早く止まるものと、この予算を使い切るものがある。使い切るものは、この値を上げると実行時間が延びる。
+/// 手が尽きたときの最後の手(汎用の補助作図)があるので、以前に止まっていた問題も予算まで走ることがある。)
 pub const DEFAULT_STEP_BUDGET: u64 = 8_000_000;
 /// --time の既定。解けるかどうかを決める予算ではなく、
 /// 「どれだけ待っても終わらない」を防ぐだけの安全弁。
@@ -87,8 +86,24 @@ pub const OPTIONS: &[Opt] = &[
           help: "長さを橋渡しする定理(中点連結定理の長さ版)。既定で入るので指定は不要" },
     Opt { name: "--no-length-theorems", arg: Switch, default: "長さの定理を使う", mode: Solve,
           help: "長さを橋渡しする定理を外す(A/B比較用)" },
-    Opt { name: "--central-angle", arg: Switch, default: "bench_2012egmop1のみ", mode: Solve,
-          help: "中心角の定理を全問題で使う(既定はbench_2012egmop1だけ)" },
+    Opt { name: "--central-angle", arg: Switch, default: "既定で有効", mode: Solve,
+          help: "中心角の定理。既定で入るので指定は不要(以前は bench_2012egmop1 だけに問題名で入れていた。来歴 #70)" },
+    Opt { name: "--no-central-angle", arg: Switch, default: "中心角の定理を使う", mode: Solve,
+          help: "中心角の定理を外す(A/B比較用)" },
+    Opt { name: "--rules", arg: Value("chord,parallelogram,spiral,spiral-prop"), default: "足さない", mode: Solve,
+          help: "追加の規則を足す。chord=同じ円で等しい円周角に対する弦は等しい、parallelogram=平行四辺形の対角線は互いに二等分する、spiral=スパイラル相似(同じ向き)、spiral-prop=スパイラル相似(同じ向き)を合同閉包の局所伝播として適用(来歴 #71・#74・#75)" },
+    Opt { name: "--no-spiral-opp", arg: Switch, default: "交わる弦の相似を使う", mode: Solve,
+          help: "交わる弦の相似(逆向きのスパイラル相似、既定で入る)を外す(A/B比較用。来歴 #74)" },
+    Opt { name: "--no-conclusion-check", arg: Switch, default: "結論を数値で確かめる", mode: Solve,
+          help: "定理の結論をマージ前に数値で確かめて偽なら却下するのをやめる(A/B用。前提が乱数座標で成り立つ問題でだけ効く。来歴 #76)" },
+    Opt { name: "--no-merge-checks", arg: Switch, default: "マージ前に数値で確かめる", mode: Solve,
+          help: "マージ前の数値チェック(局所伝播の却下と定理の結論の検算)を全て外す。規則だけで健全かを --audit-merges と組んで確かめる" },
+    Opt { name: "--no-fixed-coords", arg: Switch, default: "固定座標で検算する", mode: Solve,
+          help: "数値チェックを固定座標(探索の前に一度だけ置き、各実体を元の定義から一度だけ計算する)ではなく、構造が変わるたびに置き直す従来の経路で行う(A/B 用)" },
+    Opt { name: "--no-nondegeneracy", arg: Switch, default: "非退化条件を使う", mode: Solve,
+          help: "非退化条件(定理の「図の上でも相異なる」・局所伝播の条件・値の定まらない作図の見送り)を全て外す(A/B 用)" },
+    Opt { name: "--no-generic-aux", arg: Switch, default: "汎用の補助作図を足す", mode: Solve,
+          help: "手が全部尽きたとき、最後に熱い点どうしの中点と熱い直線どうしの交点を足す手を外す(A/B用。今解けている問題の探索は変わらない。来歴 #72)" },
     Opt { name: "--midpoint-demands", arg: Switch, default: "無効", mode: Solve,
           help: "行き詰まったら、図に既にある中点の端点について残りの中点も作る" },
     Opt { name: "--no-collinear-extra", arg: Switch, default: "枠を分ける", mode: Solve,
@@ -109,10 +124,6 @@ pub const OPTIONS: &[Opt] = &[
           help: "終了時に「どの定理がどの優先度で発火し、うち証明に残ったのはどれか」と、熱・参照数・退化関係数の分布を表示する" },
     Opt { name: "--widen-first", arg: Switch, default: "無効", mode: Solve,
           help: "行き詰まったとき、図を広げる需要作図より先に候補capの拡大を試す" },
-    Opt { name: "--gj-audit", arg: Arg::None, default: "無効", mode: Solve,
-          help: "従来の探索と関係マッチングのマッチ数を照らし合わせる(診断用)" },
-    Opt { name: "--generic-join", arg: Arg::None, default: "無効", mode: Solve,
-          help: "関係マッチングの試作を使う(capを使わず候補集合を交差させる)" },
     Opt { name: "--var-order", arg: Arg::None, default: "無効", mode: Solve,
           help: "他のパターンが縛っている変数から先に束縛する(cap の広げ方と組で効く)" },
     Opt { name: "--no-semijoin", arg: Arg::None, default: "semijoin は既定で有効", mode: Solve,
@@ -125,8 +136,6 @@ pub const OPTIONS: &[Opt] = &[
           help: "--widen-first で先に広げるのをこの cap までにする(それ以上は需要作図の後)" },
     Opt { name: "--fanout-connected", arg: Switch, default: "無効", mode: Solve,
           help: "Connected の片側だけ束縛の候補も fanout-heat-cap(狭く始めて行き詰まったら広げる)で絞る" },
-    Opt { name: "--batch-conclusions", arg: Switch, default: "無効", mode: Solve,
-          help: "1回の全探索では結論をすぐ適用せず、全タスクを試してからまとめて適用する(順序依存のA/B用)" },
     Opt { name: "--noise", arg: Value("個"), default: "0", mode: Solve,
           help: "初期作図に証明と無関係な作図をN個足す(図が大きくなっても解けるかの計測)" },
     Opt { name: "--noise-seed", arg: Value("整数"), default: "12345", mode: Solve,
@@ -139,6 +148,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "行き詰まったときの手を個別に外す(A/B用)。line=補助線, point=交点, second=円とのもう一方の交点, mid=中点, angle=角/方向, target=目標駆動の補助線と複比" },
     Opt { name: "--sketch", arg: Value("pure|aux|N"), default: "使わない", mode: Solve,
           help: "証明の筋書きの段で解く。aux=補助作図を与える、N=補助作図と手順1..Nを前提にする(diagnose が使う)" },
+    Opt { name: "--sketch-file", arg: Value("パス"), default: "問題ファイルの筋書き", mode: Solve,
+          help: "筋書きを問題ファイルではなくこのファイルから読む(diagnose も同じ。コンパイルし直さずに筋書きを試す用)" },
     Opt { name: "--seeded-rematch", arg: Switch, default: "無効", mode: Solve,
           help: "証明された事実から定理をシードして再マッチングする(実測で掛け合わせが悪化するため既定無効)" },
 

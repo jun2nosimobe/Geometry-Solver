@@ -43,3 +43,10 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。図にある直線どうしの交点を全部補助作図として与えて、供給が律速かを見る検査
+/// (与えても解けなければ、詰まりは補助作図ではなく推論の側)。
+pub fn sketch() -> String {
+    crate::sketch::with_all_intersections(&["L1", "L2", "X_1", "X_2", "Y_1", "Y_2", "Z_1", "Z_2", "XY"],
+        "collinear X Y Z | パップスの定理(目標)")
+}

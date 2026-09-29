@@ -60,3 +60,11 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。Z は完全四辺形(AB, BC, XY, AC)のミケル点なので円 CDY 上にもあり、∠VZW = ∠DCY = ∠BCA。
+/// 円 ω 上で同じ大きさの円周角に対する弦は等しいので VW = AB。
+pub const SKETCH: &str = r#"
+aux circle Circ_CDY through C D Y
+step concyclic Z D C Y                | ミケルの定理: 円 BXD と円 ABC の交点 Z は円 CDY 上にもある
+step equal_angle Z V Z W C B C A      | ∠VZW = ∠DZY = ∠DCY = ∠BCA(V は ZD 上、W は ZY 上)
+"#;

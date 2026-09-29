@@ -77,6 +77,10 @@ pub enum Pattern {
     /// parents から kind で作られた図形が result。
     DefinedBy { kind: DefKind, parents: Vec<String>, result: String, flip: Flip, role: DefRole },
     Distinct(Vec<String>),
+    /// 🌟 Distinct と同じ照合に加えて、図の上でも数値的に一致しないこと(非退化条件)。一致すると定理が偽になる相異
+    /// (三角形の頂点や3辺、円周上の点など)に使う。「既に同じなら適用しても意味がない」だけの相異は Distinct。
+    /// 完成したマッチで確かめる(ProverEngine::numeric_distinct)。
+    NonDegenerate(Vec<String>),
     /// 代表元IDの厳密な昇順。同じ候補プールから選ぶ変数の並べ替えを1通りに絞る。
     Order(Vec<String>),
     /// 代表元IDの非厳密な昇順("<=")。2組の役割を丸ごと入れ替えても同じ結論になる
@@ -134,7 +138,7 @@ pub struct TheoremDef {
 /// 前提(patterns)の中で実際に照合される変数名。作図・結論にしか出てこない変数は含まない。
 pub(crate) fn collect_pattern_vars<'a>(pat: &'a Pattern, out: &mut Vec<&'a str>) {
     match pat {
-        Pattern::Distinct(vars) | Pattern::Order(vars) | Pattern::OrderNonStrict(vars) => {
+        Pattern::Distinct(vars) | Pattern::NonDegenerate(vars) | Pattern::Order(vars) | Pattern::OrderNonStrict(vars) => {
             out.extend(vars.iter().map(|v| v.as_str()));
         }
         Pattern::Not(inner) => collect_pattern_vars(inner, out),

@@ -248,12 +248,25 @@ impl EGraph {
         out
     }
 
+    /// 探索の前の時点の前提の曲線を固める(premise_incidences 参照)。
+    pub fn freeze_premise_incidences(&mut self) {
+        let mut pairs = Vec::new();
+        for fp in self.all_free_points() {
+            for c in self.compute_extraneous_incidences(fp) { pairs.push((fp, c)); }
+        }
+        self.premise_incidences = Some(pairs);
+        self.structure_cache.borrow_mut().extraneous.clear();
+    }
+
     fn compute_extraneous_incidences(&self, rep: ClassId) -> Vec<ClassId> {
         let Some(comp) = self.entities[rep.0].components.first() else { return Vec::new() };
-        let mut out: Vec<ClassId> = comp.subobjects.iter()
-            .map(|&s| self.get_rep(s))
-            .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
-            .collect();
+        let mut out: Vec<ClassId> = match &self.premise_incidences {
+            Some(pairs) => pairs.iter().filter(|(p, _)| self.get_rep(*p) == rep).map(|(_, c)| self.get_rep(*c)).collect(),
+            None => comp.subobjects.iter()
+                .map(|&s| self.get_rep(s))
+                .filter(|&s| matches!(self.entities[s.0].entity_type, EntityType::Line | EntityType::Conic))
+                .collect(),
+        };
         out.sort_unstable_by_key(|c| c.0);
         out.dedup();
         out.retain(|&s| !self.is_natural_incidence(rep, s));

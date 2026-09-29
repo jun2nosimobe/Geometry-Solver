@@ -17,6 +17,15 @@ impl EGraph {
         self.parents[root2.0].set(root1.0);
 
         let root2_comps = std::mem::take(&mut self.entities[root2.0].components);
+        // 🌟 スパイラル相似の局所伝播の差分(spiral_prop.rs): 合流してくる側の角の定義と、その側の未処理分を積む。
+        if self.spiral_propagation {
+            let mut incoming: Vec<(ClassId, ClassId)> = root2_comps.iter().flat_map(|c| c.definitions.iter())
+                .filter_map(|d| if let Definition::AnglePair(x, y) = d { Some((*x, *y)) } else { None }).collect();
+            if !incoming.is_empty() {
+                if let Some(mut p2) = self.spiral_pending.remove(&root2.0) { incoming.append(&mut p2); }
+                self.spiral_pending.entry(root1.0).or_default().extend(incoming);
+            }
+        }
         let root2_heat = self.entities[root2.0].heat_bonus;
         let root2_imp = self.entities[root2.0].base_importance;
         let root2_mcts_depth = self.entities[root2.0].mcts_depth;
@@ -109,6 +118,7 @@ impl EGraph {
         let root1 = self.get_rep(id1);
         let root2 = self.get_rep(id2);
         if root1 == root2 { return false; }
+        self.census_record(root1, root2, false, &justification);
         let did_merge = self.merge_entities(id1, id2);
         if did_merge {
             // root2は吸収された側(union-find上、二度とrootに戻らない)なので、
@@ -191,6 +201,7 @@ impl EGraph {
                 // 🌟 スカラー(複比)の一致から、点の一致を導く。propagate_cross_ratio_uniqueness 参照。
                 EntityType::Scalar => {
                     if self.propagate_cross_ratio_uniqueness(rep_id) { changed_any = true; }
+                    if self.spiral_propagation && self.propagate_spiral(self.get_rep(rep_id)) { changed_any = true; }
                 }
                 EntityType::Point => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
@@ -294,7 +305,7 @@ impl EGraph {
 
                 // 🌟 マージを確定する前に、ランダムな座標で本当に2直線が等しいかを検算する。明確に矛盾する
                 // (Some(false))ならマージしない。判定不能(None)なら進める。
-                if self.numeric_plausibility_check(line, other_line, 2) == Some(false) {
+                if self.merge_checks && self.numeric_plausibility_check(line, other_line, 2) == Some(false) {
                     let name1 = self.entities[line.0].name.clone();
                     let name2 = self.entities[other_line.0].name.clone();
                     println!("  🚫 [健全性チェック] {} と {} は共有点={}(重複除去後)だが数値的に別の直線のため結合を却下",
@@ -377,6 +388,9 @@ impl EGraph {
                     if !is_dup { distinct_shared.push(p); }
                 }
                 if distinct_shared.len() < 5 { continue; }
+                // 🌟 非退化条件: 5点で二次曲線が決まるのは、どの4点も共線でないとき。2直線に退化した二次曲線どうしは
+                // 1本の直線を丸ごと共有でき、その上の5点を共有しても同じ曲線とは限らない(centroid)。
+                if self.nondegeneracy && !self.has_five_in_general_position(&distinct_shared) { self.nondegenerate_skips[1] += 1; continue; }
 
                 // 🌟 却下済みペアキャッシュ(EGraph::rejected_conic_pairsの
                 // ドキュメント参照): 前回このペアを却下した時点からマージが
@@ -388,7 +402,7 @@ impl EGraph {
                 }
                 // 🌟 健全性の穴の修正: propagate_line_uniquenessと同様、マージを
                 // 確定する前に数値的な裏付けを取る。
-                if self.numeric_plausibility_check(conic, other_conic, 2) == Some(false) {
+                if self.merge_checks && self.numeric_plausibility_check(conic, other_conic, 2) == Some(false) {
                     self.rejected_conic_pairs.insert(cache_key, self.merge_generation);
                     let name1 = self.entities[conic.0].name.clone();
                     let name2 = self.entities[other_conic.0].name.clone();
@@ -398,14 +412,30 @@ impl EGraph {
                 }
                 let name1 = self.entities[conic.0].name.clone();
                 let name2 = self.entities[other_conic.0].name.clone();
+                let shared_names: Vec<String> = distinct_shared.iter().map(|&p| self.entities[self.get_rep(p).0].name.clone()).collect();
                 let justification = Justification::ConicUniqueness { shared_points: distinct_shared.clone() };
                 if self.merge_entities_justified(conic, other_conic, justification) {
-                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}、重複除去後)により二次曲線を結合: {} ≡ {}",
-                        distinct_shared.len(), name1, name2);
+                    println!("  ⚙️ [E-Graph自動マージ] 幾何条件(共有点={}、重複除去後)により二次曲線を結合: {} ≡ {} (共有点 {})",
+                        distinct_shared.len(), name1, name2, shared_names.join(", "));
                     return true;
                 }
             }
         }
+        false
+    }
+
+    /// 非退化条件: pts(相異なる点)から、どの4点も共線でない5点を選べるか。判定不能な4点は共線でないとみなす。
+    fn has_five_in_general_position(&self, pts: &[ClassId]) -> bool {
+        let n = pts.len().min(9);
+        let collinear4 = |q: [ClassId; 4]| self.numeric_collinear(&q) == Some(true);
+        for a in 0..n { for b in a + 1..n { for c in b + 1..n { for d in c + 1..n { for e in d + 1..n {
+            let s = [pts[a], pts[b], pts[c], pts[d], pts[e]];
+            let bad = (0..5).any(|skip| {
+                let q: Vec<ClassId> = (0..5).filter(|&k| k != skip).map(|k| s[k]).collect();
+                collinear4([q[0], q[1], q[2], q[3]])
+            });
+            if !bad { return true; }
+        }}}}}
         false
     }
 
@@ -418,10 +448,13 @@ impl EGraph {
     fn propagate_cross_ratio_uniqueness(&mut self, scalar: ClassId) -> bool {
         let scalar = self.get_rep(scalar);
         // 同じ同値類に入っている = 値が等しい複比たち。
-        let defs: Vec<[ClassId; 4]> = match self.entities[scalar.0].components.first() {
+        // 各複比の実体も持つ(証明の前提に「2つの複比が等しい」を記録するため)。
+        let defs: Vec<([ClassId; 4], ClassId)> = match self.entities[scalar.0].components.first() {
             Some(c) => c.definitions.iter().filter_map(|d| match d {
-                Definition::CrossRatio(a, b, c2, d2) =>
-                    Some([self.get_rep(*a), self.get_rep(*b), self.get_rep(*c2), self.get_rep(*d2)]),
+                Definition::CrossRatio(a, b, c2, d2) => {
+                    let ent = self.memo.get(&self.normalize_definition(d)).copied().unwrap_or(scalar);
+                    Some(([self.get_rep(*a), self.get_rep(*b), self.get_rep(*c2), self.get_rep(*d2)], ent))
+                }
                 _ => None,
             }).collect(),
             None => return false,
@@ -430,8 +463,8 @@ impl EGraph {
 
         for i in 0..defs.len() {
             for j in (i + 1)..defs.len() {
-                let t1 = defs[i];
-                let t2 = defs[j];
+                let (t1, cr1) = defs[i];
+                let (t2, cr2) = defs[j];
                 // t2 のV4軌道を回して、t1 と3箇所一致するものを探す。
                 let orbit = [
                     [t2[0], t2[1], t2[2], t2[3]],
@@ -448,12 +481,14 @@ impl EGraph {
                     // 一意性が効くのは、固定された3点が相異なるときだけ。
                     let fixed: Vec<ClassId> = (0..4).filter(|&x| x != k).map(|x| t1[x]).collect();
                     if fixed[0] == fixed[1] || fixed[1] == fixed[2] || fixed[0] == fixed[2] { continue; }
+                    // 非退化条件: 図の上でも相異なること(まだマージされていないだけの同じ点では一意性が効かない)。
+                    if self.nondegeneracy && [(0, 1), (1, 2), (0, 2)].iter().any(|&(x, y)| self.numeric_plausibility_check(fixed[x], fixed[y], 2) == Some(true)) { self.nondegenerate_skips[2] += 1; continue; }
                     // 複比が意味を持つのは4点が共線のときだけ。t1側の共通直線を
                     // 取り、qもその上にあることを確かめる(そうでなければ
                     // 「同じ直線上の射影座標」という議論が成り立たない)。
                     let line = match self.find_common_line(&t1) { Some(l) => l, None => continue };
                     if !self.is_connected(q, line) { continue; }
-                    if self.numeric_plausibility_check(p, q, 2) == Some(false) {
+                    if self.merge_checks && self.numeric_plausibility_check(p, q, 2) == Some(false) {
                         let (n1, n2) = (self.entities[p.0].name.clone(), self.entities[q.0].name.clone());
                         println!("  🚫 [健全性チェック] {} と {} は複比の一意性から一致するはずだが数値的に別の点のため結合を却下", n1, n2);
                         continue;
@@ -461,7 +496,8 @@ impl EGraph {
                     let (n1, n2) = (self.entities[p.0].name.clone(), self.entities[q.0].name.clone());
                     let justification = Justification::Theorem {
                         name: "複比の透視射影不変性の逆(共線4点の4点目の一意性)".to_string(),
-                        premises: fixed.iter().map(|&f| ("Connected".to_string(), vec![f, line]))
+                        premises: std::iter::once(("Identical".to_string(), vec![cr1, cr2]))
+                            .chain(fixed.iter().map(|&f| ("Connected".to_string(), vec![f, line])))
                             .chain(std::iter::once(("Connected".to_string(), vec![q, line])))
                             .collect(),
                     };
@@ -507,10 +543,13 @@ impl EGraph {
         for (existing, via_l1, via_l2) in candidates {
             let existing_rep = self.get_rep(existing);
             let point_rep = self.get_rep(point);
+            // 非退化条件: 交点が一意なのは2直線が図の上でも別の直線のとき(まだマージされていないだけの同じ直線の「交点」は
+            // その直線上のどの点でもよい)。
+            if self.nondegeneracy && existing_rep != point_rep && self.numeric_plausibility_check(via_l1, via_l2, 2) == Some(true) { self.nondegenerate_skips[0] += 1; continue; }
             if existing_rep != point_rep {
                 // 🌟 マージを確定する前に数値的な裏付けを取る(propagate_line_uniqueness と同じ)。平行な2直線の交点は
                 // 無限遠点になり、それが方向と同一視されるのは正しい(方向も Point なので型の不一致は起きない)。
-                if self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {
+                if self.merge_checks && self.numeric_plausibility_check(existing_rep, point_rep, 2) == Some(false) {
                     let name1 = self.entities[existing_rep.0].name.clone();
                     let name2 = self.entities[point_rep.0].name.clone();
                     println!("  🚫 [健全性チェック] {} と {} は2直線の交点として一致するはずだが数値的に別の点のため結合を却下",

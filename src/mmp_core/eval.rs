@@ -217,7 +217,7 @@ impl EGraph {
     /// 方式が定義の種類によって異なる(FreePointは[x,y,1]のまま、他の多くは
     /// 「最初の非ゼロ成分を1にする」方式)ため、単純な要素比較ではなく
     /// 外積(クロス積)がゼロかどうかで比較する。
-    fn numeric_values_proportional(v1: &[ModInt], v2: &[ModInt]) -> bool {
+    pub(crate) fn numeric_values_proportional(v1: &[ModInt], v2: &[ModInt]) -> bool {
         if v1.len() != v2.len() || v1.is_empty() { return false; }
         if v1.len() == 3 {
             let z1 = v1[0] * v2[1] - v1[1] * v2[0];
@@ -274,7 +274,7 @@ impl EGraph {
 
     /// 祖先の自由点に座標を置く(coords の place_free_points の有限体版)。置けない点や前提を満たさない点が
     /// 残れば false(呼び出し側は判定不能に倒す)。
-    fn assign_free_point_coords(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>) -> bool {
+    pub(crate) fn assign_free_point_coords(&self, ancestors: &[ClassId], vars: &mut FxHashMap<String, ModInt>) -> bool {
         self.assign_free_point_coords_with(ancestors, vars, RngSource::Numeric)
     }
 
@@ -288,6 +288,7 @@ impl EGraph {
     /// congruence.rs の構造的な伝播(propagate_*_uniqueness)が偶然の一致で誤った同一視をしないためのゲートで、
     /// これ自体は何も証明しない。
     pub(crate) fn numeric_plausibility_check(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
+        if let Some(v) = self.fixed_equal(a, b) { return v; }
         let (ra, rb) = (self.get_rep(a), self.get_rep(b));
         let key = if ra.0 <= rb.0 { (ra.0, rb.0) } else { (rb.0, ra.0) };
         {
@@ -336,6 +337,59 @@ impl EGraph {
         self.numeric_plausibility_check_per_pair(a, b, trials)
     }
 
+    /// 🌟 非退化条件: def を今の図の上で作ると値が定まらないか(図の上で同じ2点を通る直線・同じ2直線の交点・
+    /// 共線な3点の外接円など)。親は全て評価できるのに def だけが評価できないときに true。図を置けないときは false
+    /// (判定しない)。値の定まらない図形は、別の図形と数値で比べても「判定不能」になって健全性のチェックをすり抜け、
+    /// 「2点を共有する直線は同じ」のような規則の前提(相異なる2点)を偽のまま満たしてしまう。
+    pub(crate) fn definition_is_degenerate(&self, def: &Definition) -> bool {
+        if matches!(def, Definition::FreePoint | Definition::GivenPoint | Definition::ConstantHomogeneous(..)) { return false; }
+        if !self.fixed_active() && !self.shared_samples(1) { return false; }
+        // 円・二次曲線は、生成元のどれか3点が共線だと退化する(円は定まらず、5点の二次曲線は2直線になって
+        // シュタイナーの定理のような二次曲線の性質が成り立たない)。値は計算できてしまうので別に確かめる。
+        let generators: &[ClassId] = match def {
+            Definition::Circumcircle(a, b, c) => &[*a, *b, *c],
+            Definition::ConicThrough5Points(a, b, c, d, e) => &[*a, *b, *c, *d, *e],
+            _ => &[],
+        };
+        let n = generators.len();
+        for x in 0..n { for y in x + 1..n { for z in y + 1..n {
+            if self.numeric_collinear(&[generators[x], generators[y], generators[z]]) == Some(true) { return true; }
+        }}}
+        if let Some(d) = self.fixed_degenerate(def) { return d; }
+        let mut samples = self.numeric_samples.borrow_mut();
+        let NumericSamples { vars, cache, .. } = &mut *samples;
+        let geometry = ModIntVars { vars: &vars[0] };
+        let cache0 = &mut cache[0];
+        let mut parents_ok = true;
+        let value = geometry.construct(self, def, &mut |q| {
+            let r = coords::evaluate(self, &geometry, q, cache0, &mut HashSet::new());
+            if r.is_none() { parents_ok = false; }
+            r
+        });
+        parents_ok && value.is_none()
+    }
+
+    /// 点(方向・円周点を含む)たちが図の上で同じ直線に乗っているか(非退化条件の判定用)。3点未満は true。
+    /// 図の全ての自由点を置けないか、評価できない点があれば None。
+    pub(crate) fn numeric_collinear(&self, pts: &[ClassId]) -> Option<bool> {
+        if pts.len() < 3 { return Some(true); }
+        if let Some(v) = self.fixed_collinear(pts) { return v; }
+        if !self.shared_samples(2) { return None; }
+        let mut samples = self.numeric_samples.borrow_mut();
+        for i in 0..2 {
+            let NumericSamples { vars, cache, .. } = &mut *samples;
+            let vals: Vec<Vec<ModInt>> = pts.iter().map(|&p| self.evaluate_node(p, &vars[i], &mut cache[i]))
+                .collect::<Option<Vec<_>>>()?;
+            if vals.iter().any(|v| v.len() != 3) { return None; }
+            let (a, b) = (&vals[0], &vals[1]);
+            for c in &vals[2..] {
+                let det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+                if det != ModInt::new(0) { return Some(false); }
+            }
+        }
+        Some(true)
+    }
+
     fn numeric_plausibility_check_per_pair(&self, a: ClassId, b: ClassId, trials: usize) -> Option<bool> {
         // 🐛 問題文は「P はこの円の上」のような前提を座標ではなく link_logical_incidence で与えることが多い。
         // そういう自由点に完全な乱数座標を置くと前提を満たさず、正しいマージまで却下してしまうので、
@@ -366,6 +420,26 @@ impl EGraph {
         out
     }
 
+    /// 診断用: 数値チェックが判定不能になった理由(図全体の標本が使えるか、各々が評価できるか)。
+    pub(crate) fn debug_numeric_unknown(&self, a: ClassId, b: ClassId) -> String {
+        let usable = self.shared_samples(2);
+        if !usable {
+            let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+            let placed = self.place_free_points(&self.all_free_points(), &mut ModIntPlacer { vars: &mut vars, rng: RngSource::Numeric }, true);
+            let why = match placed {
+                Placed::All => "All".to_string(),
+                Placed::Violated(v) => format!("Violated({})", v.iter().map(|p| self.entities[p.0].name.clone()).collect::<Vec<_>>().join(",")),
+                Placed::Stuck => "Stuck".to_string(),
+            };
+            return format!("shared=unusable placement={}", why);
+        }
+        let mut samples = self.numeric_samples.borrow_mut();
+        let NumericSamples { vars, cache, .. } = &mut *samples;
+        let va = self.evaluate_node(a, &vars[0], &mut cache[0]).is_some();
+        let vb = self.evaluate_node(b, &vars[0], &mut cache[0]).is_some();
+        format!("shared=usable eval_a={} eval_b={}", va, vb)
+    }
+
     /// 点 point が曲線 curve(直線・二次曲線)に乗っているかの数値的な裏付け(numeric_plausibility_check の接続版)。
     /// 判定できなければ None。
     pub(crate) fn numeric_incidence_check(&self, point: ClassId, curve: ClassId, trials: usize) -> Option<bool> {
@@ -373,8 +447,22 @@ impl EGraph {
         let curve_type = self.entities[curve.0].entity_type;
         if self.entities[point.0].entity_type != EntityType::Point
             || !matches!(curve_type, EntityType::Line | EntityType::Conic) { return None; }
+        if let Some(v) = self.fixed_incidence(point, curve, curve_type) { return v; }
         let ancestors = self.free_point_ancestors_of(&[point, curve]);
         if ancestors.is_empty() { return None; }
+        // 図全体の標本を先に使う(numeric_plausibility_check と同じ)。祖先だけを置く経路は、円の上に置く点のように
+        // 前提の曲線ごと置かないと座標が取れない点で判定不能になり、接続の検算が素通りになっていた(pascal)。
+        if self.shared_samples(trials) {
+            let mut samples = self.numeric_samples.borrow_mut();
+            for i in 0..trials {
+                let NumericSamples { vars, cache, .. } = &mut *samples;
+                let (Some(p), Some(c)) = (self.evaluate_node(point, &vars[i], &mut cache[i]), self.evaluate_node(curve, &vars[i], &mut cache[i]))
+                    else { return None };
+                let mut tmp = vars[i].clone();
+                if !(ModIntPlacer { vars: &mut tmp, rng: RngSource::Numeric }).lies_on(&p, &c, curve_type) { return Some(false); }
+            }
+            return Some(true);
+        }
         for _ in 0..trials {
             let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
             if !self.assign_free_point_coords(&ancestors, &mut vars) { return None; }
@@ -389,12 +477,14 @@ impl EGraph {
     /// 探索を始める前にマージ済みの組(問題文の前提)が、乱数座標で数値的に成り立つか。マージ済みの2つは同じ同値類として
     /// 評価されてしまうので、それぞれの元の定義(original_definition)を個別に評価して比べる。成り立たない組があるなら、
     /// その問題の前提は座標への制約(「OP = OA」など)で、乱数座標による検算は前提を満たさない図で行われている。
+    /// 全ての自由点を前提どおりに置けない図(直線と円の両方に乗る点など、平方根が要る)も false: そういう点に
+    /// 依存する結論は判定不能のまま通り、その先の結論だけが検算されて誤警報になる(bench_2010g1 のノイズ20)。
     pub fn hypotheses_hold_numerically(&self) -> bool {
         self.without_consuming_rng(|eg| {
             let points = eg.all_free_points();
             for _ in 0..2 {
                 let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
-                if !eg.assign_free_point_coords(&points, &mut vars) { return true; } // 判定できない
+                if !eg.assign_free_point_coords(&points, &mut vars) { return false; }
                 let geometry = ModIntVars { vars: &vars };
                 let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
                 for (i, e) in eg.entities.iter().enumerate() {
@@ -671,7 +761,7 @@ impl EGraph {
 }
 
 /// 有限体での各定義の値。点・直線は同次座標、二次曲線は6係数、スカラーは [値, 1, 1]。
-fn modint_construct(eg: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<Vec<ModInt>>) -> Option<Vec<ModInt>> {
+pub(crate) fn modint_construct(eg: &EGraph, def: &Definition, get: &mut dyn FnMut(ClassId) -> Option<Vec<ModInt>>) -> Option<Vec<ModInt>> {
     match def {
         Definition::FreePoint | Definition::GivenPoint => None,
         Definition::Midpoint(p1, p2) => {
@@ -867,6 +957,10 @@ fn modint_free(eg: &EGraph, rep: ClassId, def: &Definition, vars: &FxHashMap<Str
             let y = vars.get(&format!("{}_y", eg.entities[rep.0].name)).copied()?;
             Some(vec![x, y, ModInt::new(1)])
         }
+        // 有向角の定数は複比 (I,J;D1,D2) の値で置く(直角は -1、0度は 1)。他の定義とマージされる前の Ang90 を
+        // (0,0,1) と評価すると、最初の「垂線 ⇒ 90度」のマージを数値チェックが偽と判定する。
+        Definition::GivenPoint if rep == eg.get_rep(eg.ang90) => Some(vec![ModInt::new(-1), ModInt::new(1), ModInt::new(1)]),
+        Definition::GivenPoint if rep == eg.get_rep(eg.ang0) => Some(vec![ModInt::new(1), ModInt::new(1), ModInt::new(1)]),
         Definition::GivenPoint => {
             let x = vars.get(&format!("{}_x", eg.entities[rep.0].name)).copied().unwrap_or(ModInt::new(0));
             let y = vars.get(&format!("{}_y", eg.entities[rep.0].name)).copied().unwrap_or(ModInt::new(0));

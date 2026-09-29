@@ -43,6 +43,8 @@ pub mod pappus;
 pub mod pascal;
 pub mod desargues;
 pub mod newton_gauss;
+pub mod test_parallelogram;
+pub mod test_spiral_circles;
 
 use crate::mmp_core::{ClassId, EGraph, Fact}; // Factを追加
 
@@ -100,25 +102,43 @@ pub const ALL_PROBLEMS: &[&str] = &[
     "pascal",
     "desargues",
     "newton_gauss",
+    "test_parallelogram",
+    "test_spiral_circles",
 ];
 
 /// 🌟 証明の筋書き(sketch.rs)を持つ問題。diagnose の対象。
+/// 人間の証明を書いたもの(重心・ニュートン=ガウス・HAGeo の6問)と、射影の3問(パップス・デザルグ・パスカル)は
+/// 補助作図の供給が律速かを見る検査(sketch::with_all_intersections)。
 pub const PROBLEMS_WITH_SKETCH: &[&str] = &[
     "bench_2012chnwesternmop5",
     "bench_2016armog10p2",
     "bench_2008armog10p6",
     "bench_2000usatstp2",
+    "bench_2011balkanmop1",
+    "bench_2015apmop1",
+    "centroid",
+    "newton_gauss",
+    "pappus",
+    "desargues",
+    "pascal",
 ];
 
 /// 問題の証明の筋書き(人間の証明の補助作図と手順)。sketch.rs のドキュメント参照。
-pub fn sketch_for(name: &str) -> Option<&'static str> {
-    match name {
-        "bench_2012chnwesternmop5" => Some(bench_2012chnwesternmop5::SKETCH),
-        "bench_2016armog10p2" => Some(bench_2016armog10p2::SKETCH),
-        "bench_2008armog10p6" => Some(bench_2008armog10p6::SKETCH),
-        "bench_2000usatstp2" => Some(bench_2000usatstp2::SKETCH),
-        _ => None,
-    }
+pub fn sketch_for(name: &str) -> Option<String> {
+    Some(match name {
+        "bench_2012chnwesternmop5" => bench_2012chnwesternmop5::SKETCH.to_string(),
+        "bench_2016armog10p2" => bench_2016armog10p2::SKETCH.to_string(),
+        "bench_2008armog10p6" => bench_2008armog10p6::SKETCH.to_string(),
+        "bench_2000usatstp2" => bench_2000usatstp2::SKETCH.to_string(),
+        "bench_2011balkanmop1" => bench_2011balkanmop1::SKETCH.to_string(),
+        "bench_2015apmop1" => bench_2015apmop1::SKETCH.to_string(),
+        "centroid" => centroid::SKETCH.to_string(),
+        "newton_gauss" => newton_gauss::SKETCH.to_string(),
+        "pappus" => pappus::sketch(),
+        "desargues" => desargues::sketch(),
+        "pascal" => pascal::sketch(),
+        _ => return None,
+    })
 }
 
 pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
@@ -167,6 +187,9 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "pascal" => pascal::setup(egraph),
         "desargues" => desargues::setup(egraph),
         "newton_gauss" => newton_gauss::setup(egraph),
+        "test_parallelogram" => test_parallelogram::setup(egraph),
+        "test_spiral_circles" => test_spiral_circles::setup(egraph),
+        n if n.starts_with("hageo:") => crate::hageo::setup(&n["hageo:".len()..], egraph),
         _ => panic!("未知の問題名です: {}", name),
     }
 }
@@ -256,6 +279,40 @@ mod tests {
         assert!(checked >= 2, "検算できた問題が少なすぎる({}件)。", checked);
     }
 
+    /// 検算が「判定不能(None)」になる問題。上の2つのテストは Some(false) だけを落とすので、判定不能の問題は書き間違いが
+    /// あっても素通しになる(bench_2005usamop3 がそうだった: 制約で置く点が有限体では置けず、判定不能だった)。
+    /// 増やさないために、ここに載っていない問題が判定不能になったらテストが落ちる。直すか、理由を添えて足すこと。
+    const INDETERMINATE_KNOWN: &[&str] = &[
+    // 自由点に「直線上かつ円上」のような2つの制約を与えている(有限体では平方根が要り、点が置けない)。
+    // 第2交点の定義で書き直せば検算できる(bench_2018chnwesternmop5 はそう直した。来歴 #76)。
+    "miquel", "miquel_quadrilateral", "two_circles_reim",
+];
+
+    /// 🌟 目標の検算が、判定不能のまま素通しになっていないこと。
+    #[test]
+    fn no_target_is_silently_indeterminate() {
+        let mut none = Vec::new();
+        for name in ALL_PROBLEMS {
+            let mut egraph = EGraph::new();
+            let setup = load_problem(name, &mut egraph);
+            if !setup.initial_facts.is_empty() || ASSUMES_A_HYPOTHESIS.contains(name) { continue; }
+            let Some((kind, args)) = setup.target_fact else { continue };
+            let verdict = match kind.as_str() {
+                "Identical" if args.len() >= 2 => egraph.numeric_plausibility_check(args[0], args[1], 4),
+                "Concyclic" if args.len() >= 4 => {
+                    let c1 = egraph.create_entity("__ind1".into(), Definition::Circumcircle(args[0], args[1], args[2]), EntityType::Conic);
+                    let c2 = egraph.create_entity("__ind2".into(), Definition::Circumcircle(args[0], args[1], args[3]), EntityType::Conic);
+                    egraph.numeric_plausibility_check(c1, c2, 4)
+                }
+                _ => continue,
+            };
+            if verdict.is_none() { none.push(*name); }
+        }
+        println!("判定不能の問題: {:?}", none);
+        let unexpected: Vec<_> = none.iter().filter(|n| !INDETERMINATE_KNOWN.contains(n)).collect();
+        assert!(unexpected.is_empty(), "目標の検算が判定不能のままの問題がある(書き間違いが素通しになる): {:?}", unexpected);
+    }
+
     /// 🌟 証明の筋書きが正しく書けているか。書き間違いの筋書きで「この手順で
     /// 詰まっている」と結論してしまわないよう、補助作図を与えた図で各手順が
     /// 乱数座標で成り立ち、名前が全部引けることを確かめる。
@@ -266,7 +323,7 @@ mod tests {
             assert!(sketch_for(name).is_some(), "「{}」は一覧にあるのに筋書きが引けない", name);
             let mut egraph = EGraph::new();
             let _ = load_problem(name, &mut egraph);
-            let p = prepare(&mut egraph, sketch_for(name).unwrap(), Rung::Assume(0))
+            let p = prepare(&mut egraph, &sketch_for(name).unwrap(), Rung::Assume(0))
                 .unwrap_or_else(|e| panic!("「{}」の筋書きを適用できない: {}", name, e));
             for (i, step) in p.sketch.steps.iter().enumerate() {
                 let st = status_of(&egraph, &p.env, step, i);

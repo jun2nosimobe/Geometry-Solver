@@ -43,3 +43,10 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
         initial_facts: vec![],
     }
 }
+
+/// 🌟 証明の筋書き(sketch.rs)。E, H, K, G は EG を直径とする円上。△EAB ∽ △EDC(逆向き)で中線 EF と EG が対応するので
+/// ∠(EF,AB) = ∠(CD,EG) となり、円 EHKG の円周角と合わせて EF ⊥ HK が出る。
+pub const SKETCH: &str = r#"
+step concyclic E Foot_H Foot_K G      | ∠EHG = ∠EKG = 90°(E,H,K,G は EG を直径とする円上)
+step equal_angle E F A B C D E G      | △EAB ∽ △EDC(逆向き)の対応する中線 EF, EG: ∠(EF,AB) = ∠(CD,EG)
+"#;

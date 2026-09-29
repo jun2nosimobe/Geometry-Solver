@@ -9,10 +9,11 @@
 | ノート | 対象 |
 |---|---|
 | [mmp_core.md](mmp_core.md) | `src/mmp_core/`(e-graph・合同閉包・数値評価・証明の抽出)と `src/mmp_calculators.rs` |
-| [theorems.md](theorems.md) | `src/theorems.rs`(定理の定義) |
+| [theorems.md](theorems.md) | `src/theorems.rs`(定理の定義。追加の規則 `--rules` と書かなかった規則の理由を含む) |
+| [theorem_catalog.md](theorem_catalog.md) | Atlas §07 定理([../theorems.html](../theorems.html))の手書きの部分: 各定理の主張と現状の問題点 |
 | [discover.md](discover.md) | `src/discover.rs`・`src/padic*.rs`・`src/serve.rs`・`src/discover_viz.rs`(自由探索による発見と作図画面) |
 | [mcts.md](mcts.md) | `src/action_space.rs`・`src/mcts.rs`(MCTS、既定では無効) |
-| [diagnostics.md](diagnostics.md) | `src/trace.rs`・`src/sketch.rs`・`src/sweep.rs`・`src/cli.rs`・問題ファイル |
+| [diagnostics.md](diagnostics.md) | `src/trace.rs`・`src/sketch.rs`・`src/sweep.rs`・`src/cli.rs`・問題ファイル・`src/hageo.rs`(HAGeo-409 の取り込みと語彙の被覆率) |
 | [../../bench/README.md](../../bench/README.md) | ベンチの回し方(二段構え・再開可能な長時間実行・落とし穴) |
 
 各項目の引用は移した時点の原文のまま。ファイル名(`main.rs`・`logic_core.rs`)や数値(`NN/96`・`37問` など)は当時のもので、今のコードとは食い違うことがある。今の挙動はソースのコメントとコードを正とする。

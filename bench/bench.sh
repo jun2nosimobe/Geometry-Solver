@@ -10,7 +10,8 @@ WORK=$(mktemp -d "$(dirname "$OUT")/run.XXXXXX")
 export BIN FLAGS WORK
 one() {
   p="$1"; d="$WORK/$p"; mkdir -p "$d"; cd "$d"
-  timeout 900 "$BIN" "$p" $FLAGS > out.txt 2>&1
+  # 1問の暴走(メモリを食い尽くす)で WSL ごと落ちないよう、1プロセスのアドレス空間を 2.5GB に制限する(来歴 #75)。
+  ( ulimit -v 2500000; timeout 900 "$BIN" "$p" $FLAGS > out.txt 2>&1 )
   solved=0; grep -q '🎉 証明完了' out.txt && solved=1
   work=$(grep -oP '消費した仕事量: \K[0-9]+' out.txt | tail -1)
   h=$(grep -E '🟢|⚙️|💡|🚫|SKETCH' out.txt | md5sum | cut -c1-12)

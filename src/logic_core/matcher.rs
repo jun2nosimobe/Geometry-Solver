@@ -53,13 +53,27 @@ pub(crate) struct Search<'a> {
     pub pattern_masks: &'a [u64],
 }
 
-/// DefinedBy で親が全部そろっていて定義がまだ無いとき、その場で作ってよい種類。
-pub(crate) fn created_on_demand(kind: DefKind) -> bool {
-    matches!(kind, DefKind::AnglePair | DefKind::DirectionOf | DefKind::LengthSq
-        | DefKind::CrossRatio | DefKind::CrossRatioOfLines | DefKind::Product)
-}
-
 impl ProverEngine {
+    /// 🌟 非退化条件(numeric_distinct): 「相異なる」で結ばれた図形(点・方向・直線・二次曲線)のうち、図の上で数値的に
+    /// 一致する組があれば true。e-graph がまだ一致を証明していないだけの同じ図形を別物として扱うと、2点が重なった
+    /// 外接円や3点が共線な三角形のような退化した配置で偽の結論を出す。スカラーの「相異なる」は枝刈りのためのもので、
+    /// 数値的に等しい長さを別物として要求しているわけではないので見ない。完成したマッチ1つにつき1回だけ呼ぶ。
+    fn degenerate_binding(&self, patterns: &[Pattern], bind: &Bind) -> Option<(ClassId, ClassId)> {
+        for pat in patterns {
+            let Pattern::NonDegenerate(vars) = pat else { continue };
+            let ids: Vec<ClassId> = vars.iter().filter_map(|v| bind.get(v).map(|&id| self.egraph.get_rep(id))).collect();
+            for i in 0..ids.len() {
+                if !matches!(self.egraph.entities[ids[i].0].entity_type, EntityType::Point | EntityType::Line | EntityType::Conic) { continue; }
+                for &other in &ids[i + 1..] {
+                    if self.egraph.without_consuming_rng(|eg| eg.numeric_plausibility_check(ids[i], other, 2)) == Some(true) {
+                        return Some((ids[i], other));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// 失敗キャッシュのキー。どのパターン列の、どのパターンが残っているか・束縛(代表元に
     /// 直したもの)・フリップ状態から作る。
     ///
@@ -173,6 +187,14 @@ impl ProverEngine {
                     if *expected_type != actual_type { return false; }
                 }
             }
+            if self.numeric_distinct && let Some((x, y)) = self.degenerate_binding(s.patterns, &bind) {
+                self.degenerate_matches += 1;
+                if self.degenerate_matches <= 30 {
+                    println!("  📐 [退化した配置] {}: {} と {} が図の上で一致", theorem.name,
+                        self.egraph.entities[x.0].name, self.egraph.entities[y.0].name);
+                }
+                return false;
+            }
             (s.on_match)(&bind, &flip_states);
             return true;
         }
@@ -206,7 +228,7 @@ impl ProverEngine {
 
         let matched_any = match &patterns[best_idx] {
             // 破れていれば上の1周で既に切っているので、ここでは消費するだけ。
-            Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) => {
+            Pattern::Order(_) | Pattern::OrderNonStrict(_) | Pattern::Distinct(_) | Pattern::NonDegenerate(_) => {
                 self.branch_tag = 0;
                 self.dfs_match(s, next_active, bind, flip_states, &mut my_mask)
             }
@@ -524,7 +546,7 @@ impl ProverEngine {
                         out.push(SemiConstraint::SameAs(self.egraph.get_rep(oid)));
                     }
                 }
-                Pattern::Distinct(vars) => {
+                Pattern::Distinct(vars) | Pattern::NonDegenerate(vars) => {
                     if !vars.iter().any(|v| v == var) { continue; }
                     for v in vars {
                         if v == var { continue; }
@@ -730,6 +752,8 @@ impl ProverEngine {
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
                 valid_nodes.push(self.egraph.get_rep(existing));
             } else if role == DefRole::Build {
+                // 図の上で値の定まらない図形(重なった2点の長さなど)は作らない。
+                if self.egraph.nondegeneracy && self.egraph.without_consuming_rng(|eg| eg.definition_is_degenerate(&temp_def)) { return valid_nodes; }
                 // 無関係な4点・4直線の複比は次数が積み上がるので、高すぎるものは作らない。
                 if let Definition::CrossRatio(a, b, c, d) | Definition::CrossRatioOfLines(a, b, c, d) = temp_def {
                     const CR_DEGREE_CAP: usize = 8;
