@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas · 定理</title>
+<link rel="stylesheet" href="atlas.css">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  table.pat, table.kv, table.sum { border-collapse: collapse; font-size: 13px; margin: 6px 0; width: 100%; }
+  table.pat td, table.pat th, table.kv td, table.kv th, table.sum td, table.sum th { padding: 3px 8px; border-bottom: 1px solid var(--rule, #e3e3e3); text-align: left; vertical-align: top; }
+  table.pat tr.demand td { background: var(--warning-soft, #fff4db); }
+  table.pat tr.build td { background: var(--accent-soft, #eef3ff); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .muted { color: var(--ink-soft, #777); font-size: 13px; }
+  .tag.warn { background: var(--danger-soft, #fde2e2); color: var(--danger, #b00020); }
+  details.item h4 { margin: 14px 0 4px; font-size: 14px; }
+  .body code { font-size: 12.5px; }
+  .wrap-x { overflow-x: auto; }
+</style>
+<nav class="topnav"><div class="in"><span class="brand">Geometry Solver Atlas</span><a href="atlas.html">概要 §00–03</a><a href="ledger.html">来歴 §04</a><a href="backlog.html">改善候補 §05</a><a href="notes.html">設計ノート §06</a><a href="theorems.html" aria-current="page">定理 §07</a></div></nav>
+<div class="wrap">
+<section id="theorems">
+<div class="section-head"><span class="section-num">07</span><h2>定理</h2></div>
+<p class="section-note">登録されている全定理(27件)の、主張・作図の需要・見積もり・実測・現状の問題点。パターン・作図・結論・見積もりの順序は
+コード(<code>geom_solver theorem-atlas</code>)から、実測はベンチ(<code>bench/theorem_stats.sh</code>)から、主張と問題点は
+<a href="notes/theorem_catalog.md">notes/theorem_catalog.md</a> から <code>docs/gen_theorem_atlas.py</code> が作る。作り直し方はそのスクリプトの先頭。
+見積もりの順序は <code>nine_point_full</code> の図の上で計算した(値は図に依存する)。</p>
+
+<h3>見積もり(estimate_cost)の読み方</h3>
+<div class="wrap-x"><table class="sum">
+<tr><th>パターン</th><th>束縛の状態</th><th>見積もり</th></tr>
+<tr><td>一致 a ≡ b</td><td>両方束縛 / 片方 / どちらも未束縛(自己束縛)</td><td>0 / 1 / 15</td></tr>
+<tr><td>接続 child ∈ parent</td><td>両方束縛 / 片方 / どちらも未束縛</td><td>0 / 束縛側の隣接数+1 / 親の型の実体数×5+10</td></tr>
+<tr><td>定義(照合・作る・需要)</td><td>全部束縛 / 一部 / どれも未束縛</td><td>0 / 10+未束縛の数×20 / 100+引数の数+種類の加点(中点・長さ・交点 0、直線・垂線・接線 10、方向・角・外接円 20、その他 5)</td></tr>
+<tr><td>制約(相異なる・順序)・否定</td><td>全変数が束縛されるまで</td><td>∞(最後まで選ばれない。束縛済みの範囲は毎回検査して早く枝を切る)</td></tr>
+</table></div>
+<p class="section-note">束縛済みの変数の熱(<code>heat_with_degree</code>)の合計だけ安くする(基本の見積もりの半分まで)。
+<b>どれも未束縛の一致(自己束縛)は 15 と安く、一部だけ束縛された定義(25 以上)より先に選ばれる</b> ― 角の一致を2つ持つ定理は、
+2つの角の同値類を続けて選び、構造でつなぐ前に組み合わせを舐める(#71・スパイラル相似の分析)。自己束縛の候補は熱の順に並べて上限で切る
+(通常 40。同じ型の自己束縛を2つ以上持つ定理は狭い上限 5 から始めて、手詰まりのたびに 40 まで広げる)。</p>
+
+<h3>全体に共通する問題</h3>
+<ul>
+<li><b>「相異なる」の2つの役割。</b> <code>distinct</code> は e-graph 上で別の実体であることしか見ない。図の上では同じなのにまだ一致が証明されていない
+2つの図形を別物として扱うと、退化した配置で偽の結論が出る(#75)。一致すると定理が偽になる相異は「非退化」(図の上でも相異なる)として書き、
+完成したマッチで数値的に確かめる(#78)。これで、座標を置ける問題ではマージ前の検査(#76)を外しても偽のマージが起きない(#79)。
+パターン表の種類「非退化」がそれ。</li>
+<li><b>結論やその場の作図で図形を作る定理は、使われない発火で図を膨らませる。</b> 作られた有向角の9割以上・積のすべて・外接円のほとんどが証明に出ない(b7、#38)。
+中点や直線を作らず「図にあるものだけ照合する」形にすると課税が消えることが多い(#68・#74)。</li>
+<li><b>需要は探索の副作用として立つ。</b> 補助線の需要は、定理のマッチが直線を欲しがって空振りした回数で、探索の順序に依存する(b33)。</li>
+<li><b>角の足し算を規則で総当たりしている。</b> 有向角の加法性・交替律・同位角の3つは有向角の線形な関係で、線形代数でまとめて閉じる仕組みにできる(#75)。</li>
+</ul>
+
+<h3>一覧</h3>
+<div class="wrap-x"><table class="sum">
+<tr><th>#</th><th>定理</th><th>入り方</th><th>変数/パターン</th><th>需要</th><th>探索量の割合</th><th>マッチ</th><th>証明に登場(問)</th></tr>
+<tr><td class="num">0</td><td><a href="#t0">円周角の定理</a></td><td>既定</td><td class="num">15/24</td><td class="num">4</td><td class="num">11.8%</td><td class="num">2129</td><td class="num">13</td></tr><tr><td class="num">1</td><td><a href="#t1">垂直二等分線の距離の等価性</a></td><td>既定</td><td class="num">6/5</td><td class="num">1</td><td class="num">0.1%</td><td class="num">250</td><td class="num">2</td></tr><tr><td class="num">2</td><td><a href="#t2">垂直二等分線の距離の等価性の逆</a></td><td>既定</td><td class="num">8/4</td><td class="num">0</td><td class="num">0.1%</td><td class="num">114</td><td class="num">2</td></tr><tr><td class="num">3</td><td><a href="#t3">中点連結定理</a></td><td>既定</td><td class="num">9/7</td><td class="num">2</td><td class="num">0.2%</td><td class="num">502</td><td class="num">4</td></tr><tr><td class="num">4</td><td><a href="#t4">二等辺三角形の底角</a></td><td>既定</td><td class="num">13/13</td><td class="num">3</td><td class="num">0.3%</td><td class="num">149</td><td class="num">4</td></tr><tr><td class="num">5</td><td><a href="#t5">二等辺三角形の底角の逆</a></td><td>既定</td><td class="num">13/15</td><td class="num">0</td><td class="num">5.8%</td><td class="num">7</td><td class="num">2</td></tr><tr><td class="num">6</td><td><a href="#t6">共点二弦の相似(方冪の定理の基礎)</a></td><td>既定</td><td class="num">21/24</td><td class="num">0</td><td class="num">10.7%</td><td class="num">228</td><td class="num">1</td></tr><tr><td class="num">7</td><td><a href="#t7">接弦定理</a></td><td>既定</td><td class="num">14/12</td><td class="num">3</td><td class="num">0.0%</td><td class="num">6</td><td class="num">1</td></tr><tr><td class="num">8</td><td><a href="#t8">円周角の定理の逆</a></td><td>既定</td><td class="num">15/17</td><td class="num">0</td><td class="num">21.6%</td><td class="num">2488</td><td class="num">9</td></tr><tr><td class="num">9</td><td><a href="#t9">同位角による平行判定(右共通)</a></td><td>既定</td><td class="num">5/4</td><td class="num">0</td><td class="num">0.1%</td><td class="num">50</td><td class="num">9</td></tr><tr><td class="num">10</td><td><a href="#t10">同位角による平行判定(左共通)</a></td><td>既定</td><td class="num">5/4</td><td class="num">0</td><td class="num">0.1%</td><td class="num">0</td><td class="num">0</td></tr><tr><td class="num">11</td><td><a href="#t11">有向角の加法性</a></td><td>既定</td><td class="num">12/11</td><td class="num">0</td><td class="num">28.3%</td><td class="num">3917</td><td class="num">5</td></tr><tr><td class="num">12</td><td><a href="#t12">有向角の交替律</a></td><td>既定</td><td class="num">8/6</td><td class="num">0</td><td class="num">5.3%</td><td class="num">3325</td><td class="num">9</td></tr><tr><td class="num">13</td><td><a href="#t13">直角三角形の斜辺の中線</a></td><td>既定</td><td class="num">16/11</td><td class="num">0</td><td class="num">0.5%</td><td class="num">89</td><td class="num">2</td></tr><tr><td class="num">14</td><td><a href="#t14">直角三角形の斜辺の中線 (距離版)</a></td><td>既定</td><td class="num">14/10</td><td class="num">0</td><td class="num">0.6%</td><td class="num">46</td><td class="num">1</td></tr><tr><td class="num">15</td><td><a href="#t15">直角三角形の斜辺の中線の逆</a></td><td>既定</td><td class="num">12/5</td><td class="num">0</td><td class="num">0.1%</td><td class="num">47</td><td class="num">2</td></tr><tr><td class="num">16</td><td><a href="#t16">中点連結定理(長さ)</a></td><td>既定</td><td class="num">8/4</td><td class="num">0</td><td class="num">0.1%</td><td class="num">1235</td><td class="num">2</td></tr><tr><td class="num">17</td><td><a href="#t17">中心角の定理</a></td><td>既定</td><td class="num">18/18</td><td class="num">4</td><td class="num">0.2%</td><td class="num">174</td><td class="num">1</td></tr><tr><td class="num">18</td><td><a href="#t18">複比の透視射影不変性(点→線束)/対合定理(共点4直線+横断線)</a></td><td>既定</td><td class="num">12/16</td><td class="num">0</td><td class="num">2.9%</td><td class="num">949</td><td class="num">3</td></tr><tr><td class="num">19</td><td><a href="#t19">複比の透視射影不変性(線束→点)</a></td><td>既定</td><td class="num">12/15</td><td class="num">0</td><td class="num">0.9%</td><td class="num">65</td><td class="num">1</td></tr><tr><td class="num">20</td><td><a href="#t20">シュタイナーの定理(二次曲線上の6点の複比不変性)</a></td><td>既定</td><td class="num">17/13</td><td class="num">8</td><td class="num">0.0%</td><td class="num">1</td><td class="num">1</td></tr><tr><td class="num">21</td><td><a href="#t21">シュタイナーの定理(接線版)/接弦定理(射影版)</a></td><td>既定</td><td class="num">16/12</td><td class="num">7</td><td class="num">0.0%</td><td class="num">1</td><td class="num">1</td></tr><tr><td class="num">22</td><td><a href="#t22">シュタイナーの定理の逆(射影版・円周角の定理の逆)</a></td><td>既定</td><td class="num">17/22</td><td class="num">0</td><td class="num">10.3%</td><td class="num">7</td><td class="num">0</td></tr><tr><td class="num">23</td><td><a href="#t23">等しい円周角に対する弦は等しい</a></td><td>--rules=chord</td><td class="num">19/27</td><td class="num">0</td><td class="num">12.0%</td><td class="num">36</td><td class="num">2</td></tr><tr><td class="num">24</td><td><a href="#t24">平行四辺形の対角線は互いに二等分する</a></td><td>--rules=parallelogram</td><td class="num">12/20</td><td class="num">0</td><td class="num">0.4%</td><td class="num">229</td><td class="num">2</td></tr><tr><td class="num">25</td><td><a href="#t25">スパイラル相似(同じ向き)</a></td><td>--rules=spiral</td><td class="num">36/25</td><td class="num">0</td><td class="num">20.6%</td><td class="num">100</td><td class="num">1</td></tr><tr><td class="num">26</td><td><a href="#t26">交わる弦の相似(逆向きのスパイラル相似)</a></td><td>既定</td><td class="num">24/16</td><td class="num">0</td><td class="num">0.3%</td><td class="num">277</td><td class="num">1</td></tr>
+</table></div>
+<p class="section-note">探索量の割合・マッチ・証明に登場は、既定の定理は既定設定の全44問、既定外の定理はその規則を足した全44問での値。</p>
+
+<div class="toolbar"><input type="search" id="q" placeholder="定理名・パターン・問題点を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="default" aria-pressed="false">既定</button><button type="button" data-filter="rules" aria-pressed="false">既定外(--rules)</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
+<div class="group"><div class="group-title">定理 · 27件</div>
+<details class="item" id="t0" data-status="default">
+  <summary><span class="idx">0</span><span class="t">円周角の定理</span><span class="tag">既定</span><span class="tag">変数15・パターン24</span><span class="tag warn">規模が上限超過</span><span class="tag">需要 4</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>同じ円の上の4点 Apex1・Apex2・Base1・Base2 について、弦 Base1–Base2 を2つの頂点から見込む有向角は等しい: ∠(Apex1 Base1, Apex1 Base2) = ∠(Apex2 Base1, Apex2 Base2)。角の読み方は2つの角で向きをそろえる(向きの組 Cyclic)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>L_A1_B1 = LineThroughPoints(Apex1, Base1)</code>・<code>L_A1_B2 = LineThroughPoints(Apex1, Base2)</code>・<code>L_A2_B1 = LineThroughPoints(Apex2, Base1)</code>・<code>L_A2_B2 = LineThroughPoints(Apex2, Base2)</code></p>
+    <p>その場で作る(親が揃えば図に足す): <code>Dir_A1_B1 = Dir(L_A1_B1)</code>・<code>Dir_A1_B2 = Dir(L_A1_B2)</code>・<code>Dir_A2_B1 = Dir(L_A2_B1)</code>・<code>Dir_A2_B2 = Dir(L_A2_B2)</code>・<code>Ang1 = AnglePair(Dir_A1_B1, Dir_A1_B2) 〔向きの組 Cyclic〕</code>・<code>Ang2 = AnglePair(Dir_A2_B1, Dir_A2_B2) 〔向きの組 Cyclic〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>Ang1 ≡ Ang2</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Apex1 ∈ Circ(円)</code>(見積もり 10)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>接続</td><td><code>Apex1 ∈ Circ(円)</code></td><td class="num">1</td><td class="num">10</td></tr><tr class=""><td class="num">1</td><td>接続</td><td><code>Apex2 ∈ Circ(円)</code></td><td class="num">2</td><td class="num">10</td></tr><tr class=""><td class="num">2</td><td>接続</td><td><code>Base1 ∈ Circ(円)</code></td><td class="num">8</td><td class="num">0.5</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>Base2 ∈ Circ(円)</code></td><td class="num">14</td><td class="num">0.5</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>相異なる(Apex1, Apex2, Base1, Base2)</code></td><td class="num">10</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>非退化</td><td><code>図の上でも相異なる(Apex1, Base1, Base2)</code></td><td class="num">11</td><td class="num">0</td></tr><tr class=""><td class="num">6</td><td>非退化</td><td><code>図の上でも相異なる(Apex2, Base1, Base2)</code></td><td class="num">12</td><td class="num">0</td></tr><tr class="demand"><td class="num">7</td><td>需要を立てる</td><td><code>L_A1_B1 = LineThroughPoints(Apex1, Base1)</code></td><td class="num">15</td><td class="num">25</td></tr><tr class="demand"><td class="num">8</td><td>需要を立てる</td><td><code>L_A1_B2 = LineThroughPoints(Apex1, Base2)</code></td><td class="num">16</td><td class="num">25</td></tr><tr class=""><td class="num">9</td><td>制約</td><td><code>相異なる(L_A1_B1, L_A1_B2)</code></td><td class="num">17</td><td class="num">0</td></tr><tr class="demand"><td class="num">10</td><td>需要を立てる</td><td><code>L_A2_B1 = LineThroughPoints(Apex2, Base1)</code></td><td class="num">7</td><td class="num">0</td></tr><tr class="demand"><td class="num">11</td><td>需要を立てる</td><td><code>L_A2_B2 = LineThroughPoints(Apex2, Base2)</code></td><td class="num">13</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>Apex2 ∈ L_A2_B1</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>Base1 ∈ L_A2_B1</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>Apex2 ∈ L_A2_B2</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>Base2 ∈ L_A2_B2</code></td><td class="num">9</td><td class="num">3.5</td></tr><tr class=""><td class="num">16</td><td>制約</td><td><code>相異なる(L_A2_B1, L_A2_B2)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class="build"><td class="num">17</td><td>その場で作る</td><td><code>Dir_A1_B1 = Dir(L_A1_B1)</code></td><td class="num">18</td><td class="num">27.5</td></tr><tr class="build"><td class="num">18</td><td>その場で作る</td><td><code>Dir_A1_B2 = Dir(L_A1_B2)</code></td><td class="num">19</td><td class="num">27.5</td></tr><tr class="build"><td class="num">19</td><td>その場で作る</td><td><code>Dir_A2_B1 = Dir(L_A2_B1)</code></td><td class="num">21</td><td class="num">27.5</td></tr><tr class="build"><td class="num">20</td><td>その場で作る</td><td><code>Dir_A2_B2 = Dir(L_A2_B2)</code></td><td class="num">22</td><td class="num">27.5</td></tr><tr class="build"><td class="num">21</td><td>その場で作る</td><td><code>Ang1 = AnglePair(Dir_A1_B1, Dir_A1_B2) 〔向きの組 Cyclic〕</code></td><td class="num">20</td><td class="num">25</td></tr><tr class="build"><td class="num">22</td><td>その場で作る</td><td><code>Ang2 = AnglePair(Dir_A2_B1, Dir_A2_B2) 〔向きの組 Cyclic〕</code></td><td class="num">23</td><td class="num">25</td></tr><tr class=""><td class="num">23</td><td>制約</td><td><code>相異なる(Ang1, Ang2)</code></td><td class="num">24</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>32問</td></tr><tr><th>試行回数(合計)</th><td>403</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>11,402,227(全定理の 11.8%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>70回</td></tr><tr><th>マッチ成立</th><td>2,129回・29問</td></tr><tr><th>証明に登場した問題</th><td>13問: bench_2005ctstp1, bench_2010g1, bench_2011armog10p6, bench_2011balkanmop1, bench_2012egmop1, bench_2018silkroadp1, bench_2019g1, cyclic_quad, orthic_incenter, orthocenter, simson, test_power_of_point, two_circles_reim</td></tr></table>
+    <h4>現状の問題点</h4><ul><li><b>規模が上限を超えている</b>(パターン22)。円の上の4点の順序つきの組を全部舐めるので、点の多い円があると重い(<a class="secref" href="backlog.html#b34">b34</a>)。</li><li>頂点と底の点を結ぶ4本の直線を<b>需要として立てる</b>(<code>demand_by</code>)。補助線の需要の主な供給元で、解けている問題の約半分を支える一方、 円の上の点が増えると需要も組の数だけ増える。</li><li>結論の角は <code>build_by</code> でその場に作る。発火のたびに方向と角が増える(<a class="secref" href="backlog.html#b7">b7</a>)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: パターン24本(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): thales</p>
+  </div>
+</details>
+<details class="item" id="t1" data-status="default">
+  <summary><span class="idx">1</span><span class="t">垂直二等分線の距離の等価性</span><span class="tag">既定</span><span class="tag">変数6・パターン5</span><span class="tag">需要 1</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>線分 BC の垂直二等分線 PerpMid の上の点 P は、B と C から等距離: PB² = PC²。外心の性質(3本の垂直二等分線が1点で交わる)の証明で使う。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>LineBC = LineThroughPoints(B, C)</code></p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>Dist_PB = LengthSq(P, B)</code>・<code>Dist_PC = LengthSq(P, C)</code></p>
+    <p>結論: <code>Dist_PB ≡ Dist_PC</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>P ∈ PerpMid</code>(見積もり 60)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Mid_BC = Midpoint(B, C)</code></td><td class="num">3</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">1</td><td>需要を立てる</td><td><code>LineBC = LineThroughPoints(B, C)</code></td><td class="num">4</td><td class="num">0</td></tr><tr class="lookup"><td class="num">2</td><td>照合</td><td><code>PerpMid = PerpendicularLine(LineBC, Mid_BC)</code></td><td class="num">2</td><td class="num">47.5</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>P ∈ PerpMid</code></td><td class="num">1</td><td class="num">60</td></tr><tr class=""><td class="num">4</td><td>非退化</td><td><code>図の上でも相異なる(B, C, P)</code></td><td class="num">5</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>541</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>59,141(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>250回・15問</td></tr><tr><th>証明に登場した問題</th><td>2問: bench_2012egmop1, circumcenter</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>中点 Mid_BC と垂直二等分線 PerpMid が<b>図に既にある</b>ことを要求する(<code>match_by</code>)。垂直二等分線は、逆向きの定理の結論か問題文でしか作られない。</li><li>直線 BC は需要として立てる。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t2" data-status="default">
+  <summary><span class="idx">2</span><span class="t">垂直二等分線の距離の等価性の逆</span><span class="tag">既定</span><span class="tag">変数8・パターン4</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>B と C から等距離な点 P(PB² = PC²)は、線分 BC の垂直二等分線の上にある。垂直二等分線と中点は前提で要求せず、結論の側で作る。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Dist_PB = LengthSq(P, B)</code>・<code>Dist_PC = LengthSq(P, C)</code></p>
+    <p>結論のときに作る: <code>Mid_BC = Midpoint(B, C)</code>・<code>LineBC = LineThroughPoints(B, C)</code>・<code>PerpMid = PerpendicularLine(LineBC, Mid_BC)</code></p>
+    <p>結論: <code>P ∈ PerpMid</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Dist_PB ≡ Dist_PC</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="build"><td class="num">0</td><td>その場で作る</td><td><code>Dist_PB = LengthSq(P, B)</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Dist_PC = LengthSq(P, C)</code></td><td class="num">3</td><td class="num">26.5</td></tr><tr class=""><td class="num">2</td><td>一致</td><td><code>Dist_PB ≡ Dist_PC</code></td><td class="num">1</td><td class="num">15</td></tr><tr class=""><td class="num">3</td><td>非退化</td><td><code>図の上でも相異なる(B, C, P)</code></td><td class="num">4</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>541</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>71,304(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>114回・12問</td></tr><tr><th>証明に登場した問題</th><td>2問: bench_2012egmop1, circumcenter</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>入口は「等しい長さの同値類」の自己束縛で、長さを <code>build_by</code> で作る。等しい長さが多い図(円の中心がある図)では組が増える。</li><li>結論のたびに中点・直線・垂線を作る。図を増やす結論なので、使われない発火は図を膨らませるだけになる。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t3" data-status="default">
+  <summary><span class="idx">3</span><span class="t">中点連結定理</span><span class="tag">既定</span><span class="tag">変数9・パターン7</span><span class="tag">需要 2</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>三角形 ABC で AB の中点 M1・AC の中点 M2 について、M1M2 ∥ BC。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>LineBC = LineThroughPoints(B, C)</code>・<code>LineM1M2 = LineThroughPoints(M1, M2)</code></p>
+    <p>その場で作る(親が揃えば図に足す): <code>DirBC = Dir(LineBC)</code>・<code>DirM1M2 = Dir(LineM1M2)</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>DirBC ≡ DirM1M2</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>M1 = Midpoint(A, B)</code>(見積もり 103)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>M1 = Midpoint(A, B)</code></td><td class="num">1</td><td class="num">103</td></tr><tr class="lookup"><td class="num">1</td><td>照合</td><td><code>M2 = Midpoint(A, C)</code></td><td class="num">2</td><td class="num">47.5</td></tr><tr class=""><td class="num">2</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C, M1, M2)</code></td><td class="num">3</td><td class="num">0</td></tr><tr class="demand"><td class="num">3</td><td>需要を立てる</td><td><code>LineBC = LineThroughPoints(B, C)</code></td><td class="num">4</td><td class="num">25</td></tr><tr class="demand"><td class="num">4</td><td>需要を立てる</td><td><code>LineM1M2 = LineThroughPoints(M1, M2)</code></td><td class="num">5</td><td class="num">25</td></tr><tr class="build"><td class="num">5</td><td>その場で作る</td><td><code>DirBC = Dir(LineBC)</code></td><td class="num">6</td><td class="num">27.5</td></tr><tr class="build"><td class="num">6</td><td>その場で作る</td><td><code>DirM1M2 = Dir(LineM1M2)</code></td><td class="num">7</td><td class="num">27.5</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>541</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>203,224(全定理の 0.2%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>502回・16問</td></tr><tr><th>証明に登場した問題</th><td>4問: bench_2012egmop1, test_right_midpoint, thales, varignon</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>中点が図に既にあることを要求する(<code>match_by</code>)。中点の需要は既定では切っているので、問題文と他の定理の結論にある中点でしか発火しない。</li><li>直線 BC と M1M2 を需要として立てる。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): varignon</p>
+  </div>
+</details>
+<details class="item" id="t4" data-status="default">
+  <summary><span class="idx">4</span><span class="t">二等辺三角形の底角</span><span class="tag">既定</span><span class="tag">変数13・パターン13</span><span class="tag">需要 3</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>AB = AC(長さの二乗で)なら、底角が等しい: ∠(AB, BC) = ∠(BC, AC)(向きの組 Isosceles)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>LineAB = LineThroughPoints(A, B)</code>・<code>LineAC = LineThroughPoints(A, C)</code>・<code>LineBC = LineThroughPoints(B, C)</code></p>
+    <p>その場で作る(親が揃えば図に足す): <code>Dist_AB = LengthSq(A, B)</code>・<code>Dist_AC = LengthSq(A, C)</code>・<code>DirAB = Dir(LineAB)</code>・<code>DirAC = Dir(LineAC)</code>・<code>DirBC = Dir(LineBC)</code>・<code>Ang_B = AnglePair(DirAB, DirBC) 〔向きの組 Isosceles〕</code>・<code>Ang_C = AnglePair(DirBC, DirAC) 〔向きの組 Isosceles〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>Ang_B ≡ Ang_C</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Dist_AB ≡ Dist_AC</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Dist_AB ≡ Dist_AC</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Dist_AB = LengthSq(A, B)</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Dist_AC = LengthSq(A, C)</code></td><td class="num">4</td><td class="num">26.5</td></tr><tr class=""><td class="num">3</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class="demand"><td class="num">4</td><td>需要を立てる</td><td><code>LineAB = LineThroughPoints(A, B)</code></td><td class="num">3</td><td class="num">25</td></tr><tr class="demand"><td class="num">5</td><td>需要を立てる</td><td><code>LineAC = LineThroughPoints(A, C)</code></td><td class="num">6</td><td class="num">25</td></tr><tr class="demand"><td class="num">6</td><td>需要を立てる</td><td><code>LineBC = LineThroughPoints(B, C)</code></td><td class="num">7</td><td class="num">25</td></tr><tr class="build"><td class="num">7</td><td>その場で作る</td><td><code>DirAB = Dir(LineAB)</code></td><td class="num">8</td><td class="num">27.5</td></tr><tr class="build"><td class="num">8</td><td>その場で作る</td><td><code>DirAC = Dir(LineAC)</code></td><td class="num">9</td><td class="num">27.5</td></tr><tr class="build"><td class="num">9</td><td>その場で作る</td><td><code>DirBC = Dir(LineBC)</code></td><td class="num">10</td><td class="num">27.5</td></tr><tr class=""><td class="num">10</td><td>制約</td><td><code>相異なる(DirAB, DirAC, DirBC)</code></td><td class="num">11</td><td class="num">0</td></tr><tr class="build"><td class="num">11</td><td>その場で作る</td><td><code>Ang_B = AnglePair(DirAB, DirBC) 〔向きの組 Isosceles〕</code></td><td class="num">12</td><td class="num">25</td></tr><tr class="build"><td class="num">12</td><td>その場で作る</td><td><code>Ang_C = AnglePair(DirBC, DirAC) 〔向きの組 Isosceles〕</code></td><td class="num">13</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>541</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>264,705(全定理の 0.3%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>149回・15問</td></tr><tr><th>証明に登場した問題</th><td>4問: bench_2010g1, bench_2012egmop1, test_isosceles_converse, test_right_midpoint</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>3本の辺の直線を需要として立てる。等しい長さの同値類が大きい図では、組の数だけ需要が出る。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t5" data-status="default">
+  <summary><span class="idx">5</span><span class="t">二等辺三角形の底角の逆</span><span class="tag">既定</span><span class="tag">変数13・パターン15</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>底角が等しい(∠(AB, BC) = ∠(BC, AC))なら、AB = AC。自己相似 △ABC ∽ △ACB による古典的な証明に対応する。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang_B = AnglePair(DirAB, DirBC) 〔向きの組 IsoscelesConv〕</code>・<code>Ang_C = AnglePair(DirBC, DirAC) 〔向きの組 IsoscelesConv〕</code></p>
+    <p>結論のときに作る: <code>Dist_AB = LengthSq(A, B)</code>・<code>Dist_AC = LengthSq(A, C)</code></p>
+    <p>結論: <code>Dist_AB ≡ Dist_AC</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang_B ≡ Ang_C [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang_B ≡ Ang_C [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang_B = AnglePair(DirAB, DirBC) 〔向きの組 IsoscelesConv〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang_C = AnglePair(DirBC, DirAC) 〔向きの組 IsoscelesConv〕</code></td><td class="num">9</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(DirAB, DirAC, DirBC)</code></td><td class="num">10</td><td class="num">0</td></tr><tr class=""><td class="num">4</td><td>接続</td><td><code>LineAB ∈ DirAB(方向)</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>LineBC ∈ DirBC(方向)</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>LineAC ∈ DirAC(方向)</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">7</td><td>非退化</td><td><code>図の上でも相異なる(LineAB, LineBC, LineAC)</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>A ∈ LineAB</code></td><td class="num">5</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>A ∈ LineAC</code></td><td class="num">6</td><td class="num">1.5</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>B ∈ LineAB</code></td><td class="num">11</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>B ∈ LineBC</code></td><td class="num">12</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>C ∈ LineBC</code></td><td class="num">13</td><td class="num">3.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>C ∈ LineAC</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">14</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C)</code></td><td class="num">15</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>541</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>5,572,858(全定理の 5.8%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>7回・6問</td></tr><tr><th>証明に登場した問題</th><td>2問: bench_2010g1, test_isosceles_converse</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>入口は「等しい角の同値類」の自己束縛。角の同値類が大きい図では、その同値類の定義の組を全部舐める。</li><li>bench_2018chnwesternmop5 の座標を置ける書き方で、局所伝播が作った図形と組むと偽の結論を出した(<a class="secref" href="ledger.html#l75">#75</a>)。この定理そのものの誤りではなく、 数値的に一致する2点が別の実体のまま残ると退化した三角形で発火する(下の「全体に共通する問題」)。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_isosceles_converse</p>
+  </div>
+</details>
+<details class="item" id="t6" data-status="default">
+  <summary><span class="idx">6</span><span class="t">共点二弦の相似(方冪の定理の基礎)</span><span class="tag">既定</span><span class="tag">変数21・パターン24</span><span class="tag warn">規模が上限超過</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>2直線 AB・CD が P で交わり、弦 BD を見込む角が ∠(AB, AD) = ∠(CB, CD) なら、△PAD ∽ △PCB から PA·PB = PC·PD(長さの二乗の積)。 円周角の定理と鎖状につながって方冪の定理になる。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>AngA = AnglePair(DirAB, DirAD) 〔向きの組 PowSim〕</code>・<code>AngC = AnglePair(DirCB, DirCD) 〔向きの組 PowSim〕</code></p>
+    <p>結論のときに作る: <code>LenPA = LengthSq(P, A)</code>・<code>LenPB = LengthSq(P, B)</code>・<code>LenPC = LengthSq(P, C)</code>・<code>LenPD = LengthSq(P, D)</code>・<code>ProdAB = Product(LenPA, LenPB)</code>・<code>ProdCD = Product(LenPC, LenPD)</code></p>
+    <p>結論: <code>ProdAB ≡ ProdCD</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>AngA ≡ AngC [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>AngA ≡ AngC [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>AngA = AnglePair(DirAB, DirAD) 〔向きの組 PowSim〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>AngC = AnglePair(DirCB, DirCD) 〔向きの組 PowSim〕</code></td><td class="num">16</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(DirAB, DirAD)</code></td><td class="num">3</td><td class="num">0</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>相異なる(DirCD, DirCB)</code></td><td class="num">17</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>LineAB ∈ DirAB(方向)</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>LineAD ∈ DirAD(方向)</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>LineCD ∈ DirCD(方向)</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>LineCB ∈ DirCB(方向)</code></td><td class="num">15</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>制約</td><td><code>相異なる(LineAB, LineAD, LineCD, LineCB)</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>A ∈ LineAB</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>A ∈ LineAD</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>C ∈ LineCD</code></td><td class="num">11</td><td class="num">3.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>C ∈ LineCB</code></td><td class="num">13</td><td class="num">1.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>P ∈ LineAB</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>P ∈ LineCD</code></td><td class="num">9</td><td class="num">1.5</td></tr><tr class=""><td class="num">16</td><td>非退化</td><td><code>図の上でも相異なる(A, C, P)</code></td><td class="num">12</td><td class="num">0</td></tr><tr class=""><td class="num">17</td><td>接続</td><td><code>B ∈ LineAB</code></td><td class="num">18</td><td class="num">3.5</td></tr><tr class=""><td class="num">18</td><td>接続</td><td><code>B ∈ LineCB</code></td><td class="num">19</td><td class="num">0</td></tr><tr class=""><td class="num">19</td><td>非退化</td><td><code>図の上でも相異なる(A, P, B)</code></td><td class="num">20</td><td class="num">0</td></tr><tr class=""><td class="num">20</td><td>接続</td><td><code>D ∈ LineCD</code></td><td class="num">21</td><td class="num">3.5</td></tr><tr class=""><td class="num">21</td><td>非退化</td><td><code>図の上でも相異なる(C, P, D)</code></td><td class="num">22</td><td class="num">0</td></tr><tr class=""><td class="num">22</td><td>接続</td><td><code>D ∈ LineAD</code></td><td class="num">23</td><td class="num">0</td></tr><tr class=""><td class="num">23</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C, D)</code></td><td class="num">24</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>544</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>10,367,626(全定理の 10.7%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>4回</td></tr><tr><th>マッチ成立</th><td>228回・22問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_power_of_point</td></tr></table>
+    <h4>現状の問題点</h4><ul><li><b>規模が上限を超えている</b>(変数21・パターン24)。</li><li>結論の積(<code>Product</code>)を使う定理が今は無い。積は <code>test_power_of_point</code> の目標のためにしか使われず、ほかの問題では作るだけになる (以前は比の前提で書いたスパイラル相似が使うはずだったが、その前提を作れず一度も発火しなかった。<a class="secref" href="ledger.html#l74">#74</a>)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: 変数21個(上限20)</li><li><b>規模が大きい</b>: パターン24本(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_power_of_point</p>
+  </div>
+</details>
+<details class="item" id="t7" data-status="default">
+  <summary><span class="idx">7</span><span class="t">接弦定理</span><span class="tag">既定</span><span class="tag">変数14・パターン12</span><span class="tag">需要 3</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>円の上の点 A における接線と弦 AB のなす角は、弦 AB を見込む円周角に等しい: ∠(接線, AB) = ∠(CA, CB)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>LineAB = LineThroughPoints(A, B)</code>・<code>LineAC = LineThroughPoints(A, C)</code>・<code>LineBC = LineThroughPoints(B, C)</code></p>
+    <p>その場で作る(親が揃えば図に足す): <code>DirTan = Dir(TanA)</code>・<code>DirAB = Dir(LineAB)</code>・<code>DirAC = Dir(LineAC)</code>・<code>DirBC = Dir(LineBC)</code>・<code>AngTan = AnglePair(DirTan, DirAB) 〔向きの組 TanGrp〕</code>・<code>AngBCA = AnglePair(DirAC, DirBC) 〔向きの組 TanGrp〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>AngTan ≡ AngBCA</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>TanA = TangentLine(Circ, A)</code>(見積もり 113)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Circ = Circumcircle(A, B, C)</code></td><td class="num">6</td><td class="num">45</td></tr><tr class="lookup"><td class="num">1</td><td>照合</td><td><code>TanA = TangentLine(Circ, A)</code></td><td class="num">1</td><td class="num">113</td></tr><tr class=""><td class="num">2</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C)</code></td><td class="num">7</td><td class="num">0</td></tr><tr class="demand"><td class="num">3</td><td>需要を立てる</td><td><code>LineAB = LineThroughPoints(A, B)</code></td><td class="num">3</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">4</td><td>需要を立てる</td><td><code>LineAC = LineThroughPoints(A, C)</code></td><td class="num">8</td><td class="num">25</td></tr><tr class="demand"><td class="num">5</td><td>需要を立てる</td><td><code>LineBC = LineThroughPoints(B, C)</code></td><td class="num">9</td><td class="num">25</td></tr><tr class="build"><td class="num">6</td><td>その場で作る</td><td><code>DirTan = Dir(TanA)</code></td><td class="num">2</td><td class="num">27.5</td></tr><tr class="build"><td class="num">7</td><td>その場で作る</td><td><code>DirAB = Dir(LineAB)</code></td><td class="num">4</td><td class="num">27.5</td></tr><tr class="build"><td class="num">8</td><td>その場で作る</td><td><code>DirAC = Dir(LineAC)</code></td><td class="num">10</td><td class="num">27.5</td></tr><tr class="build"><td class="num">9</td><td>その場で作る</td><td><code>DirBC = Dir(LineBC)</code></td><td class="num">11</td><td class="num">27.5</td></tr><tr class="build"><td class="num">10</td><td>その場で作る</td><td><code>AngTan = AnglePair(DirTan, DirAB) 〔向きの組 TanGrp〕</code></td><td class="num">5</td><td class="num">25</td></tr><tr class="build"><td class="num">11</td><td>その場で作る</td><td><code>AngBCA = AnglePair(DirAC, DirBC) 〔向きの組 TanGrp〕</code></td><td class="num">12</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>32問</td></tr><tr><th>試行回数(合計)</th><td>337</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>827(全定理の 0.0%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>6回・2問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_steiner_tangent</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>接線が図に既にあることを要求する(<code>match_by</code>)。接線を作る手が無いので、問題文に接線がある問題でしか発火しない。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t8" data-status="default">
+  <summary><span class="idx">8</span><span class="t">円周角の定理の逆</span><span class="tag">既定</span><span class="tag">変数15・パターン17</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(L1, L2) = ∠(L3, L4) で、L1∩L2 = Apex1、L3∩L4 = Apex2、L1∩L3 = Base1、L2∩L4 = Base2 なら、4点は同じ円の上にある (Apex1・Base1・Base2 を通る円を作り、Apex2 をそれに接続する)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang1 = AnglePair(Dir_L1, Dir_L2) 〔向きの組 ConvCyc〕</code>・<code>Ang2 = AnglePair(Dir_L3, Dir_L4) 〔向きの組 ConvCyc〕</code></p>
+    <p>結論のときに作る: <code>Circ_New = Circumcircle(P_Apex1, P_Base1, P_Base2)</code></p>
+    <p>結論: <code>P_Apex2 ∈ Circ_New</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang1 ≡ Ang2 [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang1 ≡ Ang2 [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang1 = AnglePair(Dir_L1, Dir_L2) 〔向きの組 ConvCyc〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang2 = AnglePair(Dir_L3, Dir_L4) 〔向きの組 ConvCyc〕</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>L1 ∈ Dir_L1(方向)</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">4</td><td>接続</td><td><code>L2 ∈ Dir_L2(方向)</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>L3 ∈ Dir_L3(方向)</code></td><td class="num">9</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>L4 ∈ Dir_L4(方向)</code></td><td class="num">13</td><td class="num">3.5</td></tr><tr class=""><td class="num">7</td><td>非退化</td><td><code>図の上でも相異なる(L1, L2, L3, L4)</code></td><td class="num">12</td><td class="num">0</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>P_Apex1 ∈ L1</code></td><td class="num">5</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>P_Apex1 ∈ L2</code></td><td class="num">6</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>P_Apex2 ∈ L3</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>P_Apex2 ∈ L4</code></td><td class="num">11</td><td class="num">1.5</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>P_Base1 ∈ L1</code></td><td class="num">7</td><td class="num">3.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>P_Base1 ∈ L3</code></td><td class="num">8</td><td class="num">1.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>P_Base2 ∈ L2</code></td><td class="num">15</td><td class="num">3.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>P_Base2 ∈ L4</code></td><td class="num">16</td><td class="num">0</td></tr><tr class=""><td class="num">16</td><td>非退化</td><td><code>図の上でも相異なる(P_Apex1, P_Apex2, P_Base1, P_Base2)</code></td><td class="num">17</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>584</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>20,867,750(全定理の 21.6%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>61回</td></tr><tr><th>マッチ成立</th><td>2,488回・33問</td></tr><tr><th>証明に登場した問題</th><td>9問: bench_2005ctstp1, bench_2010g1, bench_2011armog10p6, bench_2011balkanmop1, bench_2012egmop1, bench_2018silkroadp1, orthic_incenter, orthocenter, simson</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>結論のたびに外接円を作る。bench_2018chnwesternmop5 では117個作って、証明に出たのは0個だった(<a class="secref" href="ledger.html#l38">#38</a>)。</li><li>4点のうち2点が数値的には同じ点なのに別の実体のまま残っていると、2点が重なった退化した外接円を作り、偽の接続を結論する(<a class="secref" href="ledger.html#l75">#75</a> で観測)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t9" data-status="default">
+  <summary><span class="idx">9</span><span class="t">同位角による平行判定(右共通)</span><span class="tag">既定</span><span class="tag">変数5・パターン4</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(D1, D3) = ∠(D2, D3)(共通の方向 D3 が右側)なら、方向 D1 と D2 は一致する(平行)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang1 = AnglePair(D1, D3) 〔向きの組 P1〕</code>・<code>Ang2 = AnglePair(D2, D3) 〔向きの組 P1〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>D1 ≡ D2</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang1 ≡ Ang2 [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang1 ≡ Ang2 [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang1 = AnglePair(D1, D3) 〔向きの組 P1〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang2 = AnglePair(D2, D3) 〔向きの組 P1〕</code></td><td class="num">3</td><td class="num">26.5</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(D1, D2, D3)</code></td><td class="num">4</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>537</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>92,557(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>50回・20問</td></tr><tr><th>証明に登場した問題</th><td>9問: bench_2005ctstp1, bench_2018silkroadp1, bench_2019g1, orthocenter, orthocenter_alt, simson, tangent_orthic, test_parallel, two_circles_reim</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>小さく安い。角の同値類の自己束縛から始まる。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_parallel</p>
+  </div>
+</details>
+<details class="item" id="t10" data-status="default">
+  <summary><span class="idx">10</span><span class="t">同位角による平行判定(左共通)</span><span class="tag">既定</span><span class="tag">変数5・パターン4</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(D3, D1) = ∠(D3, D2)(共通の方向 D3 が左側)なら、方向 D1 と D2 は一致する(平行)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang1 = AnglePair(D3, D1) 〔向きの組 P2〕</code>・<code>Ang2 = AnglePair(D3, D2) 〔向きの組 P2〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>D1 ≡ D2</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang1 ≡ Ang2 [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang1 ≡ Ang2 [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang1 = AnglePair(D3, D1) 〔向きの組 P2〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang2 = AnglePair(D3, D2) 〔向きの組 P2〕</code></td><td class="num">3</td><td class="num">26.5</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(D1, D2, D3)</code></td><td class="num">4</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>537</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>90,741(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>0回・0問</td></tr><tr><th>証明に登場した問題</th><td>0問</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>右共通と同じ。2つに分けているのは、有向角の引数の順序を向きの組で固定しているため。</li><li><b>既定設定の全44問でマッチが0回</b>(右共通は45回・証明に9問)。交替律と右共通で足りていて、要らない可能性がある(未検証。外して選抜で比べる)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t11" data-status="default">
+  <summary><span class="idx">11</span><span class="t">有向角の加法性</span><span class="tag">既定</span><span class="tag">変数12・パターン11</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(D1, D2) = ∠(D4, D5) かつ ∠(D2, D3) = ∠(D5, D6) なら ∠(D1, D3) = ∠(D4, D6)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang12 = AnglePair(D1, D2) 〔向きの組 Add1〕</code>・<code>Ang45 = AnglePair(D4, D5) 〔向きの組 Add1〕</code>・<code>Ang23 = AnglePair(D2, D3) 〔向きの組 Add2〕</code>・<code>Ang56 = AnglePair(D5, D6) 〔向きの組 Add2〕</code>・<code>Ang13 = AnglePair(D1, D3) 〔向きの組 Add3〕</code>・<code>Ang46 = AnglePair(D4, D6) 〔向きの組 Add3〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>Ang13 ≡ Ang46</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang12 ≡ Ang45 [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang12 ≡ Ang45 [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang12 = AnglePair(D1, D2) 〔向きの組 Add1〕</code></td><td class="num">3</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang45 = AnglePair(D4, D5) 〔向きの組 Add1〕</code></td><td class="num">7</td><td class="num">49</td></tr><tr class="build"><td class="num">3</td><td>その場で作る</td><td><code>Ang23 = AnglePair(D2, D3) 〔向きの組 Add2〕</code></td><td class="num">4</td><td class="num">26.5</td></tr><tr class="build"><td class="num">4</td><td>その場で作る</td><td><code>Ang56 = AnglePair(D5, D6) 〔向きの組 Add2〕</code></td><td class="num">9</td><td class="num">26.5</td></tr><tr class=""><td class="num">5</td><td>一致</td><td><code>Ang23 ≡ Ang56 [角度]</code></td><td class="num">2</td><td class="num">15</td></tr><tr class=""><td class="num">6</td><td>制約</td><td><code>相異なる(D1, D2, D3)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class=""><td class="num">7</td><td>制約</td><td><code>相異なる(D4, D5, D6)</code></td><td class="num">10</td><td class="num">0</td></tr><tr class=""><td class="num">8</td><td>制約</td><td><code>順序 D1 ≤ D4</code></td><td class="num">8</td><td class="num">0</td></tr><tr class="build"><td class="num">9</td><td>その場で作る</td><td><code>Ang13 = AnglePair(D1, D3) 〔向きの組 Add3〕</code></td><td class="num">6</td><td class="num">25</td></tr><tr class="build"><td class="num">10</td><td>その場で作る</td><td><code>Ang46 = AnglePair(D4, D6) 〔向きの組 Add3〕</code></td><td class="num">11</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>628</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>27,357,897(全定理の 28.3%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>145回</td></tr><tr><th>マッチ成立</th><td>3,917回・26問</td></tr><tr><th>証明に登場した問題</th><td>5問: bench_2011balkanmop1, bench_2012egmop1, bench_2018silkroadp1, orthic_incenter, orthocenter</td></tr></table>
+    <h4>現状の問題点</h4><ul><li><b>角の足し算を規則として総当たりしている</b>。等しい角の同値類を2つ続けて選び(自己束縛)、その組み合わせを舐めるので、1回の試行が重い (上限の到達が多い)。角の等式は有向角の群の上の線形な関係なので、規則ではなく線形代数でまとめて閉じる仕組み (AlphaGeometry の AR と同じ発想)に置き換えるのが本筋(<a class="secref" href="ledger.html#l75">#75</a> の考察、<a class="secref" href="backlog.html#b45">b45</a>)。</li><li>実測(既定設定・全44問): <b>全定理の探索量の 23% で最大</b>。マッチ約3,000回に対し、証明に登場したのは5問。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t12" data-status="default">
+  <summary><span class="idx">12</span><span class="t">有向角の交替律</span><span class="tag">既定</span><span class="tag">変数8・パターン6</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(D1, D2) = ∠(D3, D4) なら ∠(D1, D3) = ∠(D2, D4)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang12 = AnglePair(D1, D2) 〔向きの組 Perm1〕</code>・<code>Ang34 = AnglePair(D3, D4) 〔向きの組 Perm1〕</code>・<code>Ang13 = AnglePair(D1, D3) 〔向きの組 Perm2〕</code>・<code>Ang24 = AnglePair(D2, D4) 〔向きの組 Perm2〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>Ang13 ≡ Ang24</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang12 ≡ Ang34 [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>Ang12 ≡ Ang34 [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Ang12 = AnglePair(D1, D2) 〔向きの組 Perm1〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang34 = AnglePair(D3, D4) 〔向きの組 Perm1〕</code></td><td class="num">4</td><td class="num">26.5</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(D1, D2, D3, D4)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class="build"><td class="num">4</td><td>その場で作る</td><td><code>Ang13 = AnglePair(D1, D3) 〔向きの組 Perm2〕</code></td><td class="num">3</td><td class="num">47.5</td></tr><tr class="build"><td class="num">5</td><td>その場で作る</td><td><code>Ang24 = AnglePair(D2, D4) 〔向きの組 Perm2〕</code></td><td class="num">6</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>538</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>5,160,788(全定理の 5.3%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>1回</td></tr><tr><th>マッチ成立</th><td>3,325回・28問</td></tr><tr><th>証明に登場した問題</th><td>9問: bench_2005ctstp1, bench_2010g1, bench_2011armog10p6, bench_2012egmop1, bench_2018silkroadp1, orthic_incenter, orthocenter, test_right_midpoint, thales</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>加法性と同じく、角の線形な関係を規則で総当たりしている。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t13" data-status="default">
+  <summary><span class="idx">13</span><span class="t">直角三角形の斜辺の中線</span><span class="tag">既定</span><span class="tag">変数16・パターン11</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(AH, CH) = 90° で M が AC の中点なら、∠(MH, CH) = ∠(CH, CA)(中線 MH と辺の角が等しい = △MHC が二等辺)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang_AH_CH = AnglePair(Dir_AH, Dir_CH)</code>・<code>Dir_AH = Dir(L_AH)</code>・<code>Dir_CH = Dir(L_CH)</code></p>
+    <p>結論のときに作る: <code>L_MH = LineThroughPoints(M, H)</code>・<code>L_CA = LineThroughPoints(C, A)</code>・<code>Dir_MH = Dir(L_MH)</code>・<code>Dir_CA = Dir(L_CA)</code>・<code>Ang_MH_CH = AnglePair(Dir_MH, Dir_CH)</code>・<code>Ang_CH_CA = AnglePair(Dir_CH, Dir_CA)</code></p>
+    <p>結論: <code>Ang_MH_CH ≡ Ang_CH_CA</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang_AH_CH ≡ Ang90 [角度]</code>(見積もり 0.5)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>M = Midpoint(A, C)</code></td><td class="num">10</td><td class="num">25</td></tr><tr class=""><td class="num">1</td><td>一致</td><td><code>Ang_AH_CH ≡ Ang90 [角度]</code></td><td class="num">1</td><td class="num">0.5</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang_AH_CH = AnglePair(Dir_AH, Dir_CH)</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">3</td><td>その場で作る</td><td><code>Dir_AH = Dir(L_AH)</code></td><td class="num">3</td><td class="num">27.5</td></tr><tr class="build"><td class="num">4</td><td>その場で作る</td><td><code>Dir_CH = Dir(L_CH)</code></td><td class="num">6</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>H ∈ L_AH</code></td><td class="num">4</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>H ∈ L_CH</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>A ∈ L_AH</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>C ∈ L_CH</code></td><td class="num">9</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>非退化</td><td><code>図の上でも相異なる(A, C, H, M)</code></td><td class="num">11</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>制約</td><td><code>相異なる(L_AH, L_CH)</code></td><td class="num">7</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>458,717(全定理の 0.5%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>89回・6問</td></tr><tr><th>証明に登場した問題</th><td>2問: test_right_midpoint, thales</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>入口は直角(Ang90)の同値類。直角が多い図(垂線の多い図)では組が増える。</li><li>結論のたびに直線 MH・CA とその角を作る。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_right_midpoint</p>
+  </div>
+</details>
+<details class="item" id="t14" data-status="default">
+  <summary><span class="idx">14</span><span class="t">直角三角形の斜辺の中線 (距離版)</span><span class="tag">既定</span><span class="tag">変数14・パターン10</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠A = 90° で M が BC の中点なら、MA = MB(長さの二乗で)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Ang_A = AnglePair(Dir1, Dir2) 〔向きは自由〕</code>・<code>Dir1 = Dir(L1)</code>・<code>Dir2 = Dir(L2)</code></p>
+    <p>結論のときに作る: <code>Line_Median = LineThroughPoints(Mid_BC, A)</code>・<code>Dir_Median = Dir(Line_Median)</code>・<code>Dist_MB = LengthSq(Mid_BC, B)</code>・<code>Dist_MA = LengthSq(Mid_BC, A)</code></p>
+    <p>結論: <code>Dist_MB ≡ Dist_MA</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Ang_A ≡ Ang90 [角度]</code>(見積もり 0.5)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Mid_BC = Midpoint(B, C)</code></td><td class="num">10</td><td class="num">25</td></tr><tr class=""><td class="num">1</td><td>一致</td><td><code>Ang_A ≡ Ang90 [角度]</code></td><td class="num">1</td><td class="num">0.5</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Ang_A = AnglePair(Dir1, Dir2) 〔向きは自由〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">3</td><td>その場で作る</td><td><code>Dir1 = Dir(L1)</code></td><td class="num">3</td><td class="num">27.5</td></tr><tr class="build"><td class="num">4</td><td>その場で作る</td><td><code>Dir2 = Dir(L2)</code></td><td class="num">6</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>A ∈ L1</code></td><td class="num">4</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>A ∈ L2</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>B ∈ L1</code></td><td class="num">7</td><td class="num">3.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>C ∈ L2</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C)</code></td><td class="num">9</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>545,343(全定理の 0.6%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>46回・6問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_right_midpoint</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>結論の側で中線の直線と長さを作る。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t15" data-status="default">
+  <summary><span class="idx">15</span><span class="t">直角三角形の斜辺の中線の逆</span><span class="tag">既定</span><span class="tag">変数12・パターン5</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>M が BC の中点で MA = MB なら、∠BAC = 90°。タレスの定理の証明で使う。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>Dist_MB = LengthSq(Mid_BC, B)</code>・<code>Dist_MA = LengthSq(Mid_BC, A)</code></p>
+    <p>結論のときに作る: <code>L1 = LineThroughPoints(A, B)</code>・<code>L2 = LineThroughPoints(A, C)</code>・<code>Dir1 = Dir(L1)</code>・<code>Dir2 = Dir(L2)</code>・<code>Ang_A = AnglePair(Dir1, Dir2)</code></p>
+    <p>結論: <code>Ang_A ≡ Ang90</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Dist_MB ≡ Dist_MA</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Mid_BC = Midpoint(B, C)</code></td><td class="num">3</td><td class="num">25</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>Dist_MB = LengthSq(Mid_BC, B)</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>Dist_MA = LengthSq(Mid_BC, A)</code></td><td class="num">4</td><td class="num">26.5</td></tr><tr class=""><td class="num">3</td><td>一致</td><td><code>Dist_MB ≡ Dist_MA</code></td><td class="num">1</td><td class="num">15</td></tr><tr class=""><td class="num">4</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C)</code></td><td class="num">5</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>57,214(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>47回・6問</td></tr><tr><th>証明に登場した問題</th><td>2問: test_right_midpoint, thales</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>bench_2018chnwesternmop5(元の書き方)では、この定理の結論が数値監査で偽と出る(<a class="secref" href="ledger.html#l75">#75</a>)。この問題は点の座標が置けず監査が当てにならないので、 真の誤りか誤警報かは区別できていない。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t16" data-status="default">
+  <summary><span class="idx">16</span><span class="t">中点連結定理(長さ)</span><span class="tag">既定</span><span class="tag">変数8・パターン4</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>三角形 ABC の3辺の中点 Mab・Mac・Mbc について、Mab–Mac の長さは B–Mbc(BC の半分)に等しい。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>LenMid = LengthSq(Mab, Mac)</code>・<code>LenHalf = LengthSq(B, Mbc)</code></p>
+    <p>結論: <code>LenMid ≡ LenHalf</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Mab = Midpoint(A, B)</code>(見積もり 103)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Mab = Midpoint(A, B)</code></td><td class="num">1</td><td class="num">103</td></tr><tr class="lookup"><td class="num">1</td><td>照合</td><td><code>Mac = Midpoint(A, C)</code></td><td class="num">2</td><td class="num">47.5</td></tr><tr class="lookup"><td class="num">2</td><td>照合</td><td><code>Mbc = Midpoint(B, C)</code></td><td class="num">3</td><td class="num">25</td></tr><tr class=""><td class="num">3</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C, Mab, Mac, Mbc)</code></td><td class="num">4</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>94,454(全定理の 0.1%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>1,235回・18問</td></tr><tr><th>証明に登場した問題</th><td>2問: test_right_midpoint, thales</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>3つの中点が全部図にあることを要求する(作らない)。中点は数が少ないので安い。課税は図が大きいときだけ(<a class="secref" href="ledger.html#l63">#63</a>)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t17" data-status="default">
+  <summary><span class="idx">17</span><span class="t">中心角の定理</span><span class="tag">既定</span><span class="tag">変数18・パターン18</span><span class="tag">需要 4</span><span class="tag">証人なし</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>O が A・B・C から等距離(外心)なら、中心角 ∠BOC は円周角 ∠BAC の2倍。有向角を円周点との複比 k として評価するので、「2倍」は k² = 積 Product(∠BAC, ∠BAC) で表す。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>L_AB = LineThroughPoints(A, B)</code>・<code>L_AC = LineThroughPoints(A, C)</code>・<code>L_OB = LineThroughPoints(O, B)</code>・<code>L_OC = LineThroughPoints(O, C)</code></p>
+    <p>その場で作る(親が揃えば図に足す): <code>LenOA = LengthSq(O, A)</code>・<code>LenOB = LengthSq(O, B)</code>・<code>LenOC = LengthSq(O, C)</code>・<code>Dir_AB = Dir(L_AB)</code>・<code>Dir_AC = Dir(L_AC)</code>・<code>Dir_OB = Dir(L_OB)</code>・<code>Dir_OC = Dir(L_OC)</code>・<code>AngBAC = AnglePair(Dir_AB, Dir_AC)</code>・<code>AngBOC = AnglePair(Dir_OB, Dir_OC)</code></p>
+    <p>結論のときに作る: <code>AngBAC_Sq = Product(AngBAC, AngBAC)</code></p>
+    <p>結論: <code>AngBOC ≡ AngBAC_Sq</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>LenOA ≡ LenOB</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="build"><td class="num">0</td><td>その場で作る</td><td><code>LenOA = LengthSq(O, A)</code></td><td class="num">3</td><td class="num">49</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>LenOB = LengthSq(O, B)</code></td><td class="num">4</td><td class="num">26.5</td></tr><tr class=""><td class="num">2</td><td>一致</td><td><code>LenOA ≡ LenOB</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">3</td><td>その場で作る</td><td><code>LenOC = LengthSq(O, C)</code></td><td class="num">7</td><td class="num">26.5</td></tr><tr class=""><td class="num">4</td><td>一致</td><td><code>LenOA ≡ LenOC</code></td><td class="num">2</td><td class="num">0.5</td></tr><tr class=""><td class="num">5</td><td>非退化</td><td><code>図の上でも相異なる(O, A, B, C)</code></td><td class="num">8</td><td class="num">0</td></tr><tr class="demand"><td class="num">6</td><td>需要を立てる</td><td><code>L_AB = LineThroughPoints(A, B)</code></td><td class="num">5</td><td class="num">25</td></tr><tr class="demand"><td class="num">7</td><td>需要を立てる</td><td><code>L_AC = LineThroughPoints(A, C)</code></td><td class="num">9</td><td class="num">25</td></tr><tr class=""><td class="num">8</td><td>制約</td><td><code>相異なる(L_AB, L_AC)</code></td><td class="num">10</td><td class="num">0</td></tr><tr class="demand"><td class="num">9</td><td>需要を立てる</td><td><code>L_OB = LineThroughPoints(O, B)</code></td><td class="num">6</td><td class="num">25</td></tr><tr class="demand"><td class="num">10</td><td>需要を立てる</td><td><code>L_OC = LineThroughPoints(O, C)</code></td><td class="num">11</td><td class="num">25</td></tr><tr class=""><td class="num">11</td><td>制約</td><td><code>相異なる(L_OB, L_OC)</code></td><td class="num">12</td><td class="num">0</td></tr><tr class="build"><td class="num">12</td><td>その場で作る</td><td><code>Dir_AB = Dir(L_AB)</code></td><td class="num">13</td><td class="num">27.5</td></tr><tr class="build"><td class="num">13</td><td>その場で作る</td><td><code>Dir_AC = Dir(L_AC)</code></td><td class="num">14</td><td class="num">27.5</td></tr><tr class="build"><td class="num">14</td><td>その場で作る</td><td><code>Dir_OB = Dir(L_OB)</code></td><td class="num">16</td><td class="num">27.5</td></tr><tr class="build"><td class="num">15</td><td>その場で作る</td><td><code>Dir_OC = Dir(L_OC)</code></td><td class="num">17</td><td class="num">27.5</td></tr><tr class="build"><td class="num">16</td><td>その場で作る</td><td><code>AngBAC = AnglePair(Dir_AB, Dir_AC)</code></td><td class="num">15</td><td class="num">25</td></tr><tr class="build"><td class="num">17</td><td>その場で作る</td><td><code>AngBOC = AnglePair(Dir_OB, Dir_OC)</code></td><td class="num">18</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>179,196(全定理の 0.2%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>174回・10問</td></tr><tr><th>証明に登場した問題</th><td>1問: bench_2012egmop1</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>2026-09-28 に既定にした(<a class="secref" href="ledger.html#l70">#70</a>。以前は問題名のリストで bench_2012egmop1 だけに入れていた)。課税はほぼ無いが、ノイズ20の miquel だけ61倍になる。</li><li>結論の積(角の2乗)を使うのはこの定理自身の結論の側だけ。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>証人が無い</b>: 発火を確かめる問題が紐づいていない</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): なし</p>
+  </div>
+</details>
+<details class="item" id="t18" data-status="default">
+  <summary><span class="idx">18</span><span class="t">複比の透視射影不変性(点→線束)/対合定理(共点4直線+横断線)</span><span class="tag">既定</span><span class="tag">変数12・パターン16</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>直線 L の上の4点 A・B・C・D と、それらを点 O と結ぶ4直線について、点の複比 (A,B;C,D) = 線束の複比 (OA,OB;OC,OD)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>CR1 = CrossRatio(A, B, C, D)</code>・<code>CRL = CrossRatioOfLines(LOA, LOB, LOC, LOD)</code></p>
+    <p>結論: <code>CR1 ≡ CRL</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>A ∈ L</code>(見積もり 60)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>接続</td><td><code>A ∈ L</code></td><td class="num">1</td><td class="num">60</td></tr><tr class=""><td class="num">1</td><td>接続</td><td><code>B ∈ L</code></td><td class="num">3</td><td class="num">3.5</td></tr><tr class=""><td class="num">2</td><td>制約</td><td><code>順序 A &lt; B</code></td><td class="num">4</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>C ∈ L</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>順序 B &lt; C</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>D ∈ L</code></td><td class="num">9</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>制約</td><td><code>順序 C &lt; D</code></td><td class="num">10</td><td class="num">0</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>A ∈ LOA</code></td><td class="num">2</td><td class="num">1.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>O ∈ LOA</code></td><td class="num">13</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>B ∈ LOB</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>O ∈ LOB</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>C ∈ LOC</code></td><td class="num">8</td><td class="num">1.5</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>O ∈ LOC</code></td><td class="num">15</td><td class="num">0</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>D ∈ LOD</code></td><td class="num">11</td><td class="num">1.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>O ∈ LOD</code></td><td class="num">16</td><td class="num">0</td></tr><tr class=""><td class="num">15</td><td>制約</td><td><code>相異なる(LOA, LOB, LOC, LOD)</code></td><td class="num">12</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>2,843,906(全定理の 2.9%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>949回・17問</td></tr><tr><th>証明に登場した問題</th><td>3問: centroid, test_cross_ratio, test_involution</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>同じ4点の並べ替えを省くため、代表元の番号の昇順(A &lt; B &lt; C &lt; D)の1通りだけを通す。複比は6通りの値を持つので、目標の複比が別の値だと届かない。 順序を緩めると重くなり、しかもパップス・デザルグ・パスカルは解けなかった(<a class="secref" href="ledger.html#l67">#67</a>)。</li><li>パップス・デザルグでは素の図で一度も発火しない。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_involution</p>
+  </div>
+</details>
+<details class="item" id="t19" data-status="default">
+  <summary><span class="idx">19</span><span class="t">複比の透視射影不変性(線束→点)</span><span class="tag">既定</span><span class="tag">変数12・パターン15</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>1点 O で交わる4直線の線束の複比 = それらと横断線 T の交点 Ap・Bp・Cp・Dp の複比。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>CRL = CrossRatioOfLines(L1, L2, L3, L4)</code></p>
+    <p>結論のときに作る: <code>CR2 = CrossRatio(Ap, Bp, Cp, Dp)</code></p>
+    <p>結論: <code>CRL ≡ CR2</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>O ∈ L1</code>(見積もり 60)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="build"><td class="num">0</td><td>その場で作る</td><td><code>CRL = CrossRatioOfLines(L1, L2, L3, L4)</code></td><td class="num">15</td><td class="num">20</td></tr><tr class=""><td class="num">1</td><td>制約</td><td><code>相異なる(L1, L2, L3, L4)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class=""><td class="num">2</td><td>接続</td><td><code>O ∈ L1</code></td><td class="num">1</td><td class="num">60</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>O ∈ L2</code></td><td class="num">2</td><td class="num">1.5</td></tr><tr class=""><td class="num">4</td><td>接続</td><td><code>O ∈ L3</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>O ∈ L4</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>Ap ∈ L1</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>Ap ∈ T</code></td><td class="num">7</td><td class="num">1.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>Bp ∈ L2</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>Bp ∈ T</code></td><td class="num">9</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>Cp ∈ L3</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>Cp ∈ T</code></td><td class="num">11</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>Dp ∈ L4</code></td><td class="num">12</td><td class="num">3.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>Dp ∈ T</code></td><td class="num">13</td><td class="num">0</td></tr><tr class=""><td class="num">14</td><td>非退化</td><td><code>図の上でも相異なる(O, Ap, Bp, Cp, Dp)</code></td><td class="num">14</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>536</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>822,589(全定理の 0.9%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>65回・10問</td></tr><tr><th>証明に登場した問題</th><td>1問: centroid</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>以前は O での共点と T 上の共線を要求しておらず、偽の等式を大量に作っていた(<a class="secref" href="ledger.html#l44">#44</a> で修正)。</li><li>線束の複比 <code>CrossRatioOfLines</code> を <code>build_by</code> で作る。</li><li>centroid では、数値的には同じ直線が別の実体のまま残った線束(4直線のうち2本が一致)で偽の等式を出していた(<a class="secref" href="ledger.html#l76">#76</a>)。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_cross_ratio</p>
+  </div>
+</details>
+<details class="item" id="t20" data-status="default">
+  <summary><span class="idx">20</span><span class="t">シュタイナーの定理(二次曲線上の6点の複比不変性)</span><span class="tag">既定</span><span class="tag">変数17・パターン13</span><span class="tag">需要 8</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>二次曲線の上の点 P1・P5 から、同じ二次曲線の上の4点 P2・P3・P4・Q を見る線束の複比は等しい。円周角の定理の一般の二次曲線への拡張。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>L1_P2 = LineThroughPoints(P1, P2)</code>・<code>L1_P3 = LineThroughPoints(P1, P3)</code>・<code>L1_P4 = LineThroughPoints(P1, P4)</code>・<code>L1_Q = LineThroughPoints(P1, Q)</code>・<code>L5_P2 = LineThroughPoints(P5, P2)</code>・<code>L5_P3 = LineThroughPoints(P5, P3)</code>・<code>L5_P4 = LineThroughPoints(P5, P4)</code>・<code>L5_Q = LineThroughPoints(P5, Q)</code></p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>CR_P1 = CrossRatioOfLines(L1_P2, L1_P3, L1_P4, L1_Q)</code>・<code>CR_P5 = CrossRatioOfLines(L5_P2, L5_P3, L5_P4, L5_Q)</code></p>
+    <p>結論: <code>CR_P1 ≡ CR_P5</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Q ∈ Conic</code>(見積もり 10)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Conic = ConicThrough5Points(P1, P2, P3, P4, P5)</code></td><td class="num">7</td><td class="num">40</td></tr><tr class=""><td class="num">1</td><td>接続</td><td><code>Q ∈ Conic</code></td><td class="num">1</td><td class="num">10</td></tr><tr class=""><td class="num">2</td><td>非退化</td><td><code>図の上でも相異なる(P1, P2, P3, P4, P5, Q)</code></td><td class="num">8</td><td class="num">0</td></tr><tr class="demand"><td class="num">3</td><td>需要を立てる</td><td><code>L1_P2 = LineThroughPoints(P1, P2)</code></td><td class="num">3</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">4</td><td>需要を立てる</td><td><code>L1_P3 = LineThroughPoints(P1, P3)</code></td><td class="num">4</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">5</td><td>需要を立てる</td><td><code>L1_P4 = LineThroughPoints(P1, P4)</code></td><td class="num">5</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">6</td><td>需要を立てる</td><td><code>L1_Q = LineThroughPoints(P1, Q)</code></td><td class="num">2</td><td class="num">47.5</td></tr><tr class=""><td class="num">7</td><td>制約</td><td><code>相異なる(L1_P2, L1_P3, L1_P4, L1_Q)</code></td><td class="num">6</td><td class="num">0</td></tr><tr class="demand"><td class="num">8</td><td>需要を立てる</td><td><code>L5_P2 = LineThroughPoints(P5, P2)</code></td><td class="num">9</td><td class="num">25</td></tr><tr class="demand"><td class="num">9</td><td>需要を立てる</td><td><code>L5_P3 = LineThroughPoints(P5, P3)</code></td><td class="num">10</td><td class="num">25</td></tr><tr class="demand"><td class="num">10</td><td>需要を立てる</td><td><code>L5_P4 = LineThroughPoints(P5, P4)</code></td><td class="num">11</td><td class="num">25</td></tr><tr class="demand"><td class="num">11</td><td>需要を立てる</td><td><code>L5_Q = LineThroughPoints(P5, Q)</code></td><td class="num">12</td><td class="num">25</td></tr><tr class=""><td class="num">12</td><td>制約</td><td><code>相異なる(L5_P2, L5_P3, L5_P4, L5_Q)</code></td><td class="num">13</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>32問</td></tr><tr><th>試行回数(合計)</th><td>334</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>799(全定理の 0.0%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>1回・1問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_steiner</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>視点を二次曲線の定義の生成元 P1・P5 に固定した特殊形。別の視点が要るときは、問題の側でその点を生成元に含めて二次曲線を作る必要がある (問題の書き方に依存する)。</li><li>パスカルでは一度も発火しない(<a class="secref" href="ledger.html#l67">#67</a>)。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_steiner</p>
+  </div>
+</details>
+<details class="item" id="t21" data-status="default">
+  <summary><span class="idx">21</span><span class="t">シュタイナーの定理(接線版)/接弦定理(射影版)</span><span class="tag">既定</span><span class="tag">変数16・パターン12</span><span class="tag">需要 7</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>シュタイナーの定理で Q → P1 とした極限: P1 における接線と P1 から P2・P3・P4 への直線の線束の複比は、P5 から P2・P3・P4・P1 への線束の複比に等しい。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要を立てる(図に無ければ補助作図の候補にする): <code>L1_P2 = LineThroughPoints(P1, P2)</code>・<code>L1_P3 = LineThroughPoints(P1, P3)</code>・<code>L1_P4 = LineThroughPoints(P1, P4)</code>・<code>L5_P2 = LineThroughPoints(P5, P2)</code>・<code>L5_P3 = LineThroughPoints(P5, P3)</code>・<code>L5_P4 = LineThroughPoints(P5, P4)</code>・<code>L5_P1 = LineThroughPoints(P5, P1)</code></p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>CR_P1 = CrossRatioOfLines(L1_P2, L1_P3, L1_P4, T1)</code>・<code>CR_P5 = CrossRatioOfLines(L5_P2, L5_P3, L5_P4, L5_P1)</code></p>
+    <p>結論: <code>CR_P1 ≡ CR_P5</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>Conic = ConicThrough5Points(P1, P2, P3, P4, P5)</code>(見積もり 111)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class="lookup"><td class="num">0</td><td>照合</td><td><code>Conic = ConicThrough5Points(P1, P2, P3, P4, P5)</code></td><td class="num">1</td><td class="num">111</td></tr><tr class=""><td class="num">1</td><td>非退化</td><td><code>図の上でも相異なる(P1, P2, P3, P4, P5)</code></td><td class="num">2</td><td class="num">0</td></tr><tr class="lookup"><td class="num">2</td><td>照合</td><td><code>T1 = TangentLine(Conic, P1)</code></td><td class="num">12</td><td class="num">47.5</td></tr><tr class="demand"><td class="num">3</td><td>需要を立てる</td><td><code>L1_P2 = LineThroughPoints(P1, P2)</code></td><td class="num">3</td><td class="num">25</td></tr><tr class="demand"><td class="num">4</td><td>需要を立てる</td><td><code>L1_P3 = LineThroughPoints(P1, P3)</code></td><td class="num">4</td><td class="num">25</td></tr><tr class="demand"><td class="num">5</td><td>需要を立てる</td><td><code>L1_P4 = LineThroughPoints(P1, P4)</code></td><td class="num">5</td><td class="num">25</td></tr><tr class=""><td class="num">6</td><td>制約</td><td><code>相異なる(L1_P2, L1_P3, L1_P4)</code></td><td class="num">6</td><td class="num">0</td></tr><tr class="demand"><td class="num">7</td><td>需要を立てる</td><td><code>L5_P2 = LineThroughPoints(P5, P2)</code></td><td class="num">7</td><td class="num">25</td></tr><tr class="demand"><td class="num">8</td><td>需要を立てる</td><td><code>L5_P3 = LineThroughPoints(P5, P3)</code></td><td class="num">8</td><td class="num">25</td></tr><tr class="demand"><td class="num">9</td><td>需要を立てる</td><td><code>L5_P4 = LineThroughPoints(P5, P4)</code></td><td class="num">9</td><td class="num">25</td></tr><tr class="demand"><td class="num">10</td><td>需要を立てる</td><td><code>L5_P1 = LineThroughPoints(P5, P1)</code></td><td class="num">10</td><td class="num">25</td></tr><tr class=""><td class="num">11</td><td>制約</td><td><code>相異なる(L5_P2, L5_P3, L5_P4, L5_P1)</code></td><td class="num">11</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>32問</td></tr><tr><th>試行回数(合計)</th><td>334</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>350(全定理の 0.0%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>1回・1問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_steiner_tangent</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>二次曲線が5点の定義で図にあることを要求する。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_steiner_tangent</p>
+  </div>
+</details>
+<details class="item" id="t22" data-status="default">
+  <summary><span class="idx">22</span><span class="t">シュタイナーの定理の逆(射影版・円周角の定理の逆)</span><span class="tag">既定</span><span class="tag">変数17・パターン22</span><span class="tag warn">規模が上限超過</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>2点から4点への線束の複比が等しければ、6点は同じ二次曲線の上にある(5点を通る二次曲線を作り、6点目をそれに接続する)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>CR_P1 = CrossRatioOfLines(L1_P2, L1_P3, L1_P4, L1_Q)</code>・<code>CR_P5 = CrossRatioOfLines(L5_P2, L5_P3, L5_P4, L5_Q)</code></p>
+    <p>結論のときに作る: <code>Conic_New = ConicThrough5Points(P1, P2, P3, P4, P5)</code></p>
+    <p>結論: <code>Q ∈ Conic_New</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>CR_P1 ≡ CR_P5 [線束の複比]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>CR_P1 ≡ CR_P5 [線束の複比]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>CR_P1 = CrossRatioOfLines(L1_P2, L1_P3, L1_P4, L1_Q)</code></td><td class="num">6</td><td class="num">0</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>CR_P5 = CrossRatioOfLines(L5_P2, L5_P3, L5_P4, L5_Q)</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(L1_P2, L1_P3, L1_P4, L1_Q)</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>相異なる(L5_P2, L5_P3, L5_P4, L5_Q)</code></td><td class="num">15</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>P1 ∈ L1_P2</code></td><td class="num">2</td><td class="num">60</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>P1 ∈ L1_P3</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>P1 ∈ L1_P4</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>P1 ∈ L1_Q</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>P5 ∈ L5_P2</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>P5 ∈ L5_P3</code></td><td class="num">11</td><td class="num">1.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>P5 ∈ L5_P4</code></td><td class="num">12</td><td class="num">1.5</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>P5 ∈ L5_Q</code></td><td class="num">13</td><td class="num">1.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>P2 ∈ L1_P2</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>P2 ∈ L5_P2</code></td><td class="num">9</td><td class="num">1.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>P3 ∈ L1_P3</code></td><td class="num">16</td><td class="num">3.5</td></tr><tr class=""><td class="num">16</td><td>接続</td><td><code>P3 ∈ L5_P3</code></td><td class="num">17</td><td class="num">0</td></tr><tr class=""><td class="num">17</td><td>接続</td><td><code>P4 ∈ L1_P4</code></td><td class="num">18</td><td class="num">3.5</td></tr><tr class=""><td class="num">18</td><td>接続</td><td><code>P4 ∈ L5_P4</code></td><td class="num">19</td><td class="num">0</td></tr><tr class=""><td class="num">19</td><td>接続</td><td><code>Q ∈ L1_Q</code></td><td class="num">20</td><td class="num">3.5</td></tr><tr class=""><td class="num">20</td><td>接続</td><td><code>Q ∈ L5_Q</code></td><td class="num">21</td><td class="num">0</td></tr><tr class=""><td class="num">21</td><td>非退化</td><td><code>図の上でも相異なる(P1, P5, P2, P3, P4, Q)</code></td><td class="num">22</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>550</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>9,987,957(全定理の 10.3%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>18回</td></tr><tr><th>マッチ成立</th><td>7回・2問</td></tr><tr><th>証明に登場した問題</th><td>0問</td></tr></table>
+    <h4>現状の問題点</h4><ul><li><b>規模が上限を超えている</b>(パターン22)。</li><li>結論のたびに5点を通る二次曲線を作る(bench_2018chnwesternmop5 で16個作って、証明に出たのは0個)。</li><li>実測(既定設定・全44問): 全定理の探索量の 20%(加法性に次ぐ2位)、マッチ約11,000回で、証明に登場したのは1問だけ。</li><li>5点のうち3点が共線でも止めなかったので、退化した二次曲線(2直線)に点を載せる偽の結論を出していた。 centroid では「A が C・G2・Mc(共線)を通る二次曲線の上」が証明に入り、以前の「解けた」はこれに頼っていた(<a class="secref" href="ledger.html#l76">#76</a>)。 今は、3点が共線な5点の二次曲線は作らない(値の定まらない作図の見送り、<a class="secref" href="ledger.html#l78">#78</a>)。pappus の以前の証明も2直線に退化した二次曲線の上だった。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: パターン22本(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_steiner_converse</p>
+  </div>
+</details>
+<details class="item" id="t23" data-status="rules">
+  <summary><span class="idx">23</span><span class="t">等しい円周角に対する弦は等しい</span><span class="tag">--rules=chord</span><span class="tag">変数19・パターン27</span><span class="tag warn">規模が上限超過</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>同じ円の上で、2つの弦を見込む円周角が等しければ、弦の長さは等しい。弦² = 4R²sin²θ は θ の符号にも π の周期にも依らないので、 有向角の等式から健全に言える。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>AngA = AnglePair(DirA1, DirA2) 〔向きは自由〕</code>・<code>AngB = AnglePair(DirB1, DirB2) 〔向きは自由〕</code></p>
+    <p>結論のときに作る: なし</p>
+    <p>結論: <code>LenA ≡ LenB</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>XA ∈ Circ(円)</code>(見積もり 10)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>AngA ≡ AngB [角度]</code></td><td class="num">22</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>AngA = AnglePair(DirA1, DirA2) 〔向きは自由〕</code></td><td class="num">23</td><td class="num">0</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>AngB = AnglePair(DirB1, DirB2) 〔向きは自由〕</code></td><td class="num">24</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>LA1 ∈ DirA1(方向)</code></td><td class="num">4</td><td class="num">3.5</td></tr><tr class=""><td class="num">4</td><td>接続</td><td><code>LA2 ∈ DirA2(方向)</code></td><td class="num">5</td><td class="num">3.5</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>LB1 ∈ DirB1(方向)</code></td><td class="num">15</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>LB2 ∈ DirB2(方向)</code></td><td class="num">16</td><td class="num">3.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>XA ∈ LA1</code></td><td class="num">2</td><td class="num">1.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>XA ∈ LA2</code></td><td class="num">3</td><td class="num">1.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>PA ∈ LA1</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>QA ∈ LA2</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>非退化</td><td><code>図の上でも相異なる(XA, PA, QA)</code></td><td class="num">9</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>XB ∈ LB1</code></td><td class="num">13</td><td class="num">1.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>XB ∈ LB2</code></td><td class="num">14</td><td class="num">1.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>PB ∈ LB1</code></td><td class="num">17</td><td class="num">3.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>QB ∈ LB2</code></td><td class="num">19</td><td class="num">3.5</td></tr><tr class=""><td class="num">16</td><td>非退化</td><td><code>図の上でも相異なる(XB, PB, QB)</code></td><td class="num">20</td><td class="num">0</td></tr><tr class="lookup"><td class="num">17</td><td>照合</td><td><code>LenA = LengthSq(PA, QA)</code></td><td class="num">25</td><td class="num">25</td></tr><tr class="lookup"><td class="num">18</td><td>照合</td><td><code>LenB = LengthSq(PB, QB)</code></td><td class="num">26</td><td class="num">25</td></tr><tr class=""><td class="num">19</td><td>制約</td><td><code>相異なる(LenA, LenB)</code></td><td class="num">27</td><td class="num">0</td></tr><tr class=""><td class="num">20</td><td>接続</td><td><code>XA ∈ Circ(円)</code></td><td class="num">1</td><td class="num">10</td></tr><tr class=""><td class="num">21</td><td>接続</td><td><code>PA ∈ Circ(円)</code></td><td class="num">7</td><td class="num">0.5</td></tr><tr class=""><td class="num">22</td><td>接続</td><td><code>QA ∈ Circ(円)</code></td><td class="num">10</td><td class="num">0.5</td></tr><tr class=""><td class="num">23</td><td>接続</td><td><code>XB ∈ Circ(円)</code></td><td class="num">11</td><td class="num">10</td></tr><tr class=""><td class="num">24</td><td>接続</td><td><code>PB ∈ Circ(円)</code></td><td class="num">18</td><td class="num">0.5</td></tr><tr class=""><td class="num">25</td><td>接続</td><td><code>QB ∈ Circ(円)</code></td><td class="num">21</td><td class="num">0.5</td></tr><tr class=""><td class="num">26</td><td>制約</td><td><code>順序 XA ≤ XB</code></td><td class="num">12</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定 + --rules=chord・全44問</p><table class="kv"><tr><th>試行した問題</th><td>31問</td></tr><tr><th>試行回数(合計)</th><td>282</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>10,203,633(全定理の 12.0%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>58回</td></tr><tr><th>マッチ成立</th><td>36回・5問</td></tr><tr><th>証明に登場した問題</th><td>2問: bench_2010g1, bench_2015apmop1</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>既定外(<code>--rules=chord</code>)。2015 APMO が33万ステップで解けるが、全問題に約25%の課税(<a class="secref" href="ledger.html#l68">#68</a>)。</li><li>課税の原因は、角の同値類の定義の組(頂点と弦の組)を全部舐めること。合同閉包の局所伝播として、差分評価で書けば安くなる見込み(<a class="secref" href="backlog.html#b35">b35</a>)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: パターン27本(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): bench_2015apmop1</p>
+  </div>
+</details>
+<details class="item" id="t24" data-status="rules">
+  <summary><span class="idx">24</span><span class="t">平行四辺形の対角線は互いに二等分する</span><span class="tag">--rules=parallelogram</span><span class="tag">変数12・パターン20</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>対辺が平行な四角形 ABCD(AB ∥ CD かつ BC ∥ DA)では、AC の中点と BD の中点が一致する。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>MidAC = Midpoint(A, C)</code>・<code>MidBD = Midpoint(B, D)</code></p>
+    <p>結論: <code>MidAC ≡ MidBD</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>A ∈ LAB</code>(見積もり 60)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>接続</td><td><code>LAB ∈ Dir1(方向)</code></td><td class="num">3</td><td class="num">3.5</td></tr><tr class=""><td class="num">1</td><td>接続</td><td><code>LCD ∈ Dir1(方向)</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">2</td><td>接続</td><td><code>LBC ∈ Dir2(方向)</code></td><td class="num">8</td><td class="num">1.5</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>LDA ∈ Dir2(方向)</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>相異なる(LAB, LCD)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>制約</td><td><code>相異なる(LBC, LDA)</code></td><td class="num">9</td><td class="num">0</td></tr><tr class=""><td class="num">6</td><td>制約</td><td><code>相異なる(Dir1, Dir2)</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>A ∈ LAB</code></td><td class="num">1</td><td class="num">60</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>B ∈ LAB</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>B ∈ LBC</code></td><td class="num">11</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>C ∈ LBC</code></td><td class="num">13</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>C ∈ LCD</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>D ∈ LCD</code></td><td class="num">16</td><td class="num">3.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>D ∈ LDA</code></td><td class="num">17</td><td class="num">0</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>A ∈ LDA</code></td><td class="num">2</td><td class="num">1.5</td></tr><tr class=""><td class="num">15</td><td>非退化</td><td><code>図の上でも相異なる(A, B, C, D)</code></td><td class="num">18</td><td class="num">0</td></tr><tr class=""><td class="num">16</td><td>制約</td><td><code>順序 A &lt; B</code></td><td class="num">12</td><td class="num">0</td></tr><tr class=""><td class="num">17</td><td>制約</td><td><code>順序 A &lt; C</code></td><td class="num">15</td><td class="num">0</td></tr><tr class=""><td class="num">18</td><td>制約</td><td><code>順序 A &lt; D</code></td><td class="num">19</td><td class="num">0</td></tr><tr class=""><td class="num">19</td><td>制約</td><td><code>順序 B &lt; D</code></td><td class="num">20</td><td class="num">0</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定 + --rules=parallelogram・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>393</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>342,049(全定理の 0.4%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>229回・16問</td></tr><tr><th>証明に登場した問題</th><td>2問: bench_2012egmop1, bench_2018silkroadp1</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>既定外(<code>--rules=parallelogram</code>)。重心の証明の手順が自力で出るようになる(<a class="secref" href="ledger.html#l68">#68</a>)。</li><li>ノイズ下で平行な直線の組が増えると急に重くなる(ノイズ10で orthocenter が24倍)。</li></ul>
+    
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_parallelogram</p>
+  </div>
+</details>
+<details class="item" id="t25" data-status="rules">
+  <summary><span class="idx">25</span><span class="t">スパイラル相似(同じ向き)</span><span class="tag">--rules=spiral</span><span class="tag">変数36・パターン25</span><span class="tag warn">規模が上限超過</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>∠(EA, EB) = ∠(ED, EC) かつ ∠(AE, AB) = ∠(DE, DC)(E を通る4直線は相異なる)なら、E を中心とする相似が A→D、B→C に写す。 結論は、中点の対応 ∠(EA, EM) = ∠(ED, EN)・∠(EM, AB) = ∠(EN, DC)(M・N は AB・DC の中点)と、対になる相似の角 ∠(AE, AD) = ∠(BE, BC)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場で作る(親が揃えば図に足す): <code>AngE_AB = AnglePair(DirEA, DirEB) 〔向きの組 SpiralE〕</code>・<code>AngE_DC = AnglePair(DirED, DirEC) 〔向きの組 SpiralE〕</code>・<code>DirAB = Dir(LineAB)</code>・<code>DirDC = Dir(LineDC)</code>・<code>AngA = AnglePair(DirEA, DirAB) 〔向きの組 SpiralA〕</code>・<code>AngA = AnglePair(DirED, DirDC) 〔向きの組 SpiralA〕</code></p>
+    <p>結論のときに作る: <code>M = Midpoint(A, B)</code>・<code>N = Midpoint(D, C)</code>・<code>LineEM = LineThroughPoints(E, M)</code>・<code>LineEN = LineThroughPoints(E, N)</code>・<code>DirEM = Dir(LineEM)</code>・<code>DirEN = Dir(LineEN)</code>・<code>AngE_AM = AnglePair(DirEA, DirEM)</code>・<code>AngE_DN = AnglePair(DirED, DirEN)</code>・<code>AngM = AnglePair(DirEM, DirAB)</code>・<code>AngN = AnglePair(DirEN, DirDC)</code>・<code>LineAD = LineThroughPoints(A, D)</code>・<code>LineBC = LineThroughPoints(B, C)</code>・<code>DirAD = Dir(LineAD)</code>・<code>DirBC = Dir(LineBC)</code>・<code>AngA_AD = AnglePair(DirEA, DirAD)</code>・<code>AngB_BC = AnglePair(DirEB, DirBC)</code></p>
+    <p>結論: <code>AngE_AM ≡ AngE_DN</code>・<code>AngM ≡ AngN</code>・<code>AngA_AD ≡ AngB_BC</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>AngE_AB ≡ AngE_DC [角度]</code>(見積もり 15)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>一致</td><td><code>AngE_AB ≡ AngE_DC [角度]</code></td><td class="num">1</td><td class="num">15</td></tr><tr class="build"><td class="num">1</td><td>その場で作る</td><td><code>AngE_AB = AnglePair(DirEA, DirEB) 〔向きの組 SpiralE〕</code></td><td class="num">2</td><td class="num">49</td></tr><tr class="build"><td class="num">2</td><td>その場で作る</td><td><code>AngE_DC = AnglePair(DirED, DirEC) 〔向きの組 SpiralE〕</code></td><td class="num">13</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>制約</td><td><code>相異なる(DirEA, DirEB)</code></td><td class="num">3</td><td class="num">0</td></tr><tr class=""><td class="num">4</td><td>制約</td><td><code>相異なる(DirED, DirEC)</code></td><td class="num">14</td><td class="num">0</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>LineEA ∈ DirEA(方向)</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>LineEB ∈ DirEB(方向)</code></td><td class="num">5</td><td class="num">1.5</td></tr><tr class=""><td class="num">7</td><td>接続</td><td><code>LineED ∈ DirED(方向)</code></td><td class="num">11</td><td class="num">3.5</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>LineEC ∈ DirEC(方向)</code></td><td class="num">12</td><td class="num">3.5</td></tr><tr class=""><td class="num">9</td><td>制約</td><td><code>相異なる(LineEA, LineEB, LineED, LineEC)</code></td><td class="num">10</td><td class="num">0</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>E ∈ LineEA</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>E ∈ LineEB</code></td><td class="num">7</td><td class="num">0</td></tr><tr class=""><td class="num">12</td><td>接続</td><td><code>E ∈ LineED</code></td><td class="num">8</td><td class="num">1.5</td></tr><tr class=""><td class="num">13</td><td>接続</td><td><code>E ∈ LineEC</code></td><td class="num">9</td><td class="num">1.5</td></tr><tr class=""><td class="num">14</td><td>接続</td><td><code>A ∈ LineEA</code></td><td class="num">15</td><td class="num">3.5</td></tr><tr class=""><td class="num">15</td><td>接続</td><td><code>B ∈ LineEB</code></td><td class="num">16</td><td class="num">3.5</td></tr><tr class=""><td class="num">16</td><td>接続</td><td><code>D ∈ LineED</code></td><td class="num">17</td><td class="num">3.5</td></tr><tr class=""><td class="num">17</td><td>接続</td><td><code>C ∈ LineEC</code></td><td class="num">18</td><td class="num">3.5</td></tr><tr class=""><td class="num">18</td><td>非退化</td><td><code>図の上でも相異なる(E, A, B, D, C)</code></td><td class="num">19</td><td class="num">0</td></tr><tr class="lookup"><td class="num">19</td><td>照合</td><td><code>LineAB = LineThroughPoints(A, B)</code></td><td class="num">20</td><td class="num">25</td></tr><tr class="lookup"><td class="num">20</td><td>照合</td><td><code>LineDC = LineThroughPoints(D, C)</code></td><td class="num">21</td><td class="num">25</td></tr><tr class="build"><td class="num">21</td><td>その場で作る</td><td><code>DirAB = Dir(LineAB)</code></td><td class="num">22</td><td class="num">27.5</td></tr><tr class="build"><td class="num">22</td><td>その場で作る</td><td><code>DirDC = Dir(LineDC)</code></td><td class="num">25</td><td class="num">0</td></tr><tr class="build"><td class="num">23</td><td>その場で作る</td><td><code>AngA = AnglePair(DirEA, DirAB) 〔向きの組 SpiralA〕</code></td><td class="num">23</td><td class="num">25</td></tr><tr class="build"><td class="num">24</td><td>その場で作る</td><td><code>AngA = AnglePair(DirED, DirDC) 〔向きの組 SpiralA〕</code></td><td class="num">24</td><td class="num">26.5</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定 + --rules=spiral・全44問</p><table class="kv"><tr><th>試行した問題</th><td>44問</td></tr><tr><th>試行回数(合計)</th><td>492</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>17,495,870(全定理の 20.6%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>124回</td></tr><tr><th>マッチ成立</th><td>100回・12問</td></tr><tr><th>証明に登場した問題</th><td>1問: test_spiral_similarity</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>既定外(<code>--rules=spiral</code>)。以前は比の前提(EA·EC = EB·ED)で書いていて、その積を作れる定理が無く一度も発火しなかった(<a class="secref" href="ledger.html#l71">#71</a>・<a class="secref" href="ledger.html#l74">#74</a>)。</li><li>角で書いた今は発火し、bench_2016armog10p2 が補助作図なしで解ける。ただし結論で中点・直線を作るので図が膨らみ、ノイズ下で解けた数を落とす。 作らない形(局所伝播の「作らない版」)では 2016ARMO が解けない(<a class="secref" href="ledger.html#l75">#75</a>)。</li><li><b>規模が上限を超えている</b>(変数36)。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: 変数36個(上限20)</li><li><b>規模が大きい</b>: パターン25本(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): test_spiral_circles</p>
+  </div>
+</details>
+<details class="item" id="t26" data-status="default">
+  <summary><span class="idx">26</span><span class="t">交わる弦の相似(逆向きのスパイラル相似)</span><span class="tag">既定</span><span class="tag">変数24・パターン16</span><span class="tag warn">規模が上限超過</span></summary>
+  <div class="body">
+    <h4>主張</h4><p>円に内接する四角形 ABCD の対角線 AC・BD の交点を E とすると、△EAB と △EDC は逆向きに相似(A→D、B→C)。 結論は中点の対応 ∠(EA, EM) = ∠(EN, ED)・∠(EM, AB) = ∠(DC, EN)(M・N は AB・DC の中点で、図に既にあるもの)。</p>
+    <h4>作図の需要とその場の作図</h4>
+    <p>需要は立てない。</p>
+    <p>その場では作らない。</p>
+    <p>結論のときに作る: <code>Dir1 = Dir(L1)</code>・<code>Dir2 = Dir(L2)</code>・<code>DirAB = Dir(LineAB)</code>・<code>DirDC = Dir(LineDC)</code>・<code>LineEM = LineThroughPoints(E, M)</code>・<code>LineEN = LineThroughPoints(E, N)</code>・<code>DirEM = Dir(LineEM)</code>・<code>DirEN = Dir(LineEN)</code>・<code>AngE_AM = AnglePair(Dir1, DirEM)</code>・<code>AngE_ND = AnglePair(DirEN, Dir2)</code>・<code>AngM = AnglePair(DirEM, DirAB)</code>・<code>AngN = AnglePair(DirDC, DirEN)</code></p>
+    <p>結論: <code>AngE_AM ≡ AngE_ND</code>・<code>AngM ≡ AngN</code></p>
+    <h4>見積もり(cost の estimate)</h4>
+    <p>束縛が空の状態から、<code>dfs_match</code> と同じ選び方(いちばん安いパターン、同点なら先頭)で消費される順序と、そのときの <code>estimate_cost</code>。
+    入口は <code>A ∈ Circ(円)</code>(見積もり 10)。</p>
+    <table class="pat"><tr><th>#</th><th>種類</th><th>パターン</th><th>選ばれる順</th><th>その時の見積もり</th></tr><tr class=""><td class="num">0</td><td>接続</td><td><code>E ∈ L1</code></td><td class="num">3</td><td class="num">3.5</td></tr><tr class=""><td class="num">1</td><td>接続</td><td><code>E ∈ L2</code></td><td class="num">4</td><td class="num">1.5</td></tr><tr class=""><td class="num">2</td><td>制約</td><td><code>相異なる(L1, L2)</code></td><td class="num">5</td><td class="num">0</td></tr><tr class=""><td class="num">3</td><td>接続</td><td><code>A ∈ L1</code></td><td class="num">2</td><td class="num">1.5</td></tr><tr class=""><td class="num">4</td><td>接続</td><td><code>C ∈ L1</code></td><td class="num">6</td><td class="num">3.5</td></tr><tr class=""><td class="num">5</td><td>接続</td><td><code>B ∈ L2</code></td><td class="num">8</td><td class="num">3.5</td></tr><tr class=""><td class="num">6</td><td>接続</td><td><code>D ∈ L2</code></td><td class="num">10</td><td class="num">3.5</td></tr><tr class=""><td class="num">7</td><td>非退化</td><td><code>図の上でも相異なる(E, A, B, D, C)</code></td><td class="num">11</td><td class="num">0</td></tr><tr class=""><td class="num">8</td><td>接続</td><td><code>A ∈ Circ(円)</code></td><td class="num">1</td><td class="num">10</td></tr><tr class=""><td class="num">9</td><td>接続</td><td><code>B ∈ Circ(円)</code></td><td class="num">9</td><td class="num">0.5</td></tr><tr class=""><td class="num">10</td><td>接続</td><td><code>C ∈ Circ(円)</code></td><td class="num">7</td><td class="num">0.5</td></tr><tr class=""><td class="num">11</td><td>接続</td><td><code>D ∈ Circ(円)</code></td><td class="num">12</td><td class="num">0.5</td></tr><tr class="lookup"><td class="num">12</td><td>照合</td><td><code>LineAB = LineThroughPoints(A, B)</code></td><td class="num">13</td><td class="num">25</td></tr><tr class="lookup"><td class="num">13</td><td>照合</td><td><code>LineDC = LineThroughPoints(D, C)</code></td><td class="num">14</td><td class="num">25</td></tr><tr class="lookup"><td class="num">14</td><td>照合</td><td><code>M = Midpoint(A, B)</code></td><td class="num">15</td><td class="num">25</td></tr><tr class="lookup"><td class="num">15</td><td>照合</td><td><code>N = Midpoint(D, C)</code></td><td class="num">16</td><td class="num">25</td></tr></table>
+    <h4>実測</h4><p class="muted">既定設定・全44問</p><table class="kv"><tr><th>試行した問題</th><td>32問</td></tr><tr><th>試行回数(合計)</th><td>333</td></tr><tr><th>探索量(試行×平均 dfs_call)</th><td>246,981(全定理の 0.3%)</td></tr><tr><th>上限(dfs_cap)到達</th><td>0回</td></tr><tr><th>マッチ成立</th><td>277回・5問</td></tr><tr><th>証明に登場した問題</th><td>1問: bench_2011balkanmop1</td></tr></table>
+    <h4>現状の問題点</h4><ul><li>2026-09-29 に既定にした(<a class="secref" href="ledger.html#l74">#74</a>)。2011 バルカンが12万ステップで解ける。</li><li>中点が図に既にあることを要求する(作らない)。中点を作る形にすると、円周上の4点の組ごとに中点・直線・角を作り、無関係な問題が最大14倍重くなった。</li><li>角の前提で一般に書いた版は、E を通る直線が2本だけの配置で E での角の一致が自明に成り立ち、2直線の交点すべてで点の組を総当たりして重かった。</li></ul>
+    <h4>lint の指摘</h4><ul><li><b>規模が大きい</b>: 変数24個(上限20)</li></ul>
+    <p class="muted">証人(この定理が発火しないと解けない問題): bench_2011balkanmop1</p>
+  </div>
+</details>
+</div>
+
+<h3>合同閉包に組み込まれた規則(定理ではない)</h3>
+<p class="section-note">次の規則は定理のマッチングではなく、マージのたびに変化した実体の近傍だけを見る局所伝播として <code>mmp_core/congruence.rs</code> などに組み込まれている。どれも既にある実体をマージするだけで、図形を作らない。</p>
+<ul>
+<li><b>直線の一致</b>(<code>propagate_line_uniqueness</code>): 2点(無限遠点を含む)を共有する2直線は同じ。共有点は図の上でも相異なるものだけ数える。</li>
+<li><b>交点の一意性</b>(<code>propagate_point_uniqueness</code>): 2直線の交点は1つ。非退化条件: 2直線が図の上でも別の直線(#78)。</li>
+<li><b>二次曲線の一致</b>(<code>propagate_conic_uniqueness</code>): 3点(円)・5点を共有する二次曲線は同じ。非退化条件: 共有点から、どの4点も共線でない5点を選べる(#78)。
+2直線に退化した二次曲線どうしは1本の直線を丸ごと共有でき、pappus の以前の証明はそこで誤ってマージしていた。</li>
+<li><b>複比の一意性</b>(<code>propagate_cross_ratio_uniqueness</code>): 共線な3点を固定した複比が等しければ4点目は一致する(透視射影不変性の逆)。非退化条件: 固定した3点が図の上でも相異なる(#78)。
+以前は証明の前提に「2つの複比が等しい」を記録していなかったので、その等式が偽のマージから来ていても証明は「厳密」に見えた(#76、centroid)。</li>
+<li><b>自明な関係</b>(<code>apply_trivial_relations</code>): 垂線と直角、垂直方向の対合、調和共役の対合など、定義から機械的に従うもの。</li>
+<li><b>スパイラル相似の局所伝播</b>(<code>mmp_core/spiral_prop.rs</code>、既定外 <code>--rules=spiral-prop</code>): 角の同値類に新しく合流した定義との組だけを見る差分評価。
+結論の図形(中点・直線・角)が既にあるときだけマージする。課税は小さいが、2016ARMO は結論で図形を作らないと解けないので、既定では使わない(#75)。</li>
+</ul>
+</section>
+<footer>Geometry Solver Atlas — docs/theorems.html(docs/gen_theorem_atlas.py が生成)</footer>
+</div>
+<script src="atlas.js"></script>
+</html>
