@@ -24,6 +24,9 @@ use super::BlackboardEngine;
 use crate::mmp_core::{ClassId, Definition, EntityType, Justification};
 use crate::mmp_math::ModInt;
 
+/// 行演算を仕事量に数えるときの割り算(ar_round のコメント参照)。
+const AR_OPS_PER_WORK: u64 = 16;
+
 /// ねじれの座標(4倍すると0)。列の中で最後に来るよう最大値にする。
 const T: u32 = u32::MAX;
 
@@ -133,9 +136,22 @@ impl Lattice {
     }
 }
 
-/// 記号 s(X,Y) の番号(順序のない点の組ごと)。
+/// 記号の番号。s(X,Y)(順序のない点の組ごと)と、等式を作るときに導入する新しい記号(円の点の記号など)。
 #[derive(Default)]
-struct Atoms { ids: FxHashMap<(usize, usize), u32> }
+struct Atoms {
+    ids: FxHashMap<(usize, usize), u32>,
+    fresh: FxHashMap<(u8, usize, usize, usize), u32>,
+    next: u32,
+}
+
+/// 新しい記号の種類。
+const THETA: u8 = 0;       // 円 C の上の点 P の記号 θ_C(P)(弦 PX の方向の記号 = θ_C(P) + θ_C(X) + c_C)
+const CIRCLE_C: u8 = 1;    // 円 C の定数 c_C
+const PROJ_MU: u8 = 2;     // 中心 O から直線 L への射影の、点 X の倍率 μ_{O,L}(X)
+const PROJ_K: u8 = 3;      // その定数 κ_{O,L}
+const CONIC_S: u8 = 4;     // 二次曲線 C の媒介変数の差 s_C(X,Y)(向きのある組)
+const STEINER_MU: u8 = 5;  // 二次曲線 C の頂点 P からの線束の、点 X の倍率
+const STEINER_K: u8 = 6;   // その定数
 
 /// 直線の無限遠点の仮の番号(方向の点がまだ図に無い直線用)。実体の番号とは重ならない大きい側に置く。
 const VIRTUAL_BASE: usize = usize::MAX / 2;
@@ -147,11 +163,31 @@ impl Atoms {
     fn add(&mut self, v: &mut SVec, x: usize, y: usize, sign: i64) -> Option<()> {
         if x == y { return None; }
         let (key, flipped) = if x < y { ((x, y), false) } else { ((y, x), true) };
-        let n = self.ids.len() as u32;
-        let id = *self.ids.entry(key).or_insert(n);
+        let id = match self.ids.get(&key) { Some(&id) => id, None => { let id = self.next; self.next += 1; self.ids.insert(key, id); id } };
         add_scaled(v, &SVec::from([(id, 1)]), sign)?;
         if flipped { add_scaled(v, &SVec::from([(T, 2)]), sign)?; }
         Some(())
+    }
+
+    /// 新しい記号を v に sign 倍で足す。
+    fn add_fresh(&mut self, v: &mut SVec, key: (u8, usize, usize, usize), sign: i64) -> Option<()> {
+        let id = match self.fresh.get(&key) { Some(&id) => id, None => { let id = self.next; self.next += 1; self.fresh.insert(key, id); id } };
+        add_scaled(v, &SVec::from([(id, 1)]), sign)
+    }
+
+    /// 向きのある差の新しい記号(s_C(Y,X) = s_C(X,Y) + ねじれ 2)。
+    fn add_fresh_diff(&mut self, v: &mut SVec, kind: u8, owner: usize, x: usize, y: usize, sign: i64) -> Option<()> {
+        if x == y { return None; }
+        let (a, b, flipped) = if x < y { (x, y, false) } else { (y, x, true) };
+        self.add_fresh(v, (kind, owner, a, b), sign)?;
+        if flipped { add_scaled(v, &SVec::from([(T, 2)]), sign)?; }
+        Some(())
+    }
+
+    /// 方向 D の角の記号 β(D) = s(I,D) − s(D,J)(有向角 (I,J;D1,D2) = β(D1) − β(D2))。
+    fn add_beta(&mut self, v: &mut SVec, i: usize, j: usize, d: usize, sign: i64) -> Option<()> {
+        self.add(v, i, d, sign)?;
+        self.add(v, d, j, -sign)
     }
 }
 
@@ -270,14 +306,14 @@ impl BlackboardEngine {
 
         // 等式(同値類の中の2つの式の差)と、ねじれの関係 4T = 0。
         let mut lattice = Lattice::default();
-        let mut premises_of: Vec<(String, Vec<ClassId>)> = Vec::new();
+        let mut premises_of: Vec<Vec<(String, Vec<ClassId>)>> = Vec::new();
         if lattice.insert(SVec::from([(T, 4)]), Vec::new()).is_none() { return 0; }
         for (_, vs) in &classes {
             for (v, ent) in &vs[1..] {
                 let mut rel = v.clone();
                 if add_scaled(&mut rel, &vs[0].0, -1).is_none() { continue; }
                 let id = premises_of.len() as u32;
-                premises_of.push(("Identical".to_string(), vec![*ent, vs[0].1]));
+                premises_of.push(vec![("Identical".to_string(), vec![*ent, vs[0].1])]);
                 if lattice.insert(rel, vec![id]).is_none() { return 0; }
             }
         }
@@ -291,12 +327,21 @@ impl BlackboardEngine {
                 .and_then(|_| add_scaled(&mut rel, &SVec::from([(T, 2)]), -1));
             if ok.is_none() || !self.ar_verify_const(pts, minus_one) { continue; }
             let id = premises_of.len() as u32;
-            premises_of.push(premise);
+            premises_of.push(vec![premise]);
             dbg_ratio += 1;
             if lattice.insert(rel, vec![id]).is_none() { return 0; }
         }
 
+        // 定理の代わりに等式を作る(円・透視射影・二次曲線の射影対応)。
+        let mut gen_count = 0usize;
+        for (rel, premises) in self.ar_generated_relations(&mut atoms) {
+            let id = premises_of.len() as u32;
+            premises_of.push(premises);
+            gen_count += 1;
+            if lattice.insert(rel, vec![id]).is_none() { return 0; }
+        }
         if std::env::var("GS_DEBUG_AR").is_ok() {
+            println!("  AR_DEBUG generated={}", gen_count);
             let mapped: usize = classes.iter().map(|(_, v)| v.len()).sum();
             println!("  AR_DEBUG classes={} mapped={} degen={} unverified={} ratio_facts={} relations={} rows={} atoms={}",
                 classes.len(), mapped, dbg_degen, dbg_unverified, dbg_ratio, premises_of.len(), lattice.rows.len(), atoms.ids.len());
@@ -340,7 +385,10 @@ impl BlackboardEngine {
                 if Some(&r) == zero.as_ref() { dir_merges.push((d1, d2, src)); }
             }
         }
-        self.prover.egraph.spiral_prop_work += lattice.ops;
+        let links = self.ar_detect_concyclic(&mut atoms, &mut lattice, zero.as_ref());
+        // 行演算1回(疎なベクトル数項の足し算)は dfs_match 1回よりずっと軽いので、16回で仕事量1と数える
+        // (nine_point_full で行演算が 80万増えて壁時計は 0.3秒しか増えず、dfs_match 1回はおよそその18倍だった)。
+        self.prover.egraph.spiral_prop_work += lattice.ops / AR_OPS_PER_WORK;
         self.ar_ops += lattice.ops;
         self.ar_rounds += 1;
         merges.extend(dir_merges);
@@ -354,7 +402,7 @@ impl BlackboardEngine {
                 continue;
             }
             let premises: Vec<(String, Vec<ClassId>)> = src.iter()
-                .map(|&i| premises_of[i as usize].clone()).collect();
+                .flat_map(|&i| premises_of[i as usize].clone()).collect();
             let (na, nb) = (eg.entities[eg.get_rep(a).0].name.clone(), eg.entities[eg.get_rep(b).0].name.clone());
             let justification = Justification::Theorem { name: "代数的な追跡(複比・有向角の線形関係)".to_string(), premises };
             if eg.merge_entities_justified(a, b, justification) {
@@ -362,7 +410,217 @@ impl BlackboardEngine {
                 merged += 1;
             }
         }
+        // 円周角の逆(検出): 点を円に接続する。
+        for (z, c, src) in links {
+            let eg = &mut self.prover.egraph;
+            let (z, c) = (eg.get_rep(z), eg.get_rep(c));
+            if eg.is_connected(z, c) { continue; }
+            if eg.merge_checks && eg.numeric_incidence_check(z, c, 2) == Some(false) { self.ar_rejected += 1; continue; }
+            let premises: Vec<(String, Vec<ClassId>)> = src.iter().flat_map(|&i| premises_of[i as usize].clone()).collect();
+            let (nz, nc) = (eg.entities[z.0].name.clone(), eg.entities[c.0].name.clone());
+            eg.link_logical_incidence_justified(z, c, Justification::Theorem { name: "代数的な追跡(円周角の逆)".to_string(), premises });
+            println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
+            merged += 1;
+        }
         merged
+    }
+
+    /// 直線の方向の点(無ければ直線ごとの仮の無限遠点)。
+    fn ar_dir_or_virtual(&self, line: ClassId) -> usize {
+        self.ar_direction(line).map(|d| d.0).unwrap_or_else(|| virtual_infinity(line))
+    }
+
+    /// 有限の点の代表元のうち、曲線 c に乗っているもの(図の上でも乗っていて、互いに相異なるもの)。
+    fn ar_points_on(&self, c: ClassId) -> Vec<ClassId> {
+        let eg = &self.prover.egraph;
+        let mut out: Vec<ClassId> = eg.entities[c.0].components.first().map(|comp| comp.subobjects.iter().map(|&s| eg.get_rep(s))
+            .filter(|&s| eg.entities[s.0].entity_type == EntityType::Point && !eg.is_connected(s, eg.line_infinity)).collect()).unwrap_or_default();
+        out.sort_by_key(|x| x.0);
+        out.dedup();
+        out.retain(|&p| eg.fixed_incidence(p, c, eg.entities[c.0].entity_type) == Some(Some(true)));
+        let mut distinct: Vec<ClassId> = Vec::new();
+        for p in out { if distinct.iter().all(|&q| eg.fixed_equal(p, q) == Some(Some(false))) { distinct.push(p); } }
+        distinct
+    }
+
+    /// 直線の代表元のうち、点 a と b を両方通るもの。
+    fn ar_lines_through(&self, a: ClassId, b: ClassId) -> Vec<ClassId> {
+        let eg = &self.prover.egraph;
+        let mut out: Vec<ClassId> = eg.entities[a.0].components.first().map(|comp| comp.subobjects.iter().map(|&s| eg.get_rep(s))
+            .filter(|&s| eg.entities[s.0].entity_type == EntityType::Line && s != eg.get_rep(eg.line_infinity) && eg.is_connected(b, s)).collect()).unwrap_or_default();
+        out.sort_by_key(|x| x.0);
+        out.dedup();
+        out
+    }
+
+    /// 円か(虚円点 I, J を通る二次曲線)。
+    fn ar_is_circle(&self, c: ClassId) -> bool {
+        let eg = &self.prover.egraph;
+        eg.is_connected(c, eg.get_rep(eg.circ_i)) && eg.is_connected(c, eg.get_rep(eg.circ_j))
+    }
+
+    /// 定理の代わりに作る等式と、その前提。
+    /// - 円: 弦 PX の方向の記号 β = θ_C(P) + θ_C(X) + c_C、接線 β = 2θ_C(P) + c_C(円周角の定理・接弦定理)。
+    ///   単位円の複素座標で、弦 PX の方向の等角座標は −p·x、接線は −p² になる(2点の積に分かれる)ことによる。
+    /// - 透視射影: 中心 O から直線 L への射影は一次分数変換なので、方向の差 = 点の差 + 各点の倍率 + 定数
+    ///   (点→線束・線束→点の透視射影不変性)。
+    /// - 円以外の二次曲線: 頂点 P からの線束も二次曲線の媒介変数の一次分数変換なので、同じ形(シュタイナーの定理)。
+    fn ar_generated_relations(&self, atoms: &mut Atoms) -> Vec<(SVec, Vec<(String, Vec<ClassId>)>)> {
+        let eg = &self.prover.egraph;
+        let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
+        let linf = eg.get_rep(eg.line_infinity);
+        let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
+        let mut out = Vec::new();
+        let conics: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&c| eg.get_rep(c) == c && eg.entities[c.0].entity_type == EntityType::Conic && eg.entities[c.0].is_active()).collect();
+        let lines: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&l| eg.get_rep(l) == l && l != linf && eg.entities[l.0].entity_type == EntityType::Line && eg.entities[l.0].is_active()).collect();
+        let tangent_of = |l: ClassId| -> Option<(ClassId, ClassId)> {
+            eg.entities[l.0].components.first()?.definitions.iter().find_map(|d| match *d {
+                Definition::TangentLine(c, p) => Some((eg.get_rep(c), eg.get_rep(p))), _ => None })
+        };
+
+        for &c in &conics {
+            let pts = self.ar_points_on(c);
+            if pts.len() < 2 { continue; }
+            if self.ar_is_circle(c) {
+                // 弦
+                for i in 0..pts.len() {
+                    for j in (i + 1)..pts.len() {
+                        let (p, x) = (pts[i], pts[j]);
+                        for l in self.ar_lines_through(p, x) {
+                            let d = self.ar_dir_or_virtual(l);
+                            let mut v = SVec::new();
+                            let ok = atoms.add_beta(&mut v, ci, cj, d, 1)
+                                .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, p.0, 0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, x.0, 0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
+                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c), conn(p, l), conn(x, l)])); }
+                        }
+                    }
+                }
+                // 接線
+                for &l in &lines {
+                    let Some((tc, tp)) = tangent_of(l) else { continue };
+                    if tc != c || !pts.contains(&tp) { continue; }
+                    let d = self.ar_dir_or_virtual(l);
+                    let mut v = SVec::new();
+                    let ok = atoms.add_beta(&mut v, ci, cj, d, 1)
+                        .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, tp.0, 0), -2))
+                        .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
+                    if ok.is_some() { out.push((v, vec![conn(tp, c), ("DefinedBy:TangentLine".to_string(), vec![c, tp, l])])); }
+                }
+            } else if pts.len() >= 4 {
+                // 二次曲線の頂点 P からの線束(接線は X = P の方向)。
+                for &p in &pts {
+                    let mut rays: Vec<(ClassId, usize, Vec<(String, Vec<ClassId>)>)> = Vec::new();
+                    for &x in &pts {
+                        if x == p { continue; }
+                        if let Some(l) = self.ar_lines_through(p, x).first().copied() {
+                            rays.push((x, self.ar_dir_or_virtual(l), vec![conn(p, c), conn(x, c), conn(p, l), conn(x, l)]));
+                        }
+                    }
+                    for &l in &lines {
+                        if let Some((tc, tp)) = tangent_of(l) && tc == c && tp == p {
+                            rays.push((p, self.ar_dir_or_virtual(l), vec![conn(p, c), ("DefinedBy:TangentLine".to_string(), vec![c, p, l])]));
+                        }
+                    }
+                    if rays.len() < 4 { continue; }
+                    for a in 0..rays.len() {
+                        for b in (a + 1)..rays.len() {
+                            let (x, dx, px) = &rays[a];
+                            let (y, dy, py) = &rays[b];
+                            let mut v = SVec::new();
+                            let ok = atoms.add(&mut v, *dx, *dy, 1)
+                                .and_then(|_| atoms.add_fresh_diff(&mut v, CONIC_S, c.0, x.0, y.0, -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (STEINER_MU, c.0, p.0, x.0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (STEINER_MU, c.0, p.0, y.0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (STEINER_K, c.0, p.0, 0), -1));
+                            if ok.is_some() { out.push((v, [px.clone(), py.clone()].concat())); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 透視射影: 中心 O を通る直線と直線 L の交点 X ごとに、方向 OX と L の上の X を対応させる。
+        let points: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&o| eg.get_rep(o) == o && eg.entities[o.0].entity_type == EntityType::Point && eg.entities[o.0].is_active()
+                && !eg.is_connected(o, linf)).collect();
+        for &o in &points {
+            let through_o: Vec<ClassId> = eg.entities[o.0].components.first().map(|comp| comp.subobjects.iter().map(|&s| eg.get_rep(s))
+                .filter(|&s| s != linf && eg.entities[s.0].entity_type == EntityType::Line).collect()).unwrap_or_default();
+            if through_o.len() < 3 { continue; }
+            for &l in &lines {
+                if eg.is_connected(o, l) || eg.fixed_incidence(o, l, EntityType::Line) != Some(Some(false)) { continue; }
+                let mut rays: Vec<(ClassId, usize, ClassId)> = Vec::new();
+                for &m in &through_o {
+                    // m と L の交点のうち図にある有限の点。
+                    let Some(x) = self.ar_points_on(l).into_iter().find(|&x| x != o && eg.is_connected(x, m)) else { continue };
+                    if rays.iter().any(|r| r.0 == x) { continue; }
+                    rays.push((x, self.ar_dir_or_virtual(m), m));
+                }
+                if rays.len() < 3 { continue; }
+                for a in 0..rays.len() {
+                    for b in (a + 1)..rays.len() {
+                        let (x, dx, mx) = rays[a];
+                        let (y, dy, my) = rays[b];
+                        let mut v = SVec::new();
+                        let ok = atoms.add(&mut v, dx, dy, 1)
+                            .and_then(|_| atoms.add(&mut v, x.0, y.0, -1))
+                            .and_then(|_| atoms.add_fresh(&mut v, (PROJ_MU, o.0, l.0, x.0), -1))
+                            .and_then(|_| atoms.add_fresh(&mut v, (PROJ_MU, o.0, l.0, y.0), -1))
+                            .and_then(|_| atoms.add_fresh(&mut v, (PROJ_K, o.0, l.0, 0), -1));
+                        if ok.is_some() {
+                            out.push((v, vec![conn(o, mx), conn(x, mx), conn(x, l), conn(o, my), conn(y, my), conn(y, l)]));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 円周角の逆(検出): 円 C の外の点 Z から、C の上の2点 A, B への直線の方向の記号の差 β(ZA) − β(ZB) が
+    /// θ_C(A) − θ_C(B) に還元されるなら、Z は C の上にある。返り値は (Z, C, 使った等式)。
+    fn ar_detect_concyclic(&self, atoms: &mut Atoms, lattice: &mut Lattice, zero: Option<&SVec>) -> Vec<(ClassId, ClassId, Vec<u32>)> {
+        let eg = &self.prover.egraph;
+        let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
+        let linf = eg.get_rep(eg.line_infinity);
+        let mut out = Vec::new();
+        let Some(zero) = zero else { return out };
+        let conics: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&c| eg.get_rep(c) == c && eg.entities[c.0].entity_type == EntityType::Conic && eg.entities[c.0].is_active()).collect();
+        let points: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&o| eg.get_rep(o) == o && eg.entities[o.0].entity_type == EntityType::Point && eg.entities[o.0].is_active()
+                && !eg.is_connected(o, linf)).collect();
+        for &c in &conics {
+            if !self.ar_is_circle(c) { continue; }
+            let on_c = self.ar_points_on(c);
+            if on_c.len() < 3 { continue; }
+            // 円の点の記号が格子に出ている(弦の等式がある)点だけを使う。
+            let with_theta: Vec<ClassId> = on_c.into_iter().filter(|p| atoms.fresh.contains_key(&(THETA, c.0, p.0, 0))).collect();
+            for &z in &points {
+                if eg.is_connected(z, c) || with_theta.contains(&z) { continue; }
+                let rays: Vec<(ClassId, ClassId)> = with_theta.iter().filter_map(|&a| self.ar_lines_through(z, a).first().map(|&l| (a, l))).collect();
+                if rays.len() < 2 { continue; }
+                'pairs: for i in 0..rays.len() {
+                    for j in (i + 1)..rays.len() {
+                        let ((a, la), (b, lb)) = (rays[i], rays[j]);
+                        if la == lb { continue; }
+                        let mut v = SVec::new();
+                        let ok = atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(la), 1)
+                            .and_then(|_| atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(lb), -1))
+                            .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, a.0, 0), -1))
+                            .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, b.0, 0), 1));
+                        if ok.is_none() { continue; }
+                        let Some((r, src)) = lattice.reduce(&v) else { continue };
+                        if &r == zero { out.push((z, c, src)); break 'pairs; }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// 手が止まったときに呼ぶ。併合が無くなるまで(最大数回)追跡し、何か併合したら定理を全部試し直させる。
