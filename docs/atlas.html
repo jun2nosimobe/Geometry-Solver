@@ -16,11 +16,11 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#79(未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#82(数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
-    <div class="stat"><div class="n">33/44</div><div class="l">既定設定の掃引。仕事量予算なので、壁時計の安全弁(600秒)に当たる重い問題を除けば何度流しても同じ結果になる。交わる弦の相似で 2011 バルカンが解け(#74)、2018 CHN Western の「解けた」は数値で検証できない書き方の上だった(#76)。非退化条件で centroid が厳密な証明で解け、pappus の以前の証明は誤った推論だった(#78)</div></div>
+    <div class="stat"><div class="n">34/44</div><div class="l">既定設定の掃引。仕事量予算なので、壁時計の安全弁(600秒)に当たる重い問題を除けば何度流しても同じ結果になる。交わる弦の相似で 2011 バルカンが解け(#74)、2018 CHN Western の「解けた」は数値で検証できない書き方の上だった(#76)。数値で選ぶ補助作図で desargues(#80)、代数的な追跡で pappus(#82)が解けた。centroid の以前の解は値の定まらない複比の上だった(#81)</div></div>
     <div class="stat"><div class="n">24</div><div class="l">既定で有効な定理(基本16 + 長さ1 + 中心角1 + 射影5 + 交わる弦の相似1)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理の主張・作図の需要・見積もり・実測・問題点は <a class="secref" href="theorems.html">§07</a></div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
@@ -38,7 +38,7 @@
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
-  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">33/44・決定的</span></summary>
+  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">34/44・決定的</span></summary>
   <div class="body">
 <div class="desc" style="margin-bottom:6px"><b>方針B マッチングと探索の制御</b></div><div class="desc">予算は壁時計の秒ではなく仕事量(<code>dfs_match</code>の呼び出し回数)で測り、数値検証とMCTSの乱数もシード固定にしたので、同じ設定なら何度流しても結果が1ステップも変わらない。失敗キャッシュは個々の失敗状態ごとの依存マスクを持つ定理単位の永続キャッシュ(鍵に無関係な束縛まで入っている問題は <a class="secref" href="backlog.html">§05</a> b28、無効化は大雑把だが、<b>上界を測ると直しても仕事量は減らない</b>と分かったのが <a class="secref" href="backlog.html">§05</a> b29)、候補capは狭い値(5)から始めて手詰まりのときだけ広げる。型をまとめるときは、候補プールの混ざり方だけでなくキャッシュの無効化の粒度(<code>angle_generation</code>)も点検すること。<br>候補は cap で切る前に他の前提で絞る(<a class="secref" href="ledger.html">§04</a> #55)。<b>現状の課題:</b> 探索が定理を試す順序に大きく左右される(登録順を変えるだけで仕事量が±15%、1問が解けたり解けなかったりする)。筋の通った並べ方はどれも登録順に勝たなかったので、順序に鈍感な探索にする方が本筋。<code>dfs_match</code> は貪欲な<b>入れ子ループ結合</b>。関係として張り直して最悪計算量最適結合で評価する案(<a class="secref" href="backlog.html">§05</a> b30)の動機のうち、<b>capの不要化と b29 の解決は実測で消えた</b> ― cap を 40→200 にしても降参する4問は1ステップも動かず(<a class="secref" href="ledger.html">§04</a> #64)、失敗キャッシュの無効化を止めても仕事量は減らず16問落ちる(#66)。<b>残る動機は順序非依存だけ。</b>未解決12問のうち5問は予算を使い切って止まる。</div>
   </div>

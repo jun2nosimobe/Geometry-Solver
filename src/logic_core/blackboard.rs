@@ -31,6 +31,10 @@ pub struct RecoveryOptions {
     pub widen_every: usize,
     /// 🌟 決定的な手が全部尽きたとき、最後に熱い点どうしの中点と熱い直線どうしの交点を足すか(--generic-aux)。
     pub generic_aux: bool,
+    /// 手が全部尽きたとき、汎用の補助作図の前に、候補を座標で試作して新しい一致を生むものを作る(numeric_aux.rs)。
+    pub numeric_aux: bool,
+    /// 数値で選ぶ補助作図を、最後の手ではなく行き詰まりのたびに(需要の補助線・交点の直後に)試す。
+    pub numeric_aux_early: bool,
 }
 
 impl RecoveryOptions {
@@ -62,6 +66,14 @@ pub struct BlackboardEngine {
     pub stalls_since_widen: usize,
     /// resolve_generic_aux が今までに足した作図の数(上限 GENERIC_AUX_TOTAL)。
     pub generic_aux_added: usize,
+    /// resolve_numeric_aux が今までに足した作図の数。
+    pub numeric_aux_added: usize,
+    /// 代数的な追跡(ar.rs)で併合した数と、数値で偽と分かって見送った数。
+    pub ar_merged: u64,
+    pub ar_rejected: u64,
+    /// 代数的な追跡の行演算の数(仕事量に数えている)と、追跡の回数。
+    pub ar_ops: u64,
+    pub ar_rounds: u64,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -77,6 +89,11 @@ impl BlackboardEngine {
             seeded_rematch_enabled: false,
             stalls_since_widen: 0,
             generic_aux_added: 0,
+            numeric_aux_added: 0,
+            ar_merged: 0,
+            ar_rejected: 0,
+            ar_ops: 0,
+            ar_rounds: 0,
             work_limit: u64::MAX,
         }
     }
@@ -92,6 +109,8 @@ impl BlackboardEngine {
         self.stalls_since_widen += 1;
         let mut recovered = !opts.skipped("line") && self.resolve_demands();
         if !opts.skipped("point") && self.resolve_point_demands() { recovered = true; }
+        if !recovered && opts.numeric_aux_early
+            && self.resolve_numeric_aux(super::numeric_aux::EARLY_MIN_SCORE, super::numeric_aux::EARLY_PER_STALL) { recovered = true; }
         // cap の拡大を先に試す(--widen-first)。広げられたらそこで戻り、次の全探索を同じ図でやり直す。
         // cap が一度も候補を切り捨てていなければ、広げても候補は増えないので先に広げる意味がない。
         // widen_every 回の行き詰まりごとに、需要作図より先に広げる番を作る(需要作図が尽きるのを待たない)。
@@ -124,7 +143,11 @@ impl BlackboardEngine {
             self.schedule_full_sweep();
             return Recovered::WidenedCap(self.prover.fanout_heat_cap);
         }
-        if opts.generic_aux && self.resolve_generic_aux() { return Recovered::Construction; }
+        // 汎用の補助作図と、数値で選ぶ補助作図を同じ回に両方試す(数値の側が汎用の側を押しのけると、汎用の補助作図に頼る
+        // 解の道筋が変わる。汎用の側は予算の中で使い切られないので、後ろに回すと数値の側が一度も呼ばれない)。
+        let generic = opts.generic_aux && self.resolve_generic_aux();
+        let numeric = opts.numeric_aux && self.resolve_numeric_aux(super::numeric_aux::LAST_MIN_SCORE, super::numeric_aux::LAST_PER_STALL);
+        if generic || numeric { return Recovered::Construction; }
         Recovered::Exhausted
     }
 
@@ -354,7 +377,7 @@ impl BlackboardEngine {
 
     /// 補助作図を1つ図に足す。出どころを刻み(--origins 用)、importance が与えられれば
     /// 重要度を下げて推論の主軸がぶれないようにする。図の上で値の定まらない作図(同じ2点を通る直線など)は作らず None。
-    fn add_aux(&mut self, name: String, def: Definition, ty: EntityType, origin: EntityOrigin, importance: Option<f64>) -> Option<ClassId> {
+    pub(crate) fn add_aux(&mut self, name: String, def: Definition, ty: EntityType, origin: EntityOrigin, importance: Option<f64>) -> Option<ClassId> {
         let eg = &mut self.prover.egraph;
         if eg.nondegeneracy && !matches!(def, Definition::DirectionOf(_)) && eg.without_consuming_rng(|g| g.definition_is_degenerate(&def)) {
             println!("  📐 [退化した作図を見送り] {}", name);
@@ -371,7 +394,7 @@ impl BlackboardEngine {
     }
 
     /// 作図の直後に既存の図形と合流させてから、全定理を試し直す。
-    fn settle_and_resweep(&mut self) {
+    pub(crate) fn settle_and_resweep(&mut self) {
         self.prover.egraph.apply_congruence_closure();
         self.schedule_full_sweep();
     }

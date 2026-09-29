@@ -88,7 +88,7 @@ impl EGraph {
     }
 
     /// 同値類の値: 代表元の元の定義の値。それが定まらないときだけ、同値類の他の定義を親の実体の値で作って使う。
-    fn class_value(&self, id: ClassId, k: usize) -> Option<Vec<ModInt>> {
+    pub(crate) fn class_value(&self, id: ClassId, k: usize) -> Option<Vec<ModInt>> {
         let rep = self.get_rep(id);
         if let Some(v) = self.entity_value(rep, k) { return Some(v); }
         let defs = self.entities[rep.0].components.first().map(|c| c.definitions.clone()).unwrap_or_default();
@@ -97,6 +97,15 @@ impl EGraph {
             _ => modint_construct_pub(self, d, &mut |q| self.entity_value(q, k)),
         })
     }
+
+    /// まだ図に無い作図 def の(標本 k での)値。親は同値類の値で評価する。補助作図の候補を図に足さずに試作するため。
+    pub(crate) fn fixed_def_value(&self, def: &Definition, k: usize) -> Option<Vec<ModInt>> {
+        if !self.fixed_active() { return None; }
+        modint_construct_pub(self, def, &mut |q| self.class_value(q, k))
+    }
+
+    /// 標本の数(補助作図の試作が全標本で確かめるため)。
+    pub(crate) fn fixed_samples(&self) -> usize { SAMPLES }
 
     /// 固定座標での一致の検算。固定座標を使っていなければ None(呼び出し側は従来の経路へ)。
     pub(crate) fn fixed_equal(&self, a: ClassId, b: ClassId) -> Option<Option<bool>> {
@@ -147,7 +156,7 @@ impl EGraph {
     }
 }
 
-fn point_lies_on(point: &[ModInt], v: &[ModInt], curve_type: EntityType) -> bool {
+pub(crate) fn point_lies_on(point: &[ModInt], v: &[ModInt], curve_type: EntityType) -> bool {
     if point.len() < 3 { return false; }
     let (x, y, z) = (point[0], point[1], point[2]);
     match curve_type {

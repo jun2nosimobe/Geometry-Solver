@@ -25,6 +25,7 @@ mod congruence;
 mod census;
 pub use census::MergeCensus;
 mod fixed_coords;
+pub(crate) use fixed_coords::point_lies_on;
 pub(crate) mod coords;
 pub(crate) mod eval;
 mod proof;

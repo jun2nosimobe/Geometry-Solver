@@ -37,6 +37,12 @@ pub struct SolveOptions {
     pub midpoint_demands: bool,
     /// 手が尽きたとき最後に、熱い点どうしの中点と熱い直線どうしの交点を足す(既定で有効。--no-generic-aux で外す)。
     pub generic_aux: bool,
+    /// 数値で選ぶ補助作図(既定。手が全部尽きたとき、汎用の補助作図と一緒に作る。--no-numeric-aux で外す)。
+    pub numeric_aux: bool,
+    /// 代数的な追跡(複比・有向角の線形関係。既定、--no-ar で外す)と、角の足し算の規則を外してそれに任せる(--ar-replace)。
+    pub ar: bool,
+    pub ar_replace: bool,
+    pub numeric_aux_early: bool,
     pub length_theorems: bool,
     pub no_central_angle: bool,
     /// 追加の規則(--rules=chord,parallelogram,spiral,spiral-prop)。既定では入らない。
@@ -98,6 +104,10 @@ impl SolveOptions {
             fanout_heat_cap: value(args, "--fanout-heat-cap=").unwrap_or(5),
             midpoint_demands: flag(args, "--midpoint-demands"),
             generic_aux: !flag(args, "--no-generic-aux"),
+            numeric_aux: !flag(args, "--no-numeric-aux"),
+            ar: !flag(args, "--no-ar"),
+            ar_replace: flag(args, "--ar-replace"),
+            numeric_aux_early: !flag(args, "--no-numeric-aux") && flag(args, "--numeric-aux-early"),
             length_theorems: !flag(args, "--no-length-theorems"),
             no_central_angle: flag(args, "--no-central-angle"),
             no_spiral_opp: flag(args, "--no-spiral-opp"),
@@ -141,7 +151,7 @@ impl SolveOptions {
     }
 
     fn recovery_options(&self) -> RecoveryOptions {
-        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every, generic_aux: self.generic_aux }
+        RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every, generic_aux: self.generic_aux, numeric_aux: self.numeric_aux, numeric_aux_early: self.numeric_aux_early }
     }
 }
 
@@ -365,7 +375,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     prover.semijoin = opts.semijoin;
     prover.var_order = opts.var_order;
     prover.collinear_extra = opts.collinear_extra;
-    prover.theorems = theorem_set(opts).into_iter().map(std::rc::Rc::new).collect();
+    let mut theorems = theorem_set(opts);
+    // --ar-replace: 角の足し算の規則(加法性・交替律)を外し、代数的な追跡に任せる。
+    if opts.ar_replace { theorems.retain(|t| t.name != "有向角の加法性" && t.name != "有向角の交替律"); }
+    prover.theorems = theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
     engine.seeded_rematch_enabled = opts.seeded_rematch;
@@ -422,7 +435,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
             Goal::Abort => break,
             Goal::NotYet => {}
         }
-        if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) {
+        // 手が止まったら、代数的な追跡(--ar)と回復の手(補助作図など)を同じ回に両方行う。追跡だけで次の回に進むと、
+        // 補助作図が要る問題で全定理の試し直しが余分に挟まる(nine_point_full が4倍遅くなった)。
+        let ar_progressed = !applied_logic && opts.ar && engine.run_ar();
+        if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) && !ar_progressed {
             break;
         }
     }
@@ -431,6 +447,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     let sk = engine.prover.egraph.nondegenerate_skips;
     if sk.iter().any(|&n| n > 0) {
         println!("📐 局所伝播が非退化条件で見送った回数: 交点の一意性 {} / 二次曲線の一意性 {} / 複比の一意性 {}", sk[0], sk[1], sk[2]);
+    }
+    if opts.ar {
+        println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回、行演算 {}(仕事量に含む)",
+            engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_ops);
     }
     if engine.prover.degenerate_matches > 0 {
         println!("📐 図の上で退化した配置(「相異なる」図形が数値的に一致)のマッチを {} 件捨てました。", engine.prover.degenerate_matches);

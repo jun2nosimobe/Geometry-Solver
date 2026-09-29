@@ -7,9 +7,9 @@ bench_2012egmop1
 bench_2018silkroadp1
 bench_2019g1
 bench_2022balkanmop1
-centroid
 circumcenter
 cyclic_quad
+desargues
 miquel
 miquel_quadrilateral
 nine_point
@@ -17,6 +17,7 @@ nine_point_full
 orthic_incenter
 orthocenter
 orthocenter_alt
+pappus
 simson
 tangent_orthic
 test_cross_ratio

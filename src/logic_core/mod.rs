@@ -13,6 +13,8 @@
 mod blackboard;
 mod cost;
 mod matcher;
+mod numeric_aux;
+mod ar;
 mod prover;
 mod theorem;
 

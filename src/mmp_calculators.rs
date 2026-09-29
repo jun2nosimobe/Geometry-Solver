@@ -130,8 +130,8 @@ pub fn calc_harmonic_conjugate(a: &[ModInt], b: &[ModInt], c: &[ModInt]) -> Vec<
 // 🌟 複比 (A,B;C,D) の直接計算。A,B,C,Dが同一直線上にあるとき、C,Dを
 // それぞれA,Bの1次結合 X = p_X*A + q_X*B (同次座標としての比のみ意味を持つ、
 // calc_harmonic_conjugateと同じ分解トリック)に分解し、A,Bを媒介変数0,∞と
-// みなした時の"座標" τ_X = q_X/p_X を使って (A,B;C,D) := τ_D / τ_C として
-// 求める。D = H(A,B,C)(調和共役点)のときはτ_D = -τ_Cとなるため、この式は
+// みなした時の"座標" τ_X = q_X/p_X を使って (A,B;C,D) := τ_C / τ_D として
+// 求める(コードの式 (q_c·p_d)/(p_c·q_d)。以前ここには τ_D/τ_C と書いてあった)。D = H(A,B,C)(調和共役点)のときはτ_D = -τ_Cとなるため、この式は
 // ちょうど-1を返す ── これをテストでの正しさの検算に使う。
 // A,B,C,Dのいずれかが縮退している(C=BまたはD=A、あるいは分解不能)場合はNone。
 pub fn calc_cross_ratio(a: &[ModInt], b: &[ModInt], c: &[ModInt], d: &[ModInt]) -> Option<ModInt> {

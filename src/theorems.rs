@@ -1087,7 +1087,10 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 on("O", "LOC"),
                 on("D", "LOD"),
                 on("O", "LOD"),
-                distinct(&["LOA", "LOB", "LOC", "LOD"]),
+                // 非退化: 横断線の上の4点と線束の4直線が、図の上でも相異なる(2点が重なった複比は値が定まらない。
+                // 以前は点を代表元の番号の順序でしか分けておらず、図の上で同じ2点で偽の等式を出していた。来歴 #81)。
+                nondegenerate(&["A", "B", "C", "D"]),
+                nondegenerate(&["LOA", "LOB", "LOC", "LOD"]),
             ],
             constructions: vec![
                 build(DefKind::CrossRatio, &["A", "B", "C", "D"], "CR1"),
@@ -1110,7 +1113,7 @@ pub fn get_projective_theorems() -> Vec<TheoremDef> {
                 // それぞれ L1..L4 と交わること。どちらが欠けても線束の複比と点の複比は一致しない
                 // (DefinedBy は線束の複比を任意の4直線に対してその場で作るので、共点は明示が要る)。
                 build_by(DefKind::CrossRatioOfLines, &["L1", "L2", "L3", "L4", "CRL"]),
-                distinct(&["L1", "L2", "L3", "L4"]),
+                nondegenerate(&["L1", "L2", "L3", "L4"]),
                 on("O", "L1"),
                 on("O", "L2"),
                 on("O", "L3"),

@@ -23,7 +23,9 @@ impl EGraph {
                 Some(prev) => prev.intersection(&lines).copied().collect(),
             });
         }
-        candidates.and_then(|s| s.into_iter().next())
+        // 🐛 共通の直線が複数ある(まだマージされていない同じ直線)とき、HashSet の反復順(実行ごとに乱数で変わる)で
+        // 選ぶと、複比の一意性の伝播などの結果が実行ごとに変わっていた(centroid の仕事量が実行ごとに違った)。番号の最小を取る。
+        candidates.and_then(|s| s.into_iter().min_by_key(|l| l.0))
     }
 
     /// 🌟 調和共役点の具体的な作図(完全四辺形)。円錐曲線を一切使わず、

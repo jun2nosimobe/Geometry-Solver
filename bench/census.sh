@@ -19,5 +19,5 @@ one() { p=$1; [ -s "$OUT/$p.sum" ] && return; d=$(mktemp -d); cd "$d" || return
     grep -E '^MERGE_CENSUS(_FALSE)?\s' out.txt | sed "s/^MERGE_CENSUS_FALSE/FALSE\t$p/"; } > "$OUT/$p.sum"
   cd; rm -rf "$d"; }
 export -f one
-printf '%s\n' $PROBS | xargs -P 10 -I{} bash -c 'one {}'
+printf '%s\n' $PROBS | xargs -P ${CENSUS_JOBS:-10} -I{} bash -c 'one {}'
 echo "CENSUS_DONE $L"
