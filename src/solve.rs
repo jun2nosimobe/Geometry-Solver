@@ -117,7 +117,7 @@ impl SolveOptions {
             ar: !flag(args, "--no-ar"),
             ar_first: !flag(args, "--no-ar-first"),
             prune: args.iter().find_map(|a| a.strip_prefix("--prune=")).and_then(|v| v.parse().ok()),
-            ar_drop: args.iter().find_map(|a| a.strip_prefix("--ar-drop=")).unwrap_or("proj,angle")
+            ar_drop: args.iter().find_map(|a| a.strip_prefix("--ar-drop=")).unwrap_or("proj,angle,circle,length")
                 .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "none").collect(),
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),

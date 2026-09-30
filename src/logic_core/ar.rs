@@ -21,7 +21,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 use rustc_hash::FxHashMap;
 
 use super::BlackboardEngine;
-use crate::mmp_core::{ClassId, Definition, EGraph, EntityType, Justification};
+use crate::mmp_core::{ClassId, Definition, EGraph, EntityOrigin, EntityType, Justification};
 use crate::mmp_math::ModInt;
 
 /// 行演算を仕事量に数えるときの割り算(ar_round のコメント参照)。
@@ -217,7 +217,7 @@ pub(crate) const AR_RULES: &[ArRule] = &[
         relation: "s(JX,JY) − s(X,Y) = κ_J(m)、κ_J(m) − κ_I(m) = β(m の方向) + 定数(直線の上の比と方向の角をつなぐ)", ledger: "85" },
     ArRule { kind: "等式", name: "二次曲線(シュタイナー・円周角・接弦)",
         situation: "二次曲線 C の上の点 P と、C の上の点 X への直線 PX(X = P なら接線)。円では I・J も C の点として入れる(P から I への方向は I)",
-        relation: "s(d_X,d_Y) = s_C(X,Y) + μ_P(X) + μ_P(Y) + κ_P(線束は曲線の媒介変数の一次分数変換)。円は I・J を動かさないのでこの対応が定数倍になり、β(PX) = θ_C(P) + θ_C(X) + c_C・接線 β = 2θ_C(P) + c_C(円周角の定理・接弦定理)の形になる。θ_C(X) = s_C(I,X) − s_C(X,J) + ℓ_C でつなぐ", ledger: "83・91" },
+        relation: "s(d_X,d_Y) = s_C(X,Y) + μ_P(X) + μ_P(Y) + κ_P(線束は曲線の媒介変数の一次分数変換)。円は I・J を動かさないのでこの対応が定数倍になり、β(PX) = θ_C(P) + θ_C(X) + c_C・接線 β = 2θ_C(P) + c_C(円周角の定理・接弦定理)の形になる。θ_C(X) = s_C(I,X) − s_C(X,J) + ℓ_C でつなぐ。円の上の2点を通る直線が図に無い弦は、線分の向きで dir(PX) − c_0 = θ_C(P) + θ_C(X) + c_C", ledger: "83・91・93" },
     ArRule { kind: "等式", name: "射影(中心からの射影)",
         situation: "中心 O と、O を通らない直線 L1, L2。O を通る直線 m ごとの対応 m∩L1 ↦ m∩L2 と、動かない L1∩L2。有限の O では L2 = 無限遠直線(X ↦ 直線 OX の方向)、無限遠の O(方向 D の平行線の族)では L1, L2 は有限の直線",
         relation: "s(X2,Y2) − s(X1,Y1) = μ(X1) + μ(Y1) + κ(射影は一次分数変換)。O が無限遠なら ∞_L1 ↦ ∞_L2 でアフィンなので μ は一定で、比が一定になる(平行 ⇒ 比、三角形の比の定理)", ledger: "83・84・89" },
@@ -258,8 +258,11 @@ pub(crate) const AR_RULES: &[ArRule] = &[
         situation: "二次曲線 C の上の5点 P, P′, A, B, D と C の外の点 Z で、(PA,PB;PD,PZ) と (P′A,P′B;P′D,P′Z) の式の差が 0 に還元される(固定座標で Z ∈ C が真の候補だけ)",
         relation: "Z を C に接続する", ledger: "91" },
     ArRule { kind: "検出", name: "円周角の逆",
-        situation: "円 C の外の点 Z から C の上の2点 A, B への β(ZA) − β(ZB) が θ_C(A) − θ_C(B) に還元される",
-        relation: "Z を C に接続する", ledger: "83" },
+        situation: "円 C の外の点 Z から C の上の2点 A, B への線分の向きの差 dir(ZA) − dir(ZB)(直線があれば β の差)が θ_C(A) − θ_C(B) に還元される(候補は固定座標で C に乗る点)",
+        relation: "Z を C に接続する", ledger: "83・93" },
+    ArRule { kind: "検出", name: "図に無い円の円周角の逆",
+        situation: "固定座標で同じ円に乗る4点以上の組で3点が乗る円が図に無く、4点 A, B, C, Z の共円を表す3通りの角の等式(2本の弦への分け方)のどれかが格子で言える",
+        relation: "外接円 ABC を作って Z を接続する(言えなかった組には、4点のうち直線の無い組に直線を引く)", ledger: "93" },
     ArRule { kind: "検出", name: "メネラウスの逆",
         situation: "三角形の2辺の上の点(1つは無限遠点でもよい)を通る直線 t があり、3つ目の辺の上の点 E で比の積の式が −1 に還元される(固定座標で E ∈ t が真の候補だけ)",
         relation: "E を t に接続する(共線)", ledger: "88" },
@@ -772,6 +775,8 @@ impl BlackboardEngine {
         links.extend(self.ar_detect_menelaus_ceva(st, &frame, &mut rc));
         links.extend(self.ar_detect_conic_converse(st, &mut rc));
         links.extend(length_links);
+        let (virtual_concyclic, wanted_lines) = if std::env::var("GS_AR_OFF").unwrap_or_default().contains("vconcyclic") { (Vec::new(), Vec::new()) }
+            else { self.ar_detect_virtual_concyclic(st, &frame, &mut rc) };
         let parallels = self.ar_detect_parallel(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref());
         if std::env::var("GS_DEBUG_AR").is_ok() {
             println!("  AR_DEBUG detect {:?}/{} ops", t2.elapsed(), st.lattice.ops - ops2);
@@ -823,6 +828,31 @@ impl BlackboardEngine {
             eg.link_logical_incidence_justified(z, c, Justification::Theorem { name: name.to_string(), premises });
             println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
             merged += 1;
+        }
+        // 図に無い円の円周角の逆: 3点の外接円を作り、乗ると分かった点を接続する。
+        for ([a, b, c], z, src) in virtual_concyclic {
+            let eg = &self.prover.egraph;
+            let (a, b, c, z) = (eg.get_rep(a), eg.get_rep(b), eg.get_rep(c), eg.get_rep(z));
+            let name = format!("Circ_{}_{}_{}_(AR)", eg.entities[a.0].name, eg.entities[b.0].name, eg.entities[c.0].name);
+            let Some(circle) = self.add_aux(name, Definition::Circumcircle(a, b, c), EntityType::Conic, EntityOrigin::Construct, None) else { continue };
+            let eg = &mut self.prover.egraph;
+            let circle = eg.get_rep(circle);
+            if eg.is_connected(z, circle) { continue; }
+            if eg.merge_checks && eg.numeric_incidence_check(z, circle, 2) == Some(false) { self.ar_rejected += 1; continue; }
+            let premises: Vec<(String, Vec<ClassId>)> = src.iter().flat_map(|&i| st.premises_of[i as usize].clone()).collect();
+            let (nz, nc) = (eg.entities[z.0].name.clone(), eg.entities[circle.0].name.clone());
+            eg.link_logical_incidence_justified(z, circle, Justification::Theorem { name: "代数的な追跡(円周角の逆)".to_string(), premises });
+            println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
+            merged += 1;
+        }
+        // 共円と言えなかった組の直線を引く(次の追跡で、その直線の上の比・平行・相似が格子に載る)。
+        for (x, y) in wanted_lines {
+            let eg = &self.prover.egraph;
+            let (x, y) = (eg.get_rep(x), eg.get_rep(y));
+            let def = Definition::new_line(x, y);
+            if x == y || eg.live_memo(&eg.normalize_definition(&def)) || !self.ar_lines_through(x, y).is_empty() { continue; }
+            let name = format!("Line_{}_{}_(AR)", eg.entities[x.0].name, eg.entities[y.0].name);
+            if self.add_aux(name, def, EntityType::Line, EntityOrigin::LineDemand, Some(0.5)).is_some() { merged += 1; }
         }
         Some(merged)
     }
@@ -912,7 +942,8 @@ impl BlackboardEngine {
                 for i in 0..pts.len() {
                     for j in (i + 1)..pts.len() {
                         let (p, x) = (pts[i], pts[j]);
-                        for l in self.ar_lines_through(p, x) {
+                        let chords = self.ar_lines_through(p, x);
+                        for &l in &chords {
                             let d = self.ar_dir_or_virtual(l);
                             let mut v = SVec::new();
                             let ok = atoms.add_beta(&mut v, ci, cj, d, 1)
@@ -920,6 +951,16 @@ impl BlackboardEngine {
                                 .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, x.0, 0), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
                             if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c), conn(p, l), conn(x, l)])); }
+                        }
+                        // 直線の無い弦: 線分の向き s(JP,JX) − s(IP,IX) は、直線があればその β + c_0(地図の等式)なので、同じ形で書く。
+                        if chords.is_empty() {
+                            let mut v = SVec::new();
+                            let ok = atoms.add_dir(&mut v, p, x, 1)
+                                .and_then(|_| atoms.add_fresh(&mut v, (CHART_0, 0, 0, 0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, p.0, 0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, x.0, 0), -1))
+                                .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
+                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c)])); }
                         }
                     }
                 }
@@ -2279,11 +2320,10 @@ impl BlackboardEngine {
         out
     }
 
-    /// 円周角の逆(検出): 円 C の外の点 Z から、C の上の2点 A, B への直線の方向の記号の差 β(ZA) − β(ZB) が
-    /// θ_C(A) − θ_C(B) に還元されるなら、Z は C の上にある。返り値は (Z, C, 使った等式)。
+    /// 円周角の逆(検出): 円 C の外の点 Z から、C の上の2点 A, B への線分の向きの差 dir(ZA) − dir(ZB)(直線があれば β の差)が
+    /// θ_C(A) − θ_C(B) に還元されるなら、Z は C の上にある。候補は固定座標で C に乗る点だけ。返り値は (Z, C, 使った等式)。
     fn ar_detect_concyclic(&self, atoms: &mut Atoms, lattice: &mut Lattice, rc: &mut FxHashMap<u32, SVec>, zero: Option<&SVec>) -> Vec<(ClassId, ClassId, Vec<u32>)> {
         let eg = &self.prover.egraph;
-        let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
         let mut out = Vec::new();
         let Some(zero) = zero else { return out };
         let conics: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
@@ -2297,17 +2337,17 @@ impl BlackboardEngine {
             if on_c.len() < 3 { continue; }
             // 円の点の記号が格子に出ている(弦の等式がある)点だけを使う。
             let with_theta: Vec<ClassId> = on_c.into_iter().filter(|p| atoms.fresh.contains_key(&(THETA, c.0, p.0, 0))).collect();
+            if with_theta.len() < 2 { continue; }
             for &z in &points {
                 if eg.is_connected(z, c) || with_theta.contains(&z) { continue; }
-                let rays: Vec<(ClassId, ClassId)> = with_theta.iter().filter_map(|&a| self.ar_lines_through(z, a).first().map(|&l| (a, l))).collect();
-                if rays.len() < 2 { continue; }
-                'pairs: for i in 0..rays.len() {
-                    for j in (i + 1)..rays.len() {
-                        let ((a, la), (b, lb)) = (rays[i], rays[j]);
-                        if la == lb { continue; }
+                if eg.fixed_incidence(z, c, EntityType::Conic) != Some(Some(true)) { continue; }
+                // 格子が知っているのはどれかの弦を見込む角なので、円の点の組を順に試す。
+                let cand: Vec<ClassId> = with_theta.iter().copied().filter(|&a| eg.fixed_equal(z, a) == Some(Some(false))).take(8).collect();
+                'pairs: for i in 0..cand.len() {
+                    for j in (i + 1)..cand.len() {
+                        let (a, b) = (cand[i], cand[j]);
                         let mut v = SVec::new();
-                        let ok = atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(la), 1)
-                            .and_then(|_| atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(lb), -1))
+                        let ok = atoms.add_dir(&mut v, z, a, 1).and_then(|_| atoms.add_dir(&mut v, z, b, -1))
                             .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, a.0, 0), -1))
                             .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, b.0, 0), 1));
                         if ok.is_none() { continue; }
@@ -2320,6 +2360,83 @@ impl BlackboardEngine {
             }
         }
         out
+    }
+
+    /// 図に無い円の円周角の逆(検出): 固定座標で同じ円に乗る4点以上の組で、3点が乗る円の実体が無いものについて、
+    /// 最初の3点 A, B, C と他の点 Z で ∠(ZA,ZB) = ∠(CA,CB)(線分の向きの差)が格子で言えるなら、Z は円 ABC の上にある。
+    /// 円は後で作る。候補は固定座標で選ぶ(証明は格子)。返り値は ([A,B,C], Z, 使った等式) と、言えなかった組で引きたい直線
+    /// (4点のうち直線の無い組。中点連結の平行などは直線が図にあって初めて格子に載るので、円周角の逆の定理が需要で引いていた直線を
+    /// 代わりに引く)。
+    #[allow(clippy::type_complexity)]
+    fn ar_detect_virtual_concyclic(&self, st: &mut ArState, frame: &Frame, rc: &mut FxHashMap<u32, SVec>)
+        -> (Vec<([ClassId; 3], ClassId, Vec<u32>)>, Vec<(ClassId, ClassId)>) {
+        const MAX_POINTS: usize = 120;
+        const MAX_SETS: usize = 60;
+        const MAX_LINES: usize = 6;
+        let eg = &self.prover.egraph;
+        let mut out = Vec::new();
+        let mut wanted: Vec<(ClassId, ClassId)> = Vec::new();
+        let Some((zero, _)) = st.lattice.reduce(&SVec::new()) else { return (out, wanted) };
+        let mut pts: Vec<(ClassId, (ModInt, ModInt))> = Vec::new();
+        for &p in &frame.points {
+            let Some(v) = eg.class_value(p, 0) else { continue };
+            if v.len() < 3 || v[2].0 == 0 { continue; }
+            let xy = (v[0] / v[2], v[1] / v[2]);
+            if pts.iter().any(|(_, q)| q.0.0 == xy.0.0 && q.1.0 == xy.1.0) { continue; }
+            pts.push((p, xy));
+            if pts.len() >= MAX_POINTS { break; }
+        }
+        // 3点ごとの円の鍵(中心と半径の2乗)で、同じ円に乗る点の組を集める。
+        let two = ModInt::new(2);
+        let mut sets: FxHashMap<(i64, i64, i64), Vec<usize>> = FxHashMap::default();
+        let n = pts.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                for k in (j + 1)..n {
+                    let ((ax, ay), (bx, by), (cx, cy)) = (pts[i].1, pts[j].1, pts[k].1);
+                    let d = two * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+                    if d.0 == 0 { continue; }
+                    let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
+                    let ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+                    let uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+                    let r2 = (ax - ux) * (ax - ux) + (ay - uy) * (ay - uy);
+                    let e = sets.entry((ux.0 as i64, uy.0 as i64, r2.0 as i64)).or_default();
+                    for x in [i, j, k] { if !e.contains(&x) { e.push(x); } }
+                }
+            }
+        }
+        let mut groups: Vec<Vec<usize>> = sets.into_values().filter(|g| g.len() >= 4).map(|mut g| { g.sort_unstable(); g }).collect();
+        // 点の多い組から(4点の組は補助作図の点どうしの偶然の共円が多く、上限で大事な組が切られる)。
+        groups.sort_by(|x, y| y.len().cmp(&x.len()).then_with(|| x.cmp(y)));
+        let circles: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&c| eg.get_rep(c) == c && eg.entities[c.0].entity_type == EntityType::Conic && eg.entities[c.0].is_active() && self.ar_is_circle(c)).collect();
+        for g in groups.into_iter().take(MAX_SETS) {
+            if st.lattice.ops > st.ops_cap { break; }
+            let members: Vec<ClassId> = g.iter().map(|&i| pts[i].0).collect();
+            // 3点以上が乗る円の実体があれば、既存の円の円周角の逆に任せる。
+            if circles.iter().any(|&c| members.iter().filter(|&&m| eg.is_connected(m, c)).count() >= 3) { continue; }
+            let (a, b, c) = (members[0], members[1], members[2]);
+            // 4点の共円は、2本の弦への分け方ごとの3通りの角の等式のどれでも言える(互いに線形には導けない)ので、3通りとも試す。
+            for &z in members[3..].iter().take(8) {
+                let before = out.len();
+                for (x, y, u) in [(a, b, c), (a, c, b), (b, c, a)] {
+                    let mut v = SVec::new();
+                    let ok = st.atoms.add_dir(&mut v, z, x, 1).and_then(|_| st.atoms.add_dir(&mut v, z, y, -1))
+                        .and_then(|_| st.atoms.add_dir(&mut v, u, x, -1)).and_then(|_| st.atoms.add_dir(&mut v, u, y, 1));
+                    if ok.is_none() { continue; }
+                    if st.lattice.reduce_cached(&v, rc).as_ref() != Some(&zero) { continue; }
+                    let Some((_, src)) = st.lattice.reduce(&v) else { continue };
+                    out.push(([a, b, c], z, src));
+                    break;
+                }
+                if out.len() == before && wanted.len() < MAX_LINES {
+                    for (x, y) in [(z, a), (z, b), (z, c), (a, b), (a, c), (b, c)] {
+                        if wanted.len() < MAX_LINES && frame.line_of(x, y).is_none() && !wanted.contains(&(x, y)) { wanted.push((x, y)); }
+                    }
+                }
+            }
+        }
+        (out, wanted)
     }
 
     /// 手が止まったときに呼ぶ。併合が無くなるまで(最大数回)追跡し、何か併合したら定理を全部試し直させる。

@@ -1,9 +1,11 @@
 bench_2000usatstp2
 bench_2005ctstp1
 bench_2005usamop3
+bench_2008armog10p6
 bench_2010g1
 bench_2011armog10p6
 bench_2011balkanmop1
+bench_2012chnwesternmop5
 bench_2012egmop1
 bench_2015apmop1
 bench_2016armog10p2

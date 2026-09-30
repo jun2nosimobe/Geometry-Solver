@@ -44,7 +44,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let circ_124 = egraph.create_entity("Circ_124".to_string(), Definition::Circumcircle(p12, p14, p24), EntityType::Conic);
 
     // ミケル点: 上記2円の交点として作図する(miquel.rsと同じ手法)
-    let m = egraph.create_entity("M".to_string(), Definition::Intersection(circ_123, circ_124), EntityType::Point);
+    let m = egraph.create_entity("M".to_string(), Definition::SecondIntersectionOfCircles(p12, circ_123, circ_124), EntityType::Point);
     egraph.link_logical_incidence(m, circ_123);
     egraph.link_logical_incidence(m, circ_124);
 

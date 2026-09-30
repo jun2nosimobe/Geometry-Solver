@@ -22,7 +22,7 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     let circ_aef = egraph.create_entity("CircAEF".to_string(), Definition::Circumcircle(a, e, f), EntityType::Conic);
     let circ_bfd = egraph.create_entity("CircBFD".to_string(), Definition::Circumcircle(b, f, d), EntityType::Conic);
     
-    let m = egraph.create_entity("M".to_string(), Definition::Intersection(circ_aef, circ_bfd), EntityType::Point);
+    let m = egraph.create_entity("M".to_string(), Definition::SecondIntersectionOfCircles(f, circ_aef, circ_bfd), EntityType::Point);
     egraph.link_logical_incidence(m, circ_aef);
     egraph.link_logical_incidence(m, circ_bfd);
     
