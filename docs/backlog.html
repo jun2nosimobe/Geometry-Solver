@@ -34,20 +34,22 @@
   </div>
 </details>
 <details class="item" id="b44" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 解けた証明の各ステップを数値で確かめる ― 全マージの監査は固定座標で偽0、共円・接続の目標も監査するようになった(#86)。残りは局所伝播の前提の記録と、座標を置けない問題</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 解けた証明の各ステップを確かめる ― 監査を時刻つきにして、解けている37問全てがギャップ・循環なし(#87)。残りは座標を置けない2問</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html#l76">§04 #76</a>。<code>extract_proof</code> の「全ステップが厳密に辿れた」は、各ステップに名前付きの理由と前提があることしか確かめていない。centroid の証明は169ステップの「厳密」な証明に見えたが、複比の一意性の局所伝播が前提(2つの複比が等しい)を記録しておらず、その等式は偽のマージ(退化した二次曲線)から来ていた。</div>
     <div class="evidence"><b>案:</b> (1) 証明に出た一致・接続の各ステップを <code>numeric_plausibility_check</code> で確かめ、偽があれば「解けた」と数えない(ベンチの表に列を足す)。(2) 他の局所伝播(直線・点・二次曲線の一意性、<code>apply_trivial_relations</code>)が前提を全部記録しているか監査する。(3) 数値の図が前提を満たさない8問(直線と円の両方に乗る自由点など)は、結論の検算も監査も効かない ― 第2交点の定義で書き直せるものは書き直す(<code>INDETERMINATE_KNOWN</code> の3問も同じ)。<br><b>2026-09-29 に見つけた未調査の崩壊:</b> bench_2008armog10p6 を <code>--rules=chord,parallelogram,spiral</code> で回すと(結論の検算は有効)、900秒の打ち切りの直前に局所伝播のマージが連鎖して図が崩壊する(「Foot_C1 ≡ C」「Q ≡ B」「Dir_AB ≡ Dir_AC ≡ Dir_BC」。どれも交点・直線の一意性の伝播で、マージ前の数値チェックを通っている)。定理の結論の偽は6件で、どれも検算で却下されている ― 崩壊は伝播の側から入っている。マージ前の検算が同値類の代表の定義で評価するので、一度どこかで誤ったマージが入ると以後の検算も誤る可能性がある(仮説)。伝播のマージを <code>hypotheses_hold_numerically</code> と同じく<b>元の定義どうし</b>で監査して、最初の偽を探すのが次の一手。bench_2012chnwesternmop5 も同じ設定で900秒の打ち切りになる。</div>
     <div class="evidence" style="margin-top:8px"><b>2026-09-29 の進展(<a class="secref" href="ledger.html#l78">§04 #78</a>・<a class="secref" href="ledger.html#l79">§04 #79</a>):</b> 規則に非退化条件を書き、数値の検算を固定座標にした。座標を置ける問題では、マージ前の検査を外しても偽のマージが1件も起きない(既定とノイズ3水準の監査)。検査は安全網として残す。<b>残り:</b> (1) 証明の各ステップを固定座標で確かめる ― 値は計算済みなので安い。(2) 座標を置けない8問では数値の検算が効かない(<a class="secref" href="backlog.html#b46">§05 b46</a>)。(3) 他の局所伝播(直線・交点の一意性、<code>apply_trivial_relations</code>)が前提を全部記録しているかの監査は未実施。</div>
     <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> (1) の「証明の各ステップを数値で」は、<code>--audit-merges --no-merge-checks</code>(<code>bench/census.sh</code>)が証明に使ったものを含む<b>全て</b>のマージ・接続を固定座標で確かめる形で実質達成している(#85 の採用時も偽0)。ただし通常の solve の中では回していない。目標が共円・接続の8問は、目標の数値の検算と深い監査が無かった ― <a class="secref" href="ledger.html#l86">§04 #86</a> で塞いだ。残り: (2) 局所伝播が前提を全部記録しているか(監査は結論の真偽しか見ない)、(3) 座標を置けない8問(<a class="secref" href="#b46">b46</a>)、(4) bench_2008armog10p6 を <code>--rules=chord,parallelogram,spiral</code> で回したときの崩壊は、固定座標・非退化条件の後で測り直していない。</div>
+    <div class="evidence" style="margin-top:8px"><b>2026-09-30(<a class="secref" href="ledger.html#l87">§04 #87</a>):</b> pappus の証明手順を確かめる中で、監査の3つの穴(検証中と検証済みを区別しない「既出」、直線の組の無い共有点の見出し、探索の終わりの図から根拠を選ぶことによる循環)を見つけ、実体・マージ・接続に時刻を振った監査に置き換えた。各ステップの前提がそれより前に成り立っていたかも確かめる。記録の無い接続は、定義から・前提の凍結の前のものだけを基底の事実として認める。解けている37問全てがギャップ・循環なし。(2) の「局所伝播が前提を全部記録しているか」は、この監査が接続・一致・定義の由来をすべて時刻つきで辿るので実質片付いた。残り: 座標を置けない2問(<a class="secref" href="#b46">b46</a>)。</div>
     <div class="b-tags"><span class="tag">健全性</span><span class="tag">測定の妥当性</span><span class="tag">centroid</span></div>
   </div>
 </details>
 <details class="item" id="b46" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 有限体で平方根を取り、直線と円・2円の交点に乗る自由点を置けるようにする ― 座標を置けない8問を検算の対象にする</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 有限体で根を取り、座標を置けない問題を検算の対象にする ― 8問中6問を置けた(#87、検算専用)。残りは担当の点で解けない前提の2問</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html#l78">§04 #78</a>・<a class="secref" href="ledger.html#l79">§04 #79</a>。数値の検算(固定座標)と非退化条件の判定は、前提どおりに自由点を置けて、前提が乱数座標で成り立つ問題でしか使えない。今の44問では8問が外れ(thales・test_right_midpoint など前提を座標への制約として与える問題と、bench_2010g1 のように直線と外接円の両方に乗る自由点を持つ問題)、そこでは偽のマージを止める手段が無い ― bench_2010g1 のノイズ10は、非退化条件で探索の道筋が変わっただけで図の崩壊に当たった。判定不能の一覧(<code>INDETERMINATE_KNOWN</code>)の3問も同じ理由。</div>
     <div class="evidence"><b>案:</b> 法 998244353 の有限体では、判別式が平方剰余なら平方根が取れる(Tonelli–Shanks)。平方剰余になるのは約半分なので、乱数の配置を何回か引き直せば、直線と円・2円の交点を有理的に置ける。前提を座標への制約として与える問題(「OP = OA」など)は、その前提を作図に書き直すか(第2交点・垂直二等分線の上の点など)、同じく拘束を解いて置く。</div>
+    <div class="evidence" style="margin-top:8px"><b>2026-09-30(<a class="secref" href="ledger.html#l87">§04 #87</a>)に入れた:</b> 平方根だけでなく一般の根を有限体の上で求める(前提を媒介変数の有理関数として標本から復元し、分子の根を gcd で取り出す)。検算専用で、次数の評価(動点法)には使わない(ユーザー方針)。8問中6問(bench_2010g1・thales・test_right_midpoint・test_isosceles_converse・test_steiner_converse・two_circles_reim)で固定座標を置け、どれも解けて偽0。監査の対象は 36 → 42問。<b>残り:</b> test_parallel(前提の担当は最後に作った点 F だが、F では解けず C か D を動かす必要がある)と test_spiral_similarity(1点に前提が3つ)。担当を前の点へ移すと、その前提が後の点にも依存したままになり置く順序と矛盾する ― 複数の点を同時に解くか、前提から解ける点を選ぶ仕組みが要る。</div>
     <div class="b-tags"><span class="tag">健全性</span><span class="tag">8問</span><span class="tag">Tonelli–Shanks</span></div>
   </div>
 </details>

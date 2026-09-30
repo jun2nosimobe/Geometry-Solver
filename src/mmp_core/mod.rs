@@ -25,6 +25,7 @@ mod congruence;
 mod census;
 pub use census::MergeCensus;
 mod fixed_coords;
+mod algebraic;
 pub(crate) use fixed_coords::point_lies_on;
 pub(crate) mod coords;
 pub(crate) mod eval;
@@ -398,6 +399,12 @@ pub struct EGraph {
     // 成り立ったかの記録。Concyclicの目標(共円であることの証明)を復元する時に使う。
     // キーは(小さい方のClassId, 大きい方のClassId)。
     pub incidence_provenance: rustc_hash::FxHashMap<(ClassId, ClassId), Justification>,
+    /// 監査用の時計: 実体の生成・理由つきのマージ・理由つきの接続のたびに進む。
+    pub clock: u64,
+    /// 各実体を作った時刻。
+    pub entity_time: Vec<u64>,
+    /// 各接続(張ったときの代表元の組)を最初に張った時刻と、その文脈。
+    pub incidence_time: rustc_hash::FxHashMap<(ClassId, ClassId), (u64, LinkKind)>,
     // 🌟 数値評価(eval.rs)が偶然の一致(log_conjecture_candidate)を検出した
     // ときに蓄積する「証明されていないが数値的根拠のある予想」。通常の証明
     // 状態(parents/memo/subobjects)とは完全に独立しており、証明の健全性には
@@ -556,6 +563,19 @@ pub struct ProofEdge {
     pub from: ClassId,
     pub to: ClassId,
     pub justification: Justification,
+    /// マージした時刻(EGraph::clock)。監査が「このマージの前提は、これより前に成り立っていたか」を確かめるのに使う。
+    pub seq: u64,
+}
+
+/// 記録(理由)の無い接続を張ったときの文脈。監査は、定義上の接続と問題の前提だけを基底の事実として認める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// 作図の定義から従う接続(create_entity の自明な関係の中)。
+    Definition,
+    /// 前提を凍結する前(問題ファイル・ノイズ・筋書きの作図)。
+    Premise,
+    /// それ以外(理由を持たない接続。監査はギャップとして扱う)。
+    Bare,
 }
 
 impl EGraph {
@@ -572,6 +592,9 @@ impl EGraph {
             worklist: Vec::new(),
             proof_edges: rustc_hash::FxHashMap::default(),
             incidence_provenance: rustc_hash::FxHashMap::default(),
+            clock: 0,
+            entity_time: Vec::new(),
+            incidence_time: rustc_hash::FxHashMap::default(),
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
@@ -687,6 +710,8 @@ impl EGraph {
         };
 
         self.entities.push(entity);
+        self.clock += 1;
+        self.entity_time.push(self.clock);
         self.parents.push(Cell::new(id.0));
         self.type_index.entry(e_type).or_default().push(id);
         // 🌟 新規エンティティの誕生そのものが「この型の候補集合が変わった」
@@ -969,6 +994,10 @@ impl EGraph {
         if added_new_link {
             self.note_type_changed(self.entities[rep1.0].entity_type, BumpCause::Incidence);
             self.note_type_changed(self.entities[rep2.0].entity_type, BumpCause::Incidence);
+            let kind = if self.trivial_depth > 0 { LinkKind::Definition }
+                else if self.premise_incidences.is_none() { LinkKind::Premise } else { LinkKind::Bare };
+            let key = if rep1.0 < rep2.0 { (rep1, rep2) } else { (rep2, rep1) };
+            self.incidence_time.entry(key).or_insert((self.clock, kind));
         }
 
         // 🌟 新しい接続関係(incidence)ができたので、apply_congruence_closure の
@@ -988,6 +1017,7 @@ impl EGraph {
         if self.merge_census.is_some() && !self.is_connected(self.get_rep(id1), self.get_rep(id2)) {
             self.census_record(id1, id2, true, &justification);
         }
+        self.clock += 1;
         self.link_logical_incidence(id1, id2);
         let rep1 = self.get_rep(id1);
         let rep2 = self.get_rep(id2);

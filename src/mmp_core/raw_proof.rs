@@ -83,6 +83,17 @@ impl EGraph {
             let (kind, payload) = encode_justification(just);
             out.push_str(&format!("I\t{}\t{}\t{}\t{}\n", a.0, b.0, kind, payload));
         }
+        // 時刻(監査が根拠の順序を確かめる): TE 実体を作った時刻、TP マージした時刻、TL 接続を最初に張った時刻と文脈。
+        for (i, t) in self.entity_time.iter().enumerate() {
+            out.push_str(&format!("TE\t{}\t{}\n", i, t));
+        }
+        for (&from, edge) in &self.proof_edges {
+            out.push_str(&format!("TP\t{}\t{}\n", from, edge.seq));
+        }
+        for (&(a, b), &(t, kind)) in &self.incidence_time {
+            let k = match kind { super::LinkKind::Definition => "def", super::LinkKind::Premise => "premise", super::LinkKind::Bare => "bare" };
+            out.push_str(&format!("TL\t{}\t{}\t{}\t{}\n", a.0, b.0, t, k));
+        }
         out
     }
 }
@@ -123,6 +134,11 @@ pub struct RawProof {
     /// 最初に持っていた実体id(複数あり得る)への逆引きインデックス。parse時に
     /// original_defsから一度だけ構築する(canonical_def_key参照)。
     by_definition: FxHashMap<(String, Vec<usize>), Vec<usize>>,
+    /// 時刻(TE/TP/TL 行)。無い(古いダンプ)なら時刻つきの監査は使わない。
+    ent_time: FxHashMap<usize, u64>,
+    edge_time: FxHashMap<usize, u64>,
+    /// 接続 (a, b, 時刻, 文脈)。
+    links: Vec<(usize, usize, u64, String)>,
 }
 
 impl RawProof {
@@ -137,6 +153,9 @@ impl RawProof {
         let mut proof_edges = FxHashMap::default();
         let mut incidence = FxHashMap::default();
         let mut original_defs: FxHashMap<usize, (String, Vec<usize>)> = FxHashMap::default();
+        let mut ent_time: FxHashMap<usize, u64> = FxHashMap::default();
+        let mut edge_time: FxHashMap<usize, u64> = FxHashMap::default();
+        let mut links: Vec<(usize, usize, u64, String)> = Vec::new();
 
         for line in text.lines() {
             let mut parts = line.splitn(5, '\t');
@@ -168,6 +187,16 @@ impl RawProof {
                     let key = if a < b { (a, b) } else { (b, a) };
                     incidence.insert(key, RawEdge { to: b, kind: kind.to_string(), payload: payload.to_string() });
                 }
+                "TE" | "TP" => {
+                    let (Some(a_s), Some(t_s)) = (parts.next(), parts.next()) else { continue };
+                    let (Ok(a), Ok(t)) = (a_s.parse::<usize>(), t_s.parse::<u64>()) else { continue };
+                    if tag == "TE" { ent_time.insert(a, t); } else { edge_time.insert(a, t); }
+                }
+                "TL" => {
+                    let (Some(a_s), Some(b_s), Some(t_s), Some(k)) = (parts.next(), parts.next(), parts.next(), parts.next()) else { continue };
+                    let (Ok(a), Ok(b), Ok(t)) = (a_s.parse::<usize>(), b_s.parse::<usize>(), t_s.parse::<u64>()) else { continue };
+                    links.push((a, b, t, k.to_string()));
+                }
                 _ => {}
             }
         }
@@ -178,6 +207,7 @@ impl RawProof {
         let mut proof = RawProof {
             names, name_to_id, proof_edges, reverse_edges, incidence,
             original_defs, by_definition: FxHashMap::default(),
+            ent_time, edge_time, links,
         };
         // 🌟 by_definitionインデックスの構築はproof_edges/reverse_edgesが
         // 揃った後でなければfinal_repが正しく計算できないため、ここで最後に行う。
@@ -223,6 +253,12 @@ impl RawProof {
             }
             "Circumcircle" if chased.len() == 3 => {
                 chased.sort_unstable();
+            }
+            // 複比は値を保つ4通りの並べ替え(クラインの4元群)を同じ定義として扱う(normalize_definition と同じ)ので、
+            // 並べ替えた形で照合された前提からも元の実体を引けるよう、4通りのうち最小の並びにそろえる。
+            "CrossRatio" | "CrossRatioOfLines" if chased.len() == 4 => {
+                let (a, b, c, d) = (chased[0], chased[1], chased[2], chased[3]);
+                chased = [[a, b, c, d], [b, a, d, c], [c, d, a, b], [d, c, b, a]].into_iter().min().unwrap().to_vec();
             }
             "HarmonicConjugateOf" if chased.len() == 3 => {
                 let mut ab = [chased[0], chased[1]];
@@ -295,7 +331,7 @@ impl RawProof {
         from: usize,
         edge: &RawEdge,
         is_incidence: bool,
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let headline = self.format_location(from, edge.to, is_incidence);
@@ -385,7 +421,7 @@ impl RawProof {
         &self,
         entity: usize,
         exclude: (usize, usize),
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> Vec<DeepStep> {
         let is_excluded = |a: usize, b: usize| (a, b) == exclude || (b, a) == exclude;
@@ -401,10 +437,11 @@ impl RawProof {
             for &src in sources {
                 if is_excluded(src, entity) { continue; }
                 let edge_key = ("REVEDGE".to_string(), vec![src, entity]);
-                if !visited.insert(edge_key) { continue; }
+                if !matches!(visited.enter(edge_key.clone()), Enter::New) { continue; }
                 if let Some(edge) = self.proof_edges.get(&src) {
                     children.push(self.build_step(src, edge, false, visited, depth + 1));
                 }
+                visited.finish(edge_key);
             }
         }
         children
@@ -419,13 +456,17 @@ impl RawProof {
         entity: usize,
         lines: &[usize],
         exclude: (usize, usize),
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let key = ("GROUND".to_string(), { let mut v = vec![entity]; v.extend_from_slice(lines); v });
-        let headline = format!("{} の由来", self.name_of(entity));
-        if !visited.insert(key) {
-            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        // 見出しに対象の直線も入れる(別の直線の組での「同じ点の由来」を、圧縮した証明が同じステップとみなさないように)。
+        let headline = format!("{} の由来({} の共有点)", self.name_of(entity),
+            lines.iter().map(|&l| self.name_of(l)).collect::<Vec<_>>().join("・"));
+        match visited.enter(key.clone()) {
+            Enter::Done => return DeepStep::seen_before(headline),
+            Enter::Open => return DeepStep::cycle(headline),
+            Enter::New => {}
         }
         let mut children = self.merge_ancestry_steps(entity, exclude, visited, depth);
         // (b) 関係する直線それぞれへの接続の由来。記録が無ければ、作図時点の
@@ -438,6 +479,7 @@ impl RawProof {
                 None => children.push(self.build_structural_incidence_step(entity, line, sub_headline, exclude, visited, depth + 1)),
             }
         }
+        visited.finish(key);
         DeepStep { headline, reason: "共有点/共有直線としての由来".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
     }
 
@@ -451,7 +493,7 @@ impl RawProof {
         line: usize,
         headline: String,
         exclude: (usize, usize),
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let (re, rl) = (self.final_rep(entity), self.final_rep(line));
@@ -492,8 +534,10 @@ impl RawProof {
             return DeepStep::leaf(headline, "作図時点の構造的な接続(定義から機械的に従う)".to_string());
         }
         let key = ("STRUCT_INC".to_string(), vec![entity, line, o]);
-        if !visited.insert(key) {
-            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        match visited.enter(key.clone()) {
+            Enter::Done => return DeepStep::seen_before(headline),
+            Enter::Open => return DeepStep::cycle(headline),
+            Enter::New => {}
         }
         let mut children = Vec::new();
         for (x, y) in &bridges {
@@ -513,6 +557,7 @@ impl RawProof {
                 }),
             }
         }
+        visited.finish(key);
         DeepStep {
             headline,
             reason: format!("{} の定義がこの接続を直に持ち、あとは{}",
@@ -536,14 +581,17 @@ impl RawProof {
         &self,
         entity: usize,
         headline: String,
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let key = ("RESULT_ANCESTRY".to_string(), vec![entity]);
-        if !visited.insert(key) {
-            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        match visited.enter(key.clone()) {
+            Enter::Done => return DeepStep::seen_before(headline),
+            Enter::Open => return DeepStep::cycle(headline),
+            Enter::New => {}
         }
         let ancestry = self.merge_ancestry_steps(entity, (usize::MAX, usize::MAX), visited, depth);
+        visited.finish(key);
         if ancestry.is_empty() {
             DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う。この実体が他の実体を吸収した履歴はありません)".to_string())
         } else {
@@ -570,7 +618,7 @@ impl RawProof {
         fact_type: &str,
         args: &[usize],
         headline: String,
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let result_id = *args.last().unwrap();
@@ -603,14 +651,17 @@ impl RawProof {
             }
             Some(origin_id) => {
                 let ground_key = ("DEFORIGIN".to_string(), vec![origin_id, result_id]);
-                if !visited.insert(ground_key) {
-                    return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+                match visited.enter(ground_key.clone()) {
+                    Enter::Done => return DeepStep::seen_before(headline),
+                    Enter::Open => return DeepStep::cycle(headline),
+                    Enter::New => {}
                 }
                 match self.explain(origin_id, result_id) {
                     Some(sub_edges) if !sub_edges.is_empty() => {
                         let children: Vec<DeepStep> = sub_edges.iter()
                             .map(|(sf, se)| self.build_step(*sf, se, false, visited, depth + 1))
                             .collect();
+                        visited.finish(ground_key);
                         DeepStep {
                             headline,
                             reason: format!(
@@ -636,7 +687,7 @@ impl RawProof {
         &self,
         fact_type: &str,
         args: &[usize],
-        visited: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        visited: &mut Seen,
         depth: usize,
     ) -> DeepStep {
         let arg_names: Vec<String> = args.iter().map(|&a| self.name_of(a)).collect();
@@ -644,10 +695,12 @@ impl RawProof {
         let mut key_args = args.to_vec();
         key_args.sort_unstable();
         let key = (format!("F:{}", fact_type), key_args);
-        if !visited.insert(key) {
-            return DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string());
+        match visited.enter(key.clone()) {
+            Enter::Done => return DeepStep::seen_before(headline),
+            Enter::Open => return DeepStep::cycle(headline),
+            Enter::New => {}
         }
-        match fact_type {
+        let step = match fact_type {
             // 🌟 Identical(X,X): 既に同じ実体(id)を指している場合、その実体が
             // なぜ「この役割」を持つに至ったか(=どのDefinedBy前提の合流の
             // 産物か)は、隣接するDefinedBy前提側(build_defined_by_step)が
@@ -681,10 +734,9 @@ impl RawProof {
                         let child = self.build_step(ikey.0, inc_edge, true, visited, depth + 1);
                         DeepStep { headline, reason: "以下の由来で成立".to_string(), children: vec![child], is_gap: false, gap_reason: None, is_shortcut: false }
                     }
-                    // 🌟 由来が記録されていないConnectedは、apply_trivial_relations/
-                    // 作図時点のlink_logical_incidenceによる「定義から機械的に
-                    // 従う」接続関係であることが多く、これ自体はギャップではない。
-                    None => DeepStep::leaf(headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string()),
+                    // 🌟 由来が記録されていない Connected は、定義がこの接続を直に持つ実体まで戻り、そこからの合流を展開する
+                    // (共有点の由来と同じ扱い)。一律に「作図時点の接続」とすると、マージを経て初めて成り立つ接続の根拠が消える。
+                    None => self.build_structural_incidence_step(args[0], args[1], headline, (usize::MAX, usize::MAX), visited, depth + 1),
                 }
             }
             // 🌟 DefinedBy(引数..., 結果): 最後の引数が「定義された図形そのもの」
@@ -698,33 +750,17 @@ impl RawProof {
                 self.build_defined_by_step(fact_type, args, headline, visited, depth + 1)
             }
             _ => DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う)".to_string()),
-        }
+        };
+        visited.finish(key);
+        step
     }
 
     /// 🌟 aとbが本当にrigorousな経路(Given/Theorem/Congruence/Trivialの連鎖、
     /// かつTheoremの前提・LineUniqueness/PointUniquenessの由来も再帰的に
     /// rigorous)だけで合流しているかを検証し、その全経路を保持した
     /// DeepProofを返す。
-    /// 接続・共円の目標の監査。各 (点, 曲線) について、記録された接続 (x, y) があれば「点 ≡ x」「曲線 ≡ y」の合流経路と
-    /// Connected(x, y) の由来を展開する。記録が無い接続は定義から構造的に従うもの(作図時点の接続)として葉にする。
-    pub fn verify_incidences(&self, links: &[(usize, usize, Option<(usize, usize)>)]) -> DeepProof {
-        let mut visited = std::collections::HashSet::new();
-        let roots = links.iter().map(|&(p, c, rec)| {
-            let headline = format!("{} は {} に接続", self.name_of(p), self.name_of(c));
-            let Some((x, y)) = rec else {
-                return DeepStep::leaf(headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string());
-            };
-            let mut children = Vec::new();
-            if x != p { children.push(self.build_premise_step("Identical", &[p, x], &mut visited, 1)); }
-            if y != c { children.push(self.build_premise_step("Identical", &[c, y], &mut visited, 1)); }
-            children.push(self.build_premise_step("Connected", &[x, y], &mut visited, 1));
-            DeepStep { headline, reason: "以下の由来で成立".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
-        }).collect();
-        DeepProof { roots }
-    }
-
     pub fn verify_identical(&self, a: usize, b: usize) -> DeepProof {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = Seen::default();
         let roots = match self.explain(a, b) {
             Some(edges) => edges.iter().map(|(from, edge)| self.build_step(*from, edge, false, &mut visited, 0)).collect(),
             None => vec![DeepStep {
@@ -737,6 +773,301 @@ impl RawProof {
             }],
         };
         DeepProof { roots }
+    }
+}
+
+/// 深い証明を組み立てるときに、展開した主張(種別タグ, 対象id列)を覚える。検証を終えたもの(再び出たら「既出」)と、
+/// いま検証している祖先(再び出たら説明の循環)を区別する ― 区別しないと、自分の主張を根拠にした説明を「既出・検証済み」
+/// として素通りさせる(pappus の監査で見つかった)。
+#[derive(Default)]
+pub(crate) struct Seen {
+    state: std::collections::HashMap<(String, Vec<usize>), bool>,
+}
+
+enum Enter { New, Done, Open }
+
+impl Seen {
+    fn enter(&mut self, key: (String, Vec<usize>)) -> Enter {
+        match self.state.get(&key) {
+            Some(true) => Enter::Done,
+            Some(false) => Enter::Open,
+            None => { self.state.insert(key, false); Enter::New }
+        }
+    }
+    fn finish(&mut self, key: (String, Vec<usize>)) { self.state.insert(key, true); }
+}
+
+impl DeepStep {
+    fn seen_before(headline: String) -> DeepStep {
+        DeepStep::leaf(headline, "(既出: 上記で検証済みなので省略)".to_string())
+    }
+    fn cycle(headline: String) -> DeepStep {
+        DeepStep {
+            headline, children: Vec::new(),
+            reason: "(循環: いま検証している祖先の主張を根拠にしている)".to_string(),
+            is_gap: true,
+            gap_reason: Some("説明が循環している(この前提は、まだ検証を終えていない祖先の主張に依存する)".to_string()),
+            is_shortcut: false,
+        }
+    }
+}
+
+/// 時刻つきの監査の途中状態。主張ごとに「成り立った最も早い時刻」を覚え、検証中の祖先の参照は循環として報告する。
+struct Timed<'a> {
+    raw: &'a RawProof,
+    memo: std::collections::HashMap<(String, Vec<usize>), Option<u64>>,
+    rep: FxHashMap<usize, usize>,
+    /// 接続を、両端の最終的な代表元の組(小さい方, 大きい方)で引く: (a, b, 時刻, 文脈)。
+    link_index: FxHashMap<(usize, usize), Vec<(usize, usize, u64, String)>>,
+}
+
+impl<'a> Timed<'a> {
+    fn new(raw: &'a RawProof) -> Self {
+        let mut rep = FxHashMap::default();
+        for &id in raw.names.keys() { rep.insert(id, raw.final_rep(id)); }
+        let mut link_index: FxHashMap<(usize, usize), Vec<(usize, usize, u64, String)>> = FxHashMap::default();
+        for (a, b, t, k) in &raw.links {
+            let (ra, rb) = (raw.final_rep(*a), raw.final_rep(*b));
+            link_index.entry((ra.min(rb), ra.max(rb))).or_default().push((*a, *b, *t, k.clone()));
+        }
+        Timed { raw, memo: Default::default(), rep, link_index }
+    }
+
+    fn frep(&self, id: usize) -> usize { self.rep.get(&id).copied().unwrap_or_else(|| self.raw.final_rep(id)) }
+
+    /// a から b への合流経路(最小共通祖先まで)。辺は (from, 辺, 時刻)。つながっていなければ None。
+    fn lca_path(&self, a: usize, b: usize) -> Option<Vec<(usize, RawEdge, u64)>> {
+        if a == b { return Some(Vec::new()); }
+        let up = |mut x: usize| -> Vec<(usize, RawEdge)> {
+            let mut v = Vec::new();
+            let mut guard = 0usize;
+            while let Some(e) = self.raw.proof_edges.get(&x) { v.push((x, e.clone())); x = e.to; guard += 1; if guard > self.raw.names.len() + 10 { break; } }
+            v
+        };
+        let (pa, pb) = (up(a), up(b));
+        let root = |p: &Vec<(usize, RawEdge)>, x: usize| p.last().map(|(_, e)| e.to).unwrap_or(x);
+        if root(&pa, a) != root(&pb, b) { return None; }
+        // a 側の祖先の位置。
+        let mut pos: FxHashMap<usize, usize> = FxHashMap::default();
+        pos.insert(a, 0);
+        for (i, (_, e)) in pa.iter().enumerate() { pos.insert(e.to, i + 1); }
+        let mut from_b = Vec::new();
+        let mut x = b;
+        let mut k = 0usize;
+        while !pos.contains_key(&x) { let (f, e) = pb[k].clone(); x = e.to; from_b.push((f, e)); k += 1; }
+        let lca_pos = pos[&x];
+        let t = |f: usize| self.raw.edge_time.get(&f).copied().unwrap_or(0);
+        let mut out: Vec<(usize, RawEdge, u64)> = pa[..lca_pos].iter().map(|(f, e)| (*f, e.clone(), t(*f))).collect();
+        for (f, e) in from_b.into_iter().rev() {
+            let tf = t(f);
+            out.push((e.to, RawEdge { to: f, kind: e.kind, payload: e.payload }, tf));
+        }
+        Some(out)
+    }
+
+    fn path_time(&self, a: usize, b: usize) -> Option<u64> {
+        self.lca_path(a, b).map(|p| p.iter().map(|(_, _, t)| *t).max().unwrap_or(0))
+    }
+
+    /// 主張の記憶: Some(t) なら済み(時刻 t)、None なら検証中。
+    fn enter(&mut self, key: &(String, Vec<usize>), headline: &str) -> Result<(), (u64, DeepStep)> {
+        match self.memo.get(key) {
+            Some(Some(t)) => Err((*t, DeepStep::seen_before(headline.to_string()))),
+            Some(None) => Err((0, DeepStep::cycle(headline.to_string()))),
+            None => { self.memo.insert(key.clone(), None); Ok(()) }
+        }
+    }
+
+    /// 前提(時刻 t)を、時刻 seq のステップの根拠として使えるか確かめる。
+    fn before(step: DeepStep, t: u64, seq: u64) -> DeepStep {
+        if t < seq || step.is_gap { return step; }
+        DeepStep {
+            headline: step.headline.clone(), reason: String::new(), children: vec![step], is_gap: true,
+            gap_reason: Some(format!("時刻の逆転: この前提が成り立ったのは時刻 {} で、これを使ったステップ(時刻 {})より後", t, seq)),
+            is_shortcut: false,
+        }
+    }
+
+    fn identical(&mut self, a: usize, b: usize) -> (u64, Vec<DeepStep>) {
+        match self.lca_path(a, b) {
+            None => (0, vec![DeepStep {
+                headline: format!("{} ≡ {}", self.raw.name_of(a), self.raw.name_of(b)), reason: String::new(), children: Vec::new(),
+                is_gap: true, gap_reason: Some("raw_proof中にこの2つが合流する経路が見つかりません".to_string()), is_shortcut: false,
+            }]),
+            Some(path) => {
+                let t = path.iter().map(|(_, _, t)| *t).max().unwrap_or(0);
+                (t, path.into_iter().map(|(f, e, seq)| self.edge_step(f, &e, seq, false)).collect())
+            }
+        }
+    }
+
+    /// マージ(または理由つきの接続)1本。前提はこの時刻 seq より前に成り立っていなければならない。
+    fn edge_step(&mut self, from: usize, edge: &RawEdge, seq: u64, is_incidence: bool) -> DeepStep {
+        let headline = self.raw.format_location(from, edge.to, is_incidence);
+        let key = (if is_incidence { "EI" } else { "E" }.to_string(), vec![from, edge.to]);
+        if let Err((_, step)) = self.enter(&key, &headline) { return step; }
+        let step = match edge.kind.as_str() {
+            "Given" => DeepStep::leaf(headline, "問題の初期条件(前提)として与えられている".to_string()),
+            "Congruence" => DeepStep::leaf(headline, format!("合同閉包: どちらも {} として定義される", edge.payload)),
+            "Trivial" => DeepStep::leaf(headline, format!("定義から機械的に従う構造的な事実: {}", edge.payload)),
+            "Theorem" => {
+                let (name, premises_str) = edge.payload.split_once('|').unwrap_or((edge.payload.as_str(), ""));
+                let mut children = Vec::new();
+                for premise in premises_str.split(';').filter(|x| !x.is_empty()) {
+                    let Some((fact_type, args_str)) = premise.rsplit_once(':') else { continue };
+                    let args: Vec<usize> = args_str.split(',').filter_map(|x| x.parse::<usize>().ok()).collect();
+                    let (t, st) = self.premise(fact_type, &args);
+                    children.push(Self::before(st, t, seq));
+                }
+                DeepStep { headline, reason: format!("定理「{}」", name), children, is_gap: false, gap_reason: None, is_shortcut: false }
+            }
+            "LineUniqueness" | "ConicUniqueness" | "PointUniqueness" => {
+                let ids: Vec<usize> = edge.payload.split(',').filter_map(|x| x.parse().ok()).collect();
+                let mut children = Vec::new();
+                let reason = if edge.kind == "PointUniqueness" {
+                    let (l1, l2) = (ids.first().copied().unwrap_or(0), ids.get(1).copied().unwrap_or(0));
+                    for pt in [from, edge.to] {
+                        for l in [l1, l2] { let (t, st) = self.incidence(pt, l); children.push(Self::before(st, t, seq)); }
+                    }
+                    format!("直線 {} と直線 {} の交点として一意に定まる", self.raw.name_of(l1), self.raw.name_of(l2))
+                } else {
+                    for &pt in &ids {
+                        for obj in [from, edge.to] { let (t, st) = self.incidence(pt, obj); children.push(Self::before(st, t, seq)); }
+                    }
+                    let w = if edge.kind == "LineUniqueness" { "直線" } else { "円" };
+                    format!("2{}が点({})を共有しているため同一{}", w, ids.iter().map(|&i| self.raw.name_of(i)).collect::<Vec<_>>().join(", "), w)
+                };
+                DeepStep { headline, reason, children, is_gap: false, gap_reason: None, is_shortcut: true }
+            }
+            other => DeepStep { headline, reason: format!("未知の理由の種類「{}」", other), children: Vec::new(), is_gap: true,
+                gap_reason: Some("raw_proofの形式が想定外です".to_string()), is_shortcut: false },
+        };
+        self.memo.insert(key, Some(seq));
+        step
+    }
+
+    fn premise(&mut self, fact_type: &str, args: &[usize]) -> (u64, DeepStep) {
+        let headline = format!("前提 {}({})", fact_type, args.iter().map(|&a| self.raw.name_of(a)).collect::<Vec<_>>().join(", "));
+        match fact_type {
+            "Identical" if args.len() == 2 && args[0] == args[1] =>
+                (0, DeepStep::leaf(headline, "同一の実体を指しているため自明".to_string())),
+            "Identical" if args.len() == 2 => {
+                let mut k = args.to_vec(); k.sort_unstable();
+                let key = ("I".to_string(), k);
+                if let Err(r) = self.enter(&key, &headline) { return r; }
+                let (t, children) = self.identical(args[0], args[1]);
+                self.memo.insert(key, Some(t));
+                (t, DeepStep { headline, reason: "以下の合流経路で成立".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false })
+            }
+            "Connected" if args.len() == 2 => self.incidence(args[0], args[1]),
+            _ if fact_type.starts_with("DefinedBy:") && !args.is_empty() => self.defined_by(&fact_type["DefinedBy:".len()..], args, headline),
+            _ => (0, DeepStep::leaf(headline, "構造的な基底事実(定義から機械的に従う)".to_string())),
+        }
+    }
+
+    /// 点(または曲線)p が曲線 c に乗る: 記録された接続 (x, y) のうち、p ≡ x・c ≡ y の合流も含めて最も早く成り立つものを使う。
+    fn incidence(&mut self, p: usize, c: usize) -> (u64, DeepStep) {
+        let headline = format!("{} は {} に接続", self.raw.name_of(p), self.raw.name_of(c));
+        let key = ("C".to_string(), vec![p.min(c), p.max(c)]);
+        if let Err(r) = self.enter(&key, &headline) { return r; }
+        let (rp, rc) = (self.frep(p), self.frep(c));
+        let cands = self.link_index.get(&(rp.min(rc), rp.max(rc))).cloned().unwrap_or_default();
+        let mut best: Option<(u64, usize, usize, u64, String)> = None;
+        for (a, b, t, k) in cands {
+            let (x, y) = if self.frep(a) == rp && self.frep(b) == rc { (a, b) } else { (b, a) };
+            let (Some(tx), Some(ty)) = (self.path_time(p, x), self.path_time(c, y)) else { continue };
+            let time = t.max(tx).max(ty);
+            if best.as_ref().is_none_or(|bst| time < bst.0) { best = Some((time, x, y, t, k)); }
+        }
+        let Some((time, x, y, t, kind)) = best else {
+            let step = DeepStep { headline, reason: String::new(), children: Vec::new(), is_gap: true,
+                gap_reason: Some("この接続を張った記録が見つかりません".to_string()), is_shortcut: false };
+            self.memo.insert(key, Some(0));
+            return (0, step);
+        };
+        let mut children = Vec::new();
+        if x != p { let (_, st) = self.identical(p, x); children.extend(st); }
+        if y != c { let (_, st) = self.identical(c, y); children.extend(st); }
+        let lkey = if x < y { (x, y) } else { (y, x) };
+        let link_step = match self.raw.incidence.get(&lkey).cloned() {
+            Some(e) => self.edge_step(lkey.0, &e, t, true),
+            None => {
+                let h = format!("{} は {} に接続", self.raw.name_of(x), self.raw.name_of(y));
+                match kind.as_str() {
+                    "def" => DeepStep::leaf(h, "作図時点の構造的な接続(定義から機械的に従う)".to_string()),
+                    "premise" => DeepStep::leaf(h, "問題の前提(探索の前に張った接続)".to_string()),
+                    _ => DeepStep { headline: h, reason: String::new(), children: Vec::new(), is_gap: true,
+                        gap_reason: Some("理由の記録が無い接続(定義でも問題の前提でもない)".to_string()), is_shortcut: false },
+                }
+            }
+        };
+        children.push(link_step);
+        self.memo.insert(key, Some(time));
+        (time, DeepStep { headline, reason: "以下の由来で成立".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false })
+    }
+
+    /// DefinedBy:型(引数..., 結果): その定義を元々持っていた実体 o と、引数・結果への合流。最も早いものを使う。
+    fn defined_by(&mut self, type_name: &str, args: &[usize], headline: String) -> (u64, DeepStep) {
+        let key = (format!("D:{}", type_name), args.to_vec());
+        if let Err(r) = self.enter(&key, &headline) { return r; }
+        let (def_args, result) = (&args[..args.len() - 1], args[args.len() - 1]);
+        let ck = self.raw.canonical_def_key(type_name, def_args);
+        let origins = self.raw.by_definition.get(&ck).cloned().unwrap_or_default();
+        let mut best: Option<(u64, usize, Vec<(usize, usize)>)> = None;
+        for o in origins {
+            if self.frep(o) != self.frep(result) { continue; }
+            let Some((_, oargs)) = self.raw.original_defs.get(&o).cloned() else { continue };
+            // 引数の対応(最終的な代表元が同じもの同士。順不同の定義もあるので貪欲に組む)。
+            let mut used = vec![false; oargs.len()];
+            let mut bridges = vec![(o, result)];
+            let mut ok = true;
+            for &a in def_args {
+                match (0..oargs.len()).find(|&j| !used[j] && self.frep(oargs[j]) == self.frep(a)) {
+                    Some(j) => { used[j] = true; bridges.push((oargs[j], a)); }
+                    None => { ok = false; break; }
+                }
+            }
+            if !ok { continue; }
+            let mut time = self.raw.ent_time.get(&o).copied().unwrap_or(0);
+            for &(x, y) in &bridges { match self.path_time(x, y) { Some(t) => time = time.max(t), None => { ok = false; break; } } }
+            if !ok { continue; }
+            if best.as_ref().is_none_or(|bst| time < bst.0) { best = Some((time, o, bridges)); }
+        }
+        let Some((time, o, bridges)) = best else {
+            // 定義を元々持つ実体が無い(memo に後から登録された定義など)。時刻は確かめられない。
+            self.memo.insert(key, Some(0));
+            return (0, DeepStep { headline, reason: String::new(), children: Vec::new(), is_gap: true,
+                gap_reason: Some("この定義を元々持っていた実体が見つからない(定義の由来を確かめられない)".to_string()), is_shortcut: false });
+        };
+        let mut children = Vec::new();
+        for (x, y) in bridges { if x != y { let (_, st) = self.identical(x, y); children.extend(st); } }
+        self.memo.insert(key, Some(time));
+        let reason = if children.is_empty() {
+            format!("{} はこの定義そのもので作られた実体(基底事実)", self.raw.name_of(o))
+        } else {
+            format!("{} が元々この定義で作られており、以下の合流で引数・結果につながる", self.raw.name_of(o))
+        };
+        (time, DeepStep { headline, reason, children, is_gap: false, gap_reason: None, is_shortcut: false })
+    }
+}
+
+impl RawProof {
+    /// 時刻(TE/TP/TL 行)を持つダンプか。
+    pub fn has_times(&self) -> bool { !self.edge_time.is_empty() || !self.links.is_empty() }
+
+    /// 時刻つきの監査: 目標の等式の合流経路から前提を再帰的にたどり、各ステップの前提がそのステップより前に成り立っていたか、
+    /// 説明が循環していないかも確かめる(verify_identical は探索の終わりの図から根拠を選ぶので、後からできた事実で
+    /// 前のマージを説明して循環することがあった)。
+    pub fn verify_identical_timed(&self, a: usize, b: usize) -> DeepProof {
+        let mut tm = Timed::new(self);
+        let (_, roots) = tm.identical(a, b);
+        DeepProof { roots }
+    }
+
+    /// 接続・共円の目標の時刻つき監査。
+    pub fn verify_incidences_timed(&self, pairs: &[(usize, usize)]) -> DeepProof {
+        let mut tm = Timed::new(self);
+        DeepProof { roots: pairs.iter().map(|&(p, c)| tm.incidence(p, c).1).collect() }
     }
 }
 

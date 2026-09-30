@@ -74,6 +74,8 @@ pub struct Prepared {
     pub hypotheses_hold: bool,
     /// 固定座標を置いたか(AR と数値で選ぶ補助作図はこれが要る)。
     pub fixed: bool,
+    /// 乱数の座標では前提が成り立たず、代数的な置き方(平方根などを取る、検算専用)で置いたか。
+    pub algebraic: bool,
 }
 
 /// BlackboardEngine::recover が打った手。
@@ -141,13 +143,23 @@ impl BlackboardEngine {
     pub fn prepare(&mut self, setup: &SearchSetup) -> Prepared {
         // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」や結論の数値チェックは誤警報になりうる。
         self.prover.egraph.freeze_premise_incidences();
-        let hypotheses_hold = self.prover.egraph.hypotheses_hold_numerically();
+        let mut hypotheses_hold = self.prover.egraph.hypotheses_hold_numerically();
         // 座標はここで固定して以後の検算に使う(マージに依存せず、構造が変わっても捨てない)。
-        let fixed = hypotheses_hold && setup.fixed_coords && self.prover.egraph.fix_coordinates();
+        let mut fixed = hypotheses_hold && setup.fixed_coords && self.prover.egraph.fix_coordinates();
+        // 乱数の座標では前提が成り立たない図(直線と円の両方に乗る点・「OP = OA」のような方程式の前提)は、前提を方程式として
+        // 解いて置く(検算専用。次数の評価には使わない)。
+        let mut algebraic = false;
+        if !hypotheses_hold && setup.fixed_coords
+            && let Some(samples) = self.prover.egraph.algebraic_premise_samples()
+            && self.prover.egraph.fix_coordinates_from(samples) {
+            fixed = true;
+            hypotheses_hold = true;
+            algebraic = true;
+        }
         self.prover.egraph.merge_checks = setup.merge_checks;
         self.prover.numeric_distinct = setup.nondegeneracy;
         self.prover.guard_conclusions = setup.merge_checks && setup.conclusion_check && hypotheses_hold;
-        Prepared { hypotheses_hold, fixed }
+        Prepared { hypotheses_hold, fixed, algebraic }
     }
 
     /// 手が止まったときの一手: 代数的な追跡(ar が真なら)と決定的な手(recover)を同じ回に行う(AR だけで次の回に

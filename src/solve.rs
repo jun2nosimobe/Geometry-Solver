@@ -267,13 +267,13 @@ impl GoalChecker {
         // 繋がっているかを監査する(接続・共円の目標は、目標の接続の由来から)。
         let raw_text = output_raw_proof(eg, problem_name);
         let raw = RawProof::parse(&raw_text);
+        // 時刻つきの監査(各ステップの前提がそれより前に成り立っていたか・説明が循環していないかも確かめる)を使う。
         let report = if fact_type == "Identical" {
-            raw.verify_identical(target_args[0].0, target_args[1].0)
+            raw.verify_identical_timed(target_args[0].0, target_args[1].0)
         } else {
             let target = (fact_type.clone(), target_args.clone());
-            let links: Vec<(usize, usize, Option<(usize, usize)>)> = eg.goal_incidences(&target).into_iter()
-                .map(|(p, c, rec)| (p.0, c.0, rec.map(|(x, y)| (x.0, y.0)))).collect();
-            raw.verify_incidences(&links)
+            let pairs: Vec<(usize, usize)> = eg.goal_incidences(&target).into_iter().map(|(p, c, _)| (p.0, c.0)).collect();
+            raw.verify_incidences_timed(&pairs)
         };
         output_extract_report(&report, problem_name);
         Goal::Proved
@@ -428,6 +428,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
 
     let prepared = engine.prepare(&opts.search_setup());
     if !prepared.fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
+    if prepared.algebraic { println!("📐 乱数の座標では前提が成り立たないので、前提を方程式として解いて固定座標を置きました(検算専用)"); }
     if !prepared.hypotheses_hold { println!("🛡️ 結論の数値チェックは無効(前提どおりに座標を置けない図)"); }
     if opts.audit_merges {
         engine.prover.merge_audit = Some(logic_core::MergeAudit::default());

@@ -24,11 +24,21 @@ pub(crate) struct FixedCoords {
 impl EGraph {
     /// 探索の前に呼ぶ(freeze_premise_incidences の後)。自由点を前提どおりに置けなければ false で、従来の経路のまま。
     pub fn fix_coordinates(&mut self) -> bool {
-        let mut fixed = FixedCoords::default();
         let points = self.all_free_points();
-        for k in 0..SAMPLES {
+        let mut samples = Vec::new();
+        for _ in 0..SAMPLES {
             let mut vars = rustc_hash::FxHashMap::default();
             if !self.assign_free_point_coords(&points, &mut vars) { return false; }
+            samples.push(vars);
+        }
+        self.fix_coordinates_from(samples)
+    }
+
+    /// 前提どおりに置いた座標(標本ごと)で固定座標を作る。代数的な置き方(algebraic.rs)の結果もここから入れる。
+    pub fn fix_coordinates_from(&mut self, samples: Vec<rustc_hash::FxHashMap<String, ModInt>>) -> bool {
+        if samples.len() != SAMPLES { return false; }
+        let mut fixed = FixedCoords::default();
+        for (k, vars) in samples.into_iter().enumerate() {
             // 自由点・定数の値はこの時点の名前で引くので、名前がマージで変わる前にここで全て確定させる。
             let slot = &mut fixed.values[k];
             slot.resize(self.entities.len(), None);
@@ -46,7 +56,7 @@ impl EGraph {
 
     pub(crate) fn fixed_active(&self) -> bool { self.fixed_coords.borrow().is_some() }
 
-    fn constant_or_free_value(&self, id: ClassId, vars: &rustc_hash::FxHashMap<String, ModInt>) -> Option<Vec<ModInt>> {
+    pub(crate) fn constant_or_free_value(&self, id: ClassId, vars: &rustc_hash::FxHashMap<String, ModInt>) -> Option<Vec<ModInt>> {
         // 有向角の定数は複比 (I,J;D1,D2) の値(直角は -1、0度は 1)。
         if id == self.ang90 { return Some(vec![ModInt::new(-1), ModInt::new(1), ModInt::new(1)]); }
         if id == self.ang0 { return Some(vec![ModInt::new(1), ModInt::new(1), ModInt::new(1)]); }

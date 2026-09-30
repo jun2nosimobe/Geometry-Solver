@@ -20,7 +20,8 @@ pub fn setup(egraph: &mut EGraph) -> ProblemSetup {
     // 🌟 仮定: Pは中心O、半径OAの円周上にある(OP = OA)
     let dist_oa = egraph.create_entity("Dist_OA".to_string(), Definition::LengthSq(o, a), EntityType::Scalar);
     let dist_op = egraph.create_entity("Dist_OP".to_string(), Definition::LengthSq(o, p), EntityType::Scalar);
-    egraph.merge_entities(dist_oa, dist_op);
+    // 前提は理由(Given)つきでマージする(証明の監査が、この合流を前提として辿れるように)。
+    egraph.merge_entities_justified(dist_oa, dist_op, crate::mmp_core::Justification::Given);
 
     let l_pa = egraph.create_entity("L_PA".to_string(), Definition::new_line(p, a), EntityType::Line);
     let l_pb = egraph.create_entity("L_PB".to_string(), Definition::new_line(p, b), EntityType::Line);

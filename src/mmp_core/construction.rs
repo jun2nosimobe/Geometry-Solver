@@ -105,7 +105,9 @@ impl EGraph {
             reason: "調和共役点の完全四辺形作図により、抽象的な調和共役点と実際の交点が一致".to_string(),
         });
         let d = self.get_rep(d_abstract);
-        self.link_logical_incidence(d, line_abc);
+        self.link_logical_incidence_justified(d, line_abc, Justification::Trivial {
+            reason: "調和共役点は、その3点の直線の上にある(完全四辺形の作図)".to_string(),
+        });
 
         // 対合性: H(A,B,D) ≡ C
         let inv_def = self.normalize_definition(&Definition::HarmonicConjugateOf(a, b, d));

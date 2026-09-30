@@ -16,11 +16,11 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#86(入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#87(時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
-    <div class="stat"><div class="n">37/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)が解けた。検査を外した監査で偽のマージ0件</div></div>
+    <div class="stat"><div class="n">37/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)が解けた。検査を外した監査で偽のマージ0件(対象42問)、時刻つきの証明の監査で37問全てがギャップなし(#87)</div></div>
     <div class="stat"><div class="n">22</div><div class="l">solve が既定で使う定理(基本15 + 長さ1 + 中心角1 + 射影5)。方冪と交わる弦の相似は AR が置き換える(<a class="secref" href="ledger.html#l85">#85</a>、<code>--chord-theorems</code> で戻す)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理は <a class="secref" href="theorems.html">§07</a></div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
@@ -34,7 +34,7 @@
 <details class="item" id="track-1" data-status="shipped">
   <summary><span class="idx">方針A</span><span class="t">射影幾何と、規則の側で保つ健全性</span><span class="pill shipped">座標を置ける問題では検査なしで偽0</span></summary>
   <div class="body">
-<div class="desc">原則: 「普通の図形の特殊ケース」には専用の <code>EntityType</code> を作らず、標準の型と基準の実体への接続で表す(方向 = 無限遠直線上の点、円 = 虚円点 I, J を通る二次曲線、有向角 = 無限遠直線上の複比)。健全性は規則の側で保つ: 定理に非退化条件を書き(<a class="secref" href="ledger.html#l78">#78</a>)、数値の検算を探索前に一度だけ置く固定座標にした(<a class="secref" href="ledger.html#l79">#79</a>)。座標を置ける問題では、マージ前の検査を外して監査しても偽のマージが0件(検査は安全網として残す)。代数的な追跡(AR)の等式も、定義の写像を数値で確かめ、図の上で同じ点の組を使わない(<a class="secref" href="ledger.html#l85">#85</a>)。<br><b>残る穴:</b> 座標を置けない8問では数値の検算も AR も効かない(<a class="secref" href="backlog.html#b46">b46</a>)。目標が共円・接続の8問も、目標到達時の検算と深い証明の監査を通す(<a class="secref" href="ledger.html#l86">#86</a>)。証明の各ステップの数値検算は未実施(<a class="secref" href="backlog.html#b44">b44</a>)。</div>
+<div class="desc">原則: 「普通の図形の特殊ケース」には専用の <code>EntityType</code> を作らず、標準の型と基準の実体への接続で表す(方向 = 無限遠直線上の点、円 = 虚円点 I, J を通る二次曲線、有向角 = 無限遠直線上の複比)。健全性は規則の側で保つ: 定理に非退化条件を書き(<a class="secref" href="ledger.html#l78">#78</a>)、数値の検算を探索前に一度だけ置く固定座標にした(<a class="secref" href="ledger.html#l79">#79</a>)。座標を置ける問題では、マージ前の検査を外して監査しても偽のマージが0件(検査は安全網として残す)。代数的な追跡(AR)の等式も、定義の写像を数値で確かめ、図の上で同じ点の組を使わない(<a class="secref" href="ledger.html#l85">#85</a>)。<br>監査は時刻つき(各ステップの前提がそれより前に成り立っていたか・説明が循環していないか)で、解けている37問全てがギャップなし(<a class="secref" href="ledger.html#l87">#87</a>)。<b>残る穴:</b> 座標を置けない2問(8問中6問は検算専用の代数的な置き方で置けた、#87)では数値の検算も AR も効かない(<a class="secref" href="backlog.html#b46">b46</a>)。目標が共円・接続の8問も、目標到達時の検算と深い証明の監査を通す(<a class="secref" href="ledger.html#l86">#86</a>)。証明の各ステップの数値検算は未実施(<a class="secref" href="backlog.html#b44">b44</a>)。</div>
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
@@ -74,6 +74,7 @@
       <div class="gterm"><b>src/mmp_core/mod.rs</b><p><code>EGraph</code>・<code>GeoEntity</code>・<code>Definition</code>・<code>EntityType</code>・<code>Fact</code>・<code>Justification</code>。生の構造を書き換える4ゲートウェイもここ(<a class="secref" href="atlas.html#matching">§03</a>)。</p></div>
       <div class="gterm"><b>mmp_core/congruence.rs</b><p><code>apply_congruence_closure</code>と、直線・二次曲線・交点の一意性の局所伝播。マージの実行(<code>merge_entities_justified</code>)もここ。</p></div>
       <div class="gterm"><b>mmp_core/fixed_coords.rs</b><p>固定座標: 前提が乱数座標で成り立つなら探索の前に一度だけ座標を置き、各実体を元の定義から計算する(マージに依存しない)。マージ前の検査・結論の検算・非退化条件・AR の写像の確認・数値で選ぶ補助作図が使う(<a class="secref" href="ledger.html#l79">#79</a>)。</p></div>
+      <div class="gterm"><b>mmp_core/algebraic.rs</b><p>検算専用の代数的な置き方。乱数の座標では前提が成り立たない図(直線と円の両方に乗る点・「OP = OA」のような前提)で、前提を媒介変数の有理関数として標本から復元し、有限体の上で根を求めて自由点を置く。次数の評価には使わない(<a class="secref" href="ledger.html#l87">#87</a>)。</p></div>
       <div class="gterm"><b>mmp_core/eval.rs</b><p>有限体上の数値評価。<code>numeric_plausibility_check</code>(マージ前と目標到達時の裏付け)と<code>cached_degree</code>(動点法の代数的次数)。</p></div>
       <div class="gterm"><b>mmp_core/coords.rs</b><p>数の表現によらない評価の骨組み: 同値類の評価(同居する定義を順に試す・循環の検出)と、自由点の置き方(前提の曲線の上に置く・循環の解消・最後の検証)。有限体(eval.rs)・p進(padic_eval.rs)・実数(discover_viz.rs)の3つが共有する。</p></div>
       <div class="gterm"><b>mmp_core/proof.rs</b><p><code>explain_identical</code>: なぜ2つが同じ同値類に入ったかを「証明の森」から復元する。人間向けの<code>generate_proof</code>も。</p></div>
@@ -122,7 +123,9 @@ flowchart TD
     C --> P["前提の事実を投入<br/>merge / link → freeze_premise_incidences"]
     P --> FX{"prepare: 前提は乱数座標で<br/>成り立つ?"}
     FX -->|"はい(36問)"| FX1["fix_coordinates<br/>固定座標・結論の検算・マージ前の検査"]
-    FX -->|"いいえ(8問)"| FX2["従来の数値検算のみ<br/>結論の検算なし・AR なし"]
+    FX -->|"いいえ(8問)"| FXA{"前提を方程式として解いて<br/>置ける?(検算専用)"}
+    FXA -->|"はい(6問)"| FX1
+    FXA -->|"いいえ(2問)"| FX2["従来の数値検算のみ<br/>結論の検算なし・AR なし"]
     FX1 --> S["schedule_full_sweep"]
     FX2 --> S
     S --> D{"task_queue"}
@@ -131,7 +134,7 @@ flowchart TD
     F --> G["apply_congruence_closure<br/>一意性の局所伝播(非退化条件つき)"]
     G --> D
     E -->|"目標に到達"| N{"図の崩壊? 数値で偽?<br/>(一致・接続・共円)"}
-    N -->|"健全"| M["🎉 証明完了<br/>generate_proof・raw_proof<br/>extract-proof の監査"]
+    N -->|"健全"| M["🎉 証明完了<br/>generate_proof・raw_proof<br/>extract-proof の時刻つきの監査"]
     N -->|"崩壊・偽"| L2["🚨 打ち切り"]
     E -->|"Stall"| R["on_stall: 同じ回に AR と回復"]
     R --> R1["run_ar(最大4回)<br/>格子を作り直して同値類・方向・円・平行・相似を併合"]
@@ -179,7 +182,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-30(来歴 #67〜#86)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-30(来歴 #67〜#87)
   </footer>
 </div>
 <script src="atlas.js"></script>

@@ -85,7 +85,8 @@ fn run_extract_proof(args: &[String]) {
         println!("⚠️ '{}' または '{}' という名前の実体がraw_proof中に見つかりませんでした。", args[3], args[4]);
         return;
     };
-    let report = raw.verify_identical(a, b);
+    // 時刻の入った(新しい)ダンプなら時刻つきの監査、古いダンプなら従来の監査。
+    let report = if raw.has_times() { raw.verify_identical_timed(a, b) } else { raw.verify_identical(a, b) };
     // result/raw_proof_<問題名>.txt から問題名を取り出して、同じ命名規則で保存する。
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or(path);
     let problem_name = stem.strip_prefix("raw_proof_").unwrap_or(stem);

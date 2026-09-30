@@ -125,7 +125,9 @@ impl EGraph {
             // このキーへの書き込みは実質的に一度きり。表示名はoriginal_name
             // (create_entity時に一度だけ設定され、以後マージで書き換わらない)
             // 経由で常に安定して引けるので、ここではraw ClassIdだけ持てば十分。
-            self.proof_edges.entry(root2.0).or_insert(ProofEdge { from: root2, to: root1, justification });
+            self.clock += 1;
+            let seq = self.clock;
+            self.proof_edges.entry(root2.0).or_insert(ProofEdge { from: root2, to: root1, justification, seq });
         }
         did_merge
     }
