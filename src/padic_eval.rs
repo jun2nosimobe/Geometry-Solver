@@ -163,6 +163,21 @@ impl<'a> DegenEvaluator<'a> {
     pub fn eval(&mut self, id: ClassId) -> Option<DegenShape> {
         coords::evaluate(self.egraph, &self.coords, id, &mut self.cache, &mut std::collections::HashSet::new())
     }
+
+    /// まだ図に無い作図 def の値(親は今の図の値で評価する)。
+    pub fn eval_def(&mut self, def: &Definition) -> Option<DegenShape> {
+        let mut vals: FxHashMap<usize, DegenShape> = FxHashMap::default();
+        for p in def.get_parents() { vals.insert(p.0, self.eval(p)?); }
+        self.coords.construct(self.egraph, def, &mut |q| vals.get(&q.0).cloned())
+    }
+}
+
+/// 2つの値がどちらも点で、同じ点か。
+pub fn same_point_shape(a: &DegenShape, b: &DegenShape) -> bool {
+    match (a, b) {
+        (DegenShape::Point(p), DegenShape::Point(q)) => cross3(p, q).iter().all(|x| x.valuation().is_none()),
+        _ => false,
+    }
 }
 
 impl DegenCoords {
@@ -239,6 +254,11 @@ impl Geometry for DegenCoords {
                 let ll = line_of(*l, get)?;
                 let pp = point_of(*p, get)?;
                 Some(DegenShape::Line(parallel_line(&ll, &pp)))
+            }
+            Definition::CircleCenterPoint(o, p) => {
+                let (center, pp) = (point_of(*o, get)?, point_of(*p, get)?);
+                let r_sq = squared_distance(&center, &pp)?;
+                Some(DegenShape::Circle { center, r_sq, known: pp })
             }
             Definition::Circumcircle(a, b, c) => {
                 let pa = point_of(*a, get)?;
@@ -442,11 +462,13 @@ pub fn find_generic_equal_lengths(egraph: &EGraph, seeds: &[u64], max_points: us
     }
 
     let mut candidates: Option<std::collections::HashSet<(usize, usize)>> = None;
+    let mut first_coords: Option<Vec<Option<Triple>>> = None;
     for &seed in seeds {
         let mut ev = DegenEvaluator::new(egraph, seed, None);
         let coords: Vec<Option<Triple>> = ids.iter()
             .map(|&id| match ev.eval(id) { Some(DegenShape::Point(t)) => Some(t), _ => None })
             .collect();
+        if first_coords.is_none() { first_coords = Some(coords.clone()); }
         // 長さの二乗でバケツ分けすると、総当たり(組の組)を避けられる。
         let mut buckets: FxHashMap<PInt, Vec<usize>> = FxHashMap::default();
         for (k, &(i, j)) in pairs.iter().enumerate() {
@@ -493,19 +515,51 @@ pub fn find_generic_equal_lengths(egraph: &EGraph, seeds: &[u64], max_points: us
         if candidates.as_ref().map_or(true, |c| c.is_empty()) { return Vec::new(); }
     }
 
+    // 4点が同じ直線に乗る2線分の等長は、その直線の上の比の言い換え(オイラー線の GN = OG/2 など)なので落とす。
+    let coords0 = first_coords.unwrap_or_default();
+    let on_one_line = |k1: usize, k2: usize| -> bool {
+        let ((i1, j1), (i2, j2)) = (pairs[k1], pairs[k2]);
+        let (Some(a), Some(b)) = (coords0.get(i1).and_then(|c| c.as_ref()), coords0.get(j1).and_then(|c| c.as_ref())) else { return false };
+        let line = cross3(a, b);
+        [i2, j2].iter().all(|&k| coords0.get(k).and_then(|c| c.as_ref()).is_some_and(|p|
+            line[0].mul(&p[0]).add(&line[1].mul(&p[1])).add(&line[2].mul(&p[2])).valuation().is_none()))
+    };
+    // 等長は推移的なので、組を全部並べると類の大きさの2乗で増える。線分を類にまとめ、類の中で「既に同じ長さと
+    // 分かっている」線分どうしを1つの組に寄せて、組の代表どうしの等長だけを出す(組の数 − 1 件)。
+    let mut parent: FxHashMap<usize, usize> = FxHashMap::default();
+    fn find(parent: &mut FxHashMap<usize, usize>, x: usize) -> usize {
+        let p = *parent.get(&x).unwrap_or(&x);
+        if p == x { return x; }
+        let r = find(parent, p);
+        parent.insert(x, r);
+        r
+    }
+    let mut cand: Vec<(usize, usize)> = candidates.unwrap_or_default().into_iter().collect();
+    cand.sort_unstable();
+    for (k1, k2) in cand {
+        if pairs[k1] == pairs[k2] || on_one_line(k1, k2) { continue; }
+        parent.entry(k1).or_insert(k1);
+        parent.entry(k2).or_insert(k2);
+        let (r1, r2) = (find(&mut parent, k1), find(&mut parent, k2));
+        if r1 != r2 { parent.insert(r1.max(r2), r1.min(r2)); }
+    }
+    let mut classes: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    let keys: Vec<usize> = parent.keys().copied().collect();
+    for k in keys { let r = find(&mut parent, k); classes.entry(r).or_default().push(k); }
     let mut out: Vec<[ClassId; 4]> = Vec::new();
-    for (k1, k2) in candidates.unwrap_or_default() {
-        let (i1, j1) = pairs[k1];
-        let (i2, j2) = pairs[k2];
-        // 使っている点が2つしかない(= 同じ線分)ものは除く。
-        let mut used = vec![i1, j1, i2, j2];
-        used.sort_unstable();
-        used.dedup();
-        if used.len() < 3 { continue; }
-        // 両方の LengthSq が既に同じ同値類にいるなら既知なので報告しない(共線・共円の検出器と同じく「構造的にまだ知られて
-        // いない」ものだけを出す。落とさないと中点のたびに AM = MB を発見し直す)。
-        if lengths_already_known_equal(egraph, ids[i1], ids[j1], ids[i2], ids[j2]) { continue; }
-        out.push([ids[i1], ids[j1], ids[i2], ids[j2]]);
+    for (_, mut segs) in classes {
+        segs.sort_unstable();
+        segs.dedup();
+        let mut groups: Vec<usize> = Vec::new();   // 各組の代表の線分
+        for k in segs {
+            let (i, j) = pairs[k];
+            if groups.iter().any(|&g| { let (a, b) = pairs[g]; lengths_already_known_equal(egraph, ids[a], ids[b], ids[i], ids[j]) }) { continue; }
+            groups.push(k);
+        }
+        for &g in &groups[1..] {
+            let ((i1, j1), (i2, j2)) = (pairs[groups[0]], pairs[g]);
+            out.push([ids[i1], ids[j1], ids[i2], ids[j2]]);
+        }
     }
     out.sort_by_key(|q| (q[0].0, q[1].0, q[2].0, q[3].0));
     out

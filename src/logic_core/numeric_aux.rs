@@ -125,7 +125,7 @@ impl BlackboardEngine {
         }
 
         // 候補を並べる(既に図にあるものは除く)。
-        let has = |d: Definition| eg.memo.contains_key(&eg.normalize_definition(&d));
+        let has = |d: Definition| eg.live_memo(&eg.normalize_definition(&d));
         let mut cands: Vec<Cand> = Vec::new();
         for i in 0..hl.len() {
             for j in (i + 1)..hl.len() {
@@ -248,8 +248,8 @@ impl BlackboardEngine {
                 let perp = matches!(cand, Cand::PerpInter { .. });
                 let ldef = if perp { Definition::PerpendicularLine(l, p) } else { Definition::ParallelLine(l, p) };
                 let norm = self.prover.egraph.normalize_definition(&ldef);
-                let aux_line = match self.prover.egraph.memo.get(&norm) {
-                    Some(&id) => self.prover.egraph.get_rep(id),
+                let aux_line = match self.prover.egraph.memo.get(&norm).copied() {
+                    Some(id) => { self.prover.egraph.revive(id); self.prover.egraph.get_rep(id) }
                     None => {
                         let lname = format!("{}_{}_{}_{}", if perp { "Perp" } else { "Par" }, name_of(self, l), name_of(self, p), tag);
                         match self.add_aux(lname, ldef, EntityType::Line, EntityOrigin::LineDemand, Some(0.5)) { Some(id) => id, None => return false }
@@ -265,7 +265,7 @@ impl BlackboardEngine {
             Cand::SecondCC { p, c1, c2 } => (format!("Second_{}_{}_{}", name_of(self, p), name_of(self, c1), tag),
                 Definition::SecondIntersectionOfCircles(p, c1, c2), EntityOrigin::SecondDemand),
         };
-        if self.prover.egraph.memo.contains_key(&self.prover.egraph.normalize_definition(&def)) { return false; }
+        if self.prover.egraph.live_memo(&self.prover.egraph.normalize_definition(&def)) { return false; }
         println!("  💡 [数値で選ぶ補助作図] {} を生成(新しい一致の点数 {})", name, score);
         self.add_aux(name, def, EntityType::Point, origin, Some(0.5)).is_some()
     }

@@ -326,11 +326,11 @@ pub(crate) fn apply_construction(egraph: &mut EGraph, env: &mut HashMap<String, 
 /// 補助的な図形を作図手順として書き戻す必要があり、そのとき名前では
 /// 引けない(自動生成の名前は作図式そのもので、EGraphの検索キーではない)
 /// ため、IDをそのまま持ち回る。
-struct Finding {
-    kind: &'static str,
-    text: String,
-    ids: Vec<String>,
-    refs: Vec<ClassId>,
+pub(crate) struct Finding {
+    pub(crate) kind: &'static str,
+    pub(crate) text: String,
+    pub(crate) ids: Vec<String>,
+    pub(crate) refs: Vec<ClassId>,
 }
 
 /// 「エンジンがすぐ証明できたか」の結果。
@@ -942,7 +942,7 @@ fn script_tail(def: &Definition, args: &[String]) -> Option<String> {
     }
 }
 
-fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> String, cap: usize)
+pub(crate) fn collect_findings(egraph: &mut EGraph, name_of: &dyn Fn(&EGraph, ClassId) -> String, cap: usize)
     -> Vec<Finding>
 {
     use crate::padic_eval as pe;

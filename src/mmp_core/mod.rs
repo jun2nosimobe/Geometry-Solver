@@ -71,6 +71,9 @@ pub enum Definition {
     LineThroughPoints(ClassId, ClassId), // 順不同
     PerpendicularLine(ClassId, ClassId), // (Line, Point)
     Circumcircle(ClassId, ClassId, ClassId), // 順不同
+    // 🌟 中心 O を持ち点 P を通る円 (O, P)(HAGeo の circle_center_point)。中心は定義に残るので、代数的な追跡の
+    // 「中心の分かった円」がそのまま使う。定理のパターンからは参照しない(kind は None)。
+    CircleCenterPoint(ClassId, ClassId),
     DirectionOf(ClassId),
     // 🌟 与えられた方向に垂直な方向。無限遠直線上の対合(involution)として
     // 垂直性を表す。perp(perp(D))=D という対合性を apply_trivial_relations で
@@ -162,7 +165,8 @@ impl Definition {
             Definition::RadicalAxis(..) => K::RadicalAxis,
             Definition::SecondIntersectionOfCircles(..) => K::SecondIntersectionOfCircles,
             Definition::GivenPoint | Definition::FreePoint | Definition::PerpDirectionOf(_)
-            | Definition::HarmonicConjugateOf(..) | Definition::ConstantHomogeneous(..) => return None,
+            | Definition::HarmonicConjugateOf(..) | Definition::ConstantHomogeneous(..)
+            | Definition::CircleCenterPoint(..) => return None,
         })
     }
 
@@ -177,6 +181,7 @@ impl Definition {
             Definition::GivenPoint => "GivenPoint",
             Definition::FreePoint => "FreePoint",
             Definition::Circumcircle(_,_,_) => "Circumcircle",
+            Definition::CircleCenterPoint(_,_) => "CircleCenterPoint",
             Definition::PerpendicularLine(_,_) => "PerpendicularLine",
             Definition::LengthSq(_,_) => "LengthSq",
             Definition::TangentLine(_,_) => "TangentLine",
@@ -203,6 +208,7 @@ impl Definition {
             Definition::AnglePair(a, b) => vec![*a, *b],
             Definition::PerpendicularLine(a, b) => vec![*a, *b],
             Definition::Circumcircle(a, b, c) => vec![*a, *b, *c],
+            Definition::CircleCenterPoint(o, p) => vec![*o, *p],
             Definition::LengthSq(a, b) => vec![*a, *b],
             Definition::TangentLine(c, p) => vec![*c, *p],
             Definition::ParallelLine(l, p) => vec![*l, *p],
@@ -233,6 +239,7 @@ impl Definition {
             Definition::Midpoint(_, _) => EntityType::Point,
             Definition::HarmonicConjugateOf(_, _, _) => EntityType::Point,
             Definition::Circumcircle(_, _, _) => EntityType::Conic,
+            Definition::CircleCenterPoint(_, _) => EntityType::Conic,
             Definition::DirectionOf(_) => EntityType::Point,
             Definition::PerpDirectionOf(_) => EntityType::Point,
             Definition::AnglePair(_, _) => EntityType::Scalar,
@@ -405,6 +412,10 @@ pub struct EGraph {
     pub entity_time: Vec<u64>,
     /// 各接続(張ったときの代表元の組)を最初に張った時刻と、その文脈。
     pub incidence_time: rustc_hash::FxHashMap<(ClassId, ClassId), (u64, LinkKind)>,
+    /// 刈り込んだ(使われなかったので無効にした)実体と、元の重要度。同じ作図がもう一度求められたら revive で戻す。
+    pub pruned: rustc_hash::FxHashMap<usize, f64>,
+    /// 刈り込んだ後にもう一度求められた実体(要ると分かったので、以後は刈り込まない)。
+    pub revived: rustc_hash::FxHashSet<usize>,
     // 🌟 数値評価(eval.rs)が偶然の一致(log_conjecture_candidate)を検出した
     // ときに蓄積する「証明されていないが数値的根拠のある予想」。通常の証明
     // 状態(parents/memo/subobjects)とは完全に独立しており、証明の健全性には
@@ -595,6 +606,8 @@ impl EGraph {
             clock: 0,
             entity_time: Vec::new(),
             incidence_time: rustc_hash::FxHashMap::default(),
+            pruned: rustc_hash::FxHashMap::default(),
+            revived: rustc_hash::FxHashSet::default(),
             conjectures: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
@@ -692,7 +705,9 @@ impl EGraph {
         if should_memoize {
             // 正規化済みのシグネチャで検索するため、順序逆転による重複生成が完全に防がれる
             if let Some(&existing_id) = self.memo.get(&norm_def) {
-                return self.get_rep(existing_id);
+                let rep = self.get_rep(existing_id);
+                self.revive(rep);
+                return rep;
             }
         }
 
@@ -1062,6 +1077,7 @@ impl EGraph {
                 reps.sort_unstable_by_key(|id| id.0);
                 Definition::Circumcircle(reps[0], reps[1], reps[2])
             },
+            Definition::CircleCenterPoint(o, p) => Definition::CircleCenterPoint(self.get_rep(*o), self.get_rep(*p)),
             Definition::AnglePair(d1, d2) => Definition::AnglePair(self.get_rep(*d1), self.get_rep(*d2)),
             Definition::PerpendicularLine(l, p) => Definition::PerpendicularLine(self.get_rep(*l), self.get_rep(*p)),
             Definition::ParallelLine(l, p) => Definition::ParallelLine(self.get_rep(*l), self.get_rep(*p)),
@@ -1156,6 +1172,30 @@ impl EGraph {
 
     /// 🌟 選ばれた出どころを一時的に差し替える。前の値を返すので、作り終えたら
     /// 必ず戻すこと。
+    /// 刈り込んだ実体を有効に戻す(刈り込んでいなければ何もしない)。
+    pub fn revive(&mut self, id: ClassId) {
+        let rep = self.get_rep(id);
+        if let Some(imp) = self.pruned.remove(&rep.0) {
+            self.revived.insert(rep.0);
+            self.entities[rep.0].base_importance = imp.max(self.entities[rep.0].base_importance);
+            self.note_type_changed(self.entities[rep.0].entity_type, BumpCause::Create);
+        }
+    }
+
+    /// 実体を刈り込む(無効にする。マージの履歴や接続はそのまま残る)。
+    pub fn prune_entity(&mut self, id: ClassId) {
+        let rep = self.get_rep(id);
+        if self.pruned.contains_key(&rep.0) || self.revived.contains(&rep.0) { return; }
+        self.pruned.insert(rep.0, self.entities[rep.0].base_importance);
+        self.entities[rep.0].base_importance = 0.0;
+        self.note_type_changed(self.entities[rep.0].entity_type, BumpCause::Create);
+    }
+
+    /// 正規化済みの定義 def の実体が図にあって、刈り込まれていないか(補助作図の「もうある」の判定用)。
+    pub fn live_memo(&self, def: &Definition) -> bool {
+        self.memo.get(def).is_some_and(|&id| !self.pruned.contains_key(&self.get_rep(id).0))
+    }
+
     pub fn set_origin(&mut self, o: EntityOrigin) -> EntityOrigin {
         std::mem::replace(&mut self.current_origin, o)
     }
@@ -1188,6 +1228,12 @@ impl EGraph {
                 self.link_logical_incidence_justified(*p3, new_id, Justification::Trivial { reason });
                 // 🌟 円は I,J を通る Conic と同じ計算で作られるので、I,J への接続も張る。これで
                 // propagate_conic_uniqueness が「実点3つを共有」を「5点を共有」として扱え、円専用の規則が要らない。
+                self.link_logical_incidence(new_id, self.circ_i);
+                self.link_logical_incidence(new_id, self.circ_j);
+            },
+            Definition::CircleCenterPoint(_o, p) => {
+                let reason = "中心と1点で決まる円の定義より、その点はこの円に乗っている".to_string();
+                self.link_logical_incidence_justified(*p, new_id, Justification::Trivial { reason });
                 self.link_logical_incidence(new_id, self.circ_i);
                 self.link_logical_incidence(new_id, self.circ_j);
             },

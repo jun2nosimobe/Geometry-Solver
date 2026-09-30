@@ -189,6 +189,9 @@ fn run_one_seed(
     // falseにしておく。
     let mut mcts = MCTSSearchEngine::new();
     mcts.target_bias_enabled = false;
+    // 種配置の前提(自由点をどの曲線の上に置くか)を、作図を始める前に固める。自由作図の途中で導かれた接続を前提に
+    // 数えないため(証明に使う小さな図 minimal_figure は、ここで固めた前提だけを持ち込む)。
+    egraph.freeze_premise_incidences();
 
     let start = Instant::now();
     let mut steps_done = 0usize;
@@ -262,6 +265,9 @@ fn run_one_seed(
     // のドキュメント参照)。従来のreport_conjecturesは「作図が退化した時」しか
     // 拾えなかったため、実測で報告0件が続いていた。
     report_sweep_discoveries(&mut engine.prover.egraph, top_n, sweep_pts, sweep_lines);
+    if let Some(steps) = std::env::args().find_map(|a| a.strip_prefix("--prove-findings=").and_then(|v| v.parse::<u64>().ok())) {
+        prove_findings(&mut engine.prover.egraph, steps, sweep_pts);
+    }
 
     let sections = report_conjectures(&mut engine.prover.egraph, top_n, try_prove, prove_steps);
     report_heat_ranking(&engine.prover.egraph, 10);
@@ -339,6 +345,101 @@ fn probe_and_expand_conjectures(engine: &mut BlackboardEngine, dfs_budget: usize
         }
     }
     println!("🧪 プロービング終了: 新たに{}件の条件付きの予想を発見しました。", new_count);
+}
+
+/// --prove-findings=<仕事量>(実験): serve と同じ検出器の発見を1件ずつ、その主張だけを目標にして証明し、
+/// 証明に要った仕事量(難しさの目安)を並べる。証明は主張に要る作図だけの小さな図(minimal_figure)で行う。
+fn prove_findings(egraph: &mut EGraph, steps: u64, cap: usize) {
+    let name_of = |eg: &EGraph, id: ClassId| eg.entities[eg.get_rep(id).0].name.chars().take(60).collect::<String>();
+    let findings = crate::serve::collect_findings(egraph, &name_of, cap);
+    // 種類ごとに先頭の8件だけ(検出器によっては数百件出る)。
+    let mut per_kind: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let total = findings.len();
+    let findings: Vec<&crate::serve::Finding> = findings.iter().filter(|f| { let n = per_kind.entry(f.kind).or_default(); *n += 1; *n <= 8 }).collect();
+    println!("\n=== 🧾 発見を1件ずつ証明する(予算 {} 、全{}件のうち種類ごとに8件、{}件。種類別の件数 {:?}) ===", steps, total, findings.len(), per_kind);
+    let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for (i, f) in findings.iter().enumerate() {
+        let Some((mut eg, refs)) = minimal_figure(egraph, &f.refs) else {
+            println!("  {:>3}. [{}] 図を取り出せない: {}", i + 1, f.kind, f.text.chars().take(120).collect::<String>());
+            *tally.entry("unsupported").or_default() += 1;
+            continue;
+        };
+        let Some(target) = crate::serve::goal_for(&mut eg, f.kind, &refs, 90_000 + i) else {
+            println!("  {:>3}. [{}] 目標にできない: {}", i + 1, f.kind, f.text.chars().take(120).collect::<String>());
+            *tally.entry("unsupported").or_default() += 1;
+            continue;
+        };
+        eg.apply_congruence_closure();
+        let (verdict, work) = if eg.goal_status(Some(&target)) == GoalStatus::Reached { ("trivial", 0) } else {
+            let mut engine = build_full_engine(eg);
+            engine.work_limit = steps;
+            engine.schedule_full_sweep();
+            let recovery = RecoveryOptions { midpoint_demands: true, ..RecoveryOptions::standard() };
+            let open = [target.clone()];
+            let (start, mut rotate) = (Instant::now(), 0usize);
+            let mut status = GoalStatus::NotYet;
+            while engine.prover.work_done() < steps && start.elapsed() < Duration::from_secs(60) {
+                let applied = engine.run_step(1000);
+                status = engine.prover.egraph.goal_status(Some(&target));
+                if status != GoalStatus::NotYet { break; }
+                if !applied && engine.on_stall(&open, &mut rotate, &recovery, true) == Recovered::Exhausted { break; }
+            }
+            (match status { GoalStatus::Reached => "proved", GoalStatus::NotYet => "open", _ => "broken" }, engine.prover.work_done())
+        };
+        *tally.entry(verdict).or_default() += 1;
+        println!("  {:>3}. [{}] {:<7} 仕事量 {:>8}  {}", i + 1, f.kind, verdict, work,
+            f.text.chars().take(140).collect::<String>());
+    }
+    println!("  集計: {:?}", tally);
+}
+
+/// 実体 refs の作図に要るものだけを、元の定義(original_definition)から新しい図に作り直す(serve の proof_figure と
+/// 同じ考え: 自由作図で膨らんだ図のまま証明すると、主張と無関係な実体を舐めるだけで予算が尽きる)。
+/// 自由点に前提として張った接続は premise_incidences(作図を始める前に凍結したもの)から持ち込む。
+pub(crate) fn minimal_figure(eg: &EGraph, refs: &[ClassId]) -> Option<(EGraph, Vec<ClassId>)> {
+    let mut ne = EGraph::new();
+    let mut map: rustc_hash::FxHashMap<usize, ClassId> = rustc_hash::FxHashMap::default();
+    for (o, n) in [(eg.line_infinity, ne.line_infinity), (eg.circ_i, ne.circ_i), (eg.circ_j, ne.circ_j), (eg.ang0, ne.ang0), (eg.ang90, ne.ang90)] {
+        map.insert(o.0, n);
+    }
+    fn build(eg: &EGraph, ne: &mut EGraph, map: &mut rustc_hash::FxHashMap<usize, ClassId>, id: ClassId, depth: usize) -> Option<ClassId> {
+        if let Some(&n) = map.get(&id.0) { return Some(n); }
+        if depth > 200 { return None; }
+        let e = &eg.entities[id.0];
+        let def = e.original_definition.clone();
+        let mut ps = Vec::new();
+        for p in def.get_parents() { ps.push(build(eg, ne, map, p, depth + 1)?); }
+        let nd = match def {
+            Definition::FreePoint => Definition::FreePoint,
+            Definition::GivenPoint => return None,
+            Definition::ConstantHomogeneous(..) => def.clone(),
+            Definition::HarmonicConjugateOf(..) => Definition::HarmonicConjugateOf(ps[0], ps[1], ps[2]),
+            Definition::PerpDirectionOf(..) => Definition::PerpDirectionOf(ps[0]),
+            Definition::CircleCenterPoint(..) => Definition::CircleCenterPoint(ps[0], ps[1]),
+            _ => ne.build_definition(def.kind()?, &ps)?,
+        };
+        let n = ne.create_entity(e.original_name.clone(), nd, e.entity_type);
+        map.insert(id.0, n);
+        Some(n)
+    }
+    let mut out = Vec::new();
+    for &r in refs { out.push(build(eg, &mut ne, &mut map, eg.get_rep(r), 0)?); }
+    // 自由点に前提として張った接続(「P は外接円の上」など)も持ち込む。その曲線の作図も要る。
+    let premises = eg.premise_incidences.clone().unwrap_or_default();
+    let mut linked = rustc_hash::FxHashSet::default();
+    loop {
+        let mut grew = false;
+        for &(fp, c) in &premises {
+            let Some(&np) = map.get(&fp.0) else { continue };
+            if !linked.insert((fp.0, c.0)) { continue; }
+            let nc = build(eg, &mut ne, &mut map, c, 0)?;
+            ne.link_logical_incidence(np, nc);
+            grew = true;
+        }
+        if !grew { break; }
+    }
+    ne.apply_congruence_closure();
+    Some((ne, out))
 }
 
 struct RankedConjecture {
@@ -669,7 +770,10 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
     println!("\n🔍 最有力候補の証明を試みます: {} ≡ {} (予算: {}ステップ、MCTSは使わず名前付き定理の連鎖のみ)",
         name_a, name_b, steps);
 
-    let mut engine = build_full_engine(egraph.clone());
+    // 主張に要る作図だけの小さな図で証明する(自由作図で膨らんだ図のままだと、無関係な実体を舐めるだけで予算が尽きる)。
+    let (small, ab) = minimal_figure(egraph, &[a, b]).unwrap_or_else(|| (egraph.clone(), vec![a, b]));
+    let (a, b) = (ab[0], ab[1]);
+    let mut engine = build_full_engine(small);
     let open = [("Identical".to_string(), vec![a, b])];
     let recovery = RecoveryOptions { midpoint_demands: true, ..RecoveryOptions::standard() };
     let mut rotate = 0;
@@ -680,7 +784,7 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
     let mut status = GoalStatus::NotYet;
     // 予算は仕事量。秒は暴走を止める安全弁。目標の判定(図の崩壊・数値の検算を含む)は solve と共通。
     while engine.prover.work_done() < steps && start.elapsed() < Duration::from_secs(PROVE_TIME_CAP_SECS) {
-        let applied = engine.run_step(10000);
+        let applied = engine.run_step(1000);
         status = engine.prover.egraph.goal_status(Some(&open[0]));
         if status != GoalStatus::NotYet { break; }
         // 回復は serve の証明試行と同じ設定(中点の需要も使う)。
@@ -1233,11 +1337,32 @@ pub(crate) fn systematic_closure_until(
             }
         }
 
+        // 🌟 点を作る前に値を計算し、既にある点と一致するもの(2円の第2交点が、実はもう1つの共有点そのものだった、
+        // など)や値の定まらないものは作らない。同じ点を別の手順で作り直しても新しい対象は増えず、発見の報告が
+        // 「その点は直線 AB の上にある」のような言い換えで埋まる(3直線の共点のような本物の一致は共点の検出器が拾う)。
+        let mut coincident = 0usize;
+        let new_defs: Vec<(Definition, EntityType)> = {
+            let mut ev = crate::padic_eval::DegenEvaluator::new(egraph, 0x5EED + round as u64, None);
+            let mut known_pts: Vec<crate::padic_eval::DegenShape> = (0..egraph.entities.len()).map(ClassId)
+                .filter(|&id| egraph.get_rep(id) == id && egraph.entities[id.0].entity_type == EntityType::Point
+                    && !egraph.is_connected(id, egraph.line_infinity))
+                .filter_map(|id| ev.eval(id)).collect();
+            let mut seen = rustc_hash::FxHashSet::default();
+            new_defs.into_iter().filter_map(|(def, ty)| {
+                let norm = egraph.normalize_definition(&def);
+                if egraph.memo.contains_key(&norm) || !seen.insert(norm.clone()) { return None; }
+                if ty == EntityType::Point {
+                    let Some(v) = ev.eval_def(&norm) else { coincident += 1; return None };
+                    if known_pts.iter().any(|k| crate::padic_eval::same_point_shape(k, &v)) { coincident += 1; return None; }
+                    known_pts.push(v);
+                }
+                Some((norm, ty))
+            }).collect()
+        };
         let mut added = 0usize;
-        for (def, ty) in new_defs {
+        for (norm, ty) in new_defs {
             if egraph.count_active_classes() >= cap { break; }
             if added % 16 == 0 && expired(deadline) { break; }
-            let norm = egraph.normalize_definition(&def);
             if egraph.memo.contains_key(&norm) { continue; }
             // 作図そのものを名前にする(通し番号だと報告が読めない)。ラウンド数は高々数回なので親の名前をそのまま埋め込み、
             // 切り詰めるのは最後の保険としてだけ(途中で切ると括弧の途中で切れて読めなくなる)。
@@ -1251,8 +1376,8 @@ pub(crate) fn systematic_closure_until(
         let before_closure = egraph.count_active_classes();
         egraph.apply_congruence_closure();
         let after = egraph.count_active_classes();
-        println!("  🏗️  [系統的作図] ラウンド{}: {}件を追加、アクティブな同値類数 {}",
-            round + 1, added, after);
+        println!("  🏗️  [系統的作図] ラウンド{}: {}件を追加(既にある点と一致する・値の定まらない点 {}件は作らない)、アクティブな同値類数 {}",
+            round + 1, added, coincident, after);
         // 🌟 崩壊の早期検出と原因の特定。系統的作図は決定的なので、
         // 「合同閉包の前後で同値類が激減した」= 誤ったマージが連鎖した、
         // という状況をその場で捕まえて、原因になったマージの根拠を出せる。

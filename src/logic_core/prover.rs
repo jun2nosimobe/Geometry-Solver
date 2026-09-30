@@ -278,6 +278,7 @@ impl ProverEngine {
             let Some(def) = self.egraph.build_definition(constr.kind, &parent_ids) else { return false };
 
             let new_id = if let Some(&existing_id) = self.egraph.memo.get(&def) {
+                self.egraph.revive(existing_id);
                 self.egraph.get_rep(existing_id)
             } else if self.egraph.nondegeneracy && self.egraph.without_consuming_rng(|eg| eg.definition_is_degenerate(&def)) {
                 // 図の上で値の定まらない作図(共線な3点の外接円など)からは結論を出さない。

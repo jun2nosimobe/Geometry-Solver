@@ -295,6 +295,7 @@ impl EGraph {
         let comp = self.entities[rep.0].components.first()?;
         comp.definitions.iter().find_map(|def| match def {
             Definition::Circumcircle(p1, _, _) => Some(*p1),
+            Definition::CircleCenterPoint(_, p) => Some(*p),
             Definition::ConicThrough5Points(p1, p2, p3, p4, p5) => [*p1, *p2, *p3, *p4, *p5].into_iter()
                 .find(|&q| !self.is_connected(q, self.line_infinity)),
             _ => None,

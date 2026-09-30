@@ -97,6 +97,16 @@ pub struct BlackboardEngine {
     pub event_queue: VecDeque<Event>,
     /// UCB1 バンディットで全探索タスクの優先度を付けるか(既定は無効: 実測で仕事量が20%増えた)。
     pub bandit_enabled: bool,
+    /// 使われなかった作図の刈り込み(リスタート、b48)。有効な実体が前回の刈り込みの後の数のこの倍を超えたら、手が止まった
+    /// ときに刈り込む。None なら刈り込まない。
+    pub prune_growth: Option<f64>,
+    /// 前回の刈り込みの後の有効な実体の数(0 ならまだ基準を取っていない)。
+    pub prune_base: usize,
+    /// 直近の手詰まりの時刻(EGraph::clock)。刈り込むのは、この2回前より前に作った(2回の手詰まりを経ても使われなかった)作図だけ。
+    pub stall_clocks: std::collections::VecDeque<u64>,
+    pub pruned_total: u64,
+    /// 問題文の作図も刈り込むときに必ず残す実体(目標の実体)。空なら問題文の作図は刈り込まない。
+    pub prune_roots: Vec<ClassId>,
     /// 証明された事実で変数を固定したタスクを積むか(既定は無効: 積む量が多すぎて全体が悪化する)。
     pub seeded_rematch_enabled: bool,
     /// 前回 cap を広げてからの行き詰まりの回数(widen_every の判定に使う)。
@@ -125,6 +135,11 @@ impl BlackboardEngine {
             task_queue: BinaryHeap::new(),
             event_queue: VecDeque::new(),
             bandit_enabled: false,
+            prune_growth: None,
+            prune_base: 0,
+            stall_clocks: std::collections::VecDeque::new(),
+            pruned_total: 0,
+            prune_roots: Vec::new(),
             seeded_rematch_enabled: false,
             stalls_since_widen: 0,
             generic_aux_added: 0,
@@ -165,11 +180,92 @@ impl BlackboardEngine {
     /// 手が止まったときの一手: 代数的な追跡(ar が真なら)と決定的な手(recover)を同じ回に行う(AR だけで次の回に
     /// 進むと、補助作図が要る問題で全定理の試し直しが余分に挟まる。来歴 #82)。solve・serve・discover で共通。
     pub fn on_stall(&mut self, open_targets: &[(String, Vec<ClassId>)], rotate: &mut usize, opts: &RecoveryOptions, ar: bool) -> Recovered {
+        if let Some(g) = self.prune_growth {
+            self.stall_clocks.push_back(self.prover.egraph.clock);
+            if self.stall_clocks.len() > 3 { self.stall_clocks.pop_front(); }
+            let active = self.active_count();
+            if self.prune_base == 0 { self.prune_base = active; }
+            else if active as f64 > self.prune_base as f64 * g && active >= self.prune_base + 20 {
+                let k = self.prune_unused();
+                self.prune_base = self.active_count();
+                println!("  🧹 [刈り込み] 使われなかった作図 {} 件を無効にしました(有効な実体 {} → {})", k, active, self.prune_base);
+            }
+        }
         let merged = ar && self.run_ar();
         match self.recover(open_targets, rotate, opts) {
             Recovered::Exhausted if merged => Recovered::Algebra,
             r => r,
         }
+    }
+
+    fn active_count(&self) -> usize {
+        let eg = &self.prover.egraph;
+        (0..eg.entities.len()).filter(|&i| eg.get_rep(ClassId(i)).0 == i && eg.entities[i].is_active()).count()
+    }
+
+    /// 使われなかった作図を無効にする(リスタート、b48)。問題文の図形と、使われた図形(ほかの図形と合流した・定義から
+    /// 従う以外の接続を持つ)を根にして、その作図の親を辿った集合に入らない実体を無効にする。消さないのでマージの履歴や
+    /// 証明は壊れず、同じ作図がもう一度求められたら有効に戻る(EGraph::revive)。無効にした数を返す。
+    pub fn prune_unused(&mut self) -> usize {
+        use crate::mmp_core::{EntityOrigin, LinkKind};
+        let eg = &mut self.prover.egraph;
+        let n = eg.entities.len();
+        let mut used = vec![false; n];
+        for (&(a, b), &(_, kind)) in &eg.incidence_time {
+            if kind == LinkKind::Bare { used[eg.get_rep(a).0] = true; used[eg.get_rep(b).0] = true; }
+        }
+        for i in 0..n {
+            let rep = eg.get_rep(ClassId(i)).0;
+            let merged = rep != i || eg.entities[i].components.first().map_or(0, |c| c.definitions.len()) > 1;
+            let given = eg.entities[i].origin == EntityOrigin::Given;
+            // 問題文の作図も刈り込むとき(prune_roots が空でない)は、自由点・定数だけを無条件に残す。
+            let keep_given = given && (self.prune_roots.is_empty()
+                || matches!(eg.entities[i].original_definition, Definition::FreePoint | Definition::GivenPoint | Definition::ConstantHomogeneous(..)));
+            if keep_given || merged { used[i] = true; used[rep] = true; }
+        }
+        for &r in &self.prune_roots { used[r.0] = true; used[eg.get_rep(r).0] = true; }
+        if let Some(pairs) = &eg.premise_incidences { for &(p, c) in pairs { used[eg.get_rep(p).0] = true; used[eg.get_rep(c).0] = true; } }
+        for s in [eg.line_infinity, eg.circ_i, eg.circ_j, eg.ang0, eg.ang90] { used[eg.get_rep(s).0] = true; }
+        // 使われた図形の作図の親(同値類の全ての定義の親)を辿る。
+        let mut needed = vec![false; n];
+        let mut stack: Vec<usize> = (0..n).filter(|&i| used[i]).collect();
+        while let Some(i) = stack.pop() {
+            if needed[i] { continue; }
+            needed[i] = true;
+            let rep = eg.get_rep(ClassId(i));
+            let mut parents = eg.entities[i].original_definition.get_parents();
+            if let Some(c) = eg.entities[rep.0].components.first() { for d in &c.definitions { parents.extend(d.get_parents()); } }
+            for p in parents {
+                for q in [p.0, eg.get_rep(p).0] { if !needed[q] { stack.push(q); } }
+            }
+        }
+        // 刈り込むのは、使われなかった補助作図(需要駆動・MCTS・調和共役など)と、それに依存して作られた使われなかった実体だけ。
+        // 定理の照合がその場で作る実体(角の組・方向など)は、問題文の図形だけから作られたものなら次の総当たりですぐ作り直される
+        // ので刈り込まない(刈り込むと作り直しと刈り込みを繰り返す)。実体は親より後に作られるので、番号の順に1回で決まる。
+        let given_too = !self.prune_roots.is_empty();
+        let aux = |o: EntityOrigin| match o {
+            EntityOrigin::Given => given_too,
+            EntityOrigin::DefinedBy | EntityOrigin::Construct => false,
+            _ => true,
+        };
+        let mut tainted = vec![false; n];
+        for i in 0..n {
+            if needed[i] { continue; }
+            let e = &eg.entities[i];
+            tainted[i] = aux(e.origin) || e.original_definition.get_parents().iter().any(|p| tainted[p.0] || tainted[eg.get_rep(*p).0]);
+        }
+        // 2回前の手詰まりより後に作ったものは、まだ使われる機会が無かったかもしれないので残す。
+        let cutoff = if self.stall_clocks.len() >= 3 { self.stall_clocks[0] } else { 0 };
+        let mut count = 0;
+        for i in 0..n {
+            let id = ClassId(i);
+            if eg.get_rep(id) != id || !tainted[i] || !eg.entities[i].is_active() { continue; }
+            if eg.entity_time.get(i).is_none_or(|&t| t >= cutoff) { continue; }
+            eg.prune_entity(id);
+            count += 1;
+        }
+        self.pruned_total += count as u64;
+        count
     }
 
     /// 行き詰まったときの決定的な手を順に打つ(on_stall から呼ぶ)。
@@ -515,7 +611,7 @@ impl BlackboardEngine {
         let mut applied = false;
         for (d1, d2) in angle_pairs_to_create {
             let def = Definition::AnglePair(d1, d2);
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("AnglePair_{}_{}_(Auto)", self.prover.egraph.entities[d1.0].name, self.prover.egraph.entities[d2.0].name);
             self.add_aux(name, def, EntityType::Scalar, EntityOrigin::AngleDemand, Some(0.2));
             applied = true;
@@ -572,7 +668,7 @@ impl BlackboardEngine {
         let mut free_count = 0;
         for ((p1, p2), score, affinity) in demands {
             let def = Definition::new_line(p1, p2);
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let free = self.prover.collinear_extra
                 && self.prover.egraph.find_common_line(&[p1, p2]).is_some();
             if free {
@@ -617,7 +713,7 @@ impl BlackboardEngine {
             for j in (i + 1)..points.len() {
                 let (p1, p2) = (points[i], points[j]);
                 let def = Definition::new_line(p1, p2);
-                if self.prover.egraph.memo.contains_key(&def) { continue; }
+                if self.prover.egraph.live_memo(&def) { continue; }
                 // 既に2点を通る直線があるのに別の直線を作ると、点が互いに矛盾しうる接続を持つと
                 // 見なされて数値サンプリングが壊れる。
                 if self.prover.egraph.find_common_line(&[p1, p2]).is_some() { continue; }
@@ -665,7 +761,7 @@ impl BlackboardEngine {
         let mut applied = false;
         for (fourth, label) in [(p, "P"), (q, "Q")] {
             let def = self.prover.egraph.normalize_definition(&Definition::CrossRatio(x, y, z, fourth));
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("CR_{}_(TargetDemand)", label);
             println!("  💡 [目標駆動オンデマンド作図] 複比の一意性に持ち込むため {} を生成", name);
             self.add_aux(name, def, EntityType::Scalar, EntityOrigin::TargetDemand, Some(0.5));
@@ -722,7 +818,7 @@ impl BlackboardEngine {
             let def = self.prover.egraph.normalize_definition(&Definition::Intersection(l1, l2));
             let (l1, l2) = match def { Definition::Intersection(a, b) => (a, b), _ => (l1, l2) };
             if l1 == l2 { continue; }
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("Pt_{}_{}_(Demand)",
                 self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
             let deg_str = deg.map(|d| d.to_string()).unwrap_or_else(|| "不明".to_string());
@@ -794,7 +890,7 @@ impl BlackboardEngine {
                     if tangent { continue; }
                     if finite_points_on(l).iter().any(|q| *q != p && on_c.contains(q)) { continue; }
                     let def = eg.normalize_definition(&Definition::SecondIntersectionOfLineAndConic(p, l, c));
-                    if eg.memo.contains_key(&def) { continue; }
+                    if eg.live_memo(&def) { continue; }
                     cands.push((def, heat_p + eg.entities[l.0].heat() + eg.entities[c.0].heat()));
                 }
             }
@@ -804,7 +900,7 @@ impl BlackboardEngine {
                     let on2 = finite_points_on(c2);
                     if finite_points_on(c1).iter().any(|q| *q != p && on2.contains(q)) { continue; }
                     let def = eg.normalize_definition(&Definition::SecondIntersectionOfCircles(p, c1, c2));
-                    if eg.memo.contains_key(&def) { continue; }
+                    if eg.live_memo(&def) { continue; }
                     cands.push((def, heat_p + eg.entities[c1.0].heat() + eg.entities[c2.0].heat()));
                 }
             }
@@ -815,7 +911,7 @@ impl BlackboardEngine {
 
         let mut applied = false;
         for (def, heat) in cands.into_iter().take(2) {
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = {
                 let eg = &self.prover.egraph;
                 let n = |id: &ClassId| eg.entities[id.0].name.clone();
@@ -869,7 +965,7 @@ impl BlackboardEngine {
             for j in (i + 1)..lines.len() {
                 let (l1, l2) = (lines[i], lines[j]);
                 let def = eg.normalize_definition(&Definition::Intersection(l1, l2));
-                if eg.memo.contains_key(&def) || shares_a_point(l1, l2) { continue; }
+                if eg.live_memo(&def) || shares_a_point(l1, l2) { continue; }
                 // 平行な2直線の交点は無限遠点(既存の方向)なので作らない。
                 if let (Some(&d1), Some(&d2)) = (
                     eg.memo.get(&eg.normalize_definition(&Definition::DirectionOf(l1))),
@@ -882,7 +978,7 @@ impl BlackboardEngine {
         for i in 0..points.len() {
             for j in (i + 1)..points.len() {
                 let def = eg.normalize_definition(&Definition::Midpoint(points[i], points[j]));
-                if eg.memo.contains_key(&def) { continue; }
+                if eg.live_memo(&def) { continue; }
                 mids.push((eg.entities[points[i].0].heat() + eg.entities[points[j].0].heat(), def));
             }
         }
@@ -894,7 +990,7 @@ impl BlackboardEngine {
         let mut applied = false;
         for (_, def) in inters.into_iter().take(INTERSECTIONS_PER_STALL) {
             let Definition::Intersection(l1, l2) = def else { continue };
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("Pt_{}_{}_(GenericAux)", self.prover.egraph.entities[l1.0].name, self.prover.egraph.entities[l2.0].name);
             println!("  💡 [汎用の補助作図] {} (熱い直線どうしの交点)を生成", name);
             self.add_aux(name, def, EntityType::Point, EntityOrigin::PointDemand, Some(0.5));
@@ -903,7 +999,7 @@ impl BlackboardEngine {
         }
         for (_, def) in mids.into_iter().take(MIDPOINTS_PER_STALL) {
             let Definition::Midpoint(a, b) = def else { continue };
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("Mid_{}_{}_(GenericAux)", self.prover.egraph.entities[a.0].name, self.prover.egraph.entities[b.0].name);
             println!("  💡 [汎用の補助作図] {} (熱い点どうしの中点)を生成", name);
             self.add_aux(name, def, EntityType::Point, EntityOrigin::MidDemand, Some(0.5));
@@ -941,7 +1037,7 @@ impl BlackboardEngine {
             for j in (i + 1)..anchors.len() {
                 let (a, b) = (anchors[i], anchors[j]);
                 let def = eg.normalize_definition(&Definition::Midpoint(a, b));
-                if eg.memo.contains_key(&def) { continue; }
+                if eg.live_memo(&def) { continue; }
                 candidates.push((a, b, eg.entities[a.0].heat() + eg.entities[b.0].heat()));
             }
         }
@@ -952,7 +1048,7 @@ impl BlackboardEngine {
         let mut applied = false;
         for (a, b, heat) in candidates.into_iter().take(2) {
             let def = self.prover.egraph.normalize_definition(&Definition::Midpoint(a, b));
-            if self.prover.egraph.memo.contains_key(&def) { continue; }
+            if self.prover.egraph.live_memo(&def) { continue; }
             let name = format!("Mid_{}_{}_(Demand)",
                 self.prover.egraph.entities[a.0].name, self.prover.egraph.entities[b.0].name);
             println!("  💡 [オンデマンド作図] 要請により {} (中点)を生成 (需要: {:.1})", name, heat);

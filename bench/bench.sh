@@ -18,6 +18,6 @@ one() {
   printf '%s\t%s\t%s\t%s\n' "$p" "$solved" "${work:--}" "$h"
 }
 export -f one
-printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one {}' | sort > "$OUT"
+printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one "$1"' _ {} | sort > "$OUT"
 rm -rf "$WORK"
 awk -F'\t' '{s+=$2; w+=$3} END {printf "solved %d/%d  work %d\n", s, NR, w}' "$OUT"

@@ -22,7 +22,7 @@ one() {
   printf '%s\t%s\t%s\t%s\t%.1f\n' "$p" "$solved" "${work:--}" "$h" "$(echo "$t1-$t0" | bc)"
 }
 export -f one
-printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one {}' | sort > "$OUT.raw"
+printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one "$1"' _ {} | sort > "$OUT.raw"
 cut -f1-4 "$OUT.raw" > "$OUT"
 cut -f1,5 "$OUT.raw" | sort -k2 -g -r > "$OUT.time"
 rm -rf "$WORK" "$OUT.raw"

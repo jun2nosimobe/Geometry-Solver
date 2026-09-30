@@ -16,11 +16,11 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#88(AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#90(AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
-    <div class="stat"><div class="n">39/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)、AR のメネラウスで newton_gauss・pascal(#88)が解けた。検査を外した監査で偽のマージ0件(対象42問)、時刻つきの証明の監査で39問全てがギャップなし(#87・#88)</div></div>
+    <div class="stat"><div class="n">40/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)、AR のメネラウスで newton_gauss・pascal(#88)、AR の二辺夾角・三辺の相似で 2016 ARMO(#90)が解けた。検査を外した監査で偽のマージ0件、時刻つきの証明の監査で既定で解ける問題全てがギャップなし(#87・#90)</div></div>
     <div class="stat"><div class="n">22</div><div class="l">solve が既定で使う定理(基本15 + 長さ1 + 中心角1 + 射影5)。方冪と交わる弦の相似は AR が置き換える(<a class="secref" href="ledger.html#l85">#85</a>、<code>--chord-theorems</code> で戻す)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理は <a class="secref" href="theorems.html">§07</a></div></div>
     <div class="stat"><div class="n">8,000,000</div><div class="l">既定の予算。秒ではなく dfs_match の呼び出し回数で測る</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
@@ -38,7 +38,7 @@
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
-  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">39/44・決定的</span></summary>
+  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">40/44・決定的</span></summary>
   <div class="body">
 <div class="desc">予算は壁時計ではなく仕事量(<code>dfs_match</code> の呼び出し回数。AR の行演算は16回で1)で測り、乱数もシード固定なので、同じ設定なら結果が1ステップも変わらない。<br><b>マージの連鎖:</b> e-graph の合同閉包は worklist でマージを連鎖させるが、定理の層は1回の全探索(sweep)ごとにしか連鎖しない(差分だけ試し直す seeded rematch は既定で無効)。AR は手詰まりのたびに、角・複比・比・相似の線形な関係を格子で一度に閉じる ― 格子は毎回作り直す(差分で積むと古い記号の行と証明の前提が膨らんだ。<a class="secref" href="ledger.html#l85">#85</a>)。<br><b>現状の課題:</b> 定理を試す順序に左右される(登録順で仕事量±15%)。<code>dfs_match</code> は貪欲な入れ子ループ結合(<a class="secref" href="backlog.html#b30">b30</a>)。</div>
   </div>
@@ -182,7 +182,7 @@ flowchart TD
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-30(来歴 #67〜#88)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-30(来歴 #67〜#90)
   </footer>
 </div>
 <script src="atlas.js"></script>

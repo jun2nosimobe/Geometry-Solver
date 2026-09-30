@@ -29,5 +29,5 @@ one() {
   rm -rf "$d"
 }
 export -f one
-printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one {}' | sort
+printf '%s\n' $PROBS | xargs -P 12 -I{} bash -c 'one "$1"' _ {} | sort
 rm -rf "$WORK"

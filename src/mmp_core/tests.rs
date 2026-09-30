@@ -1284,3 +1284,26 @@ fn goal_incidence_falls_back_to_the_defining_pair() {
     assert_eq!(egraph.get_rep(rp), egraph.get_rep(x));
     assert_eq!(egraph.get_rep(rc), egraph.get_rep(circ));
 }
+
+/// 中心と1点で決まる円 CircleCenterPoint(O, P) は、3点の外接円と同じ6係数になる:
+/// 中心 (2, 1.5)・(0,0) を通る円は (4,0)・(0,3) も通り、Circumcircle((0,0),(4,0),(0,3)) と一致する。
+#[test]
+fn circle_center_point_matches_circumcircle() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let o = egraph.create_entity("O".into(), Definition::FreePoint, EntityType::Point);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+    let cc = egraph.create_entity("CC".into(), Definition::CircleCenterPoint(o, a), EntityType::Conic);
+    let half = ModInt::new(3) / ModInt::new(2);
+    let mut vars: FxHashMap<String, ModInt> = FxHashMap::default();
+    for (n, x, y) in [("A", ModInt::new(0), ModInt::new(0)), ("B", ModInt::new(4), ModInt::new(0)), ("C", ModInt::new(0), ModInt::new(3)), ("O", ModInt::new(2), half)] {
+        vars.insert(format!("{}_x", n), x);
+        vars.insert(format!("{}_y", n), y);
+    }
+    let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+    let v1 = egraph.evaluate_node(circ, &vars, &mut cache).expect("外接円");
+    let v2 = egraph.evaluate_node(cc, &vars, &mut cache).expect("中心と1点の円");
+    assert_eq!(mmp_calculators::normalize(&v1), mmp_calculators::normalize(&v2));
+}

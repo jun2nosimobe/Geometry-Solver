@@ -196,6 +196,7 @@ impl EGraph {
             Definition::ParallelLine(l, p) => format!("Parallel({} ∥ {})", get_name(l), get_name(p)),
             Definition::LengthSq(a, b) => format!("LengthSq({}, {})", get_name(a), get_name(b)),
             Definition::Circumcircle(a, b, c) => format!("Circumcircle({}, {}, {})", get_name(a), get_name(b), get_name(c)),
+            Definition::CircleCenterPoint(o, p) => format!("CircleCenterPoint({}, {})", get_name(o), get_name(p)),
             Definition::TangentLine(c, p) => format!("TangentLine({}, {})", get_name(c), get_name(p)),
             Definition::HarmonicConjugateOf(a, b, c) => format!("HarmonicConjugate({}, {}; {})", get_name(a), get_name(b), get_name(c)),
             Definition::CrossRatio(a, b, c, d) => format!("CrossRatio({}, {}; {}, {})", get_name(a), get_name(b), get_name(c), get_name(d)),

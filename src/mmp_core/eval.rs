@@ -863,6 +863,18 @@ pub(crate) fn modint_construct(eg: &EGraph, def: &Definition, get: &mut dyn FnMu
             let vj = get(eg.circ_j)?;
             EGraph::to_option(mmp_calculators::calc_conic_through_5_points(&[v1, v2, v3, vi, vj]))
         }
+        // 🌟 中心 O を持ち P を通る円: (x − o_x)² + (y − o_y)² = |OP|²(z = 1 に揃えて6係数にする)。
+        // 半径が 0(O = P、または OP が等方)なら円にならない。
+        Definition::CircleCenterPoint(o, p) => {
+            let (vo, vp) = (get(*o)?, get(*p)?);
+            if vo.len() < 3 || vp.len() < 3 || vo[2].0 == 0 || vp[2].0 == 0 { return None; }
+            let (ox, oy) = (vo[0] / vo[2], vo[1] / vo[2]);
+            let (dx, dy) = (vp[0] / vp[2] - ox, vp[1] / vp[2] - oy);
+            let r2 = dx * dx + dy * dy;
+            if r2.0 == 0 { return None; }
+            let (one, zero, two) = (ModInt::new(1), ModInt::new(0), ModInt::new(2));
+            EGraph::to_option(mmp_calculators::normalize(&[one, zero, one, -(two * ox), -(two * oy), ox * ox + oy * oy - r2]))
+        }
         Definition::TangentLine(c, p) => {
             let vc = get(*c)?;
             let vp = get(*p)?;

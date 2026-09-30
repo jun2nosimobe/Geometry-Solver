@@ -31,12 +31,17 @@ pub fn script_of(id: &str) -> Option<&'static str> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind { Point, Line }
+enum Kind { Point, Line, Circle }
 
 struct Builder<'a> {
     eg: &'a mut EGraph,
     env: HashMap<String, (ClassId, Kind)>,
     aux: usize,
+    /// 円ごとの中心(分かっているもの)。
+    centers: HashMap<usize, ClassId>,
+    /// 内接円から作る三角形の頂点の名前(内心・角の二等分線を使う三角形)と、作った内心。
+    incircle_for: Option<[String; 3]>,
+    incenter: Option<ClassId>,
 }
 
 impl<'a> Builder<'a> {
@@ -80,6 +85,58 @@ impl<'a> Builder<'a> {
         id
     }
 
+    fn circle(&mut self, name: &str, def: Definition, center: Option<ClassId>) -> ClassId {
+        let id = self.eg.create_entity(name.to_string(), def, EntityType::Conic);
+        self.env.insert(name.to_string(), (id, Kind::Circle));
+        if let Some(o) = center { self.centers.insert(id.0, o); }
+        id
+    }
+
+    /// 名前の種類(点・直線・円)。
+    fn kind_of(&self, name: &str) -> Result<(ClassId, Kind), String> {
+        self.env.get(name).copied().ok_or_else(|| format!("「{}」が未定義", name))
+    }
+
+    /// 点 P の、点 M に関する対称点(M が PP′ の中点)。P′ は調和共役 (M, ∞; P, P′) = −1 で作り、中点の実体を M と
+    /// 合流させる(作図の定義なので前提として)。
+    fn point_reflection(&mut self, name: &str, p: ClassId, m: ClassId, line: Option<ClassId>) -> ClassId {
+        let l = match line { Some(l) => l, None => self.line_through_points(p, m, "Rl") };
+        let inf = self.hidden("Rinf", Definition::DirectionOf(l), EntityType::Point);
+        let q = self.point(name, Definition::HarmonicConjugateOf(m, inf, p));
+        let mid = self.hidden("Rmid", Definition::Midpoint(p, q), EntityType::Point);
+        self.eg.apply_congruence_closure();
+        self.eg.merge_entities_justified(mid, m, crate::mmp_core::Justification::Given);
+        q
+    }
+
+    /// 図にある有限の点のうち、2つの曲線の両方に(乱数座標で)乗っているもの。
+    fn common_point(&mut self, a: ClassId, b: ClassId) -> Option<ClassId> {
+        self.eg.apply_congruence_closure();
+        let linf = self.eg.line_infinity;
+        let mut pts: Vec<ClassId> = self.env.values().filter(|v| v.1 == Kind::Point).map(|v| self.eg.get_rep(v.0)).collect();
+        pts.sort_by_key(|p| p.0);
+        pts.dedup();
+        // 構造上も両方に乗っている点を優先する(数値で同じ位置の別の点を選ぶと、「直線と円の交点は2つまで」の規則が
+        // 新しい点をその点と合流させてしまう)。
+        let on_both: Vec<ClassId> = pts.into_iter().filter(|&p| !self.eg.is_connected(p, linf)
+            && self.eg.numeric_incidence_check(p, a, 4) == Some(true) && self.eg.numeric_incidence_check(p, b, 4) == Some(true)).collect();
+        on_both.iter().copied().max_by_key(|&p| (self.eg.is_connected(p, a) as u8 + self.eg.is_connected(p, b) as u8, std::cmp::Reverse(p.0)))
+    }
+
+    /// 円の中心(外接円なら外心を作る)。
+    fn center_of(&mut self, c: ClassId, name: &str) -> Result<ClassId, String> {
+        if let Some(&o) = self.centers.get(&c.0) { return Ok(o); }
+        let defs = self.eg.entities[c.0].components.first().map(|comp| comp.definitions.clone()).unwrap_or_default();
+        for d in defs {
+            if let Definition::Circumcircle(a, b, cc) = d {
+                let o = circumcenter(self.eg, a, b, cc, name);
+                self.centers.insert(c.0, o);
+                return Ok(o);
+            }
+        }
+        Err("円の中心が分からない".into())
+    }
+
     /// 1つの文 `名前... = 作図 引数...` を図に足す。
     fn statement(&mut self, lhs: &[&str], prim: &str, args: &[&str]) -> Result<(), String> {
         let need = |n: usize| -> Result<(), String> {
@@ -88,7 +145,60 @@ impl<'a> Builder<'a> {
         match prim {
             "triangle" | "acute_triangle" | "obtuse_triangle" => {
                 if lhs.len() != 3 { return Err("三角形の頂点が3つでない".into()); }
-                for n in lhs { self.free_point(n); }
+                if self.incircle_for.as_ref().is_some_and(|t| t.iter().zip(lhs).all(|(a, b)| a == b)) {
+                    // 内心は平方根が要るので、三角形を内接円から作る: 中心 I と円周上の3点(接点)を置き、接線どうしの交点を頂点にする。
+                    let (inn, t0n) = (self.fresh("Inc"), self.fresh("Tin"));
+                    let (i, t0) = (self.free_point(&inn), self.free_point(&t0n));
+                    let w = self.hidden("Incircle", Definition::CircleCenterPoint(i, t0), EntityType::Conic);
+                    self.centers.insert(w.0, i);
+                    let mut t = vec![t0];
+                    for _ in 0..2 {
+                        let n = self.fresh("Tin");
+                        let q = self.free_point(&n);
+                        self.eg.link_logical_incidence(q, w);
+                        t.push(q);
+                    }
+                    let tl: Vec<ClassId> = t.iter().map(|&q| self.hidden("Tan", Definition::TangentLine(w, q), EntityType::Line)).collect();
+                    // 頂点 k は、接点 k の向かい(接線 k 以外の2本の交点)。
+                    for (k, n) in lhs.iter().enumerate() {
+                        self.point(n, Definition::Intersection(tl[(k + 1) % 3], tl[(k + 2) % 3]));
+                    }
+                    self.incenter = Some(i);
+                } else {
+                    for n in lhs { self.free_point(n); }
+                }
+            }
+            "incenter" | "excenter" | "angle_bisector" | "angle_exbisector" => {
+                need(3)?;
+                let (Some(i), Some(t)) = (self.incenter, self.incircle_for.clone()) else { return Err(format!("作図「{}」は平方根が要る", prim)) };
+                let mut sorted: Vec<&str> = args.to_vec();
+                sorted.sort_unstable();
+                let mut tri: Vec<&str> = t.iter().map(|x| x.as_str()).collect();
+                tri.sort_unstable();
+                if sorted != tri { return Err(format!("作図「{}」は平方根が要る(内接円から作った三角形のものでない)", prim)); }
+                match prim {
+                    "incenter" => { self.env.insert(lhs[0].to_string(), (i, Kind::Point)); }
+                    // 傍心(最初の頂点の向かい): 他の2頂点での外角の二等分線(内角の二等分線に垂直)の交点。
+                    "excenter" => {
+                        let mut ext = Vec::new();
+                        for n in &args[1..] {
+                            let v = self.get(n, Kind::Point)?;
+                            let vi = self.line_through_points(v, i, "Bis");
+                            ext.push(self.hidden("ExBis", Definition::PerpendicularLine(vi, v), EntityType::Line));
+                        }
+                        self.point(lhs[0], Definition::Intersection(ext[0], ext[1]));
+                    }
+                    // 角の二等分線(真ん中の頂点での内角・外角)。
+                    _ => {
+                        let v = self.get(args[1], Kind::Point)?;
+                        if prim == "angle_bisector" {
+                            self.line(lhs[0], Definition::new_line(v, i));
+                        } else {
+                            let vi = self.line_through_points(v, i, "Bis");
+                            self.line(lhs[0], Definition::PerpendicularLine(vi, v));
+                        }
+                    }
+                }
             }
             "quadrilateral" => {
                 if lhs.len() != 4 { return Err("四角形の頂点が4つでない".into()); }
@@ -115,11 +225,105 @@ impl<'a> Builder<'a> {
             }
             "intersection" => {
                 need(2)?;
-                let (a, b) = (self.get(args[0], Kind::Line), self.get(args[1], Kind::Line));
-                match (a, b) {
-                    (Ok(a), Ok(b)) => { self.point(lhs[0], Definition::Intersection(a, b)); }
-                    _ => return Err("円との交点(平方根が要る)".into()),
+                if lhs.len() != 1 { return Err("2つの交点を同時に作る(平方根が要る)".into()); }
+                let (a, b) = (self.kind_of(args[0])?, self.kind_of(args[1])?);
+                match (a.1, b.1) {
+                    (Kind::Line, Kind::Line) => { self.point(lhs[0], Definition::Intersection(a.0, b.0)); }
+                    // 円との交点は、既に図にある点が両方に乗っていれば「もう一方の交点」として有理的に作れる。
+                    (Kind::Line, Kind::Circle) | (Kind::Circle, Kind::Line) | (Kind::Circle, Kind::Circle) => {
+                        let Some(k) = self.common_point(a.0, b.0) else { return Err("円との交点(既知の共有点が無く、平方根が要る)".into()) };
+                        let def = match (a.1, b.1) {
+                            (Kind::Line, _) => Definition::SecondIntersectionOfLineAndConic(k, a.0, b.0),
+                            (_, Kind::Line) => Definition::SecondIntersectionOfLineAndConic(k, b.0, a.0),
+                            _ => Definition::SecondIntersectionOfCircles(k, a.0, b.0),
+                        };
+                        self.point(lhs[0], def);
+                    }
+                    _ => return Err("交点の引数が直線・円でない".into()),
                 }
+            }
+            "circle_center_point" => {
+                need(2)?;
+                let (o, p) = (self.get(args[0], Kind::Point)?, self.get(args[1], Kind::Point)?);
+                self.circle(lhs[0], Definition::CircleCenterPoint(o, p), Some(o));
+            }
+            "circle" | "circumcircle" if args.len() == 3 => {
+                let p: Result<Vec<ClassId>, String> = args.iter().map(|n| self.get(n, Kind::Point)).collect();
+                let p = p?;
+                self.circle(lhs[0], Definition::Circumcircle(p[0], p[1], p[2]), None);
+            }
+            "circle" if args.is_empty() => {
+                // 任意の円: 中心と円周上の1点を自由点にする。
+                let (on, pn) = (self.fresh("Co"), self.fresh("Cp"));
+                let (o, p) = (self.free_point(&on), self.free_point(&pn));
+                self.circle(lhs[0], Definition::CircleCenterPoint(o, p), Some(o));
+            }
+            "circle_diameter" => {
+                need(2)?;
+                let (a, b) = (self.get(args[0], Kind::Point)?, self.get(args[1], Kind::Point)?);
+                let m = self.hidden("Dm", Definition::Midpoint(a, b), EntityType::Point);
+                self.circle(lhs[0], Definition::CircleCenterPoint(m, a), Some(m));
+            }
+            "on_circle" => {
+                need(1)?;
+                let c = self.get(args[0], Kind::Circle)?;
+                let p = self.free_point(lhs[0]);
+                self.eg.link_logical_incidence(p, c);
+            }
+            "outside" => { need(1)?; self.get(args[0], Kind::Circle)?; self.free_point(lhs[0]); }
+            "tangent" | "tangent_line" if lhs.len() == 1 => {
+                need(2)?;
+                let (p, c) = (self.get(args[0], Kind::Point)?, self.get(args[1], Kind::Circle)?);
+                self.eg.apply_congruence_closure();
+                // 円の外の点からの接線は平方根が要る。
+                if self.eg.numeric_incidence_check(p, c, 4) != Some(true) { return Err("円の外の点からの接線(平方根が要る)".into()); }
+                self.line(lhs[0], Definition::TangentLine(c, p));
+            }
+            "reflect_point_wrt_point" => {
+                need(2)?;
+                let (p, m) = (self.get(args[0], Kind::Point)?, self.get(args[1], Kind::Point)?);
+                self.point_reflection(lhs[0], p, m, None);
+            }
+            "reflect_point_wrt_line" | "reflect" => {
+                need(2)?;
+                let p = self.get(args[0], Kind::Point)?;
+                match self.kind_of(args[1])? {
+                    (m, Kind::Point) => { self.point_reflection(lhs[0], p, m, None); }
+                    (l, Kind::Line) => {
+                        let perp = self.hidden("Rperp", Definition::PerpendicularLine(l, p), EntityType::Line);
+                        let f = self.hidden("Rfoot", Definition::Intersection(l, perp), EntityType::Point);
+                        self.point_reflection(lhs[0], p, f, Some(perp));
+                    }
+                    _ => return Err(format!("鏡映の軸「{}」が点でも直線でもない", args[1])),
+                }
+            }
+            "right_triangle" => {
+                // 最初の頂点が直角。
+                if lhs.len() != 3 { return Err("三角形の頂点が3つでない".into()); }
+                let (a, b) = (self.free_point(lhs[0]), self.free_point(lhs[1]));
+                let ab = self.line_through_points(a, b, "RTab");
+                let perp = self.hidden("RTperp", Definition::PerpendicularLine(ab, a), EntityType::Line);
+                let c = self.free_point(lhs[2]);
+                self.eg.link_logical_incidence(c, perp);
+            }
+            "isos_triangle" => {
+                // 最初の頂点が頂角(OA = OB)。
+                if lhs.len() != 3 { return Err("三角形の頂点が3つでない".into()); }
+                let (o, a) = (self.free_point(lhs[0]), self.free_point(lhs[1]));
+                let c = self.hidden("ITc", Definition::CircleCenterPoint(o, a), EntityType::Conic);
+                let b = self.free_point(lhs[2]);
+                self.eg.link_logical_incidence(b, c);
+            }
+            "parallelogram" => {
+                // `A B C D = parallelogram`(A, B, C は自由)か `D = parallelogram A B C`: ABCD が平行四辺形になる D。
+                let (a, b, c, d) = match (lhs.len(), args.len()) {
+                    (4, 0) => { let (a, b, c) = (self.free_point(lhs[0]), self.free_point(lhs[1]), self.free_point(lhs[2])); (a, b, c, lhs[3]) }
+                    (1, 3) => (self.get(args[0], Kind::Point)?, self.get(args[1], Kind::Point)?, self.get(args[2], Kind::Point)?, lhs[0]),
+                    _ => return Err("平行四辺形の引数の数が合わない".into()),
+                };
+                let (bc, ab) = (self.line_through_points(b, c, "PGbc"), self.line_through_points(a, b, "PGab"));
+                let (la, lc) = (self.hidden("PGa", Definition::ParallelLine(bc, a), EntityType::Line), self.hidden("PGc", Definition::ParallelLine(ab, c), EntityType::Line));
+                self.point(d, Definition::Intersection(la, lc));
             }
             "midpoint" => {
                 need(2)?;
@@ -154,6 +358,11 @@ impl<'a> Builder<'a> {
                 let ab = self.line_through_points(a, b, "PBab");
                 let m = self.hidden("PBm", Definition::Midpoint(a, b), EntityType::Point);
                 self.line(lhs[0], Definition::PerpendicularLine(ab, m));
+            }
+            "circumcenter" if args.len() == 1 => {
+                let c = self.get(args[0], Kind::Circle)?;
+                let o = self.center_of(c, lhs[0])?;
+                self.env.insert(lhs[0].to_string(), (o, Kind::Point));
             }
             "circumcenter" => {
                 need(3)?;
@@ -222,6 +431,11 @@ impl<'a> Builder<'a> {
                 Ok(("Identical".into(), vec![l1, l2]))
             }
             "concyclic" if all_points && p.len() == 4 => Ok(("Concyclic".into(), p)),
+            "midpoint" if all_points && p.len() == 3 => {
+                // p0 が p1 p2 の中点。
+                let m = self.hidden("Gm", Definition::Midpoint(p[1], p[2]), EntityType::Point);
+                Ok(("Identical".into(), vec![p[0], m]))
+            }
             "cong" if all_points && p.len() == 4 => {
                 let a = self.hidden("GlenA", Definition::LengthSq(p[0], p[1]), EntityType::Scalar);
                 let b = self.hidden("GlenB", Definition::LengthSq(p[2], p[3]), EntityType::Scalar);
@@ -263,9 +477,27 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// 内心・傍心・角の二等分線を使う三角形(スクリプトの最初の三角形で、その3頂点について使うもの)の頂点の名前。
+/// この三角形は内接円から作る(内心を有理的に置くため)。
+fn incircle_triangle(script: &str) -> Option<[String; 3]> {
+    let stmts: Vec<(Vec<&str>, Vec<&str>)> = script.split(';').map(str::trim).filter(|s| !s.starts_with("Prove:"))
+        .filter_map(|s| { let (l, r) = s.split_once('=')?; Some((l.split_whitespace().collect(), r.split_whitespace().collect())) }).collect();
+    let (tri, _) = stmts.iter().find(|(l, r)| l.len() == 3 && matches!(r.first(), Some(&("triangle" | "acute_triangle" | "obtuse_triangle"))))?;
+    let mut t = tri.clone();
+    t.sort_unstable();
+    let uses = stmts.iter().any(|(_, r)| {
+        let Some((prim, args)) = r.split_first() else { return false };
+        if !matches!(*prim, "incenter" | "excenter" | "angle_bisector" | "angle_exbisector") || args.len() != 3 { return false; }
+        let mut a = args.to_vec();
+        a.sort_unstable();
+        a == t
+    });
+    uses.then(|| [tri[0].to_string(), tri[1].to_string(), tri[2].to_string()])
+}
+
 /// スクリプトを図に読み込む。読めなければ理由を返す。
 pub fn build(script: &str, eg: &mut EGraph) -> Result<ProblemSetup, String> {
-    let mut b = Builder { eg, env: HashMap::new(), aux: 0 };
+    let mut b = Builder { eg, env: HashMap::new(), aux: 0, centers: HashMap::new(), incircle_for: incircle_triangle(script), incenter: None };
     let mut target = None;
     for stmt in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
         if let Some(rest) = stmt.strip_prefix("Prove:") {
@@ -340,3 +572,4 @@ mod tests {
         assert!(bad.is_empty(), "目標が乱数座標で成り立たない(写しの誤り、または向きの取り違え): {:?}", bad);
     }
 }
+

@@ -15,24 +15,24 @@
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="frozen" aria-pressed="false">凍結・古い</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="group"><div class="group-title">① 優先 · 上から順に着手する · 8件</div>
 <details class="item" id="b45" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 次は鏡映と中心の分かった円(長さと角をつなぐ)、射影の規則の統合</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 鏡映・中心の分かった円・二辺夾角・長さからの接続まで入った。次は AR と重なる定理を外す測り直し</span></summary>
   <div class="body">
-<div class="desc">今の AR(<a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l83">#83</a>・<a class="secref" href="ledger.html#l84">#84</a>・<a class="secref" href="ledger.html#l85">#85</a>・<a class="secref" href="ledger.html#l88">#88</a>、規則の一覧は <a class="secref" href="theorems.html#ar">§07</a>): 2点の差の形式的な対数を記号にし、整数の格子(ℤⁿ ⊕ ℤ/4)で有向角・複比・同じ直線の上の比と平行・等方線束での長さの比・相似と対応する点・メネラウスとチェバを閉じる。方冪・交わる弦の相似の2定理を置き換えた。既定 39/44。</div>
-    <div class="evidence"><b>不足(2026-09-30 の点検):</b> 既定に残る定理のうち AR に相当する規則が無いのは、長さと角をつなぐもの ― 直角三角形の斜辺の中線(3件)、垂直二等分線の距離の等価性(2件)、二等辺三角形の底角(2件)、中心角の定理。長さは J と I の和、角は差で、2 で割れない整数の格子では足すだけではつながらない(二辺夾角が書けないのと同じ壁)。「対称な変換が存在する」ことを検出してから式を足す形なら比のまま入る:<br>
-(1) <b>鏡映</b>: 垂直二等分線(m ⊥ AB で中点を通る)や AB = AC が格子で言えるとき、鏡映 σ で s(Jσ(X),Jσ(Y)) = s(IX,IY) + κ と I の側、長さを保つので κ + κ′ = 0。二等辺三角形の底角の逆は、相似の検出で今は除いている「自分自身への入れ替え」を許せば出る。<br>
-(2) <b>中心の分かった円</b>: OA = OB = OC、または中点と直径の上の直角で中心が分かったら、|OP|² = ρ と β(OP) = 2θ(P) + c(中心角・斜辺の中線・逆向きの直角)。円の実体が無くても仮の円で。<br>
-(3) <b>射影の規則の統合</b>: 透視射影(有限の中心、直線と線束)と「平行 ⇒ 比」(無限遠の中心、直線と直線)は、中心からの射影が一次分数変換という1本の規則の2つの場合。中心と2つの無限遠点が共線なら無限遠点の組も対応に入れれば、平行の場合の比の一定はアフィンの等式から自動的に出る。<br>
-(4) 相似で対応する点を三角形の中の点へ。(5) メネラウス・チェバで無限遠の点(平行)を含む配置。<br>
-<b>重複(定理とのかぶり):</b> 円周角・角の足し算・透視射影・シュタイナー・中点連結の定理は AR と同じ内容。#83 で円・射影の定理を外すと5〜6問落ちたが、座標を置けない問題が 8 → 2問に減ったので、(1)(2) の後に外し直しを測る(シュタイナーの3件は証明にほぼ出ない)。</div>
-    <div class="b-tags"><span class="tag">AR</span><span class="tag">長さは比で</span><span class="tag">鏡映</span><span class="tag">中心の分かった円</span></div>
+<div class="desc">今の AR(<a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l83">#83</a>・<a class="secref" href="ledger.html#l84">#84</a>・<a class="secref" href="ledger.html#l85">#85</a>・<a class="secref" href="ledger.html#l88">#88</a>・<a class="secref" href="ledger.html#l89">#89</a>・<a class="secref" href="ledger.html#l90">#90</a>、規則の一覧は <a class="secref" href="theorems.html#ar">§07</a>、22件): 2点の差の形式的な対数と J・I の線束の記号を整数の格子(ℤⁿ ⊕ ℤ/4)で閉じる。有向角・複比・比と平行・射影(有限と無限遠の中心を1本に)・円・長さ・相似(AA・二辺夾角・三辺)と対応する点・メネラウスとチェバ(無限遠点を含む)・鏡映(接線の長さを含む)・中心の分かった円・長さからの接続(垂直二等分線の逆・円の上)。最初の総当たりの前に1回回す。既定 40/44。</div>
+    <div class="evidence"><b>済み(2026-09-30):</b> 鏡映・中心の分かった円・射影の統合(#89)、メネラウス・チェバの無限遠点・二辺夾角と三辺・長さからの接続(#90)。<br>
+<b>次の一手:</b> (1) <b>AR と重なる定理を外す測り直し</b> ― 円周角・角の足し算・透視射影・中点連結・垂直二等分線・二等辺三角形・中心角・斜辺の中線の定理は AR と同じ内容になった。#83 で外すと落ちた原因(座標を置けない問題)は2問に減っている。定理の課税(<a class="secref" href="#b20">b20</a>)・有向角の大量生成(<a class="secref" href="#b7">b7</a>)・定理の規模(<a class="secref" href="#b34">b34</a>)にも効く。
+(2) 相似で対応する点を三角形の中の点へ(外心どうし・垂心どうし)。(3) 極と極線・根軸(方冪は長さの差なので相似を経由してしか入っていない)。
+(4) 図が大きい問題で AR が重い(nine_point_full で行演算の9割が相似の段)― 相似の組の数か回数の上限。<br>
+<b>方針:</b> 長さは比で(足し算は扱わない)。証明で数値に頼ってよいのは向きの選択と相異なることの確認だけ(二辺夾角・三辺の向き)。</div>
+    <div class="b-tags"><span class="tag">AR</span><span class="tag">長さは比で</span><span class="tag">重なる定理を外す</span></div>
   </div>
 </details>
 <details class="item" id="b48" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 使われなかった補助作図を捨てて作り直す(リスタート)― 圧縮した証明に出ない補助作図は 15〜55%</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 使われなかった補助作図を捨てて作り直す(リスタート)― <code>--prune</code> を入れた(既定外)。ノイズの初期作図を刈るとノイズ下で効く</span></summary>
   <div class="body">
-<div class="desc">ユーザー案(2026-09-30): ある程度探索して補助作図が溜まったら、無駄な作図を一旦クリアして見通しを良くする(SAT ソルバーのリスタートに近い)。AR で「差分で積むより毎回作り直す方が速い」と分かった(<a class="secref" href="ledger.html#l85">#85</a>)のがきっかけだが、AR が遅くなった理由(古い記号の行・出どころの合併)は、union-find で代表元にまとめる e-graph では起きない。効くとすれば「図が膨らむとマッチングが重くなる」方(方針E)。</div>
-    <div class="evidence"><b>測ったこと:</b> 作った補助作図のうち圧縮した証明に出るもの ― bench_2012egmop1(ノイズ10)66個中29個、2011 バルカン 12個中7個、2015 APMO 19個中16個。<br><b>次の一手(上限の実験):</b> 解けた後に「証明に出た補助作図だけを最初から入れて解き直す」と仕事量がどこまで減るか。大きく減らなければ作らない。減るなら、探索の途中で「どこかのマージに使われた補助作図」を残して作り直す。使われなかった初期作図のノイズも同時に捨てられる(前提を減らすだけなので健全)。</div>
-    <div class="b-tags"><span class="tag">ユーザー案</span><span class="tag">方針E</span><span class="tag">まず上限を測る</span></div>
+<div class="desc">ユーザー案(2026-09-30): 補助作図が溜まったら無駄な作図を一旦クリアする。実体は消さず無効にする(<code>--prune=&lt;倍率&gt;</code>)。使われた図形(問題文・合流した・定義以外の接続)とその作図の親を残し、補助作図とそれに依存するものだけ刈る。2回前の手詰まりより後に作ったものと、一度戻したものは刈らない。同じ作図がもう一度求められたら戻す(<code>live_memo</code>・<code>revive</code>)。経緯: docs/notes/mmp_core.md「使われなかった作図の刈り込み」。</div>
+    <div class="evidence"><b>測ったこと(33問、rc5 との比較):</b> 補助作図だけを刈る版は既定ではほとんど効かない(刈れる量が少ない)。使われなかった問題文の作図(ノイズ)も刈る実験版(<code>--prune-given</code>)で、noise5 で newton_gauss が解け pappus が 726万 → 16.7万、noise10 で pappus が解け 2010 G1 が落ち、noise20 で pappus が解けた。既定では pascal 1.21倍・newton_gauss 1.10倍。<br>
+<b>次の一手:</b> 全44問×6設定で <code>--prune=1.5 --prune-given</code> を測って既定にするか決める。</div>
+    <div class="b-tags"><span class="tag">ユーザー案</span><span class="tag">方針E</span><span class="tag">既定外</span></div>
   </div>
 </details>
 <details class="item" id="b44" data-status="open">
@@ -52,27 +52,27 @@
   </div>
 </details>
 <details class="item" id="b8" data-status="open">
-  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは5問(2026-09-30)。既定は 32/44 → 34 → 37 → <b>39/44</b></span></summary>
+  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは4問(2026-09-30)。既定は 32/44 → 34 → 37 → 39 → <b>40/44</b></span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l67">#67</a> で未解決12問を型に分けた。その後に解けたもの: bench_2005usamop3(写しの修正、#69)、bench_2011balkanmop1(#74・#85)、desargues(#80)、pappus(#82)、centroid・bench_2015apmop1・bench_2018chnwesternmop5(AR の相似、#85)、newton_gauss・pascal(AR のメネラウス、#88)。以前「汎用の補助作図で pappus と重心が解けた」(#72)としたのは、どちらも偽のマージの上だった(#76・#78)。</div>
-    <div class="evidence"><table style="border-collapse:collapse;font-size:13px;margin:6px 0"><tr><th style="text-align:left;padding:3px 10px 3px 0">問題</th><th style="text-align:left;padding:3px 10px 3px 0">止まり方</th><th style="text-align:left;padding:3px 10px 3px 0">型</th><th style="text-align:left;padding:3px 10px 3px 0">詰まり所と、いま分かっていること</th></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2000usatstp2</td><td style="padding:3px 10px 3px 0;vertical-align:top">手駒切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">人間の証明は二辺夾角の合同(有向角 mod π では不健全で、AR の格子でも比の符号が決まらない)。鏡映・中心の分かった円(<a class="secref" href="#b45">b45</a>)で ME = MF を比のまま出せるかが次の試し。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2012chnwesternmop5</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順3 九点円の中心・手順4 等脚台形と共円 ― 中心の分かった円(b45)の対象。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2008armog10p6</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+筋書きの隙間</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順4・5。全手順を前提にしても目標が出ない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2016armog10p2</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">B 補助作図</td><td style="padding:3px 10px 3px 0;vertical-align:top">数値で選ぶ補助作図を行き詰まりのたびに試す版で解けるが、他を落とすので既定外(<a class="secref" href="#b36">b36</a>)。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">test_spiral_similarity</td><td style="padding:3px 10px 3px 0;vertical-align:top">—</td><td style="padding:3px 10px 3px 0;vertical-align:top">前提付き</td><td style="padding:3px 10px 3px 0;vertical-align:top">座標を置けない2問の1つ(<a class="secref" href="#b46">b46</a>)。</td></tr></table><b>ノイズ下:</b> ノイズ10・20では newton_gauss・pappus・pascal も落ちる(方針E)。</div>
-    <div class="b-tags"><span class="tag">A 規則 3問</span><span class="tag">B 補助作図 1問</span><span class="tag">前提付き 1問</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l67">#67</a> で未解決12問を型に分けた。その後に解けたもの: bench_2005usamop3(#69)、bench_2011balkanmop1(#74・#85)、desargues(#80)、pappus(#82)、centroid・bench_2015apmop1・bench_2018chnwesternmop5(#85)、newton_gauss・pascal(#88)、bench_2016armog10p2(AR の二辺夾角・三辺の相似、#90)。bench_2000usatstp2 は extras 設定で解ける(#90)。</div>
+    <div class="evidence"><table style="border-collapse:collapse;font-size:13px;margin:6px 0"><tr><th style="text-align:left;padding:3px 10px 3px 0">問題</th><th style="text-align:left;padding:3px 10px 3px 0">止まり方</th><th style="text-align:left;padding:3px 10px 3px 0">型</th><th style="text-align:left;padding:3px 10px 3px 0">詰まり所と、いま分かっていること</th></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2000usatstp2</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">既定外の extras(長さの定理・中心角・中点の需要)では仕事量23.6万で解ける(#90)。既定の定理集合と AR だけでは届かない ― 人の証明の補助点(AP・DP の中点)が要る。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2012chnwesternmop5</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+補助点</td><td style="padding:3px 10px 3px 0;vertical-align:top">人の証明は補助点 K(AH の中点)と九点円の中心の性質。中心の分かった円を入れても届かない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2008armog10p6</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+筋書きの隙間</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順4・5。全手順を前提にしても目標が出ない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">test_spiral_similarity</td><td style="padding:3px 10px 3px 0;vertical-align:top">—</td><td style="padding:3px 10px 3px 0;vertical-align:top">前提付き</td><td style="padding:3px 10px 3px 0;vertical-align:top">座標を置けない2問の1つ(<a class="secref" href="#b46">b46</a>)。</td></tr></table><b>ノイズ下:</b> ノイズ10・20では newton_gauss・pappus・pascal が落ちる(方針E)。作図の刈り込みの実験版(<a class="secref" href="#b48">b48</a>)で pappus が解ける。</div>
+    <div class="b-tags"><span class="tag">A 規則 3問</span><span class="tag">前提付き 1問</span></div>
   </div>
 </details>
 <details class="item" id="b36" data-status="open">
-  <summary><span class="idx"></span><span class="t">補助作図の語彙と「いつ試すか」― 数値で選ぶ補助作図で desargues が解けた(#80)。2016ARMO は毎回試すと解けるが他を落とす</span></summary>
+  <summary><span class="idx"></span><span class="t">補助作図の語彙と「いつ試すか」― 2016ARMO は AR で解けた(#90)。残りは試す時期と作図の刈り込みの組み合わせ</span></summary>
   <div class="body">
-<div class="desc">今: 手が全部尽きたときの最後の手として、汎用の補助作図(熱い点どうしの中点・熱い直線どうしの交点、<a class="secref" href="ledger.html#l72">#72</a>)と、数値で選ぶ補助作図(交点・中点・垂線や平行線との交点・第2交点の候補を固定座標で試作し、既存の直線・円に乗る/点と重なる/新しく共円・共線になるものを点数順に作る、<a class="secref" href="ledger.html#l80">#80</a>)を同じ回に試す。desargues が解けた。以前「汎用の補助作図で pappus と重心が解けた」としたのは、どちらも後で偽のマージの上だったと分かった(<a class="secref" href="ledger.html#l76">#76</a>・<a class="secref" href="ledger.html#l78">#78</a>)。今の2問は AR で解けている。</div>
-    <div class="evidence"><b>次の一手:</b> いつ試すか。行き詰まりのたびに試す版(<code>--numeric-aux-early</code>)は 2016ARMO を解くが他の問題を落とす。ユーザー案の作り直し(<a class="secref" href="#b48">b48</a>)と組むと、試した補助作図を捨てられる。</div>
-    <div class="b-tags"><span class="tag">補助作図</span><span class="tag">2016ARMO</span></div>
+<div class="desc">今: 手が全部尽きたときの最後の手として、汎用の補助作図(<a class="secref" href="ledger.html#l72">#72</a>)と数値で選ぶ補助作図(<a class="secref" href="ledger.html#l80">#80</a>)を同じ回に試す。desargues が解けた。行き詰まりのたびに試す版(<code>--numeric-aux-early</code>)でしか解けなかった 2016 ARMO は、AR の二辺夾角・三辺の相似で既定で解けるようになった(#90)。</div>
+    <div class="evidence"><b>次の一手:</b> 早めに試す版と、作図の刈り込み(<a class="secref" href="#b48">b48</a>、<code>--prune</code>)を組む(試した補助作図を捨てられる)。</div>
+    <div class="b-tags"><span class="tag">補助作図</span></div>
   </div>
 </details>
 <details class="item" id="b41" data-status="open">
-  <summary><span class="idx"></span><span class="t">円の定義を足して、読める問題を増やす(circle_center_point)― HAGeo-409 の被覆率は 29/409</span></summary>
+  <summary><span class="idx"></span><span class="t">HAGeo-409 の読める問題を増やす ― 29 → 206/409(#89)。残りの壁は等角の作図と平方根の要る交点</span></summary>
   <div class="body">
-<div class="desc">このエンジンの作図語彙で書ける HAGeo-409 の問題は 409問のうち29問(7%、<a class="secref" href="ledger.html#l69">#69</a>)。最大の壁は circle_center_point(中心と円周上の1点で決まる円、232問が使う)で、足すだけで 71問増える。円の定義を全部足すと 129問、有理な作図(平行四辺形・反射・二等辺/直角三角形・接線)まで足すと 198問。内心・角の二等分線・弧の中点は平方根が要る(検算側は <a class="secref" href="ledger.html#l87">#87</a> で根を取れるようになった)。</div>
-    <div class="evidence"><b>なぜ大事か:</b> 保留問題(<code>bench/heldout.txt</code>)は難易度 2.5〜6.8 の23問で易しい問題が無く、新しい問題に効くかを測れない。<br><b>見積もり:</b> <code>Definition::CircleCenterPoint(O, P)</code> を足すと Circumcircle と同じ箇所(定義・評価・係数・座標の置き方・表示・監査)に約15か所。「円周上の点は中心から等距離」は AR の中心の分かった円(<a class="secref" href="#b45">b45</a>)と同じ形で入れられる。</div>
-    <div class="b-tags"><span class="tag">読める問題 29 → 100</span><span class="tag">保留問題</span></div>
+<div class="desc">#89 で円の定義(<code>CircleCenterPoint</code>)・既知の共有点を使う第2交点・対称点・直角/二等辺三角形・平行四辺形・接線・内心(三角形を内接円から作る)を足し、読める問題が 29 → 206/409。保留問題と手で写した bench_* を除いた172問が広い集合 <code>bench/hageo.txt</code>(<code>bench/hageo.sh</code>、採否には使わず報告する)。今は 既定で 42/172 が解ける(#90)。</div>
+    <div class="evidence"><b>残りの壁</b>(先頭の理由): 等角の作図 <code>angle_equal1</code>(28)・2つの交点を同時に作る文(22、平方根)・既知の共有点が無い円との交点(平方根)・内接円から作れない内心(別の三角形の内心、19)・<code>angle_equal2</code>・<code>midarc_no</code>・<code>circle_center_radius</code>・正三角形。</div>
+    <div class="b-tags"><span class="tag">読める問題 206</span><span class="tag">広い集合</span></div>
   </div>
 </details>
 <details class="item" id="b43" data-status="open">
@@ -85,12 +85,11 @@
 </details>
 </div>
 <div class="group"><div class="group-title">② 未着手 · その他 · 11件</div>
-<details class="item" id="b35" data-status="open">
-  <summary><span class="idx"></span><span class="t">基本規則の不足 ― 弦・平行四辺形の規則の動機は AR で届いた。残る規則は比の形で AR へ</span></summary>
+<details class="item" id="b35" data-status="done">
+  <summary><span class="idx"></span><span class="t">基本規則の不足 ― 残っていた二辺夾角とメネラウスの逆は AR に入った(#88・#90)</span></summary>
   <div class="body">
-<div class="desc">弦の規則と平行四辺形の規則(<a class="secref" href="ledger.html#l68">#68</a>、<code>--rules=chord,parallelogram</code>)は、課税が大きく既定にしていない(弦は幾何平均 +23%、平行四辺形はノイズ10で最大24倍)。動機だった 2015 APMO と重心は、AR の相似で既定で解けるようになった(<a class="secref" href="ledger.html#l85">#85</a>)。定理を「安く書く」より、定理が言っていることを AR の等式にする方が課税が小さい。</div>
-    <div class="evidence"><b>残る規則:</b> 二辺夾角の合同(有向角 mod π では不健全で書けない ― 長さの比で AR に入れる道)、メネラウスの逆(newton_gauss、<a class="secref" href="#b45">b45</a>)。</div>
-    <div class="b-tags"><span class="tag">既定外のまま</span><span class="tag">残りは AR へ</span></div>
+<div class="desc">弦の規則と平行四辺形の規則(<a class="secref" href="ledger.html#l68">#68</a>、<code>--rules=chord,parallelogram</code>)は課税が大きく既定外のまま。動機だった 2015 APMO と重心は AR の相似で解ける(#85)。残っていた二辺夾角の合同は AR の二辺夾角・三辺の相似(向きは数値で選ぶ、#90)、メネラウスの逆は AR(#88)に入った。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b33" data-status="open">

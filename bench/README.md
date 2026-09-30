@@ -108,6 +108,10 @@ bench/heldout.sh mychange            # bench/heldout.txt(HAGeo-409 から機械�
 bench/seeds.sh mychange              # ノイズの seed 2・3 で選抜(通常の quick.sh は seed 12345 の1つだけ)
 ```
 
+HAGeo-409 から読める問題のうち、保留問題と手で写した bench_* を除いたもの(`bench/hageo.txt`、#89 で172問)は広い集合として
+`bench/hageo.sh <label>` で既定の設定だけ回す(結果は `res/hageo_<label>.tsv`)。これも採否の判断には使わず、結果を報告する。
+監査は `CENSUS_PROBS="$(cat bench/hageo.txt)" bench/census.sh <label> --no-merge-checks` で同じ問題に回せる。
+
 保留問題は**採用の直前に測って報告するだけ**で、調整には使わない。解けなかった理由を調べて規則や語彙を足したら、その問題は保留ではなくなる
 (`heldout.txt` から外して、`geom_solver hageo-list` で読める別の問題に置き換える)。詳しくは [設計ノート](../docs/notes/diagnostics.md) の「HAGeo-409 の取り込みと語彙の被覆率」。
 

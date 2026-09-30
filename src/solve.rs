@@ -41,6 +41,10 @@ pub struct SolveOptions {
     pub numeric_aux: bool,
     /// 代数的な追跡(複比・有向角の線形関係。既定、--no-ar で外す)と、角の足し算の規則を外してそれに任せる(--ar-replace)。
     pub ar: bool,
+    /// 最初の定理の総当たりの前に代数的な追跡を1回走らせる(図が一番小さい時点なので軽く、そこで出た合流が総当たりを短くする)。
+    pub ar_first: bool,
+    /// 使われなかった作図の刈り込み(有効な実体がこの倍を超えたら)。
+    pub prune: Option<f64>,
     pub ar_replace: bool,
     /// 名前で外す定理(--drop-theorems=名前,名前。AR への置き換えを試すため)。
     pub drop_theorems: Vec<String>,
@@ -110,6 +114,8 @@ impl SolveOptions {
             generic_aux: !flag(args, "--no-generic-aux"),
             numeric_aux: !flag(args, "--no-numeric-aux"),
             ar: !flag(args, "--no-ar"),
+            ar_first: !flag(args, "--no-ar-first"),
+            prune: args.iter().find_map(|a| a.strip_prefix("--prune=")).and_then(|v| v.parse().ok()),
             ar_replace: flag(args, "--ar-replace"),
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),
@@ -437,6 +443,11 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
 
     let mut proved = false;
     let start_time = Instant::now();
+    engine.prune_growth = opts.prune;
+    if opts.prune.is_some() && args_has_prune_given() {
+        if let Some((_, ids)) = &problem.target_fact { engine.prune_roots = ids.clone(); }
+    }
+    if opts.ar && opts.ar_first { engine.run_ar(); }
     engine.schedule_full_sweep();
     while engine.prover.work_done() < opts.step_budget
         && start_time.elapsed() < Duration::from_secs(opts.time_budget_secs) {
@@ -615,3 +626,6 @@ fn print_profile(prover: &ProverEngine, total: Duration) {
     }
     println!("=============================\n");
 }
+
+/// 実験: --prune-given で問題文の作図(目標とその作図の親以外)も刈り込む。
+fn args_has_prune_given() -> bool { std::env::args().any(|a| a == "--prune-given") }

@@ -190,6 +190,11 @@ pub fn load_problem(name: &str, egraph: &mut EGraph) -> ProblemSetup {
         "test_parallelogram" => test_parallelogram::setup(egraph),
         "test_spiral_circles" => test_spiral_circles::setup(egraph),
         n if n.starts_with("hageo:") => crate::hageo::setup(&n["hageo:".len()..], egraph),
+        // HAGeo の書式の作図スクリプトをファイルから読む(調査用)。
+        n if n.starts_with("hageo-file:") => {
+            let script = std::fs::read_to_string(&n["hageo-file:".len()..]).expect("スクリプトが読めない");
+            crate::hageo::build(script.trim(), egraph).unwrap_or_else(|e| panic!("読めない: {}", e))
+        }
         _ => panic!("未知の問題名です: {}", name),
     }
 }

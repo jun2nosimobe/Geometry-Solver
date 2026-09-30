@@ -750,6 +750,7 @@ impl ProverEngine {
             let Some(temp_def) = self.egraph.build_definition(kind, &parent_ids) else { return valid_nodes };
 
             if let Some(&existing) = self.egraph.memo.get(&temp_def) {
+                self.egraph.revive(existing);
                 valid_nodes.push(self.egraph.get_rep(existing));
             } else if role == DefRole::Build {
                 // 図の上で値の定まらない図形(重なった2点の長さなど)は作らない。
