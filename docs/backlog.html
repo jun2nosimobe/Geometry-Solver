@@ -11,46 +11,39 @@
 <div class="wrap">
   <section id="backlog">
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
-<p class="section-note"><b>2026-09-28 に並べ直した。</b>上のグループから順に着手する。以前は「優先度順」と書きながら実際は新しい順に並んでいて、実測で見込みが消えた項目が上位に残っていた。今は <b>①優先(到達範囲と測定の妥当性に効くもの)</b> → <b>②その他の未着手</b> → <b>③凍結・前提が古い</b> → <b>④解決・反証・不発</b> の順。★は着手前に踏むべき前提条件。個々の項目の数値(スコア表記 <code>NN/96</code>・時間予算5秒など)は、各項目の「再検証」欄に無ければ当時のもの。</p>
+<p class="section-note"><b>2026-09-30 に全件を書き直した。</b>各項目の説明は今の状態を主にし、経緯と古い測定は来歴(§04)への参照に寄せた。上のグループから順に着手する: <b>①優先</b> → <b>②その他の未着手</b> → <b>③凍結・前提が古い・優先度が低い</b> → <b>④解決・反証・不発</b>。★は今の主線。「要再測定」は、固定座標・AR などの後で測り直していない項目。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="frozen" aria-pressed="false">凍結・古い</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="group"><div class="group-title">① 優先 · 上から順に着手する · 8件</div>
 <details class="item" id="b45" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 角・複比・比と平行・長さの比・相似は入り(#82〜#85)、2定理を置き換えた。次は中心の分かった円・メネラウスの逆・三角形の中の対応点</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 次は中心の分かった円(長さを比のまま)・メネラウスの逆・三角形の中の対応点</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l75">§04 #75</a>。「他の定理も局所伝播にするべきか」への答え。価値があるのは有向角の加法性・交替律・同位角による平行判定のような<b>角の線形な関係</b>で、これらは有向角(mod π)の線形方程式の係数行列にまとめて、ガウスの消去法で新しい等式を一度に出せる。今は3つの定理がパターン照合で組を総当たりしている。</div>
-    <div class="evidence"><b>注意:</b> 結論に新しい図形が要る定理(中点・外接円を作るもの)は局所伝播にも線形代数にも向かない。まず有向角の同値類に対する行列を作り、既定の3つの定理を外して選抜で比べる。<br><b>2026-09-29 ユーザー案: 複比の型をまとめて扱う。</b> この証明器では有向角は虚円点との複比 (I,J;D1,D2)、点の複比・線束の複比も同じ Scalar で、透視射影不変性・シュタイナーの定理はそれらの間の等式を作っている。角だけでなく<b>複比の型を全部まとめて1つの線形代数で閉じる</b>(複比の対数を取れば、複比の積・商の関係は線形になる。点の複比 = 線束の複比 = 角 の橋渡しを行列の行として持つ)と、角の追跡・複比の追跡・円周角(シュタイナー)の一部が同じ仕組みに載る。数値の対数は要らない(ユーザー指摘): 複比を基本の記号の積・商として<b>形式的に</b>表し、指数だけを持てば関係は線形になる。角は方向ごとの記号 g_D で (I,J;D1,D2) = g_D2 − g_D1、点の複比は有向線分の記号で (A,B;C,D) = s_AC − s_BC − s_AD + s_BD、線束の複比は角の正弦の記号で同様。消去法は指数ベクトルに対して有理数の上で行い、数値(固定座標)は出てきた関係を確かめるのにだけ使う。<b>注意:</b> (1) 直角・調和点列の −1 は「2倍すると0」の元なので、指数の横に符号を mod 2 で持つ(ℚ ⊕ ℤ/2)。(2) 重なった2点の線分は記号にできない ― 記号を作る前に固定座標で0でないことを確かめる(非退化条件、#78 と同じ)。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-29 に入れた(<a class="secref" href="ledger.html#l82">§04 #82</a>、既定):</b> 有向角・点の複比・線束の複比と、中点・調和共役の比(無限遠点との複比 −1)を ℤⁿ ⊕ ℤ/4 の格子で閉じる。pappus と test_involution(ノイズ20)が解け、落ちた問題なし。<b>残り:</b> (1) 角の足し算の規則(加法性・交替律)をまだ外せない ― AR が新しい角の実体を作らないため。(2) 他の定理を AR の等式の生成に置き換える(透視射影不変性・シュタイナーの定理・円周角の定理は、射影対応の「2点の差の変換」として対ごとの等式で書ける見込み)。(3) 逆向き(等しい複比 ⇒ 接続)の検出はまだ4点目の一意性だけ。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 までに入れた(<a class="secref" href="ledger.html#l83">§04 #83</a>〜<a class="secref" href="ledger.html#l85">§04 #85</a>、既定):</b> 円(円周角・接弦)・透視射影・シュタイナーを等式の生成に、円周角の逆を検出に(#83)。比と平行(アフィンの等式、平行 ⇒ 比、比 ⇒ 平行)(#84)。等方線束で長さを比のまま入れ、相似(AA)と相似で対応する点を AR で出し、方冪・交わる弦の相似の2定理を既定で外した(#85)。既定 37/44。<b>残り:</b> (1) 角の足し算の規則はまだ外せない(新しい角の実体を作らないため)。(2) 円・射影の定理も外せない(座標を置けない問題・実体を作る働き)。(3) 長さの等しさは比のまま入れる(ユーザー方針: 足し算の長さは扱わない): 中心の分かった円で |OP|² を一定にする、直角から斜辺を直径とする仮の円を置く(2000 USA TST の「M から E, F が等距離」がこの形)。(4) 相似で対応する点は辺の上の点だけ(三角形の中の点は未)。(5) 定理の側の作り直し(ユーザー案): ある程度探索したら、使われなかった補助作図を捨てて作り直す。圧縮した証明に出ない補助作図は 15〜55%(egmop1 ノイズ10 で 66 個中 37 個)。まず「証明に出た補助作図だけを最初から入れて解き直す」上限の実験から。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 残りに足す: (6) 比 ⇒ 共線(メネラウスの逆)の検出 ― 3点が3辺(の延長)の上にあり、比の積が −1 に還元されれば共線(newton_gauss、<a class="secref" href="#b8">b8</a>)。(7) 相似で対応する点を、辺の上の点から三角形の中の点(頂点を通る2直線の交点)へ広げる。今の主線なので①の先頭へ。</div>
-    <div class="b-tags"><span class="tag">角の総当たりをやめる</span><span class="tag">AR</span></div>
+<div class="desc">今の AR(<a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l83">#83</a>・<a class="secref" href="ledger.html#l84">#84</a>・<a class="secref" href="ledger.html#l85">#85</a>): 2点の差の形式的な対数を記号にし、整数の格子(ℤⁿ ⊕ ℤ/4)で有向角・点と線束の複比・同じ直線の上の比と平行・等方線束での長さの比・相似(AA)と相似で対応する点を閉じる。円(円周角・接弦)・透視射影・シュタイナーは定理の代わりの等式として入れる。「共点二弦の相似」と「交わる弦の相似」の2定理を置き換え、既定で外した(幾何平均 −11.9%、+3問)。手詰まりのたびに格子を作り直す(差分で積む形は証明が膨らむので不採用、#85)。</div>
+    <div class="evidence"><b>次の一手:</b> (1) 中心の分かった円で |OP|² を一定にし、直角から斜辺を直径とする仮の円を置く ― 長さは足し算を扱わず比のまま入れる(ユーザー方針)。2000 USA TST の「M から E, F が等距離」がこの形(<a class="secref" href="#b8">b8</a>)。(2) 比 ⇒ 共線(メネラウスの逆)の検出 ― newton_gauss。(3) 相似で対応する点を、辺の上の点から三角形の中の点(頂点を通る2直線の交点)へ広げる。<br><b>まだ外せないもの:</b> 角の足し算の規則(AR は新しい角の実体を作らない)、円・射影の定理(座標を置けない問題では AR が働かず、定理が実体を作る働きも置き換えられない)。</div>
+    <div class="b-tags"><span class="tag">AR</span><span class="tag">長さは比で</span><span class="tag">newton_gauss</span><span class="tag">2000 USA TST</span></div>
   </div>
 </details>
 <details class="item" id="b48" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 使われなかった補助作図を捨てて作り直す(リスタート)― 圧縮した証明に出ない補助作図は 15〜55%</span></summary>
   <div class="body">
-<div class="desc">ユーザー案(2026-09-30): AR で「格子を差分で積むより毎回作り直す方が速い」と分かった(<a class="secref" href="ledger.html#l85">§04 #85</a>)のを受けて、定理の側でも、ある程度探索して補助作図が溜まったら無駄な作図を一旦クリアして見通しを良くする。SAT ソルバーのリスタート(学習した節は残して探索の状態を捨てる)に近い。<br><b>AR と同じ理由では効かない:</b> AR が遅くなったのは古い記号の行と出どころの合併だったが、e-graph は union-find で代表元にまとめ、マージの理由も1件ずつ持つので、この2つは起きない。効くとすれば「図が膨らむとマッチングが重くなる」方(方針E)。</div>
-    <div class="evidence"><b>測ったこと:</b> 作った補助作図(オンデマンド作図)のうち、圧縮した証明に出てくるもの: bench_2012egmop1(ノイズ10)66個中29個、2011 バルカン 12個中7個、2015 APMO 19個中16個、2018 Silk Road 16個中11個、2019 G1 14個中11個。使われないのは 15〜55%。<br><b>次の一手(上限の実験):</b> 解けた後に「圧縮した証明に出た補助作図だけを最初から入れて解き直す」と仕事量がどこまで減るかを測る。ここで大きく減らなければ作る価値は無い。減るなら、探索の途中で「どこかのマージに使われた補助作図」を残して作り直す形を試す。問題の初期作図のうち使われなかったノイズも同じ時に捨てられる(前提を減らすだけなので健全で、方針E に直接効く)。</div>
+<div class="desc">ユーザー案(2026-09-30): ある程度探索して補助作図が溜まったら、無駄な作図を一旦クリアして見通しを良くする(SAT ソルバーのリスタートに近い)。AR で「差分で積むより毎回作り直す方が速い」と分かった(<a class="secref" href="ledger.html#l85">#85</a>)のがきっかけだが、AR が遅くなった理由(古い記号の行・出どころの合併)は、union-find で代表元にまとめる e-graph では起きない。効くとすれば「図が膨らむとマッチングが重くなる」方(方針E)。</div>
+    <div class="evidence"><b>測ったこと:</b> 作った補助作図のうち圧縮した証明に出るもの ― bench_2012egmop1(ノイズ10)66個中29個、2011 バルカン 12個中7個、2015 APMO 19個中16個。<br><b>次の一手(上限の実験):</b> 解けた後に「証明に出た補助作図だけを最初から入れて解き直す」と仕事量がどこまで減るか。大きく減らなければ作らない。減るなら、探索の途中で「どこかのマージに使われた補助作図」を残して作り直す。使われなかった初期作図のノイズも同時に捨てられる(前提を減らすだけなので健全)。</div>
     <div class="b-tags"><span class="tag">ユーザー案</span><span class="tag">方針E</span><span class="tag">まず上限を測る</span></div>
   </div>
 </details>
 <details class="item" id="b44" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 解けた証明の各ステップを確かめる ― 監査を時刻つきにして、解けている37問全てがギャップ・循環なし(#87)。残りは座標を置けない2問</span></summary>
+  <summary><span class="idx"></span><span class="t">解けた証明の各ステップを確かめる ― 時刻つきの監査で37問全てギャップなし(#87)。残りは通常の solve での常時の検算</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l76">§04 #76</a>。<code>extract_proof</code> の「全ステップが厳密に辿れた」は、各ステップに名前付きの理由と前提があることしか確かめていない。centroid の証明は169ステップの「厳密」な証明に見えたが、複比の一意性の局所伝播が前提(2つの複比が等しい)を記録しておらず、その等式は偽のマージ(退化した二次曲線)から来ていた。</div>
-    <div class="evidence"><b>案:</b> (1) 証明に出た一致・接続の各ステップを <code>numeric_plausibility_check</code> で確かめ、偽があれば「解けた」と数えない(ベンチの表に列を足す)。(2) 他の局所伝播(直線・点・二次曲線の一意性、<code>apply_trivial_relations</code>)が前提を全部記録しているか監査する。(3) 数値の図が前提を満たさない8問(直線と円の両方に乗る自由点など)は、結論の検算も監査も効かない ― 第2交点の定義で書き直せるものは書き直す(<code>INDETERMINATE_KNOWN</code> の3問も同じ)。<br><b>2026-09-29 に見つけた未調査の崩壊:</b> bench_2008armog10p6 を <code>--rules=chord,parallelogram,spiral</code> で回すと(結論の検算は有効)、900秒の打ち切りの直前に局所伝播のマージが連鎖して図が崩壊する(「Foot_C1 ≡ C」「Q ≡ B」「Dir_AB ≡ Dir_AC ≡ Dir_BC」。どれも交点・直線の一意性の伝播で、マージ前の数値チェックを通っている)。定理の結論の偽は6件で、どれも検算で却下されている ― 崩壊は伝播の側から入っている。マージ前の検算が同値類の代表の定義で評価するので、一度どこかで誤ったマージが入ると以後の検算も誤る可能性がある(仮説)。伝播のマージを <code>hypotheses_hold_numerically</code> と同じく<b>元の定義どうし</b>で監査して、最初の偽を探すのが次の一手。bench_2012chnwesternmop5 も同じ設定で900秒の打ち切りになる。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-29 の進展(<a class="secref" href="ledger.html#l78">§04 #78</a>・<a class="secref" href="ledger.html#l79">§04 #79</a>):</b> 規則に非退化条件を書き、数値の検算を固定座標にした。座標を置ける問題では、マージ前の検査を外しても偽のマージが1件も起きない(既定とノイズ3水準の監査)。検査は安全網として残す。<b>残り:</b> (1) 証明の各ステップを固定座標で確かめる ― 値は計算済みなので安い。(2) 座標を置けない8問では数値の検算が効かない(<a class="secref" href="backlog.html#b46">§05 b46</a>)。(3) 他の局所伝播(直線・交点の一意性、<code>apply_trivial_relations</code>)が前提を全部記録しているかの監査は未実施。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> (1) の「証明の各ステップを数値で」は、<code>--audit-merges --no-merge-checks</code>(<code>bench/census.sh</code>)が証明に使ったものを含む<b>全て</b>のマージ・接続を固定座標で確かめる形で実質達成している(#85 の採用時も偽0)。ただし通常の solve の中では回していない。目標が共円・接続の8問は、目標の数値の検算と深い監査が無かった ― <a class="secref" href="ledger.html#l86">§04 #86</a> で塞いだ。残り: (2) 局所伝播が前提を全部記録しているか(監査は結論の真偽しか見ない)、(3) 座標を置けない8問(<a class="secref" href="#b46">b46</a>)、(4) bench_2008armog10p6 を <code>--rules=chord,parallelogram,spiral</code> で回したときの崩壊は、固定座標・非退化条件の後で測り直していない。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30(<a class="secref" href="ledger.html#l87">§04 #87</a>):</b> pappus の証明手順を確かめる中で、監査の3つの穴(検証中と検証済みを区別しない「既出」、直線の組の無い共有点の見出し、探索の終わりの図から根拠を選ぶことによる循環)を見つけ、実体・マージ・接続に時刻を振った監査に置き換えた。各ステップの前提がそれより前に成り立っていたかも確かめる。記録の無い接続は、定義から・前提の凍結の前のものだけを基底の事実として認める。解けている37問全てがギャップ・循環なし。(2) の「局所伝播が前提を全部記録しているか」は、この監査が接続・一致・定義の由来をすべて時刻つきで辿るので実質片付いた。残り: 座標を置けない2問(<a class="secref" href="#b46">b46</a>)。</div>
-    <div class="b-tags"><span class="tag">健全性</span><span class="tag">測定の妥当性</span><span class="tag">centroid</span></div>
+<div class="desc">今: 証明の監査は時刻つき(<a class="secref" href="ledger.html#l87">#87</a>) ― 各ステップの前提がそれより前に成り立っていたか、説明が循環していないかを確かめ、記録の無い接続は定義から・前提のものだけを基底の事実にする。解けている37問全てがギャップ・循環なし。全マージの数値監査(<code>--audit-merges --no-merge-checks</code>、<code>bench/census.sh</code>)は固定座標で42問が対象、偽0。目標が共円・接続の問題も目標の検算と監査を通す(<a class="secref" href="ledger.html#l86">#86</a>)。</div>
+    <div class="evidence"><b>残り:</b> (1) 数値の監査は <code>--audit-merges</code> のときだけで、通常の solve では証明に使ったステップを数値で確かめていない(固定座標の値は計算済みなので安い)。(2) 座標を置けない2問(<a class="secref" href="#b46">b46</a>)。(3) bench_2008armog10p6 を <code>--rules=chord,parallelogram,spiral</code> で回すと図が崩壊した件(2026-09-29、固定座標・非退化条件の前)は測り直していない。</div>
+    <div class="b-tags"><span class="tag">健全性</span><span class="tag">監査</span></div>
   </div>
 </details>
 <details class="item" id="b46" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 有限体で根を取り、座標を置けない問題を検算の対象にする ― 8問中6問を置けた(#87、検算専用)。残りは担当の点で解けない前提の2問</span></summary>
+  <summary><span class="idx"></span><span class="t">有限体で根を取り、座標を置けない問題を検算の対象にする ― 8問中6問を置けた(#87)。残りは担当の点で解けない前提の2問</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l78">§04 #78</a>・<a class="secref" href="ledger.html#l79">§04 #79</a>。数値の検算(固定座標)と非退化条件の判定は、前提どおりに自由点を置けて、前提が乱数座標で成り立つ問題でしか使えない。今の44問では8問が外れ(thales・test_right_midpoint など前提を座標への制約として与える問題と、bench_2010g1 のように直線と外接円の両方に乗る自由点を持つ問題)、そこでは偽のマージを止める手段が無い ― bench_2010g1 のノイズ10は、非退化条件で探索の道筋が変わっただけで図の崩壊に当たった。判定不能の一覧(<code>INDETERMINATE_KNOWN</code>)の3問も同じ理由。</div>
-    <div class="evidence"><b>案:</b> 法 998244353 の有限体では、判別式が平方剰余なら平方根が取れる(Tonelli–Shanks)。平方剰余になるのは約半分なので、乱数の配置を何回か引き直せば、直線と円・2円の交点を有理的に置ける。前提を座標への制約として与える問題(「OP = OA」など)は、その前提を作図に書き直すか(第2交点・垂直二等分線の上の点など)、同じく拘束を解いて置く。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30(<a class="secref" href="ledger.html#l87">§04 #87</a>)に入れた:</b> 平方根だけでなく一般の根を有限体の上で求める(前提を媒介変数の有理関数として標本から復元し、分子の根を gcd で取り出す)。検算専用で、次数の評価(動点法)には使わない(ユーザー方針)。8問中6問(bench_2010g1・thales・test_right_midpoint・test_isosceles_converse・test_steiner_converse・two_circles_reim)で固定座標を置け、どれも解けて偽0。監査の対象は 36 → 42問。<b>残り:</b> test_parallel(前提の担当は最後に作った点 F だが、F では解けず C か D を動かす必要がある)と test_spiral_similarity(1点に前提が3つ)。担当を前の点へ移すと、その前提が後の点にも依存したままになり置く順序と矛盾する ― 複数の点を同時に解くか、前提から解ける点を選ぶ仕組みが要る。</div>
-    <div class="b-tags"><span class="tag">健全性</span><span class="tag">8問</span><span class="tag">Tonelli–Shanks</span></div>
+<div class="desc">今(<a class="secref" href="ledger.html#l87">#87</a>): 乱数の座標では前提が成り立たない図で、前提を媒介変数の有理関数として標本から復元し、分子の根を有限体の上で求めて自由点を置く(平方根を含む一般の根)。検算専用で、次数の評価(動点法)には使わない(ユーザー方針)。置けたのは bench_2010g1・thales・test_right_midpoint・test_isosceles_converse・test_steiner_converse・two_circles_reim。</div>
+    <div class="evidence"><b>残り:</b> test_parallel ― 前提の担当は関わる自由点のうち最後に作った F だが、F では解けず C か D を動かす必要がある。test_spiral_similarity ― 1点に前提が3つかかる。担当を前の点へ移すと、前提が後の点にも依存したままになり置く順序と矛盾する。前提から「解ける点」を選ぶ仕組みか、複数の点を同時に解く仕組みが要る。</div>
+    <div class="b-tags"><span class="tag">健全性</span><span class="tag">2問</span><span class="tag">検算専用</span></div>
   </div>
 </details>
 <details class="item" id="b8" data-status="open">
@@ -62,431 +55,330 @@
   </div>
 </details>
 <details class="item" id="b36" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 補助作図の語彙を広げる ― 数値で選ぶ補助作図で desargues が解けた(#80)。次は「いつ試すか」(2016ARMO は毎回試すと解けるが他を落とす)</span></summary>
+  <summary><span class="idx"></span><span class="t">補助作図の語彙と「いつ試すか」― 数値で選ぶ補助作図で desargues が解けた(#80)。2016ARMO は毎回試すと解けるが他を落とす</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l72">§04 #72</a>。手が全部尽きたとき、最後に<b>熱い点どうしの中点(1回8個)と熱い直線どうしの交点(1回6個)</b>を足す(総数60まで、<code>--no-generic-aux</code> で外せる)。<b>手が尽きて止まる問題にしか効かない</b>ので、今解けている問題の探索は変わらない(選抜の default・extras・skip・noise5 で、基準と仕事量・解けた数が1つも変わらない)。<b>pappus(106万)と重心(699万)が解け、既定は +2問</b>。pappus の証明は 17ステップで、<code>extract_proof</code> が全て名前付き定理・構造的な基底事実まで厳密に辿れると確認した。</div>
-    <div class="evidence"><b>分かったこと:</b> (1) pappus で使われた補助作図は直線どうしの交点6個と中点8個。中点のうち Ap-Bp・Ap-Cp・Bp-Cp は L2 の上にあり、<b>直線上の点どうしの中点は、複比に必要な「4点目」を安く供給する</b>(仮説。中点だけ・交点だけの切り分けは未実施)。(2) 「図にある全直線の全交点」を与える検査(#67)では解けなかった。交点だけでは足りず、中点が効いている可能性が高い。(3) 汎用の補助作図は、垂線・平行線を作らない。bench_2016armog10p2(補助作図 X = 「D を通り AD に垂直な直線」と PQ の交点)には届かない。(4) 首尾: 数値の一致で候補を絞る方向は、第1の検査を通った: 2016ARMO の X は、複合の候補48,699通り(2直線の交点。直線は図にある2点の直線・点を通る垂線・平行線)のうち、乗る円の数で 19〜28位(上位 0.06% 以内)に入った(乗る円が0個の候補が47,614通り)。<br><b>次の一手:</b> 候補に「点を通る垂線・平行線」を足し、数値で新しい共円・共線が生まれる候補だけを残す(#61 の CEGAR の点版)。総数60の上限は、図が膨らんで1回の run_step が時間の安全弁より長くなる(数値チェックが仕事量に数えられない、b26)のを防ぐためのもの。<br><b>注意:</b> 上限を付ける前の版で平行四辺形の規則と組むと、centroid が 900秒でも終わらなかった(<code>work=-</code>)。時間の安全弁は run_step の途中では効かず、図が膨らむと1回の run_step が長くなる。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-29(<a class="secref" href="ledger.html#l80">§04 #80</a>):</b> 数値で選ぶ補助作図を入れた(既定、手が全部尽きたとき汎用の補助作図と一緒)。desargues が解けた。2016ARMO は行き詰まりのたびに試す版(<code>--numeric-aux-early</code>)で解けるが、他の問題を落とすので既定にしていない ― いつ試すかの決め方が残り。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 見出しの「汎用の補助作図で pappus と重心が解けた」(#72)は、どちらも後で偽のマージの上だったと分かった(<a class="secref" href="ledger.html#l76">§04 #76</a>・<a class="secref" href="ledger.html#l78">§04 #78</a>)。今の pappus・centroid は AR で解けている(<a class="secref" href="ledger.html#l82">§04 #82</a>・<a class="secref" href="ledger.html#l85">§04 #85</a>)。汎用の補助作図は今も最後の手として既定(数値で選ぶ補助作図と同じ回)。残りは「いつ試すか」の決め方と、ユーザー案の「使われなかった補助作図を捨てて作り直す」(<a class="secref" href="#b48">b48</a>)。</div>
-    <div class="b-tags"><span class="tag">pappus と重心が解けた</span><span class="tag">選抜は不変</span><span class="tag">中点が「4点目」を供給する仮説</span></div>
+<div class="desc">今: 手が全部尽きたときの最後の手として、汎用の補助作図(熱い点どうしの中点・熱い直線どうしの交点、<a class="secref" href="ledger.html#l72">#72</a>)と、数値で選ぶ補助作図(交点・中点・垂線や平行線との交点・第2交点の候補を固定座標で試作し、既存の直線・円に乗る/点と重なる/新しく共円・共線になるものを点数順に作る、<a class="secref" href="ledger.html#l80">#80</a>)を同じ回に試す。desargues が解けた。以前「汎用の補助作図で pappus と重心が解けた」としたのは、どちらも後で偽のマージの上だったと分かった(<a class="secref" href="ledger.html#l76">#76</a>・<a class="secref" href="ledger.html#l78">#78</a>)。今の2問は AR で解けている。</div>
+    <div class="evidence"><b>次の一手:</b> いつ試すか。行き詰まりのたびに試す版(<code>--numeric-aux-early</code>)は 2016ARMO を解くが他の問題を落とす。ユーザー案の作り直し(<a class="secref" href="#b48">b48</a>)と組むと、試した補助作図を捨てられる。</div>
+    <div class="b-tags"><span class="tag">補助作図</span><span class="tag">2016ARMO</span></div>
   </div>
 </details>
 <details class="item" id="b41" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 円の定義を足して、測れる問題を4倍にする(circle_center_point)</span></summary>
+  <summary><span class="idx"></span><span class="t">円の定義を足して、読める問題を増やす(circle_center_point)― HAGeo-409 の被覆率は 29/409</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l69">§04 #69</a>。<b>このエンジンの作図語彙で書ける HAGeo-409 の問題は 409問のうち29問(7%)</b>。最大の壁は <code>circle_center_point</code>(中心と円周上の1点で決まる円、232問が使う)で、足すだけで読める問題が 71問増える。円の定義(<code>circle_center_point</code>・<code>circle</code>・<code>circle_diameter</code>・<code>circle_center_radius</code>)を全部足すと 129問、有理な作図(平行四辺形・反射・二等辺/直角三角形・接線)まで足すと 198問。内心・角の二等分線・傍心・弧の中点(平方根が要る)は別の道が要る。<br><b>なぜ大事か:</b> 保留問題(<code>bench/heldout.txt</code>)は今、難易度 2.5〜6.8 の23問で易しい問題が無く、大半が解けない見込み。易しい保留問題を得るには円の定義が要る。調整に使っていない問題で「新しい問題に効くか」を測れない限り、opt-in を禁じた方針の裏返しとして、汎化の主張は検証できない。</div>
-    <div class="evidence"><b>実装の見積もり:</b> <code>Definition</code> に <code>CircleCenterPoint(O, P)</code>(Conic)を足すと、<code>Circumcircle</code> と同じ箇所(mod.rs の定義・種類・親・正規化、eval.rs の評価、mmp_calculators.rs の係数、coords.rs の既知の点、padic_eval.rs、discover_viz.rs、serve.rs、query.rs、raw_proof.rs)に約15か所。円周上の点から中心までの距離が等しい、という事実は「円周上の点は中心から等距離」の定理(中心と円周上の2点を持つ)で足す。<code>hageo.rs</code> の読み込みに <code>circle_center_point</code>・<code>circle</code> を足すのは小さい。</div>
-    <div class="b-tags"><span class="tag">読める問題 29 → 100</span><span class="tag">保留問題に易しい問題が入る</span></div>
+<div class="desc">このエンジンの作図語彙で書ける HAGeo-409 の問題は 409問のうち29問(7%、<a class="secref" href="ledger.html#l69">#69</a>)。最大の壁は circle_center_point(中心と円周上の1点で決まる円、232問が使う)で、足すだけで 71問増える。円の定義を全部足すと 129問、有理な作図(平行四辺形・反射・二等辺/直角三角形・接線)まで足すと 198問。内心・角の二等分線・弧の中点は平方根が要る(検算側は <a class="secref" href="ledger.html#l87">#87</a> で根を取れるようになった)。</div>
+    <div class="evidence"><b>なぜ大事か:</b> 保留問題(<code>bench/heldout.txt</code>)は難易度 2.5〜6.8 の23問で易しい問題が無く、新しい問題に効くかを測れない。<br><b>見積もり:</b> <code>Definition::CircleCenterPoint(O, P)</code> を足すと Circumcircle と同じ箇所(定義・評価・係数・座標の置き方・表示・監査)に約15か所。「円周上の点は中心から等距離」は AR の中心の分かった円(<a class="secref" href="#b45">b45</a>)と同じ形で入れられる。</div>
+    <div class="b-tags"><span class="tag">読める問題 29 → 100</span><span class="tag">保留問題</span></div>
   </div>
 </details>
 <details class="item" id="b43" data-status="open">
-  <summary><span class="idx"></span><span class="t">採否の統計を頑健にする ― 対にした比較(幾何平均・中央値・20%超の悪化の数)は bench/cmp_all.sh になった。残りは反転した問題の切り分け</span></summary>
+  <summary><span class="idx"></span><span class="t">採否の統計を頑健にする ― 対にした比較は bench/cmp_all.sh になった。残りは反転した問題の切り分け</span></summary>
   <div class="body">
-<div class="desc">「解けた数」と「解けた問題どうしの仕事量の合計」で採否を決めると、次の2つで誤る(<a class="secref" href="ledger.html#l68">§04 #68</a>・<a class="secref" href="ledger.html#l71">§04 #71</a> で実際に起きた)。(1) <b>合計は重い数問で決まる</b>: 平行四辺形の規則は選抜の合計が −23%(bench_2012egmop1 が 0.32倍)に見えるが、中央値は +5.5% で、noise10 では合計 +253%(orthocenter 24倍)。幾何平均・中央値・「20%超悪化した問題の数」を並べて見る(<code>/tmp</code> にあった比較の道具を <code>bench/</code> に置く価値がある)。(2) <b>bench_2018chnwesternmop5 は、定理の追加・順序・書き方のどれを変えても解けたり解けなかったりする</b>(平行四辺形の規則で 215万 → 24Mで 1154万、第2交点の定義に書き直すと 800万で未解決、中心角の定理で skip・noise20 で反転)。境界にいる問題(<code>bench_2022balkanmop1</code> のノイズ5は基準が 800.2万で予算 800万すれすれ)の反転で、変更の採否が決まってしまう。</div>
-    <div class="evidence"><b>案:</b> 採否の直前に、予算を3倍にした版(<code>--steps=24000000</code>)を、反転した問題だけに回して「落ちた」のか「予算の外へ押し出された」のかを分ける。解けた数だけでなく、幾何平均と、20%超悪化した問題の数を表に出す。<b>この問題が反転しやすい理由</b>(未調査): 証明が長い(215万)ことと、定理の順序・補助作図の順序に鋭敏なこと(b1)。問題を第2交点で書き直しても解けなくなる。<br><b>2026-09-29(<a class="secref" href="ledger.html#l76">§04 #76</a>):</b> 反転していたのは、有限体で座標が置けず「解けた」ことを数値で確かめられない書き方の上だった。座標が置ける書き方(第2交点)に置き換え、今は予算3倍でも解けない。また、重い問題では壁時計の安全弁(600秒)に当たるかどうかが機械の混み具合で変わり、同じバイナリでも結果が変わる(<a class="secref" href="ledger.html#l74">§04 #74</a>、centroid のノイズ5)。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 「比較の道具を bench/ に置く」は済んだ: <code>bench/cmp_all.sh</code>(<code>bench/cmp.py</code>)が合計・幾何平均・中央値・20%超の悪化/改善の数と、落ちた/増えた問題を出す(#83〜#86 の採否はこれで決めた)。bench_2018chnwesternmop5 は AR の相似で全6設定で解けるようになり(#85)、境界の問題ではなくなった。残り: 反転した問題だけ予算を3倍にして「落ちた」か「押し出された」かを分ける手順は、まだ道具になっていない。</div>
-    <div class="b-tags"><span class="tag">合計に頼らない</span><span class="tag">境界の問題</span><span class="tag">bench_2018chnwesternmop5</span></div>
+<div class="desc">今: <code>bench/cmp_all.sh</code>(<code>bench/cmp.py</code>)が、合計・幾何平均・中央値・20%超の悪化/改善の数と落ちた/増えた問題を出す。合計は重い数問に引きずられるので、採否は幾何平均と悪化の数で見る(#83〜#87 はこれで決めた)。</div>
+    <div class="evidence"><b>残り:</b> 反転した問題だけ予算を3倍(<code>--steps=24000000</code>)にして「落ちた」のか「予算の外へ押し出された」のかを分ける手順を道具にする。壁時計の安全弁(600秒)に当たる重い問題は、機械の混み具合で結果が変わりうる(<a class="secref" href="ledger.html#l74">#74</a>)。以前いちばん反転していた bench_2018chnwesternmop5 は AR で全設定で解けるようになった(<a class="secref" href="ledger.html#l85">#85</a>)。</div>
+    <div class="b-tags"><span class="tag">採否の統計</span></div>
   </div>
 </details>
 </div>
 <div class="group"><div class="group-title">② 未着手 · その他 · 11件</div>
 <details class="item" id="b35" data-status="open">
-  <summary><span class="idx"></span><span class="t">基本規則の不足を埋める ― 弦・平行四辺形の規則の動機(2015 APMO・重心)は AR の相似で届いた。残りは比の形で AR へ</span></summary>
+  <summary><span class="idx"></span><span class="t">基本規則の不足 ― 弦・平行四辺形の規則の動機は AR で届いた。残る規則は比の形で AR へ</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l67">§04 #67</a> の診断が指した規則の不足のうち、有向角(mod π)で健全に書けるものを <a class="secref" href="ledger.html#l68">§04 #68</a> で入れて測った(<code>--rules=chord,parallelogram</code>)。<b>どちらも解ける問題を増やす(弦: 2015 APMO が 33万で解ける。平行四辺形: 重心の手順4・5 が自力で出る)が、課税が大きく既定にしていない</b>: 弦は幾何平均で +23%、平行四辺形はきれいな図で中央値 +5%、ノイズ10で orthocenter が 24倍。定理(パターン照合)として書くと、同じ円の上の弦の組や平行な直線の組を全て舐めるのが原因。</div>
-    <div class="evidence"><b>次の一手:</b> <code>propagate_cross_ratio_uniqueness</code> のような<b>合同閉包の局所伝播</b>として書く。弦: 角度の同値類が変化したとき、その定義(頂点・弦の組)のうち同じ円の上にあるものだけを見て、既に図にある2つの弦の長さを合流させる。平行四辺形: 平行になった直線の組が変化したとき、その組を辺とする四角形だけを見る。変化した同値類だけを見るので、図が大きくなっても課税が掛け算にならないはず。証人テスト(<code>test_parallelogram</code>・<code>bench_2015apmop1</code>)は既にある。<br><b>書いていない規則:</b> 二辺夾角の合同(有向角 mod π が θ と π−θ を区別できず不健全)、相似な2三角形の対応する中線(共点二弦の配置は逆向きの相似)、メネラウスの逆(newton_gauss)。理由は <a href="notes/theorems.md">設計ノート</a>。<br><b>訂正:</b> #67 で「重心には比の一意性(単比)が要る」と書いたが、平行四辺形の規則だけで足りた。<br><b>2026-09-29(<a class="secref" href="ledger.html#l74">§04 #74</a>・<a class="secref" href="ledger.html#l75">§04 #75</a>):</b> 安く書く形は「局所伝播」より<b>「結論の図形を作らず、図にあるものだけ照合する」</b>ことだった。交わる弦の相似は、中点を <code>match_by</code>(照合だけ)にすると課税が +1〜9% に下がり既定に入った。局所伝播の版も、作る版は定理版と同じだけ課税した。弦・平行四辺形も、結論で長さや中点を作らない形にできるかが次の試し。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 動機だった2つは別の道で届いた: 2015 APMO(弦の規則で解けた)と centroid(平行四辺形の規則で手順4・5)は、どちらも AR の相似で既定で解ける(<a class="secref" href="ledger.html#l85">§04 #85</a>)。定理を「安く書く」より、定理が言っていることを AR の等式にする方が課税が小さい(2定理を外して幾何平均 −11.9%)。残る「書いていない規則」: 二辺夾角の合同(mod π で不健全)とメネラウスの逆(newton_gauss)は、どちらも比の形で AR に入れる道がある(<a class="secref" href="#b45">b45</a>)。優先度を下げて②へ。</div>
-    <div class="b-tags"><span class="tag">弦・平行四辺形は既定外のまま</span><span class="tag">動機は AR で解決</span><span class="tag">残りは AR へ</span></div>
+<div class="desc">弦の規則と平行四辺形の規則(<a class="secref" href="ledger.html#l68">#68</a>、<code>--rules=chord,parallelogram</code>)は、課税が大きく既定にしていない(弦は幾何平均 +23%、平行四辺形はノイズ10で最大24倍)。動機だった 2015 APMO と重心は、AR の相似で既定で解けるようになった(<a class="secref" href="ledger.html#l85">#85</a>)。定理を「安く書く」より、定理が言っていることを AR の等式にする方が課税が小さい。</div>
+    <div class="evidence"><b>残る規則:</b> 二辺夾角の合同(有向角 mod π では不健全で書けない ― 長さの比で AR に入れる道)、メネラウスの逆(newton_gauss、<a class="secref" href="#b45">b45</a>)。</div>
+    <div class="b-tags"><span class="tag">既定外のまま</span><span class="tag">残りは AR へ</span></div>
   </div>
 </details>
 <details class="item" id="b33" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 補助作図の需要の立て方 ― 探索の副作用ではなく、図の性質として立てる</span></summary>
+  <summary><span class="idx"></span><span class="t">補助作図の需要の立て方 ― 需要が探索の副作用としてしか立たない</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 狙い(何を作図するか)は正しいが、次の一手が具体化されていなかった。診断(b8)では、補助作図の供給だけで届くと期待できるのは1問(2016ARMO)。「点・垂線・平行線を作る」語彙の側は <a href="#b36">b36</a> に切り出した。ここは「線を引く需要」の立て方に絞る。</div>
-<div class="desc">いまの需要は <code>construction_demands[(A,B)] += 1.0</code>、つまり「マッチがこの図形を欲しがって空振りした<b>回数</b>」で、順位には <code>measure_line_affinity</code> の<b>代数的次数の差</b>(直線ABの次数が 次数A+次数B より小さい分)を加点している。文献の言葉でいえば<b>失敗駆動のアブダクション</b>(証明を通すために足りない前提を逆算する)に代数的な事前分布を掛けたもので、筋は悪くない ― 解けている問題の約半分がこれに支えられている(<a class="secref" href="ledger.html">§04</a>)。<br><b>弱さは「どこで数えるか」。</b> 需要は探索の副作用として立つ(マッチャが親を先に束縛したときだけ)。関係マッチングの試作では歩き方が変わった途端に<b>需要が0件</b>になり、補助線が1本も引かれなくなった(<a class="secref" href="ledger.html">§04</a> #60)。需要は「この図に何が足りないか」という<b>図の性質</b>のはずで、探索の順序に依存してはいけない。</div>
-    <div class="evidence"><b>取れる技術(検討した順):</b><br>
-<b>(1) アブダクションを検査側に移す。</b> 「あと1つ何があればこの定理が通るか」は1ルール分のアブダクションで、束縛が進んだ状態から直接計算できる。親がそろっていて結果が図に無い <code>DefinedBy</code> を、探索がその枝を選んだかどうかに関係なく需要として数える。順序をずらす案は外れている(#60: 需要0件のまま simson が15倍に悪化)ので、数える場所そのものを動かす。<br>
-<b>(2) 数値で「面白い構成」を選ぶ(CEGAR の発想)。</b> 回数は「多くのマッチが欲しがった」の代理指標でしかない。本当に効く補助線は<b>引いた結果として新しい一致が生まれる</b>もの。この証明器は乱数座標の評価器を持っているので、e-graph に実体を作らずに<b>座標だけで試作</b>し、第3の点を通るか・既存の円に乗るか・既存の角と一致するかを確かめてから作る。モデル検査の CEGAR(反例が示す情報で抽象化を精緻化する)と同じ構図で、次数アフィニティは既にその弱い近似。<b>方針E との相性も良い</b>: 無関係な作図から引いた補助線は一致を生まないので自然に順位が下がる。<br>
-<b>(3) マジックセット。</b> 前向きの飽和は目標と無関係なものまで作る。Datalog のマジックセット変換は前向き評価を自動的にゴール指向にする標準技法で、関係マッチャ(<a href="#b30">b30</a>)が実用になれば載せやすい。<code>resolve_target_demands</code> が一度も効いていないのは素朴なゴール駆動だからで、マジックセットはその原理的な版。<br>
-<b>(4) AlphaGeometry の教訓。</b> 記号エンジンはすぐ飽和し、難しいのは補助構成だけ ― だから彼らはそこだけを言語モデルに提案させた。モデル抜きで取れるのは2つ: 補助構成の<b>語彙を小さく固定する</b>(いまの6種類は既にその形)、記号エンジンを<b>候補の高速フィルタ</b>として使う(提案→数ステップ回す→伸びなければ捨てる)。<br>
-<b>(5) 項の重み制限。</b> 飽和証明器(Vampire/E)は項の重み上限で生成を抑える。「作ってよい種類」を無制限に作る今のやり方に深さ・次数の上限を入れる(複比の <code>CR_DEGREE_CAP</code> の一般化)。<a href="#b30">b30</a> の試作で図が膨らんだ件に直接効く。<br>
-<b>(6) 需要の種類へのバンディット。</b> 6種類の需要への予算配分は多腕バンディットそのもの(定理側には既に <code>--bandit</code> がある)。ただし順位付けの話で、立て方の問題は解かない。</div>
-    <div class="evidence"><b>(1)(2) を実装した結果(<a class="secref" href="ledger.html">§04</a> #61):</b> (1) は挙動が変わらなかった ― 既存の候補生成が実質同じ状態を見ていた。(2) は <code>--coincidence-demands</code> として入れ、きれいな図で −12.7〜−27.5%、ただしノイズ下で悪化した。<br><b>その診断は誤りだった(<a class="secref" href="ledger.html">§04</a> #62)。</b> 「無関係な作図が本物だが役に立たない一致を生んで信号を薄める」と書いたが、実際は<b>「乗る点の数」が最大になるのは、その直線が既に存在する組</b>だった ― 乗っている点は全部すでに共線なので数は最大、しかし引いても図は増えない。(2) が効いていたのはその組を先頭に上げていたからで、ノイズはその種の組を増やすだけだった。<br><b>決着:</b> 需要の補助線を「図を増やす組」と「既に共線で図を増やさない組」に分け、<b>別々の枠</b>を与える形で既定に入れた(#62、<b>全44問で +3問・後退ゼロ</b>)。座標で試作する機構一式は <code>find_common_line</code> 一発の構造テストに置き換えて撤去した。<br><b>残る本体:</b> 「需要が探索の副作用としてしか立たない」という<b>この項目の中心はまだ解けていない</b> ― マッチングが飽和すると新しい需要が生まれず、centroid は予算の1.4%、bench_2000usatstp2 は1.6%で降参する(<a href="#b8">b8</a>)。しかも作図が効率化するほどこの「ネタ切れ」が早く来る。次は (3) マジックセット、または <a href="#b8">b8</a> の打ち切り方そのもの。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> (2) の「座標で試作して新しい一致を生むものを作る」は、数値で選ぶ補助作図として手が尽きたときの手に入った(<a class="secref" href="ledger.html#l80">§04 #80</a>、desargues が解けた)。「需要が探索の副作用としてしか立たない」本体はまだ残る。</div>
-    <div class="b-tags"><span class="tag">枠分けとして #62 で既定に</span><span class="tag">44問で +3問・後退ゼロ</span><span class="tag">「需要が副作用」は未解決</span></div>
+<div class="desc">今の需要は「定理のマッチがこの図形を欲しがって空振りした回数」に代数的次数の近さを加点したもの。補助線は「図を増やす組」と「既に共線の組」を別枠で引く(<a class="secref" href="ledger.html#l62">#62</a>)。座標で試作して新しい一致を生む候補を選ぶ案は、数値で選ぶ補助作図として最後の手に入った(<a class="secref" href="ledger.html#l80">#80</a>)。</div>
+    <div class="evidence"><b>残る本体:</b> 需要はマッチングの副作用としてしか立たないので、マッチングが飽和すると新しい需要が出ず、少ない予算で降参する問題がある(<a class="secref" href="#b8">b8</a>)。未着手の手: マジックセット(前向きの評価をゴール指向にする Datalog の標準技法)、項の重み制限(作ってよい深さ・次数の上限)、需要の種類ごとの予算配分(バンディット)。作り直し(<a class="secref" href="#b48">b48</a>)と組むと、試して効かなかった需要の作図を捨てられる。</div>
+    <div class="b-tags"><span class="tag">補助作図</span><span class="tag">需要</span></div>
   </div>
 </details>
 <details class="item" id="b34" data-status="open">
-  <summary><span class="idx"></span><span class="t">定理の規模を本当に小さくするには、語彙ではなく「供給」を変える必要がある</span></summary>
+  <summary><span class="idx"></span><span class="t">定理の規模 ― 上限超過は2定理。大きい定理は AR の等式にするのが3つ目の道</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 到達を広げる項目ではなく、定理の規模の衛生の話(解けた数への上界は0)。上位に置くのは不適当なので、②に下げた。b35 で定理を足すときに、規模の上限とどう折り合うかは見る。</div>
-<div class="desc"><a class="secref" href="ledger.html">§04</a> #65 で分かったこと: <b>定理の規模は語彙の表現力ではなく、何が図に供給されているかで決まっている</b>。旧版のスパイラル相似の定理が動くのは有向角が大量に供給されているから(<a href="#b7">b7</a> の2,517個)で、射影の語彙で書き直した版が動かないのは等方直線が1本も供給されていないから。<b>b7 が「無駄」と呼んでいる大量供給が、大きい定理を動かしている唯一の理由</b>でもある。<br>上限(変数20・パターン20)を超えたまま残っている定理: 円周角の定理(パターン22)、共点二弦の相似(変数21・パターン24)、シュタイナーの定理の逆(パターン22)。<code>OVERSIZED_KNOWN</code> に明示してある。</div>
-    <div class="evidence"><b>取れる道:</b> (1) <b>等方直線の供給を足す</b> ― 点ごとに <code>Line(I, P)</code> を作る(<code>DirectionOf</code> が直線ごとに方向を作るのと同じ形)。点 n 個に対し 2n 本増えるので、方針E(図が大きくても壊れない)の観点では危険。部品(<code>Refinement::CircularPoint</code>)は #65 で入れてある。<br>(2) <b>束縛の骨組みだけ残す</b> ― 変数24・パターン15程度にしかならず、上限を満たさないうえ複比の計算コストが骨組みの上に乗る。<br>(3) <b>共通部分を Rust の関数に括り出す</b> ― 「共点二弦の相似」と旧スパイラル相似はほぼ同一の前提の形(<code>same_angle</code> → <code>angle_grouped</code>×2 → <code>distinct</code> → <code>has_direction</code>×4 → <code>on</code>×4)を持つ。<b>書きやすさは上がるが実行時の規模は1つも減らない</b>ので、上限の検査は通らない。<br><b>どれを採るにせよ、証人テスト(#65)を先に通すこと。</b>「静的には正しいが一度も発火しない」書き換えを0.4秒で捕まえる。<br><b>証人の無い定理が12件ある</b>(lint の「証人が無い」欄)。新しい <code>test_*</code> 問題を足すときに埋めていく。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 上限超過の3定理のうち「共点二弦の相似」は、AR が同じ結論を出すので既定から外した(<a class="secref" href="ledger.html#l85">§04 #85</a>、<code>--chord-theorems</code> で戻す)。規模の問題への3つ目の道が見えた: 大きい定理を定理として書かず、AR の等式(相似・円・射影対応)にする。AR は等方線束を実体として図に足さずに記号として持つので、(1) の「等方直線を図に供給すると図が膨らむ」問題も起きない。残る上限超過: 円周角の定理(パターン22)・シュタイナーの定理の逆(パターン22)。どちらも AR の等式の生成はあるが、座標を置けない問題で AR が働かないので定理を外せない(#83)。</div>
-    <div class="b-tags"><span class="tag">規模は語彙でなく供給で決まる</span><span class="tag">上限超過は3定理</span><span class="tag">証人が無い定理が12件</span></div>
+<div class="desc">定理の規模は語彙の表現力ではなく、図に何が供給されているかで決まる(<a class="secref" href="ledger.html#l65">#65</a>)。上限(変数20・パターン20)を超えて既定に残るのは、円周角の定理(パターン22)とシュタイナーの定理の逆(パターン22)。「共点二弦の相似」(変数21・パターン24)は AR が置き換えて既定から外した(<a class="secref" href="ledger.html#l85">#85</a>)。</div>
+    <div class="evidence"><b>取れる道:</b> 大きい定理を AR の等式(円・射影対応・相似)にする。AR は等方線束を図の実体にせず記号として持つので、等方直線を図に供給して図が膨らむ問題も起きない。ただし座標を置けない問題で AR は働かないので、その問題が残る限り定理を外せない(<a class="secref" href="#b46">b46</a>)。書き換えるときは証人テスト(<a class="secref" href="ledger.html#l65">#65</a>)を先に通す。</div>
+    <div class="b-tags"><span class="tag">定理の規模</span></div>
   </div>
 </details>
 <details class="item" id="b31" data-status="open">
-  <summary><span class="idx"></span><span class="t">関連度フィルタ(SInE / MePo)― 「巨大な前提のうちほとんどが無関係」はノイズ問題と同じ形</span></summary>
+  <summary><span class="idx"></span><span class="t">関連度フィルタ(SInE / MePo)― 「前提のほとんどが無関係」はノイズ問題と同じ形</span></summary>
   <div class="body">
-<div class="desc">Sledgehammer の MePo と Vampire の SInE は「巨大な公理集合のうちほとんどがゴールと無関係」という、方針E のノイズ問題とまったく同じ状況のために作られたもの。ゴールに現れる記号から出発し、記号の希少性で重み付けしながら反復的に関連する事実を引き込む。<br>いまの <code>heat</code> はその手作り版に見えるが、MePo は「ゴールからの距離」と「記号の希少性」を明示的に分け、<b>行き詰まったら半径を広げる</b>段階構成を持っている。<code>heat</code> の初期値をこの方式で与えるのは今の構造に載せやすい。<br><b>注意:</b> これは問題ごとに定理を手で選ぶ opt-in とは別物(ゴールから自動で導出し、行き詰まりに応じて広げる)。ただし「候補を落とす」機構である点は共通なので、<b>広げ方を先に決めてから</b>入れること。</div>
-    <div class="b-tags"><span class="tag">方針E 直撃</span><span class="tag">opt-in ではない(ゴールから自動導出)</span></div>
+<div class="desc">Sledgehammer の MePo と Vampire の SInE は、巨大な公理集合のうちほとんどがゴールと無関係という、方針E のノイズ問題と同じ状況のためのもの。ゴールに現れる記号から出発し、記号の希少性で重み付けしながら関連する事実を引き込み、行き詰まったら半径を広げる。今の熱(heat)はその手作り版に見える。</div>
+    <div class="evidence"><b>注意:</b> ゴールから自動で導くので、問題ごとに定理を選ぶ opt-in とは別物。ただし「候補を落とす」機構なので、広げ方を先に決めてから入れる。</div>
+    <div class="b-tags"><span class="tag">方針E</span></div>
   </div>
 </details>
 <details class="item" id="b27" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 候補capを広げるのが遅すぎる ― 需要作図が尽きるまで待つので、その間に図が膨らむ</span></summary>
+  <summary><span class="idx"></span><span class="t">候補capを広げる時機 ― 2回の行き詰まりごとに先に広げる形は既定(#51)。残りは広げる対象の絞り込み</span></summary>
   <div class="body">
-<div class="desc">行き詰まったときの手は「補助線・交点 → 有向角 → 第2交点 → 中点 → 目標からの逆算 → 候補capの拡大」の順で、候補capの拡大は需要作図が全部尽きてからになる。ところが図が大きいほど需要作図は尽きにくく、cap を広げる番が来る頃には図が膨らみ切っている。<br><b>実例(test_spiral_similarity + ノイズ5):</b> 既定では有向角の需要が78回走り、cap は3回広がったものの手遅れで、2,813,981ステップ使って解けない。最初から <code>--fanout-heat-cap=40</code> にすると <b>11,014ステップで解ける</b>。<code>--skip-recovery=angle,second,mid</code>(図を広げる手を外す)でも19,891ステップで解ける。<br><b>試した対処:</b> <code>--widen-first</code>(需要作図より先に広げる)はノイズ下で +5問(ノイズ5で30→32、10で28→29、20で28→30)だが、きれいな既定設定では仕事量 +72%。「cap が実際に候補を切り捨てたときだけ先に広げる」条件を足しても、自己束縛の切り捨てはきれいな図でも普通に起きるので同じ結果。<code>--widen-every=N</code>(行き詰まりN回ごとに先に広げる)の N=2 は、きれいな図で +35%、ノイズ5の対象問題は解ける。<br><b>次の案:</b> 広げる対象を全体ではなく「切り捨てが実際に起きた型・定理」に絞る。あるいは需要作図の側に上限を設け、同じ種類の需要を何度も繰り返さない。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> この項目の <code>--widen-every=2</code> は <a class="secref" href="ledger.html#l51">§04 #51</a> で既定になっている(<code>RecoveryOptions::standard()</code>)。上の「次の案」(広げる対象を切り捨てが起きた型・定理に絞る、同じ種類の需要の繰り返しに上限)は未着手。</div>
-    <div class="b-tags"><span class="tag">ノイズ5で2問・ノイズ10で4問が落ちる主因</span><span class="tag">きれいな図での増加を抑えるのが課題</span></div>
+<div class="desc">今: 行き詰まり2回ごとに、需要作図より先に候補capを広げる(<code>--widen-every=2</code>、<a class="secref" href="ledger.html#l51">#51</a>、<code>RecoveryOptions::standard()</code>)。</div>
+    <div class="evidence"><b>残り:</b> 広げる対象を全体ではなく「切り捨てが実際に起きた型・定理」に絞る。同じ種類の需要作図を何度も繰り返さない上限を設ける。きれいな図で仕事量を増やさずに、ノイズ下で図が膨らむ前に広げられるか。</div>
+    <div class="b-tags"><span class="tag">方針E</span></div>
   </div>
 </details>
 <details class="item" id="b26" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 仕事量に数えられない数値チェックが、実体が増えると時間の大半を占める ― 仕事量予算が時間を抑えられない</span></summary>
+  <summary><span class="idx"></span><span class="t">仕事量に数えない数値チェックの時間 ― 固定座標で形が変わった。測り直す</span></summary>
   <div class="body">
-<div class="desc">作図画面の証明を秒から仕事量(<code>dfs_match</code> の回数)の予算に移したところ、自由作図で実体が数百個になった円の図で、1回の <code>run_step</code> が仕事量17万で46秒かかった(solve の典型は毎秒15万〜25万、ここは毎秒約3,700)。スタックを採ると、時間はほぼ全て <code>propagate_conic_uniqueness</code> が呼ぶ <code>numeric_plausibility_check</code> に消えていた。内訳は (1) 前提の曲線の洗い出しと祖先の自由点集めを毎回図全体から辿り直すこと、(2) 検算そのもの(大きな祖先の評価)を二次曲線の組の数だけ繰り返すこと。(1) は構造の世代で無効化するキャッシュにして 46秒→6秒(結果は不変、<a class="secref" href="ledger.html">§04</a> #49)。(2) は残っていて、二次曲線の組が増えるほど効く。<br><b>方針Eとの関係:</b> 無関係な作図を足すと円・二次曲線が増え、仕事量は同じでも時間が大きく伸びる ― ノイズへの頑健性を測ると最初に当たる壁。候補: 検算の結果を(代表元の組, 構造の世代)で覚える、評価の中間値を同じ座標のまま使い回す、数値チェックのコストを仕事量に数える(solve の結果が変わるので要計測)。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 固定座標(#79)で数値チェックの形が変わった: 各実体の値は探索前に一度だけ計算し、以後の検算はその値の比較になった。作図画面の証明も #86 から固定座標を使う。この項目の「1回の run_step が46秒」は固定座標の前の測定なので、同じ円の図で測り直すこと(おそらく解消)。</div>
-    <div class="b-tags"><span class="tag">1回の run_step が46秒(キャッシュ後6秒)</span><span class="tag">ノイズを足した図で最初に効く</span></div>
+<div class="desc">以前(2026-09-17)、作図画面で実体が数百個の円の図を証明すると、1回の run_step が46秒かかった(時間の大半が二次曲線の一意性の伝播の数値チェック。キャッシュで6秒)。</div>
+    <div class="evidence">今は、各実体の値を探索前に一度だけ計算する固定座標(<a class="secref" href="ledger.html#l79">#79</a>)で、検算は値の比較になった。作図画面の証明も固定座標を使う(<a class="secref" href="ledger.html#l86">#86</a>)。同じ図で測り直し、解消していれば閉じる。</div>
+    <div class="b-tags"><span class="tag">要再測定</span></div>
   </div>
 </details>
 <details class="item" id="b25" data-status="open">
-  <summary><span class="idx"></span><span class="t">「その点なしで曲線を評価できるか」の判定が、辿る順序で変わる</span></summary>
+  <summary><span class="idx"></span><span class="t">「その点なしで曲線を評価できるか」の判定が辿る順序で変わる ― 固定座標を置けない問題だけに残る</span></summary>
   <div class="body">
-<div class="desc"><code>evaluation_requires_point</code> は循環に当たった節点そのものはメモしないが、その結果(「不可欠」と倒した値)を使った親の結果はメモする。同じ memo で別の曲線から辿り直すと答えが変わる。数値評価器を1つにまとめたとき(<a class="secref" href="ledger.html">§04</a>)に表に出た: p進の評価器は点ごとに memo を使い回し、有限体の評価器は曲線ごとに作り直していたので、同じ図で2つの評価器の判定が食い違っていた。使い回す方に揃えると <code>--skip-recovery=angle,target</code> で bench_2018chnwesternmop5 の二次曲線の結合の判定が変わり、解けない→解けるになった(証明は extract_proof で厳密)。今は作り直す方に揃えて挙動を変えていない。循環の影響を受けた結果を親にも伝えてメモしないようにすれば順序によらない判定になるが、循環の多い図でメモが効かず遅くなる恐れがあるので、速度と結果の両方を測ってから入れる。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 固定座標(#79)を置ける問題では、検算は元の定義からの固定値を使うので、この判定の順序依存は効かない。残るのは座標を置けない8問と、固定座標を外した A/B(<code>--no-fixed-coords</code>)だけ。優先度は下がった。</div>
-    <div class="b-tags"><span class="tag">健全性チェックの判定が順序依存</span><span class="tag">直すと solve の結果が変わりうる</span></div>
+<div class="desc"><code>evaluation_requires_point</code> は循環に当たった節点をメモしないが、その結果を使った親はメモするので、辿り直す順序で答えが変わる。固定座標を置ける問題では検算が元の定義からの固定値を使うので効かない。残るのは座標を置けない2問と、<code>--no-fixed-coords</code> の比較だけ。</div>
+    <div class="b-tags"><span class="tag">優先度低</span></div>
   </div>
 </details>
 <details class="item" id="b1" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 探索が定理を試す順序に大きく左右される ― 解けるかどうかが順序の運に依存している</span></summary>
+  <summary><span class="idx"></span><span class="t">探索が定理を試す順序に左右される ― 登録順で仕事量 ±15%</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html">§04</a>「同じ優先度のタスクを定理の登録順に取り出し…」の実測で、定理の登録順を変えるだけで両方で解けた問題の仕事量が ±15% 程度振れ、個別には bench_2012egmop1 +358%・nine_point_full +115% のように大きく動き、bench_2018chnwesternmop5 は7通り中3通りで解けなくなった。筋の通った並べ方(逆順・パターン数順・射影先頭)はどれも登録順に勝たず、登録順を詰めても問題が変われば効かない見込み。順序に鈍感な探索にする方が本筋 ― 例えば1回の <code>run_step</code> の途中でマージが起きても、同じ全探索の残りのタスクには古い図の上での結果を使わせない(全タスクを試してから結論を適用する)と、順序の影響がどれだけ減るかを測る。</div>
-          <div class="evidence" style="margin-top:10px"><b>2026-09-23 実測(不採用):</b> 「1回の全探索では結論をすぐ適用せず、全タスクを試してからまとめて適用する」(<code>--batch-conclusions</code>)を実装して6通りで測った ― 既定 32→32(仕事量+35%)、長さ+中心角+中点 30→29(+49%)、skip-recovery 31→30(−7%)、ノイズ5 30→31(+82%)、ノイズ10 28→29(+13%)、ノイズ20 28→25(+18%)。解けた数は増減して合計 −2、仕事量はほとんどの設定で大きく増える。既に分かった事実を同じ全探索の残りに使わせない代償の方が大きい。フラグはA/B用に残し、既定は従来どおり。順序への対処は別の形(まとめる単位を小さくする・優先度を図の変化に追随させる)で試す。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> AR でも同じ種類の揺れが出た: AR の併合で手詰まりの時期がずれると道筋が変わり、bench_2012egmop1 はノイズ5で12倍重く、ノイズ20では逆に0.76倍になった(<a class="secref" href="ledger.html#l85">§04 #85</a>)。「目安」に挙げた bench_2018chnwesternmop5 は AR で全設定で解けるようになった。</div>
-<div class="b-tags"><span class="tag">順序で ±15%・1問が解けたり解けなかったり</span><span class="tag">目安: bench_2018chnwesternmop5 がどの順序でも解ける</span></div>
+<div class="desc">定理の登録順を変えるだけで、両方で解けた問題の仕事量が ±15% 程度振れる(個別には数倍、<a class="secref" href="ledger.html#l45">#45</a>)。筋の通った並べ方(逆順・パターン数順・射影先頭)はどれも登録順に勝たなかった。結論をまとめて適用する形(<code>--batch-conclusions</code>)も、解けた数 −2・仕事量増で不採用(2026-09-23 の測定)。AR でも、併合で手詰まりの時期がずれると道筋が変わり、bench_2012egmop1 はノイズ5で12倍重い(<a class="secref" href="ledger.html#l85">#85</a>)。</div>
+    <div class="evidence"><b>方向:</b> 順序に鈍感な探索(まとめる単位を小さくする、優先度を図の変化に追随させる)。定理の層のマージは1回の全探索ごとにしか連鎖しないので、変化した事実から定理を試し直す差分の再照合(<a class="secref" href="#b12">b12</a>)とも関係する。</div>
+    <div class="b-tags"><span class="tag">順序依存</span></div>
   </div>
 </details>
 <details class="item" id="b5" data-status="open">
-  <summary><span class="idx"></span><span class="t">目標駆動の作図は一度も効いていない ― 「何を作図するか」を目標から逆算する手は、まだ無いのと同じ</span></summary>
+  <summary><span class="idx"></span><span class="t">目標から逆算する作図は、ほぼ効いていない(2026-09-16 の測定)</span></summary>
   <div class="body">
-<div class="desc">★の項目で「次に効くのはここ」とした <code>resolve_target_demands</code> / <code>resolve_cross_ratio_demands</code> を測ると、44問で動いたのは3問・作ったのは補助線4本と複比2個だけで、<b>その全てが一度もマージに関与していない</b>。外しても解けた問題の仕事量は1ステップも変わらない。今の実装は「目標に出てくる点のうち、まだ直線で結ばれていないペアを結ぶ」だけで、他の需要駆動の手が全部尽きた最後にしか回らないため、そもそも出番がほとんど無く、出ても目標点どうしを結ぶ直線は証明の筋に乗らない。
-          <br><b>含意:</b> 未解決13問の律速(作図のネタ切れ)に対して、目標から逆算する作図は実質まだ存在しない。今動いている需要駆動の手は全部「定理のマッチングが空振りした場所」から出ており、目標の側からは何も来ていない。</div>
-          <div class="b-tags"><span class="tag">マージ関与0</span><span class="tag">外しても差0</span></div>
+<div class="desc"><code>resolve_target_demands</code> / <code>resolve_cross_ratio_demands</code> は、44問で動いたのが3問・作ったのは補助線4本と複比2個で、どれもマージに関与しなかった(外しても仕事量が1ステップも変わらない)。今の実装は「目標に出てくる点のうち、まだ直線で結ばれていないペアを結ぶ」だけで、他の手が全部尽きた後にしか回らない。</div>
+    <div class="evidence">今動いている需要駆動の手は全部「マッチングの空振り」から出ており、目標の側からは何も来ていない。マジックセット(<a class="secref" href="#b33">b33</a>)がこの原理的な版。測定は古いので、着手前に測り直す。</div>
+    <div class="b-tags"><span class="tag">要再測定</span></div>
   </div>
 </details>
 <details class="item" id="b6" data-status="open">
-  <summary><span class="idx"></span><span class="t">補助線の需要の本数は固定値では両立しない ― 行き詰まりが続くほど広げる</span></summary>
+  <summary><span class="idx"></span><span class="t">補助線の需要の本数は固定値では両立しない(2026-09-16 の測定)</span></summary>
   <div class="body">
-<div class="desc">補助線の需要は解けた問題で当たる割合61%、外すと31→15問で、最も効いている手。1回の行き詰まりで引く本数(現在3本)を5本にすると、残った30問の仕事量は -17.8% だが bench_2011armog10p6 が落ち、bench_2019g1 は +592%、bench_2012egmop1 は -83% と振れが極端(<a class="secref" href="ledger.html">§04</a>)。<code>fanout_heat_cap</code> と同じ形のトレードオフなので、同じ解き方 ― 3本から始め、引いた補助線が次の行き詰まりまでに1本もマージを生まなかったときだけ本数を増やす ― が筋。</div>
-          <div class="b-tags"><span class="tag">3→5本: -17.8%・1問落ち</span></div>
+<div class="desc">1回の行き詰まりで引く補助線を3本から5本にすると、仕事量は −17.8% だが bench_2011armog10p6 が落ち、個別の振れが極端(+592% 〜 −83%)。</div>
+    <div class="evidence">候補capと同じ形のトレードオフなので、3本から始め、引いた補助線が次の行き詰まりまでに1本もマージを生まなかったときだけ本数を増やすのが筋。測定は枠分け(#62)の前なので測り直す。</div>
+    <div class="b-tags"><span class="tag">要再測定</span></div>
   </div>
 </details>
 <details class="item" id="b7" data-status="open">
-  <summary><span class="idx"></span><span class="t">DefinedBy のその場生成は有向角を2,517個作り、証明に出るのは1割 ― 定理の結論の積は139個で0</span></summary>
+  <summary><span class="idx"></span><span class="t">DefinedBy のその場生成は有向角を大量に作り、証明に出るのは1割(2026-09-16 の測定)</span></summary>
   <div class="body">
-<div class="desc">全44問で DefinedBy のその場生成が作った図形の98%は有向角(2,517個)で、解けた問題で証明の手順に出るのは9.8%。長さの二乗も57個作って0。定理の結論テンプレートが作る積(方冪の定理・中心角の定理が作る <code>Product</code>)は解けた問題で139個作り、<b>1個も証明に出ていない</b>(ただし方冪を主題にする bench_2015apmop1 は未解決なので、「要らない」とはまだ言えない)。作られた図形は型インデックスの走査・熱の順位付けの母数を恒久的に増やすので、量そのものがコストになる。空振りの多い組み合わせを DefinedBy 側で先に弾けるか(親の次数・熱で)が次の問い。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 方冪の定理の積(共点二弦の相似が作る Product)は、AR が置き換えて既定から外した(<a class="secref" href="ledger.html#l85">§04 #85</a>)ので、今の既定ではほぼ作られない。有向角のその場生成の空振りは未測定のまま。</div>
-          <div class="b-tags"><span class="tag">有向角2,517個で9.8%</span><span class="tag">積139個で0</span></div>
+<div class="desc">全44問で DefinedBy のその場生成が作った図形の98%は有向角(2,517個)で、解けた問題の証明に出るのは9.8%。作られた図形は型インデックスの走査・熱の順位付けの母数を恒久的に増やす。方冪の定理の積(Product)は、定理を AR が置き換えて既定から外した(<a class="secref" href="ledger.html#l85">#85</a>)ので今はほぼ作られない。</div>
+    <div class="evidence">空振りの多い組み合わせを DefinedBy の側で先に弾けるか(親の次数・熱で)。作り直し(<a class="secref" href="#b48">b48</a>)でも減らせる。測定は古い。</div>
+    <div class="b-tags"><span class="tag">要再測定</span></div>
   </div>
 </details>
 </div>
-<div class="group"><div class="group-title">③ 凍結 · 前提が古い · 13件</div>
+<div class="group"><div class="group-title">③ 凍結 · 前提が古い・優先度が低い · 13件</div>
 <details class="item" id="b3" data-status="frozen">
-  <summary><span class="idx"></span><span class="t">★ 未解決4問の詰まり所を人間の証明の手順で名指しした(diagnose) ― 足りないのは作図より「長さ・中心・垂直二等分線」の橋渡し</span></summary>
+  <summary><span class="idx"></span><span class="t">未解決問題の詰まり所を人間の証明の手順で名指しする(diagnose)― 今の表は b8</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> この項目の診断は <a href="#b8">b8</a> に統合し、4問から11問に広げた(<a class="secref" href="ledger.html#l67">§04 #67</a>)。ここの表は 2026-09-17 時点で、「既定」の欄は長さの定理が既定になった今の「--length-theorems」の欄と同じ。</div>
-<div class="desc">ユーザー要望「そろそろ個別の問題がどのステップで詰まっているのかを検証する必要もありそう」。問題ファイルに人間の証明の<b>筋書き</b>(補助作図と中間の主張の列)を書き、<code>geom_solver diagnose &lt;問題&gt;</code> で「素の図 → 補助作図 → 補助作図+手順1..kを前提」の梯子を回して、各手順が<b>手前を全部認めた段で自力で出るか</b>を見る(sketch.rs)。筋書きの各手順が乱数座標で成り立つことはテストで確かめてある。段は並列に回す(1問あたり約1分半。順に回すと12分かかっていた)。</div>
-          <div class="desc"><b>2026-09-17 時点</b>(垂直二等分線の作図・もう一方の交点・座標割り当ての修正を入れた後、<a class="secref" href="ledger.html">§04</a>):</div>
-          <table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">問題</th><th style="text-align:left;padding:2px 12px 2px 0">詰まり所(既定)</th><th style="text-align:left;padding:2px 12px 2px 0">詰まり所(--length-theorems)</th><th style="text-align:left;padding:2px 12px 2px 0">解けた最初の段</th></tr><tr><td style="padding:2px 12px 2px 0">bench_2016armog10p2</td><td style="padding:2px 12px 2px 0"><b>なし</b></td><td style="padding:2px 12px 2px 0">なし</td><td style="padding:2px 12px 2px 0">🎉 <b>補助作図だけで解ける</b>(3.93M)。残るのは X を自分で作図すること</td></tr><tr><td style="padding:2px 12px 2px 0">bench_2012chnwesternmop5</td><td style="padding:2px 12px 2px 0">手順2 中点連結の長さ、手順3 ND=NK(九点円の中心)、手順4</td><td style="padding:2px 12px 2px 0">手順3、手順4</td><td style="padding:2px 12px 2px 0">手順1..4を前提</td></tr><tr><td style="padding:2px 12px 2px 0">bench_2000usatstp2</td><td style="padding:2px 12px 2px 0">手順3,4 中点連結の長さ、手順5,6 合同</td><td style="padding:2px 12px 2px 0">手順5,6 二辺夾角の合同</td><td style="padding:2px 12px 2px 0">手順1..6を前提</td></tr><tr><td style="padding:2px 12px 2px 0">bench_2008armog10p6</td><td style="padding:2px 12px 2px 0">手順3 BO⊥A1C1、手順4 足の無い第3の高さ、手順5 ブロカール</td><td style="padding:2px 12px 2px 0">同左</td><td style="padding:2px 12px 2px 0">❌ 全部認めても解けない(下の注)</td></tr></table>
-          <div class="evidence"><b>効いたこと:</b> 「垂直二等分線の距離の等価性の逆」が中点と垂直二等分線の実体を前提にしていた制約を外したことで、bench_2016armog10p2 の詰まり所が全部消え、人間の補助作図 X を与えれば解けるようになった。中点連結の長さは <code>--length-theorems</code> で外れるが、解けた問題への課税が大きく既定には入れていない。
-          <br><b>残る詰まり所:</b> 九点円の中心(ND=NK、実質 AH=2OM)、二辺夾角の合同、足の無い第3の高さ、ブロカールの定理。
-          <br><b>探索は単調ではない:</b> 前提を足すと探索の向きが変わり、素の図で届いた手順に届かなくなることがある。bench_2008armog10p6 は、作図を足す前は手順を全部認めれば 1.0M で解けたが、今は全段が予算を使い切る(足した作図に探索が引っ張られている)。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> この項目の表(2026-09-17)は古い。今の詰まり所は <a class="secref" href="#b8">b8</a> の表。bench_2016armog10p2 は数値で選ぶ補助作図を毎回試すと自力で解ける(補助作図 X を与えなくてよい)。</div>
-          <div class="b-tags"><span class="tag">2016armog10p2: 補助作図だけで解ける</span><span class="tag">残り: 九点円の中心・合同・第3の高さ・ブロカール</span></div>
+<div class="desc"><code>geom_solver diagnose</code>(<code>sketch.rs</code>)が、問題ファイルの証明の筋書きに沿って各手順が自力で出るかを表にする。診断の表は <a class="secref" href="#b8">b8</a> に統合した。</div>
+    <div class="b-tags"><span class="tag">b8 に統合</span></div>
   </div>
 </details>
 <details class="item" id="b28" data-status="frozen">
-  <summary><span class="idx"></span><span class="t">★ 失敗キャッシュの鍵に無関係な束縛まで入っている ― 同じ理由の失敗を、無関係な変数の値の数だけ作り直す</span></summary>
+  <summary><span class="idx"></span><span class="t">失敗キャッシュの鍵を核に絞る(--nogood-core)― 実装済み・既定にしない</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 「未着手」ではなく<b>実装済み・既定にしない</b>(<code>--nogood-core</code>)。仕事量は全設定で下がるが解けた数が合計 −3。到達を広げないので、これ以上の投資はしない(凍結)。</div>
-<div class="desc">失敗した探索状態の鍵(<code>state_signature</code>)は<b>束縛を全部</b>入れて作っていた。ところが失敗の理由はたいてい束縛のうち数個しか使っていないので、無関係な変数 Z, W の値の組み合わせの数だけ、同じ失敗が別物として再発見され別々にキャッシュされる。図が大きいほど Z, W の取りうる値が増えるので、<b>同じ失敗を作り直す回数がノイズの個数に対して掛け算で増える</b>。SAT/SMT や制約充足でいう「nogood を explanation(核)付きで学習する」話にあたる。<br><b>入れた対処(<code>--nogood-core</code>):</b> 鍵を「残っているパターンが実際に見る変数」だけに絞る。失敗する枝が見る束縛はそこに限られる(パターンの選び方も、破れの早期検査も、候補の展開も、残っているパターンの引数しか見ない)ので、核に入らない変数はその部分木の答えを変えられない。ただし枝の打ち切り(<code>dfs_cap</code>)は探索の順序に依存するので、「予算切れで失敗した」かどうかまでは一致しない ― 既存の失敗キャッシュと同じ近似。</div>
-    <div class="evidence"><b>計測(1問ずつ、--profile の「失敗キャッシュのエントリ数」):</b> test_spiral_similarity 22,994→19,861(仕事量 27,462→27,059)、bench_2005ctstp1 313,146→284,708(742,344→736,854)、nine_point_full 626,966→642,825(807,600→780,026)、bench_2018chnwesternmop5 1,199,358→<b>934,328</b>(3,947,844→<b>3,613,826</b>、−8.5%)。ノイズ10では bench_2005ctstp1 427,960→<b>294,105</b>(−31%)、nine_point_full 647,620→540,937。<br><b>結論:</b> 効く向きは一貫している(測った範囲で仕事量が増えた例は無い)が、<b>予想した掛け算の潰れ方にはならなかった</b> ― 仕事量で −1〜−8%。定理が小さく変数が密に絡んでいるので、残っているパターンの変数だけに絞っても核がほとんど束縛全体になってしまう。<br><b>選抜33問での結果(基準 → --nogood-core):</b> 既定 32/32(仕事量 <b>−1.5%</b>)、extras 31→<b>30</b>(−15.1%)、skip 31→<b>30</b>(−9.4%)、ノイズ5 32→<b>31</b>(−4.2%)、ノイズ10 29→<b>30</b>(−5.5%)、ノイズ20 30→<b>29</b>(−5.3%)。仕事量は全設定で下がるが、解けた数は合計 <b>−3</b>。<b>既定にはしない。</b><br><b>落ちる仕組み:</b> 鍵が粗くなると、枝の刈られ方が変わって別の(長い)証明経路をたどることがある。bench_2012egmop1 は <code>--central-angle</code> だけなら解けるが 1,496,033 → <b>2,083,867</b> ステップかかるようになり、extras/skip/ノイズ5 の予算(<code>--steps=1500000</code>)を超えて落ちる。つまり「刈りすぎ」ではなく「予算の縁にいる問題が押し出される」。<br><b>試して外したこと:</b> 鍵を核に絞るなら候補の並べ替えも核だけで決めるべき(核の外の束縛で順序が変わると、鍵が同じなのに予算の切れ方が変わる)と考えて <code>DefinedBy</code> の並べ替えの熱を核に限ったが、<b>6設定すべてで1ステップも変わらなかった</b> ― この定理たちでは核が結局ほぼ束縛全体になる。複雑さだけ増えるので戻した。<br><b>次の案:</b> 「残っているパターンに現れる変数」は構文的な過大評価。深いところで失敗する枝は最初の1本で落ちることが多いので、<b>実際に参照した変数</b>を下から積み上げれば核はもっと小さくなる。ただしそれは鍵を引く前に分からない(ハッシュで引けず、包含判定が要る)ので、実装の形を変える必要がある。</div>
-    <div class="b-tags"><span class="tag">--nogood-core で実装済み・既定にしない</span><span class="tag">仕事量 −1.5〜−15%</span><span class="tag">解けた数は合計 −3</span></div>
+<div class="desc">鍵を「残っているパターンが見る変数」だけに絞る。仕事量は全設定で −1.5〜−15% だが、予算の縁にいる問題が押し出されて解けた数が合計 −3。核がほぼ束縛全体になり、予想した掛け算の潰れ方にはならなかった。</div>
+    <div class="b-tags"><span class="tag">フラグで残置</span></div>
   </div>
 </details>
 <details class="item" id="b29" data-status="frozen">
-  <summary><span class="idx"></span><span class="t">失敗キャッシュの無効化は大雑把だが、直しても得るものが無い ― 上界を測ったら仕事量は減らず16問落ちた</span></summary>
+  <summary><span class="idx"></span><span class="t">失敗キャッシュの無効化を細かくする ― 上界を測ったら得るものが無かった</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> #66 で上界を測り、<b>失敗キャッシュの無効化を止めても仕事量は減らず16問落ちる</b>と分かった(下の「追記」)。<b>反証済み</b>で、実体単位の依存追跡は作らない。</div>
-<div class="desc">失敗キャッシュは各エントリに「この枝の結果はどの型に依存するか」(<code>dep_mask</code>)を持ち、その型の<b>世代</b>が変わると捨てる。世代は型ごとに1つの通し番号なので、<b>その型の実体がどこかで1つでも変われば、その型に触れた全エントリが一斉に無効になる</b>。</div>
-    <div class="evidence"><b>計測1(2026-09-23、--profile):</b> <code>dfs_match</code> の呼び出しのうち、キャッシュに当たって即座に打ち切れた割合と、<b>当たったのに世代が違って使えなかった</b>割合:<br>
-bench_2022balkanmop1 ノイズ10 で <b>当たり 9.9% に対して無駄になった当たりが 51.3%</b>(791,556 対 4,103,911)。ノイズ無しでも 7.2% 対 20.2%。bench_2005ctstp1 は 13.3% 対 38.7%。<b>探索の半分近くが、すでに失敗と分かっている枝の歩き直し。</b><br>
-<b>計測2(型世代を上げた理由の内訳):</b> 4問とも同じ形で、<b>接続関係の追加が 57〜59%</b>、memoへの登録 18〜22%、実体の生成 12〜13%、マージ 8〜9%。接続関係の内訳では Point が約半分を占める。<br>
-<b>計測3(依存マスクの幅):</b> 失敗を記録するときのマスクは <b>1〜3ビットで98%</b>、全ビットが立つことは無い。<b>つまりマスクは既に細い。</b></div>
-    <div class="evidence"><b>試して外したこと(1) 型世代を「候補集合」と「接続関係」に分ける:</b> 候補プールの列挙・memo検索は実体の生成/memo登録/マージで、<code>is_connected</code> と subobjects の列挙は接続関係/マージで無効化されるように、世代とマスクを8ビットに割った。接続関係が無効化の6割を占めるので効くと見込んだが、<b>仕事量はほぼ動かなかった</b>(bench_2005ctstp1 742,344→741,964、−0.05%)。計測3 の通りマスクは元々細く、問題は<b>細さではなく、1本1本のビットが「その型のどこかで何かが起きた」という全体の通し番号であること</b>。link(Point) だけでも数千回上がるので、1ビットしか立っていないエントリでも普通に死ぬ。複雑さと記憶量([u64;4]→[u64;8])に見合わないので戻した。<br>
-<b>試して外したこと(2) 変化の無い定理の全探索タスクを積まない:</b> 「前回その定理を最後まで走査したときから、その定理が読む型の世代も cap も変わっていなければ積まない」を入れたが、<b>省けたタスクは全設定で0件</b>。sweep と sweep のあいだに何百ものタスクが実行され結論が適用されるので、4つの型世代は必ず全部動いている。粒度が sweep 単位では粗すぎる。</div>
-    <div class="evidence"><b>次にやるべきこと(当時の見立て。上の追記で否定された):</b> 残る軸は「<b>どの型か</b>」ではなく「<b>どの実体か</b>」。その枝が実際に読んだ代表元を覚えて、<b>それらが変わったときだけ</b>捨てる。型ごとの通し番号を実体ごとの版番号に落とす形になり、索引を持つ関係マッチング(<a href="#b30">b30</a>)と同じ構造を要求する ― b30 を先にやるべき根拠がここで1つ増えた。<br>
-<b>関連:</b> シード経路(差分起動)は過去6回試して6回とも撤回されている(<a href="#b7">#7</a>)。ただし6回とも全体sweepに「足す」形で、減らす側は上の(2)が初めてで、それも空振りだった。</div>
-    <div class="evidence"><b>追記 ― この項目はサイズを見誤っていた(<a class="secref" href="ledger.html">§04</a> #66):</b> 実体単位の追跡を作る前に上界を測った。失敗キャッシュを<b>一切無効化しない</b>版(得られる削減の最大値)で選抜33問を回すと、<b>16〜17問が落ちたうえ仕事量も減らない</b>(既定 +14.6%、ノイズ5 +157.0%、skip −13.8%)。<br><b>「51%が歩き直し」は dfs_match の参照回数</b>であって、その節点で打ち切れていれば省けた部分木の大きさではなかった。実際にはほぼ葉の近くで、無効化そのものは<b>図が変われば失敗が失敗でなくなる</b>という本質的な仕事をしている。<b>実体単位の依存追跡を作る価値は無い。</b>下の「試して外したこと(1)」が −0.05% だったのは、この乖離の最初の兆候だった。</div>
-    <div class="b-tags"><span class="tag">上界を測ったら仕事量は減らない</span><span class="tag">51%は参照回数で仕事量ではない</span><span class="tag">実体単位は不要と判明</span></div>
+<div class="desc">無効化を一切しない版(削減の上界)で、16問が落ちて仕事量も減らない(<a class="secref" href="ledger.html#l66">#66</a>)。「探索の51%が歩き直し」は参照回数で、省ける仕事量ではなかった。実体単位の依存追跡は作らない。</div>
+    <div class="b-tags"><span class="tag">反証済み</span></div>
   </div>
 </details>
 <details class="item" id="b30" data-status="frozen">
-  <summary><span class="idx"></span><span class="t">★ 入れ子ループ結合をやめて、関係マッチング+最悪計算量最適結合にする(第一歩の semi-join は既定で投入済み)</span></summary>
+  <summary><span class="idx"></span><span class="t">関係マッチング + 最悪計算量最適結合 ― 第一歩の semi-join は既定。本体は凍結</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 動機の2つ(cap の不要化 = #64、b29 の答え = #66)は実測で消えた。残る「順序非依存」も、定理の登録順を変える7通り(#45)で解けた数は 31〜32 にとどまり、32 を超えなかった。順序で動くのは実質 bench_2018chnwesternmop5 の1問なので、<b>到達への寄与は高々 +1</b>。試作は選抜33問で 15/33(既定 32/33)。#55〜#60 と <code>genjoin.rs</code> 513行を投じて、解けた数は増えていない。<b>凍結:</b> フラグとして残すが、新たな投資はしない(b40 で整理を検討)。</div>
-<div class="desc"><code>dfs_match</code> は毎ステップ <code>estimate_cost</code> で一番安いパターンを選ぶ<b>貪欲な入れ子ループ結合</b>で、中間結果が爆発するから <code>heat_cap</code> / <code>fanout_heat_cap</code> で打ち切っている ― つまり<b>候補capは入れ子ループ結合の爆発に対する対症療法</b>で、<a href="#b27">b27</a> の「広げる時機」もその調整でしかない。<br>対応するのが e-graph 側の既製技術で、演算子ごとに関係(列は同値類の id)を張り、マッチングを<b>連言クエリ</b>として Generic Join / Leapfrog Triejoin で評価する(relational e-matching、POPL 2022 / egglog)。効く理由が3つある: (1) 中間結果ではなく実際の出力サイズ(AGM 上界)で抑えられるので、capで切り捨てる必要が構造的に減る。(2) <b>変数順序に依存しない</b>保証があるので、方針Bの「定理の順序で±15%動く」問題に別角度から答えが出る。(3) ノイズは関係にタプルを足すだけなので、劣化が掛け算でなく出力サイズなりになる。</div>
-    <div class="evidence"><b>第一歩(投入済み、<a class="secref" href="ledger.html">§04</a> #55):</b> 候補を cap で切る<b>前に</b>、まだ残っているパターンのうち相手が束縛済みのもの(<code>Connected</code> / <code>Identical</code> / <code>Distinct</code>)で絞る semi-join reduction。解は1つも減らず、全44問×6設定で仕事量 <b>−23.4〜−33.3%</b>。既定にした(<code>--no-semijoin</code> で戻せる)。<br><b>まだやっていない本体:</b> 「パターンを選んで候補を出す」のをやめ、<b>変数を選んで、その変数に触れる全パターンの候補集合を交差させる</b>形にする。semi-join は1本のパターンから出した候補を他で絞るだけなので、<b>最初に選んだパターンの候補数がそのまま上限</b>になる(例: <code>Connected(P,L1) ∧ Connected(P,L2)</code> は L1 の subobjects を全部出してから L2 で絞る)。交差にすれば小さい方から当たれるうえ、出力サイズで抑えられるので cap 自体が要らなくなる可能性がある。<br><b>要る部品:</b> (1) 関係ごとの索引(いまは <code>components[].subobjects</code> の線形走査と <code>connected_pairs_for_types</code> の型ペアキャッシュしかない)、(2) 変数順序の決め方、(3) <a href="#b29">b29</a> で必要と分かった<b>実体単位の依存追跡</b> ― 索引を持つとこれも自然に載る。<br><b>部品を1つずつ入れる道は塞がっている(<a class="secref" href="ledger.html">§04</a> #56・#57):</b> 選抜33問×6設定で、cap を外すだけで解けた数 <b>合計 −16</b>、変数順序だけで <b>−1</b>(仕事量は −17.7%〜<b>+388%</b> と乱高下)、両方で <b>−13</b>。<b>cap は semi-join の後でも実際に効いていて外せない。</b>いまの「パターンを選んで候補を出し、熱の順に cap で切る」探索はよく釣り合った局所最適で、generic join の部品(索引・交差・変数順序・capなし)は互いに前提し合っているため、1つずつ入れると必ずどれかが足を引っ張る。<br><b>作り始めた(<a class="secref" href="ledger.html">§04</a> #58):</b> <code>logic_core/genjoin.rs</code> に <code>--generic-join</code> として別のマッチャを置いた。変数を選んで全パターンの候補集合を交差させる形で、capを一切使わない。<code>Connected</code>/<code>Identical</code>/<code>DefinedBy</code>/<code>Distinct</code>/<code>Order</code> と AnglePair の向き、その場生成と需要の記録まで動く。<b>いまの実力は9問中5問</b>で、速いのは test_spiral_similarity(−54%)だけ。既定の挙動は変えていない(選抜33問×6設定でバイト単位で一致)。<br><b>いまの実力(<a class="secref" href="ledger.html">§04</a> #59、選抜33問):</b> 解けた数は 32→<b>15</b>(設定により13〜16)だが、<b>両方が解けた問題での仕事量は −34%〜−63%</b>。抜き取り9問では解けた5問すべてが既定より速く、test_spiral_similarity は 19,123→<b>1,747</b>(−91%)。<b>速さはもう出ている。足りないのは網羅性。</b><br><b>詰まりの正体は補助作図だった(<a class="secref" href="ledger.html">§04</a> #60):</b> AnglePair の memo 逆引きなどを直した上で両マッチャのマッチ数を突き合わせると、試作は<b>少なくではなく多く</b>マッチしていた(有向角の加法性で従来60件 / 試作784件)。試作は完全で、従来は cap で絞られている ― この証明器は<b>絞られていることに依存して</b>焦点を保っている。<br>本当に落ちているのは<b>補助線の需要</b>で、既定が miquel で補助線を7本引くのに対し試作は<b>0件</b>。試作は候補集合の小さい直線を先に束縛して点を後から導くため、「2点はあるのに結ぶ直線が無い」状態に辿り着かない。束縛の順序をずらす案は外れた(需要0件のまま、simson が15倍に悪化)。<b>次は「全変数が決まった後の検査で落ちた DefinedBy を需要として記録する」方向。</b><br><b>その後:</b> 試作用の失敗キャッシュ(いまは sweep のたびに一から辿り直す)、関係ごとの索引(いまは <code>subobjects</code>/<code>uses</code> の線形走査で交差しているので候補集合が大きいと重い)。<br><b>埋もれている手がかり:</b> <code>--var-order</code> は<b>ノイズ5 で 33/33</b>(選抜の全問)を出した ― 選抜でこれが出たのは初めてで、変数順序そのものには伸びしろがある。</div>
-    <div class="evidence"><b>追記 ― 動機が2つとも実測で消えた:</b> この項目の売りは「順序非依存」と「capの不要化」、それに「<a href="#b29">b29</a> の答えでもある」ことだった。<br>(1) <b>capの不要化</b>: 降参する問題に <code>--heat-cap</code> を 40→200 にしても、centroid・desargues・pappus・pascal は<b>1ステップも変わらない</b>(<a class="secref" href="ledger.html">§04</a> #64)。cap は何も切り捨てておらず、上限側に余地が無い。<br>(2) <b>b29 の答え</b>: 失敗キャッシュの無効化を止めた上界を測ると、仕事量は減らず16問落ちる(#66)。直す価値のある問題ではなかった。<br><b>残る動機は順序非依存だけ</b>(定理の登録順を変えると仕事量が±15%動き、1問が解けたり解けなかったりする)。規模に対する見返りは以前の見積もりより小さい。</div>
-    <div class="b-tags"><span class="tag">第一歩で仕事量 −23〜−33%</span><span class="tag">cap・b29 の動機は実測で消えた</span><span class="tag">残るのは順序非依存だけ</span></div>
+<div class="desc">候補を cap で切る前に他の前提で絞る semi-join(<a class="secref" href="ledger.html#l55">#55</a>)は、解を減らさず仕事量 −23〜−33% で既定。本体(変数を選んで全パターンの候補を交差させる generic join)の試作は、補助線の需要が立たず解けた数が半減し、撤去した(<a class="secref" href="ledger.html#l60">#60</a>・<a class="secref" href="ledger.html#l73">#73</a>)。動機のうち cap の不要化と <a class="secref" href="#b29">b29</a> の答えは実測で消え、残るのは順序非依存(<a class="secref" href="#b1">b1</a>)だけ。</div>
+    <div class="b-tags"><span class="tag">第一歩は既定</span><span class="tag">本体は凍結</span></div>
   </div>
 </details>
 <details class="item" id="b10" data-status="frozen">
-  <summary><span class="idx">#1</span><span class="t">仕事量の75〜79%が「一度も結論を適用できないタスク」に消えている</span></summary>
+  <summary><span class="idx"></span><span class="t">仕事量の大半が「結論を適用できないタスク」に消える(仕事量予算の前の診断)</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc"><code>--trace</code>で6問を実測した結果、問題の難易度によらずこの比率がほぼ一定だった。さらに、発火したタスクの中で<b>実際に証明へ残るのはごく一部</b>で、証明そのものが要した仕事は全体の5〜28%にすぎない(thales 4.8% / orthocenter 7.7% / nine_point_full 7.4% / bench_2012egmop1 8.6% / miquel 20.5% / simson 27.5%。いずれも合流履歴まで含めた上界)。つまり探索の効率を上げる余地は<b>まだ一桁ある</b>。どこを削るかはこの数字を見ながら決められるようになった。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 着手:</b> この「空振り」を減らす最初の一手として、<b>タスク単位のメモ化</b>を試した ― <code>dfs_match</code>が既に集めている型別の依存マスク(<code>dep_mask</code>、failed_pathsの無効化に使っているもの)を使い、「dfs_capに当たらず完走して何も適用できなかった」タスクを記録して、その依存型の世代が1つも動いていない限り<code>schedule_full_sweep</code>で積まない、という仕組み。結果は<b>37問合計 6,741,258 対 6,740,492 で実質ゼロ</b>(solvedは29/37のまま)、撤回した。理由は明快で、<b>空の束縛から始まる全探索はほぼ必ず4つの型すべてに依存する</b>ため、どんな変化でもマスクが当たって無効化される。つまりこの75〜79%は「同じ探索の繰り返し」ではなく、毎回本当に変わった状態での探索。削るなら、状態が変わっても再利用できる形 ― 部分マッチの共有(<a class="secref" href="backlog.html">§05</a>-#10)の側で考える必要がある。</div>
-          <div class="b-tags"><span class="tag">タスク単位のメモ化は不発(撤回)</span><span class="tag">同じ探索の繰り返しではない</span></div>
+<div class="desc"><code>--trace</code> で6問を測ると、仕事量の75〜79%が一度も結論を適用できないタスク。タスク単位のメモ化は効果ゼロで撤回(毎回本当に変わった状態での探索だった)。削るなら部分マッチの共有(<a class="secref" href="#b19">b19</a>)の側。</div>
+    <div class="b-tags"><span class="tag">前提が古い</span></div>
   </div>
 </details>
 <details class="item" id="b11" data-status="frozen">
-  <summary><span class="idx">#2</span><span class="t">UCB1の優先度が、証明に効く発火と効かない発火を区別できていない</span></summary>
+  <summary><span class="idx"></span><span class="t">UCB1 の優先度が、証明に効く発火を区別できない(既定では bandit 無効)</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">証明に効いた発火の位置を測ると、simsonは全仕事量の93.2%、orthocenterは91.8%、miquelは86.4%の地点 ― <b>必要な定理が最後まで選ばれていない</b>。一方で定理ごとの平均優先度はどれも+5前後に張り付いており、有効・無効の差がついていない。UCB1の報酬は「結論を適用できたか」で測っているが、<code>--trace</code>が示したのは<b>発火しても証明に残らない方が普通</b>だということなので、報酬の定義そのものを見直す余地がある。逆にnine_point_full(21.5〜66.8%)やbench_2012egmop1(2.7〜85.9%)は実行全体に散らばっており、こちらは順序付けより連鎖の長さが支配的。</div>
-          <div class="b-tags"><span class="tag">★ #1の内訳を先に確認すること</span><span class="tag">報酬の定義から</span></div>
+<div class="desc">報酬が「結論を適用できたか」なので、発火しても証明に残らない方が普通という実態を反映しない。報酬の定義から見直す余地があるが、bandit は既定で無効。</div>
+    <div class="b-tags"><span class="tag">前提が古い</span></div>
   </div>
 </details>
 <details class="item" id="b12" data-status="frozen">
-  <summary><span class="idx">#3</span><span class="t">シード付き再マッチングのファンアウト制御</span></summary>
+  <summary><span class="idx"></span><span class="t">変化した事実から定理を試し直す(シード付き再マッチング)のファンアウト制御</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc"><a class="secref" href="ledger.html">§04</a>で生き返らせた経路(<code>--seeded-rematch</code>)は、有効にすると<code>bench_2018chnwesternmop5</code>が解ける一方で全体は28/37・416秒に落ちる。原因は「定理 × 一致するパターン × 全順列」の数だけ優先度10のタスクを無差別に積むこと。#2と合わせて、<b>どの事実からどの定理をシードする価値があるか</b>を選ぶ仕組みがあれば、両取りできる可能性がある。<a class="secref" href="backlog.html">§05</a>-#7の「結論形式単位の制御が必要」という診断とも一致する。</div>
-          <div class="b-tags"><span class="tag">実測済み: 現状は明確な損</span><span class="tag">絞り方の設計が要る</span></div>
+<div class="desc"><code>--seeded-rematch</code> は定理 × パターン × 全順列のタスクを無差別に積むので全体が悪化する(6回試して6回撤回)。定理の層でマージを連鎖させる本来の手段で、結論の形(fact_type と型)ごとに頻度で抑える形が次の候補。AR は角・複比・比・相似の線形な関係について、この連鎖を格子で一度に行う(<a class="secref" href="ledger.html#l82">#82</a>)。</div>
+    <div class="b-tags"><span class="tag">フラグで残置</span></div>
   </div>
 </details>
 <details class="item" id="b13" data-status="frozen">
-  <summary><span class="idx">#4</span><span class="t">fanout_heat_cap=5 は証明に要る実体をかなり外している</span></summary>
+  <summary><span class="idx"></span><span class="t">候補capを最初から広げても証明は早まらない</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">証明に登場した実体が熱の降順で何位にいるかを測ると、nine_point_fullでは点23個中20個・直線12個中9個が順位5の外、miquelでも点10個中7個が外にいた。一方<code>heat_cap=40</code>の外に出るものは全問題で0個。段階的な拡張(<a class="secref" href="ledger.html">§04</a>)が効いているのはこのためで、逆に<code>heat_cap</code>側は緩すぎて絞りとして機能していない可能性がある。<b>次の一手は「capの値」ではなく「並べ方」</b>だが、下記の通り単純な式の差し替えは実測で否定済み。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 着手:</b> 「証明に要る実体がcapの外にいる」なら広げれば届くはず、という含意を実測で確かめた。全37問の消費仕事量の合計は <code>cap=1</code> 6,161,242(ただし<b>27/37</b>、thalesとorthocenter_altを落とす) / <code>cap=2</code> 6,852,238 / <code>cap=3</code> <b>6,499,428</b> / <code>cap=4</code> 7,442,062 / <code>cap=5</code>(既定) 6,740,492 / <code>cap=10</code> 10,521,685 / <code>cap=20</code> 15,857,864。<b>広げる方向は明確に逆効果</b>(10で+56%、20で+135%)で、solvedはcap=1以外どれも29/37のまま増えない。つまり「capの外にいる実体」は、広げて拾っても証明を早めない ― 拾うコストの方がはるかに大きい。狭い方はcap=3が既定より3.6%安いが、2〜5の間で単調ですらない(2と4は5より高い)ので、探索の軌跡のぶれの範囲と見て既定は5のまま据え置いた。<b>この項目の含意は否定された</b>が、「狭く始めて手詰まりのときだけ広げる」という適応的な設計(<a class="secref" href="ledger.html">§04</a>)が正しい形であることの裏付けにはなった。</div>
-          <div class="b-tags"><span class="tag">広げる案は反証(10で+56%/20で+135%)</span><span class="tag">既定5は据え置き</span></div>
+<div class="desc">cap の外にいる実体は、広げて拾っても証明を早めない(cap=10 で +56%、20 で +135%)。狭く始めて手詰まりのときだけ広げる今の形(<a class="secref" href="#b27">b27</a>)の裏付け。</div>
+    <div class="b-tags"><span class="tag">反証済み</span></div>
   </div>
 </details>
 <details class="item" id="b16" data-status="frozen">
-  <summary><span class="idx">#7</span><span class="t">seeded task経路: 定理単位の絞り込みは5回中5回失敗、結論形式単位の制御が必要</span></summary>
+  <summary><span class="idx"></span><span class="t">シード付き再マッチングを定理単位で絞っても悪化する</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc"><code>schedule_matcher_task</code>によるシード付き再マッチングの再有効化は、これまで5回すべて撤回している。1〜4回目は全定理×全結論形式への無差別適用、5回目(<code>SEED_ENABLED_THEOREMS</code>)は「本来シード起動前提で設計されている」と自身のコメントに明記された5定理だけへの絞り込みだったが、それでも悪化した(simson 1.19s→4.0s、nine_point_fullが7秒で解けていたのがタイムアウトで未解決化)。原因は、対象を定理単位で絞っても<b>Identical(Angle,Angle)という「結論の形」自体がこのドメインで極めて高頻度</b>で、どの定理が証明したかに関わらず証明探索全体でこの形の事実が大量に発生し、5定理のパターンと照合され続けるため。次に試すなら、定理単位ではなく<b>結論の形(fact_type+entity_type)単位で発生頻度に応じたシード抑制</b>(例: Angle同士のIdenticalだけ間引く、または一定時間内の同一結果型への再シード数に上限を設ける)が必要と見られる――ただしこれもまた新しい仮説であり、実測での検証必須。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 6回目(<code>--seeded-rematch</code>、d1033ba)を仕事量予算の下で実測。掛け合わせ <b>29/37・51秒 → 28/37・416秒</b>。過去5回と同じく悪化だが、今回は初めて<b>内訳が取れた</b>: simson 単体で消費仕事量が105,430→740,036(7倍)、その87.7%をシード済みタスク1455回ポップが食う。また完全な損ではなく <code>bench_2018chnwesternmop5</code> は新たに解ける(<code>nine_point_full</code>と<code>bench_2005ctstp1</code>を落とす)。今回は撤回せずフラグとして残したので、7回目の試行は再実装なしで測れる。</div>
-          <div class="b-tags"><span class="tag">6戦6敗・ただしフラグで残置</span><span class="tag"><a class="secref" href="backlog.html">§05</a>-#3に引き継ぎ</span></div>
+<div class="desc">「シード起動前提」の5定理だけに絞っても悪化した。有向角どうしの一致という結論の形がこのドメインで高頻度なため、定理単位ではなく結論の形の単位で抑える必要がある(<a class="secref" href="#b12">b12</a>)。</div>
+    <div class="b-tags"><span class="tag">6戦6敗</span></div>
   </div>
 </details>
 <details class="item" id="b17" data-status="frozen">
-  <summary><span class="idx">#8</span><span class="t">failed_pathsのグローバル化、速度効果はノイズに埋もれて未確認</span></summary>
+  <summary><span class="idx"></span><span class="t">失敗キャッシュを定理ごとの永続キャッシュにした効果は未測定</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">「探索木のメモ化」(旧#3、<a class="secref" href="ledger.html">§04</a>「failed_pathsキャッシュをMatchTask単位からtheorem_idxごとの永続グローバルキャッシュへ昇格」で出荷)は、タスクをまたいだ共有という設計上の目的を達成し、32問題×3回集計でsolved/unsolvedの正誤とスコア(78/96)を完全に保ったまま(=既存の全パスに悪影響が無いことは確認済み)出荷した。出荷直後に<code>--profile</code>でグローバル化前後(コミット15cbb84 vs a242796)を単発A/Bした結果: simson 1.19s→1.12s、nine_point_full 7.21s→7.24s、miquel_quadrilateral 1.41s→1.36s、orthic_incenter 1.90s→1.88s――いずれも数%の揺れの範囲内で、単発比較では明確な高速化とは言えなかった(orthocenterは元々ボーダーラインな不安定問題のため単発比較に使えなかった)。当初の診断で見つけた「dfs_matchの全呼び出しの約38%がタスクをまたいだ再訪問」がどこまで削れたかを確かめるには、単発の壁時計時間ではなく複数回平均、または<code>ProfileStats</code>のdfs_call消費量の内訳を直接比較する必要がある――過剰にコストをかける優先度ではないが、正確な効果測定はまだ済んでいない。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 当時これが「未確認」で止まったのは、壁時計の単発比較では数%の揺れに埋もれたため。<b>その障害は消えている</b> ― 予算が仕事量になり、消費ステップ数は機械の混み具合に一切左右されないので、同じ問題を2つのコミットで流して引き算するだけで決着する。未実施の理由は優先度だけになった(有効/無効を切り替えるフラグが無いので、測るには一時的な分岐が要る)。</div>
-          <div class="b-tags"><span class="tag">測定の障害は解消済み</span><span class="tag">あとは優先度の問題</span></div>
+<div class="desc">出荷済み。壁時計の単発比較では数%の揺れに埋もれた。仕事量予算の今なら2つのコミットの差で決着するが、切り替えのフラグが無く優先度も低い。</div>
+    <div class="b-tags"><span class="tag">優先度低</span></div>
   </div>
 </details>
 <details class="item" id="b18" data-status="frozen">
-  <summary><span class="idx">#9</span><span class="t">軽量な再統合機構(全リセットに代わる手段)</span></summary>
+  <summary><span class="idx"></span><span class="t">全体の再照合に代わる軽量な再統合</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">新規エンティティ1つのために <code>schedule_full_sweep</code> が非シードタスク全体を揺さぶる、という構図そのものが2度の撤回の共通原因だった――ただし実測(#1)により<code>schedule_full_sweep</code>自体のコストは無視できるほど小さいと判明したため、優先度はDefinedByの<code>constructions</code>フィールドを使った設計上の一貫性の話として据え置く。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> <code>--profile</code>で再確認。bench_2012egmop1 で <code>schedule_full_sweep</code> は39回呼ばれて累計0.001秒(全体の0.0%)、一方 <code>dfs_match</code> 本体が98.5%。優先度を下げた当時の判断はそのまま有効。</div>
-          <div class="b-tags"><span class="tag">再確認済み・優先度低のまま</span><span class="tag">設計上の一貫性</span></div>
+<div class="desc"><code>schedule_full_sweep</code> 自体のコストは無視できるほど小さい(全体の0.0%)。設計上の一貫性の話として据え置く。</div>
+    <div class="b-tags"><span class="tag">優先度低</span></div>
   </div>
 </details>
 <details class="item" id="b19" data-status="frozen">
-  <summary><span class="idx">#10</span><span class="t">本格的なRETE型ベータネットワーク</span></summary>
+  <summary><span class="idx"></span><span class="t">本格的な RETE 型ベータネットワーク(部分マッチの共有)</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">定理間で部分マッチそのものをインクリメンタルに伝播する、案4のもともとの構想。#1〜#3で得られる効果を見てから判断する規模の刷新。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 着手条件だった「#1〜#3で得られる効果を見てから」は、形を変えて満たされた ― <code>--trace</code>(<a class="secref" href="ledger.html">§04</a>)が、判断に必要な数字を直接くれる。<b>仕事量の75〜79%が、一度も結論を適用できないタスクに消えている</b>というのがその数字で、これはまさにRETE型の部分マッチ共有が削ろうとしている領域そのもの。規模の大きさは変わらないが、「効果があるか分からないまま着手する」状態ではなくなった。</div>
-          <div class="b-tags"><span class="tag">判断材料は揃った(<a class="secref" href="backlog.html">§05</a>-#1)</span><span class="tag">大規模</span></div>
+<div class="desc">定理間で部分マッチをインクリメンタルに伝播する大規模な刷新。<a class="secref" href="#b10">b10</a> の「適用できないタスク」を削る本命だが、到達を広げる見込みは規則の不足が律速(<a class="secref" href="#b8">b8</a>)なので低い。</div>
+    <div class="b-tags"><span class="tag">大規模</span></div>
   </div>
 </details>
 <details class="item" id="b20" data-status="frozen">
-  <summary><span class="idx">#11</span><span class="t">定理集合の増加が無関係な問題に課税する問題 — 実測できた。射影5定理で平均+29%</span></summary>
+  <summary><span class="idx"></span><span class="t">定理の追加が無関係な問題に課税する ― opt-in でない減らし方は AR への置き換え</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> ここに書いた「具体的な改善案」は<b>問題名で定理を入れる opt-in そのもの</b>で、方針(新しい問題に効かない opt-in はしない)に反する。#34 で実施し #45 で撤回済み。着手しない。</div>
-<div class="desc">新定理を1つ足すと、その定理を使わない問題まで「一度は試す」コストを払う。型シグネチャ事前フィルタ(#03既出)で軽減はしたが解消はしていない、既知の許容トレードオフとして監視を続ける。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 「既知だが未測定」だったこの課税を、仕事量で初めて数値化した。射影5定理の有無(<code>--no-projective</code>)で、<b>それらを一切使わない7問</b>の消費仕事量を比べると:
-          <table style="margin:10px 0;border-collapse:collapse;font-size:13px">
-          <tr><th style="text-align:left;padding:2px 12px 2px 0">問題</th><th style="text-align:right;padding:2px 12px 2px 0">22定理(既定)</th><th style="text-align:right;padding:2px 12px 2px 0">17定理</th><th style="text-align:right">課税</th></tr>
-          <tr><td style="padding:2px 12px 2px 0">varignon</td><td style="text-align:right;padding:2px 12px 2px 0">4,020</td><td style="text-align:right;padding:2px 12px 2px 0">2,706</td><td style="text-align:right"><b>+48.6%</b></td></tr>
-          <tr><td style="padding:2px 12px 2px 0">simson</td><td style="text-align:right;padding:2px 12px 2px 0">97,276</td><td style="text-align:right;padding:2px 12px 2px 0">60,754</td><td style="text-align:right"><b>+60.1%</b></td></tr>
-          <tr><td style="padding:2px 12px 2px 0">nine_point_full</td><td style="text-align:right;padding:2px 12px 2px 0">476,779</td><td style="text-align:right;padding:2px 12px 2px 0">335,320</td><td style="text-align:right"><b>+42.2%</b></td></tr>
-          <tr><td style="padding:2px 12px 2px 0">circumcenter</td><td style="text-align:right;padding:2px 12px 2px 0">2,840</td><td style="text-align:right;padding:2px 12px 2px 0">2,359</td><td style="text-align:right">+20.4%</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">thales</td><td style="text-align:right;padding:2px 12px 2px 0">2,599</td><td style="text-align:right;padding:2px 12px 2px 0">2,323</td><td style="text-align:right">+11.9%</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">miquel</td><td style="text-align:right;padding:2px 12px 2px 0">19,379</td><td style="text-align:right;padding:2px 12px 2px 0">17,352</td><td style="text-align:right">+11.7%</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">orthocenter</td><td style="text-align:right;padding:2px 12px 2px 0">200,677</td><td style="text-align:right;padding:2px 12px 2px 0">185,950</td><td style="text-align:right">+7.9%</td></tr>
-          </table>
-          型シグネチャ事前フィルタを通した後でも、<b>5定理を足すだけで無関係な問題が平均+29%(中央値+20%)払っている</b>。「軽減はしたが解消していない」という当時の記述は正しかったが、残っている量はこれだけ大きい。
-          <br><br>そして<b>その5定理が買っているのは、それらを直接試す単体検証5問だけ</b>だった ― <code>--no-projective</code> の掃引は 24/37 で、落ちるのは <code>test_cross_ratio</code> / <code>test_steiner</code> / <code>test_steiner_tangent</code> / <code>test_involution</code> / <code>test_steiner_converse</code> の5問ちょうど。古典幾何・HAGeo由来の問題は1問も増減しない。射影定理を既定にした判断(bbc1327)の根拠は「bench_2018chnwesternmop5 が解けるようになる」だったが、<b>その+1問は後に図の崩壊による偽陽性だと判明している</b>(<a class="secref" href="ledger.html">§04</a>)ので、既定化の根拠は既に消えている。
-          <br><br><b>具体的な改善案:</b> 中心角の定理が <code>bench_2012egmop1</code> でだけ有効になっているのと同じ形で、射影5定理も必要な5問でだけ有効にする。掃引の成績(29/37)は変えずに、残り32問の探索が2〜6割軽くなる計算になる。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 「課税を減らすには定理を減らす」の、opt-in ではない形が見つかった: 定理が言っていることを AR の等式にして定理を外す。方冪・交わる弦の相似の2定理を外して幾何平均 −11.9%(<a class="secref" href="ledger.html#l85">§04 #85</a>)。射影5定理も AR の等式の生成(#83)を持つが、座標を置けない問題で AR が働かないので外せない。</div>
-          <div class="b-tags"><span class="tag">初めて数値化: 平均+29%</span><span class="tag">射影5定理は既定から外せる</span></div>
+<div class="desc">射影5定理は、使わない問題にも平均 +29% を課税していた(2026-09-16)。問題名で定理を入れる opt-in は方針で使わない。定理が言っていることを AR の等式にして外すのが、opt-in ではない減らし方(方冪・交わる弦の相似を外して幾何平均 −11.9%、<a class="secref" href="ledger.html#l85">#85</a>)。射影の定理は、座標を置けない問題で AR が働かないので外せない。</div>
+    <div class="b-tags"><span class="tag">AR で置き換え</span></div>
   </div>
 </details>
 </div>
 <div class="group"><div class="group-title">④ 解決・反証・不発 · 16件</div>
-<details class="item" id="b32" data-status="done">
-  <summary><span class="idx"></span><span class="t">マージの由来を出す ― 各マージの理由(Justification)と合流経路の復元・監査の「偽の連鎖の根」で出せるようになった</span></summary>
+<details class="item" id="b47" data-status="done">
+  <summary><span class="idx"></span><span class="t">入口ごとの探索の組み立てを1本にした ― serve・discover も固定座標・結論の検算・AR・数値で選ぶ補助作図を使う(2026-09-30)</span></summary>
   <div class="body">
-<div class="desc">マージ監査(<a class="secref" href="ledger.html">§04</a>)は数値で真偽を見るところまでで、<b>なぜそのマージが起きたか</b>は出せない。union-find に証明の辺を張る proof forest(Nieuwenhuis–Oliveras)や <code>egg</code> の explanation が既製の答えで、偽マージの由来を機械的に辿れるようになる。定理の書き方の誤りを見つける手間が大きく減る。<br><b>取らないもの:</b> LCF 風カーネル、依存型、tactic 言語、完全な superposition。こちらの主張は地の等式・接続関係なので、その表現力は要らない。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 解決済み扱い: 各マージは理由(定理名と前提・局所伝播の共有点・AR の使った等式)を記録し(<code>merge_entities_justified</code>)、<code>explain_identical</code> と <code>extract-proof</code> が合流経路を前提まで再帰的に復元する。<code>census_sum.py</code> は問題ごとの最初の偽(偽の連鎖の根)を出し、#81(透視射影不変性の非退化条件)・#85(centroid の AR の穴)はこれで根を特定した。</div>
-    <div class="b-tags"><span class="tag">監査の後始末が楽になる</span><span class="tag">小さめ</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l86">#86</a>。準備(<code>prepare</code>)と手詰まりの一手(<code>on_stall</code>)と回復の既定を solve・serve・discover で共有し、AR が置き換える2定理の除外を <code>theorem_set</code> に移した。共円・接続の目標も検算・監査する。solve は1ステップも変わらず、作図画面の証明は同じ4つの図の発見80件で 55 → 67件。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
+  </div>
+</details>
+<details class="item" id="b32" data-status="done">
+  <summary><span class="idx"></span><span class="t">マージの由来を出す ― 各マージの理由と、時刻つきの監査・偽の連鎖の根で出せる</span></summary>
+  <div class="body">
+<div class="desc">各マージは理由(定理名と前提・局所伝播の共有点・AR の使った等式)と時刻を持ち、<code>extract-proof</code> が前提まで時刻つきで辿る(<a class="secref" href="ledger.html#l87">#87</a>)。<code>census_sum.py</code> は問題ごとの最初の偽(偽の連鎖の根)を出す。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b22" data-status="done">
-  <summary><span class="idx">#13</span><span class="t">残り4問(2012egmop1・2018chnwesternmop5・2005usamop3・2011balkanmop1)は全て解けた</span></summary>
+  <summary><span class="idx"></span><span class="t">「新しい補題が要る」とした4問は全て解けた</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 監査:</b> 仕事量予算・44問ベンチに移る前の診断。前提が古く、その後の実測(#55 の semi-join、#64・#66 の否定的結果など)で状況が変わった。着手する前に、今の状態で測り直すこと。到達を広げる見込みは、b8 の分類(規則の不足が律速)からは低い。</div>
-<div class="desc">bench_2012egmop1 / bench_2018chnwesternmop5 / bench_2005usamop3 / bench_2011balkanmop1。それぞれ--time=45秒 + <code>--mcts</code>(無方向な補助構成探索を有効化)でも証明に届かないことを確認した(bench_2005usamop3は需要が尽きて自ら探索を打ち切るが、他の2つは時間いっぱい補助構成を作り続けて終わる)。これはdfs_capやヒューリスティックの調整で届く範囲ではなく、各問題が要求する古典的な補題(2012 EGMO P1は「AEDFの共円性」のような中間結論、2018 China Western MO P5・2005 USAMO P3も同様に固有の中間補題)が、現状の定理群のどの組み合わせでも再現できないことを示す。bench_2011balkanmop1(#6参照)は原因を1つ具体的に特定できたが、残り3問は「どの補題が足りないか」の特定自体がまだ済んでいない――各問題の模範解答を読み、必要な中間結論を既存定理群の言葉(AnglePair/LengthSq/Product等)に翻訳できるかを1問ずつ検討するところから始める必要がある。<b>注記(このatlas更新時点):</b> 当初この4問と一緒に「探索チューニングでは届かない」とされていたbench_2018silkroadp1/bench_2005ctstp1は、この4問とは性質が違うと判明したため#8へ切り出した――この4問だけが本当に新定理・新補題を要求するグループ。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 4問の内訳が変わった。<b>bench_2012egmop1 は既定設定で解ける</b>(20.3秒・2,368,793ステップ、MCTSは一度も起動しない)。当時「要新定理」と判断したのは正しく、必要だった中心角の定理は追加済みで、あとは探索側の改善(<a class="secref" href="ledger.html">§04</a>)が<code>--time=75〜90 --mcts</code>を不要にした。<b>bench_2018chnwesternmop5 は逆方向に動いた</b> ― 一時期「解けた」と数えていたがそれは図の崩壊による偽陽性で(<a class="secref" href="ledger.html">§04</a>)、実際には最初から解けていなかった。残る要・新定理は bench_2005usamop3 / bench_2011balkanmop1 / bench_2018chnwesternmop5 の3問で、うち原因を特定できているのは #12 の1問だけ、という状況は変わっていない。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 4問とも既定で解ける: bench_2012egmop1(中心角の定理、#70)、bench_2005usamop3(写しの修正、#69)、bench_2011balkanmop1(#74・#85)、bench_2018chnwesternmop5(座標を置ける書き方で AR の相似、<a class="secref" href="ledger.html#l85">§04 #85</a>)。</div>
-          <div class="b-tags"><span class="tag">1問解決・1問は偽陽性だった</span><span class="tag">要・新定理設計×3</span></div>
+<div class="desc">bench_2012egmop1(中心角の定理、<a class="secref" href="ledger.html#l70">#70</a>)、bench_2005usamop3(写しの修正、<a class="secref" href="ledger.html#l69">#69</a>)、bench_2011balkanmop1(<a class="secref" href="ledger.html#l74">#74</a>・<a class="secref" href="ledger.html#l85">#85</a>)、bench_2018chnwesternmop5(座標を置ける書き方で AR の相似、<a class="secref" href="ledger.html#l85">#85</a>)。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b21" data-status="done">
-  <summary><span class="idx">#12</span><span class="t">bench_2011balkanmop1(スパイラル相似)の根本原因: 定理の距離配置が合わない ― 解けた(交わる弦の相似 #74、今は AR の相似で定理なし #85)</span></summary>
+  <summary><span class="idx"></span><span class="t">bench_2011balkanmop1 ― 交わる弦の相似で解け(#74)、今は AR の相似で定理なしに解ける</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28:</b> この定理は既定から外した(<a class="secref" href="ledger.html#l71">§04 #71</a>)。2直線の配置(共点二弦)は逆向きの相似で、この定理が要求する同じ向きの等式が成り立たないことも分かった(<a class="secref" href="ledger.html#l68">§04 #68</a>)。書き直しは <a href="#b42">b42</a>。</div>
-<div class="desc">「スパイラル相似の中点対応」定理を実測診断した結果、以前の「前提がStallで確立されない」という推測は不正確だったと判明。本問題ではE=AC∩BD(円に内接する四角形ABCDの対角線の交点)で、実際にログ上でも方冪の定理相当の積の等式(EA・EC=EB・ED)は正しく確立されている――問題は前提の未確立ではなく、<b>定理の構造そのものがこの配置に噛み合わない</b>こと。定理は<code>LineEA,LineEB,LineED,LineEC</code>という4本の"Eを通る互いに異なる直線"を要求する(distinct制約)。これは一般の(円で結ばれていない)スパイラル相似中心のような「4方向に開いた頂点」を想定した設計だが、bench_2011balkanmop1のE=AC∩BDでは、Eを通る直線は実際にはAC・BDの2本しかなく(A,E,Cが共線、B,E,Dが共線)、4本のdistinct制約を原理的に満たせない。必要なのは4直線版ではなく、「共点二弦の相似」と同じ2直線配置(LineAB,LineCDがPを通り、LineAD,LineCBは通らない、という非対称な4直線)に相当する、"2直線が交わる点における中点対応"専用の新しい定理――既存定理の使い回しでは届かず、新規のTheoremDef設計(角度対応の一般化+中点という特定の対応点への相似の遺伝)が必要。<b>方針D(<a class="secref" href="atlas.html#tracks">§00</a>)が「最終手段として温存」する具体案の1つ。</b></div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 診断は今も有効。冗長な distinct を削除した際にこの定理からも部分集合側(<code>["LineEA","LineEB"]</code>など)は消えたが、<b>診断の根拠である4本版 <code>distinct(["LineEA","LineEB","LineED","LineEC"])</code> はそのまま残っている</b>。bench_2011balkanmop1 は現在も未解決。</div>
-          <div class="evidence"><b>追記 ― この定理は現状むしろ害かもしれない(<a class="secref" href="ledger.html">§04</a> #65 の副産物):</b> 「スパイラル相似の中点対応」を書き換えて<b>一度も発火しない</b>状態にしたとき(=実質この定理を外したのと同じ)、選抜33問のノイズ10で <b>bench_2018silkroadp1 と bench_2022balkanmop1 が解けるようになった</b>(仕事量も −56.9%)。もちろん test_spiral_similarity は落ちる。<br><b>測るべきこと:</b> この定理を明示的に外した A/B を取り、「1問(test_spiral_similarity)のために2問を失っていないか」を確かめる。24定理中いちばん大きい定理(変数33・パターン26)なので、課税も最大のはず。安くて当たりそうな計測。</div>
-    <div class="evidence" style="margin-top:8px"><b>2026-09-30 の精査:</b> 解決。<a class="secref" href="ledger.html#l74">§04 #74</a> の「交わる弦の相似」(逆向きの相似、2直線の配置)で解け、<a class="secref" href="ledger.html#l85">§04 #85</a> からは AR の相似と相似で対応する点(中線どうしの対応)で、この定理も無しで解ける(5.8万ステップ)。</div>
-    <div class="b-tags"><span class="tag">診断は今も有効</span><span class="tag">要・新定理設計</span><span class="tag">外すと ノイズ10 で2問増えるかもしれない</span></div>
-  </div>
-</details>
-<details class="item" id="b47" data-status="done">
-  <summary><span class="idx"></span><span class="t">入口ごとの探索の組み立てを1本にした ― serve・discover の証明試行も固定座標・結論の検算・AR・数値で選ぶ補助作図を使い、共円・接続の目標も監査する(2026-09-30)</span></summary>
-  <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l86">#86</a>。<a class="secref" href="atlas.html#gaps">§02 連携の穴</a>で見つけた3つ: (1) 前提の凍結・固定座標・検査の設定と、手詰まりの一手(AR + recover)が solve.rs の中だけにあり、serve・discover の証明試行は古い組み立てのままだった。(2) AR が置き換える2定理の除外が <code>theorem_set</code> の外にあり、§07 と定理の検査が2件を既定と表示していた。(3) 目標が共円・接続の8問は、目標到達時の数値の検算と深い証明の監査が無かった。</div>
-    <div class="evidence"><b>直した:</b> <code>BlackboardEngine::prepare</code>(前提の凍結 → 固定座標 → 検査の設定)と <code>on_stall</code>(AR と recover を同じ回に)を3つの入口で共有し、回復の既定を <code>RecoveryOptions::standard()</code> に1本化(serve・discover は中点の需要だけ足す)。除外は <code>TheoremSetOptions::ar_replaces_chord</code> に移した。共円・接続の目標は固定座標で目標の接続を確かめ、<code>RawProof::verify_incidences</code> で目標の接続の由来(記録が無ければ定義から従う組)まで監査する。<br><b>結果:</b> solve は37問×6設定で基準と1ステップも変わらない。作図画面は同じ4つの図の発見80件のうち、証明できた件数が 55 → 67。共円・接続の目標の7問で監査が回り、ギャップ0(bench_2022balkanmop1 は 3,480ステップ)。<b>残り:</b> MCTS の数値ショートカット判定はまだ Identical の目標だけ(MCTS は既定で無効)。</div>
-    <div class="b-tags"><span class="tag">解決</span><span class="tag">serve</span><span class="tag">discover</span><span class="tag">監査</span></div>
+<div class="desc">旧スパイラル相似の定理は4本の直線を要求し、2直線が交わる配置に噛み合わなかった。逆向きの相似として書いた「交わる弦の相似」で解け(<a class="secref" href="ledger.html#l74">#74</a>)、今は AR の相似と相似で対応する点(中線どうしの対応)で、定理なしに解ける(<a class="secref" href="ledger.html#l85">#85</a>)。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b42" data-status="done">
-  <summary><span class="idx"></span><span class="t">スパイラル相似の中点対応を安く書き直す ― 謎は自己束縛の見積もり。逆向きは「交わる弦の相似」として既定に、同じ向きと局所伝播は既定外(2026-09-29)</span></summary>
+  <summary><span class="idx"></span><span class="t">スパイラル相似の中点対応を安く書き直す ― 逆向きは交わる弦の相似(今は AR が置き換え)、同じ向きは既定外</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l74">§04 #74</a>・<a class="secref" href="ledger.html#l75">§04 #75</a>。<b>効かなかった理由:</b> 比の前提 EA·EC = EB·ED を作れる定理が無く、単体テスト以外で一度も発火していなかった。<b>順序が効かない謎:</b> 見積もりで、どれも未束縛の一致(自己束縛)は 15 と安く、一部だけ束縛された定義(25 以上)より先に選ばれる。角の一致と積の一致の2つの自己束縛を続けて選ぶので、並びを変えても同じ順序になっていた(<a class="secref" href="theorems.html">§07 定理</a>の見積もりの表で見える)。</div>
-    <div class="evidence"><b>結果:</b> 角だけで書き直した同じ向きの版(<code>--rules=spiral</code>)は 2016ARMO を補助作図なしで解くが、図を膨らませて +2/−7。共円の仮定で書いた逆向きの版(交わる弦の相似、中点は照合だけ)は 2011 バルカンを解いて +4/−3、課税 +1〜9% で既定。局所伝播(<code>--rules=spiral-prop</code>)は、差分評価と「作らない」で課税は小さくなるが何も増えない。</div>
-    <div class="b-tags"><span class="tag">解決(逆向き)</span><span class="tag">同じ向きは既定外</span><span class="tag">謎は見積もり</span></div>
+<div class="desc">順序が効かない謎は、どれも未束縛の一致(自己束縛)の見積もりが安いことだった。逆向きの版は既定に入れた後、AR が置き換えた(<a class="secref" href="ledger.html#l74">#74</a>・<a class="secref" href="ledger.html#l85">#85</a>)。同じ向きの版(<code>--rules=spiral</code>)と局所伝播(<code>--rules=spiral-prop</code>)は既定外。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b37" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>ベンチの妥当性と汎化を測る土台</s> — 入れた(bench_2005usamop3 の修正・検算の素通しを塞ぐテスト・HAGeo-409 の取り込み・保留問題・ノイズの seed)</span></summary>
+  <summary><span class="idx"></span><span class="t">ベンチの妥当性と汎化を測る土台</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l69">§04 #69</a>。bench_2005usamop3 は写しを直して全6設定で解ける(以前は「未解決」に数えていたが、原題が凸四角形で決めていた分岐を前提が決めておらず、健全な証明が原理的に存在しなかった)。検算のテストが判定不能(None)を素通しにしていたのを、<code>INDETERMINATE_KNOWN</code> のテストで塞いだ(4問が残る: miquel・miquel_quadrilateral・two_circles_reim・bench_2018chnwesternmop5)。<b>HAGeo-409 の作図語彙の被覆率は 29/409(7%)</b>で、円の定義が最大の壁(<a href="#b41">b41</a>)。保留問題 <code>bench/heldout.txt</code>(23問)と <code>bench/heldout.sh</code>、ノイズの seed を変える <code>bench/seeds.sh</code> を入れた。</div>
-    <div class="evidence"><b>残り:</b> 検算が判定不能の4問は第2交点の定義で書き直せば検算できるが、bench_2018chnwesternmop5 は書き直すと 800万で解けなくなる(<a href="#b43">b43</a>)。</div>
-    <div class="b-tags"><span class="tag">修正済み</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l69">#69</a>。bench_2005usamop3 の写しの修正、判定不能を素通しにしていたテストの修正、HAGeo-409 の取り込み(被覆率 29/409、<a class="secref" href="#b41">b41</a>)、保留問題(<code>bench/heldout.txt</code>)、ノイズの seed を変える <code>bench/seeds.sh</code>。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b38" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>中心角の定理を既定にして、問題名の opt-in リストを撤去する</s> — 既定にした(課税は無かった)</span></summary>
+  <summary><span class="idx"></span><span class="t">中心角の定理を既定にして、問題名の opt-in を撤去した</span></summary>
   <div class="body">
-<div class="desc"><code>solve.rs</code> の <code>CENTRAL_ANGLE_PROBLEMS</code>(bench_2012egmop1 だけ)を撤去し、中心角の定理を全問題の既定にした(<code>--no-central-angle</code> で外せる)。<a class="secref" href="ledger.html#l70">§04 #70</a>。課税を恐れて入れていなかったが、semi-join(#55)と補助線の枠分け(#62)の後に測り直すと、選抜で幾何平均 −1〜−2%、中央値 +0.2〜0.8%、20%超悪化した問題は最大1つ(bench_2011armog10p6 の noise10 で 1.26倍)。</div>
-    <div class="b-tags"><span class="tag">opt-in が消えた</span><span class="tag">課税は無い</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l70">#70</a>。課税は無かった(選抜で幾何平均 −1〜−2%)。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b39" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>ノイズで悪化した上位の問題を根因分析する</s> — スパイラル相似の中点対応が仕事量の約半分だった。既定から外した</span></summary>
+  <summary><span class="idx"></span><span class="t">ノイズで悪化した問題の根因 ― スパイラル相似の中点対応が仕事量の約半分。既定から外した</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l71">§04 #71</a>。bench_2019g1 のノイズ20(202k → 5.9M、29倍)で、<code>--stats</code> は「スパイラル相似の中点対応」が 37回の試行で平均 71,635 ステップ(45%)、cap 到達 22回と示した。外すと選抜の幾何平均が −28%、ノイズ10で +2問。既定から外した(<code>--rules=spiral</code> で戻せる)。</div>
-    <div class="evidence"><b>残る謎:</b> <a href="#b42">b42</a>。</div>
-    <div class="b-tags"><span class="tag">#62 の手順が効いた</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l71">#71</a>。外すと選抜の幾何平均 −28%、ノイズ10で +2問。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b40" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>既定オフの実験経路を整理する</s> — 関係マッチングの試作(genjoin.rs 513行)と結論のまとめ適用を消した</span></summary>
+  <summary><span class="idx"></span><span class="t">既定オフの実験経路を整理した(関係マッチングの試作・結論のまとめ適用)</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html#l73">§04 #73</a>。既定の結果はバイト単位で不変(選抜の default・extras・skip)、約700行減。戻すなら コミット 3c5941d。残した経路(MCTS・bandit・seeded-rematch・var-order・nogood-core・widen-first)は小さい切り替えで、A/B の再開に要る。</div>
-    <div class="b-tags"><span class="tag">約700行減</span></div>
+<div class="desc"><a class="secref" href="ledger.html#l73">#73</a>。既定の結果はバイト単位で不変、約700行減。MCTS・bandit・seeded-rematch・var-order・nogood-core・widen-first は A/B 用の小さい切り替えとして残した。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b2" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>結論のマージの数値監査を常設する</s> — <code>--audit-merges</code> として実装</span></summary>
+  <summary><span class="idx"></span><span class="t">結論のマージの数値監査を常設する ― --audit-merges と census</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="ledger.html">§04</a> の2件の健全性の穴(線束→点で偽3,525件、共点二弦の相似で偽6件)は、定理の結論のマージを <code>numeric_plausibility_check</code> にかけて数える一時計測で初めて見えた。<code>merge_entities_justified</code> は定理の結論を数値で裏付けずにマージするので、定理の書き方の誤りは最終目標の数値サニティチェックに引っかかるまで気づけない。これを <code>--audit-merges</code> のような診断フラグにし、全問掃引で定理ごとの偽の件数を出せるようにする。前提付きの問題(乱数座標が前提を満たさない)は誤警報になるので、問題ファイル側で前提付きであることを宣言して除外する(<code>problems::tests</code> の <code>ASSUMES_A_HYPOTHESIS</code> と同じ扱い)。</div>
-          <div class="b-tags"><span class="tag">定理の追加・書き換えのたびに回す</span></div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-17 実装(<a class="secref" href="ledger.html">§04</a> #49):</b> 定理の結論のマージと接続を適用直前に検算し、<code>MERGE_AUDIT</code> 行で定理ごとの真・偽・判定不能を出す。探索の乱数は消費しない(付けても44問の結果・仕事量・推論ログが完全に一致)。前提付きの問題は問題名のリストではなく「探索前にマージ済みの組が乱数座標で成り立つか」で自動判定する(直角・0度の定数 Ang90/Ang0 は複比の値 -1/1 として比べる)。全44問で偽34件は全て前提付きと判定された6問の中で、それ以外の38問は偽0件。</div>
+<div class="desc">定理の結論・局所伝播・AR の全マージと接続を固定座標で確かめ、出どころ別に真・偽・判定不能を数える(<a class="secref" href="ledger.html#l49">#49</a>・<a class="secref" href="ledger.html#l78">#78</a>・<a class="secref" href="ledger.html#l79">#79</a>)。<code>--no-merge-checks</code> と組むと規則だけで健全かが分かる。今は42問が対象で偽0。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b4" data-status="done">
-  <summary><span class="idx"></span><span class="t"><s>交点の需要は当たる割合が最も高いのに30個しか作っていない ― 候補の出どころを広げる</s> — 定理のパターンから広げる案は2通りとも不発</span></summary>
+  <summary><span class="idx"></span><span class="t">交点の需要の候補を定理のパターンから広げる ― 2通りとも不発</span></summary>
   <div class="body">
-<div class="desc" style="border-left:3px solid var(--warning);padding-left:10px;margin-bottom:10px"><b>2026-09-28 追記:</b> 下の「次の一手」にある「交点が律速ではない」は当時のもの。今は 2016ARMO の補助作図 X(垂線と PQ の交点)を与えれば解ける(<a href="#b8">b8</a>)。</div>
-<div class="desc"><code>--origins</code>(<a class="secref" href="ledger.html">§04</a>)で、<code>resolve_point_demands</code> が作った交点は解けた問題で17個中14個が証明の手順に出ており、外すと orthocenter・orthocenter_alt が落ちる。候補の出どころは (a) <code>match_defined_by_fact</code> の <code>Intersection</code> の空振り(そういうパターンを持つ定理が無いので一度も発火しない)と (b) 垂線の足の走査、の2つで、実際に働いているのは(b)だけだった。
-          <br><br><b>試したこと(2026-09-16):</b> 定理は「2直線の上にある点」を <code>Connected(P,L1)</code>・<code>Connected(P,L2)</code> の2パターンで書くので、2パターン目の検査に落ちたとき(L1 から取ってきた点が L2 に乗っていない)に L1∩L2 を需要として記録した。</div>
-          <table style="margin:10px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">交点の候補</th><th style="text-align:right;padding:2px 12px 2px 0">解けた数</th><th style="text-align:right;padding:2px 12px 2px 0">解けた31問の仕事量</th><th style="text-align:right;padding:2px 12px 2px 0">作った交点</th><th style="text-align:right;padding:2px 12px 2px 0">証明の手順に登場</th></tr><tr><td style="padding:2px 12px 2px 0">既定(垂線の足だけ)</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">3,263,861</td><td style="text-align:right;padding:2px 12px 2px 0">—</td><td style="text-align:right;padding:2px 12px 2px 0">—</td></tr><tr><td style="padding:2px 12px 2px 0">パターンの空振りを毎回の行き詰まりで使う</td><td style="text-align:right;padding:2px 12px 2px 0"><b>27</b></td><td style="text-align:right;padding:2px 12px 2px 0">+85.8%</td><td style="text-align:right;padding:2px 12px 2px 0">449</td><td style="text-align:right;padding:2px 12px 2px 0">13</td></tr><tr><td style="padding:2px 12px 2px 0">他の需要が尽きてから使う(進み具合で順位付け)</td><td style="text-align:right;padding:2px 12px 2px 0">31</td><td style="text-align:right;padding:2px 12px 2px 0">+17.2%</td><td style="text-align:right;padding:2px 12px 2px 0">54</td><td style="text-align:right;padding:2px 12px 2px 0"><b>0</b></td></tr></table>
-          <div class="evidence"><b>不発の理由:</b> 角の連鎖の定理(有向角の加法性など)はほぼ全ての直線の組について「頂点が2直線に乗る」を要求するので、この空振りは図のほぼ全ての直線の組で起きる。垂線の足が当たっていたのは、<b>候補が狭いから</b>だった。進み具合(その定理の事実パターンをどこまで消費していたか)で順位を付けても、作った54個は1個も証明に出なかった。コードは戻した。
-          <br><b>副産物:</b> この実験で7問が <code>Zero division in ModInt</code> で落ち、<code>measure_intersection_degree_candidate</code> が平行な2直線(交点が無限遠)で z=0 除算する不具合が見つかった(dcbf670で修正)。
-          <br><b>次の一手:</b> 候補を「どの定理が欲しがったか」から探すのではなく、下の diagnose で<b>人間の証明が実際に使った補助点</b>を並べてから決める。今回の4問の筋書きで使った交点は T = AC∩A1C1(2008armog10p6)と X = 「Dを通るADの垂線」∩PQ(2016armog10p2)で、どちらも補助作図を与えただけでは解けていない ― 交点が律速ではない。</div>
-          <div class="b-tags"><span class="tag">31→27 / +17.2%</span><span class="tag">作った54個で登場0</span></div>
+<div class="desc">パターンの空振りから交点を作ると、角の連鎖の定理がほぼ全ての直線の組で空振りするので候補が爆発し、作った54個は1個も証明に出なかった。コードは戻した。</div>
+    <div class="b-tags"><span class="tag">不発</span></div>
   </div>
 </details>
 <details class="item" id="b9" data-status="done">
-  <summary><span class="idx"></span><span class="t">重い定理を頻度で間引く案は不発 ― 間引くほど遅くなる(理由も分かった)</span></summary>
+  <summary><span class="idx"></span><span class="t">重い定理を頻度で間引く ― 間引くほど遅くなる</span></summary>
   <div class="body">
-<div class="desc">ユーザー提案:「射影幾何の定理や中心角の定理など重い定理と、angle chase関連など探索の軽い定理があるから、そこでマッチングの方針やスケジュールを変えるべきかもしれない。軽い定理はたくさん回すが、重い定理は行き詰まったり、ここで使えそうというフラグが立った時に優先的に動かす。<b>できればopt inとして扱うのは避けたい(新しい問題に出会ったときにopt inは有効ではない)</b>」。
-          <br><br>実測の裏付けはあった: 1試行あたりの平均<code>dfs_call</code>は接弦定理の1から「スパイラル相似の中点対応」の58,741まで4桁に広がる。そこで問題名のリストを一切使わず、実行中に測った値だけで決める間引きを実装した ― 平均コストが中央値の数倍を超え、かつ連続で何も適用できていない定理だけを指数的に間引き、(a)待ち回数が尽きる (b)その定理が要求する型に動きがある (c)探索が行き詰まる、のいずれかで解除する。
-          <br><br>結果は<b>どの調整でも悪化</b>した(37問の消費仕事量の合計、基準は間引きなしの6,740,492):</div>
-          <table style="margin:10px 0;border-collapse:collapse;font-size:13px">
-          <tr><th style="text-align:left;padding:2px 12px 2px 0">調整</th><th style="text-align:right;padding:2px 12px 2px 0">合計仕事量</th><th style="text-align:right">solved</th></tr>
-          <tr><td style="padding:2px 12px 2px 0">1回失敗で即・4倍・上限16</td><td style="text-align:right;padding:2px 12px 2px 0">7,474,090+</td><td style="text-align:right">28/37</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">3回失敗・8倍・上限4・型フラグあり</td><td style="text-align:right;padding:2px 12px 2px 0">6,841,222</td><td style="text-align:right">29/37</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">2回失敗・8倍・上限16・型フラグなし</td><td style="text-align:right;padding:2px 12px 2px 0">8,865,099</td><td style="text-align:right">29/37</td></tr>
-          <tr><td style="padding:2px 12px 2px 0">同上 + 射影定理を全問題に</td><td style="text-align:right;padding:2px 12px 2px 0">11,395,428</td><td style="text-align:right">29/37</td></tr>
-          </table>
-          <div class="desc"><b>なぜ逆になるのか。</b> <code>global_failed_paths</code>(定理ごとの永続キャッシュ)のおかげで、失敗する重い定理を<b>毎回回すのは既に安い</b> ― 前回の失敗状態がそのまま再利用される。間引いてsweepを飛ばすと、その間にキャッシュのエントリが型世代の変化で無効になり、しかも次に回るときにはe-graphが大きくなっているので、同じ探索がより高くつく。<b>小さい図で何度も失敗させる方が、大きくなってから1回失敗させるより安い。</b>「型に動きがあったら解除」というフラグを外すと更に悪化した(8,865,099)のも同じ理由で、あのフラグは実質「毎回回す」に近く、それが一番安かったということ。
-          <br><br><b>opt-inを置き換えるには至らなかった。</b> 射影5定理を全問題に戻して間引きで抑える、という本命の形(<a class="secref" href="backlog.html">§05</a>-#11の自動版)は11,395,428で、opt-inの6,841,222の1.7倍。現状のハードコードされた問題名リストは、ユーザーの言う通り新しい問題には効かない弱い解だが、これより良い自動解はまだ無い。
-          <br><br><b>残る筋:</b> 頻度ではなく<b>1回あたりのコスト</b>を抑える方向(定理ごとの<code>dfs_cap</code>)。ただし現状<code>cap_hits</code>は全定理で0なので、下げれば必ず探索を切ることになり、証明を落とす危険がある。より本命なのは「重い定理が失敗するのを安くする」側 ― <a class="secref" href="backlog.html">§05</a>-#10の部分マッチ共有。</div>
-          <div class="b-tags"><span class="tag">4通り実測・全部悪化</span><span class="tag">機構は特定済み(失敗キャッシュの温度)</span></div>
+<div class="desc">失敗キャッシュのおかげで、失敗する重い定理を毎回回すのは既に安い。間引くと、その間にキャッシュが無効になり、大きくなった図で同じ探索をやり直す(4通りとも悪化)。</div>
+    <div class="b-tags"><span class="tag">不発</span></div>
   </div>
 </details>
 <details class="item" id="b14" data-status="done">
-  <summary><span class="idx">#5</span><span class="t">熱の式への次数の入れ方 ― 5通りを実測して、どれも現行に勝てなかった</span></summary>
+  <summary><span class="idx"></span><span class="t">熱の式への次数の入れ方 ― 5通りとも現行に勝てなかった</span></summary>
   <div class="body">
-<div class="desc">ユーザー指摘「次数は低いほどうれしいから熱から次数を引くべきでは」を受けて測った。<b>方向としては指摘の通り</b>で、証明に要る実体の平均代数的次数は6問中5問で全体より低い(bench_2012egmop1で2.06→0.67、nine_point_fullで2.24→1.45)。ところが並べ替えに使うと順位は改善しない ― <code>heat()</code>の平均順位に対し、<code>heat()−次数*0.5</code>も「同点なら低次数」も一貫して悪化した(orthocenter 8.8→11.5、thales 3.4→5.1)。理由は、証明が必要とするのが交点・円・方向といった<b>派生物</b>の側で、それらは元の自由点より次数が高いため。実際「同点なら<b>高</b>次数」の方が一貫して良かった(orthocenter 7.5、thales 2.1)。低次数が嬉しいのは「どんな結果が欲しいか」の話で、<code>match_defined_by_fact</code>が候補を低次数から試しているのはその意味で正しく、「証明がどの実体を必要とするか」では向きが逆になる。<code>heat()+参照数</code>はorthocenterで8.8→3.2と大きく勝つがmiquelでは負ける(6.4→7.6)。<b>一貫して勝つ式はまだ無い。</b></div>
-          <div class="b-tags"><span class="tag">5通り実測済み</span><span class="tag">単純な線形和では届かない</span></div>
+<div class="desc">証明が必要とするのは交点・円・方向といった派生物で、自由点より次数が高い。単純な線形和では一貫して勝つ式が無い。</div>
+    <div class="b-tags"><span class="tag">不発</span></div>
   </div>
 </details>
 <details class="item" id="b15" data-status="done">
-  <summary><span class="idx">#6</span><span class="t"><s>残る4定理の高速化には構造変更が要る(単純capは出尽くした)</s> — 出尽くしていなかった</span></summary>
+  <summary><span class="idx"></span><span class="t">重い定理の高速化は「cap が出尽くした」後も進んだ</span></summary>
   <div class="body">
-<div class="desc">simsonは一連の修正(有向角の加法性の自己束縛cap、円周角の定理の逆への一般化、複比の透視射影不変性のConnected cap+正準順序)で2.23s→1.16s(約48%減)まで来たが、1秒未満には届いていない。残る4定理(円周角の定理の逆8,491、複比の透視射影不変性8,173、円周角の定理7,285、共点二弦の相似5,695、いずれもdfs_call/試行)を診断計測で個別に再追跡した結果、2つの追加仮説(円周角の定理の逆へのDefinedByペアリングcap再挑戦、match_connected_factの局所スキャン分岐へのcap追加)は<b>いずれも効果ゼロ</b>だった。これは「見落とされたcap」がもう無いことを示す――残るコストは、10前後の変数を持つ定理の各段階(それぞれ中程度の分岐係数)が連鎖的に掛け合わさる<b>本物の組み合わせの複雑さ</b>である。全6回の仮説のうち3勝3敗で、実測なしに次の一手を当てるのはもう五分五分に近い。seeded task経路(<a class="secref" href="backlog.html">§05</a>-#7)・タスク単位の探索木メモ化(<a class="secref" href="backlog.html">§05</a>-#8)という2つの構造変更もどちらも試して撤回済みで、単純な手当てで届く範囲はほぼ出尽くしたと見られる。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 「単純な手当てで届く範囲はほぼ出尽くした」という結論は<b>誤りだった</b>。この判断の後に、capとは別種の単純な手当てが4つ効いている: 毎ノードのヒープ確保の除去(パターンのビットマスク・署名バッファ)、<code>estimate_cost</code>の全走査キャッシュ、順序/相異制約の前倒し検査、冗長な段階的 distinct の削除。simson は当時「2.23s→1.16s、1秒未満には届いていない」と書いていたが、現在は <b>97,276ステップ・0.8秒</b>で、目標だった1秒未満に到達している。教訓: 「打ち手が尽きた」と結論する前に、探索の<b>方針</b>(cap)以外の軸 ― 確保・見積もり・制約の評価順序 ― を数えること。</div>
-          <div class="b-tags"><span class="tag">反証済み</span><span class="tag">simsonは0.8秒で目標達成</span></div>
+<div class="desc">確保・見積もり・制約の評価順序の手当てで simson が 0.8秒(目標の1秒未満)。教訓: 打ち手が尽きたと結論する前に、cap 以外の軸を数える。</div>
+    <div class="b-tags"><span class="tag">反証済み</span></div>
   </div>
 </details>
 <details class="item" id="b23" data-status="done">
-  <summary><span class="idx">#14</span><span class="t"><s>bench_2018silkroadp1/bench_2005ctstp1は既定のMCTS無効+5秒予算が原因</s> — 解決済み</span></summary>
+  <summary><span class="idx"></span><span class="t">bench_2018silkroadp1 / bench_2005ctstp1 は時間予算が原因だった</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="atlas.html#tracks">§00</a>方針Cで発見。<code>--mcts --time=30</code>を付けると<code>bench_2018silkroadp1</code>は3/3回とも一貫して9.1秒で、<code>bench_2005ctstp1</code>も2/3回(18〜33秒)で証明に到達する。A/Bテストで、新設した<code>SecondIntersectionOfLineAndConic</code>を無効化しても同じ結果だったため、<b>既存のMCTSアクションだけで解けている</b>ことを確認済み。<code>main.rs</code>のリカバリーフェーズは<code>--mcts</code>が付いていないと需要駆動の補助構成が尽きた時点で探索を完全に打ち切る実装になっており(<a class="secref" href="atlas.html#layout">§01</a>のパイプライン図の<code>J -->|"いいえ"| L["探索打ち切り"]</code>がまさにこれ)、既定の5秒という時間予算はMCTSがこれらを解くのに要する時間(9〜30秒超)より短い。つまりこの2問は「詰んでいる」のではなく「既定設定でMCTSを試す機会も時間も与えられていない」だけ――#7の4問とは根本的に別カテゴリなので、新定理設計の対象からは除外してよい。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> <b>解決済み。</b>どちらも既定設定で解ける ― bench_2018silkroadp1 が2.1秒(491,637ステップ)、bench_2005ctstp1 が3.0秒(728,168ステップ)。しかも<b>MCTSは一度も起動していない</b>(ログに「MCTSで補助的な構成を探索します」が0回)。この項目の診断「時間予算が足りないだけ」は正しく、予算を秒から仕事量に移した時点(<a class="secref" href="ledger.html">§04</a>)で自動的に解消していた。MCTS側の手当ては結果的に不要だった。</div>
-          <div class="b-tags"><span class="tag">解決済み</span><span class="tag">仕事量予算への移行で自動的に解消</span></div>
+<div class="desc">予算を仕事量に移した時点で、MCTS なしに既定で解けるようになった。</div>
+    <div class="b-tags"><span class="tag">解決</span></div>
   </div>
 </details>
 <details class="item" id="b24" data-status="done">
-  <summary><span class="idx">#15</span><span class="t"><s>MCTSを既定で有効化するには、時間予算と健全性チェックの両方に手を入れる必要がある</s> — 予算は解決したが、MCTSの取り分がゼロだった</span></summary>
+  <summary><span class="idx"></span><span class="t">MCTS を既定で有効にしても解ける問題は増えない</span></summary>
   <div class="body">
-<div class="desc"><a class="secref" href="backlog.html">§05</a>-#13を踏まえ、既定の5秒予算のまま<code>--mcts</code>だけ有効化する32問題×3回の実測を行った。結果は75/96で現状(76/96、opt-in版)とほぼ横ばい――ある回では<code>bench_2011balkanmop1</code>が新たに通る一方、別の回では<code>nine_point_full</code>/<code>orthocenter</code>が同時に不安定化した(<code>main.rs</code>に残る「MCTSの無方向な探索は健全性チェックの死角をゼロにはできない」という既知の慎重さが実際に顔を出した形)。純増にするには(a) 既定の時間予算を5秒から引き上げる(#8のケースが要する9〜30秒をカバーできる水準)、(b) MCTSが誤った局所伝播ショートカット(propagate_line/point/conic_uniqueness)を踏み抜く残存経路を塞ぐ、の両方が必要と見られ、どちらもこのatlas更新時点では未着手。<b>この2つは互いに独立な作業なので、一緒くたに検証せず個別にA/Bを取ること</b>(<a class="secref" href="atlas.html#tracks">§00</a>方針Cのスコープを保つため)。</div>
-<div class="evidence" style="margin-top:10px"><b>2026-09-16 再検証:</b> 当時の条件(a)「時間予算を上げる」は仕事量予算への移行(<a class="secref" href="ledger.html">§04</a>)で達成済みなので、改めて37問×2通りで測り直した ― 結果は <b>--mcts 29/37・619.6秒 / 既定 29/37・51.4秒</b>。<b>解けない8問の顔ぶれまで完全に同一</b>で、MCTSは1問も増やさないまま時間を12倍にする。一方、当時懸念していた条件(b)の副作用(nine_point_full/orthocenterの不安定化)は<b>今回は一度も起きなかった</b> ― 予算が決定的になり、崩壊検出(<code>merged_free_points</code>)も入ったためと見られる。つまり「予算と健全性の両方に手を入れれば純増になる」という見立ては外れで、予算を直した今、MCTSには取り分が残っていない。既定で無効のままにする判断が、初めて実測で裏付けられた。<b>注:</b> 1問150秒の上限付きの測定なので、これより長く回せば別の結論になる可能性は残る。</div>
-          <div class="b-tags"><span class="tag">実測: 純増ゼロ・時間12倍</span><span class="tag">既定無効の裏付けが取れた</span></div>
+<div class="desc">仕事量予算の下で測ると、解けた問題は同じで時間が12倍。既定で無効のまま。</div>
+    <div class="b-tags"><span class="tag">実測で裏付け</span></div>
   </div>
 </details>
 </div>
   </section>
 
   <footer>
-    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-28 に並べ直し、未解決の分類・規則・汎用の補助作図・保留問題を足した(来歴 #67〜#73)
+    Geometry Solver Atlas — docs/atlas.html · 最終更新: 2026-09-30 に全件を今の状態で書き直した(来歴 #67〜#87)
   </footer>
 </div>
 <script src="atlas.js"></script>
