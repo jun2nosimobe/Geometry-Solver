@@ -22,7 +22,11 @@ bench/quick.sh mychange "--my-flag"   # 全設定に足すフラグ
 
 ```sh
 bench/compare.sh mychange
+bench/cmp_all.sh mychange    # 問題ごとに対にして比べる(幾何平均・中央値・20%超の悪化の数・落ちた/増えた問題)
 ```
+
+`compare.sh` が出す仕事量の合計は重い数問に引きずられるので、採否は `cmp_all.sh` の幾何平均と
+「20%超悪化した問題の数」も見て決める。
 
 ## 基準の作り方と更新
 

@@ -116,14 +116,19 @@ pub struct TheoremSetOptions {
     pub parallelogram: bool,
     /// スパイラル相似・同じ向き(--rules=spiral)。既定では入れない(来歴 #71・#74)。
     pub spiral: bool,
-    /// 交わる弦の相似(逆向きのスパイラル相似)。--no-spiral-opp で外せる(来歴 #74)。代数的な追跡が有効なときは
-    /// AR の相似が置き換えるので既定で外す(--chord-theorems で残す。来歴 #85)。
+    /// 交わる弦の相似(逆向きのスパイラル相似)。--no-spiral-opp で外せる(来歴 #74)。
     pub spiral_opp: bool,
+    /// 代数的な追跡(AR)の相似が置き換える定理(AR_REPLACED_THEOREMS)を外す。既定で外す(AR と固定座標を使う
+    /// 探索の既定。solve の --no-ar・--no-fixed-coords・--chord-theorems で残す。来歴 #85)。
+    pub ar_replaces_chord: bool,
 }
+
+/// AR の相似(対応する点を含む)が同じ結論を出すので、AR を使う探索では外す定理(来歴 #85)。
+pub const AR_REPLACED_THEOREMS: [&str; 2] = ["共点二弦の相似(方冪の定理の基礎)", "交わる弦の相似(逆向きのスパイラル相似)"];
 
 impl Default for TheoremSetOptions {
     fn default() -> Self {
-        Self { projective: true, length_bridge: true, central_angle: true, chord: false, parallelogram: false, spiral: false, spiral_opp: true }
+        Self { projective: true, length_bridge: true, central_angle: true, chord: false, parallelogram: false, spiral: false, spiral_opp: true, ar_replaces_chord: true }
     }
 }
 
@@ -151,6 +156,7 @@ pub fn theorem_set(opts: &TheoremSetOptions) -> Vec<TheoremDef> {
             if th.name.contains("逆向き") { opts.spiral_opp } else { opts.spiral }
         }));
     }
+    if opts.ar_replaces_chord { all.retain(|t| !AR_REPLACED_THEOREMS.contains(&t.name.as_str())); }
     all
 }
 

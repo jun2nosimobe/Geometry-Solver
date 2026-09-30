@@ -107,9 +107,11 @@ pub fn run(args: &[String]) {
     let default_names: Vec<String> = theorem_set(&TheoremSetOptions::default()).into_iter().map(|t| t.name).collect();
     let all = theorem_set(&TheoremSetOptions {
         projective: true, length_bridge: true, central_angle: true, chord: true, parallelogram: true, spiral: true, spiral_opp: true,
+        ar_replaces_chord: false,
     });
     let rule_of = |name: &str| -> &'static str {
         if default_names.iter().any(|n| n == name) { return "既定"; }
+        if crate::theorems::AR_REPLACED_THEOREMS.contains(&name) { return "--chord-theorems(AR が置き換え)"; }
         if name.starts_with("等しい円周角") { "--rules=chord" }
         else if name.starts_with("平行四辺形") { "--rules=parallelogram" }
         else if name.starts_with("スパイラル相似") { "--rules=spiral" }

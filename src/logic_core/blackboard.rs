@@ -38,9 +38,42 @@ pub struct RecoveryOptions {
 }
 
 impl RecoveryOptions {
+    /// solve の既定(中点の需要なし・汎用と数値で選ぶ補助作図あり・2回の行き詰まりごとに cap の拡大)。
+    /// serve・discover の証明試行もここから作る(中点の需要だけ足す)。
+    pub fn standard() -> Self {
+        RecoveryOptions { midpoint_demands: false, skip: Vec::new(), widen_first: false, widen_first_ceiling: 40, widen_every: 2,
+            generic_aux: true, numeric_aux: true, numeric_aux_early: false }
+    }
+
     fn skipped(&self, name: &str) -> bool {
         self.skip.iter().any(|s| s == name)
     }
+}
+
+/// 探索の前の数値の準備(BlackboardEngine::prepare)。既定は全て使う。
+#[derive(Clone, Debug)]
+pub struct SearchSetup {
+    /// 前提が乱数座標で成り立つなら固定座標を置く(--no-fixed-coords で外す)。
+    pub fixed_coords: bool,
+    /// マージ前の数値チェック(--no-merge-checks で外す)。
+    pub merge_checks: bool,
+    /// 定理の「図の上でも相異なる」の数値判定(--no-nondegeneracy で外す)。
+    pub nondegeneracy: bool,
+    /// 定理の結論の検算(--no-conclusion-check で外す。前提が成り立たない図では効かない)。
+    pub conclusion_check: bool,
+}
+
+impl Default for SearchSetup {
+    fn default() -> Self { SearchSetup { fixed_coords: true, merge_checks: true, nondegeneracy: true, conclusion_check: true } }
+}
+
+/// BlackboardEngine::prepare の結果。
+#[derive(Clone, Copy, Debug)]
+pub struct Prepared {
+    /// 前提が乱数座標で成り立つか(成り立たない図では、数値の検算は誤警報になりうるので結論の検算を切る)。
+    pub hypotheses_hold: bool,
+    /// 固定座標を置いたか(AR と数値で選ぶ補助作図はこれが要る)。
+    pub fixed: bool,
 }
 
 /// BlackboardEngine::recover が打った手。
@@ -50,6 +83,8 @@ pub enum Recovered {
     Construction,
     /// 候補capを広げて全探索をやり直す(値は広げた後の cap)。
     WidenedCap(usize),
+    /// 代数的な追跡(AR)が併合した(作図の手は尽きていても進んだ)。
+    Algebra,
     /// 決定的な手が尽きた。
     Exhausted,
 }
@@ -101,7 +136,31 @@ impl BlackboardEngine {
         }
     }
 
-    /// 行き詰まったときの決定的な手を順に打つ。solve・serve・discover の証明試行で共通。
+    /// 前提を入れ終えた後、探索の前に一度だけ呼ぶ: 前提の接続を凍結し、前提が乱数座標で成り立つなら固定座標を置いて、
+    /// 数値の検査の設定を決める。solve・serve・discover の証明試行で共通。
+    pub fn prepare(&mut self, setup: &SearchSetup) -> Prepared {
+        // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」や結論の数値チェックは誤警報になりうる。
+        self.prover.egraph.freeze_premise_incidences();
+        let hypotheses_hold = self.prover.egraph.hypotheses_hold_numerically();
+        // 座標はここで固定して以後の検算に使う(マージに依存せず、構造が変わっても捨てない)。
+        let fixed = hypotheses_hold && setup.fixed_coords && self.prover.egraph.fix_coordinates();
+        self.prover.egraph.merge_checks = setup.merge_checks;
+        self.prover.numeric_distinct = setup.nondegeneracy;
+        self.prover.guard_conclusions = setup.merge_checks && setup.conclusion_check && hypotheses_hold;
+        Prepared { hypotheses_hold, fixed }
+    }
+
+    /// 手が止まったときの一手: 代数的な追跡(ar が真なら)と決定的な手(recover)を同じ回に行う(AR だけで次の回に
+    /// 進むと、補助作図が要る問題で全定理の試し直しが余分に挟まる。来歴 #82)。solve・serve・discover で共通。
+    pub fn on_stall(&mut self, open_targets: &[(String, Vec<ClassId>)], rotate: &mut usize, opts: &RecoveryOptions, ar: bool) -> Recovered {
+        let merged = ar && self.run_ar();
+        match self.recover(open_targets, rotate, opts) {
+            Recovered::Exhausted if merged => Recovered::Algebra,
+            r => r,
+        }
+    }
+
+    /// 行き詰まったときの決定的な手を順に打つ(on_stall から呼ぶ)。
     ///
     /// 補助線と交点は毎回試す。それ以降は、狙いの定まった手が何も出さなかったときだけ広げる
     /// (有向角の総当たり・もう一方の交点は、毎回回すと解ける問題を遠回りさせる)。目標からの逆算は、

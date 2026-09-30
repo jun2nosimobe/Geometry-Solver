@@ -785,8 +785,8 @@ fn two_lines(egraph: &mut EGraph, r: &[ClassId], tag: usize) -> Option<(ClassId,
 
 /// 🌟 目標をまとめて1つの図で解く。1件ずつ解くと、どれも同じ図の同じ基本的な事実をゼロから導き直すが、まとめれば
 /// 導かれた事実が EGraph に溜まり、2件目以降はその続きから始まる。
-/// 定理集合・手詰まりのときの回復・目標の判定は solve と共通(theorems::theorem_set / BlackboardEngine::recover /
-/// EGraph::goal_status)。中点の需要は solve では既定で切っているが、自由作図の主張では中点1つが足りないだけの形が
+/// 定理集合・探索の前の準備・手詰まりの一手・目標の判定は solve と共通(theorems::theorem_set / BlackboardEngine::prepare・
+/// on_stall / EGraph::goal_status)。中点の需要は solve では既定で切っているが、自由作図の主張では中点1つが足りないだけの形が
 /// 多いので使う。MCTS は入れない(結果が実行ごとにぶれ、決定的な回復手段で届くならその方が速く確実)。
 /// 予算は solve と同じく仕事量(steps)で測るので、同じ図なら何度試しても同じ結果になる。秒は暴走を止める安全弁。
 fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], steps: u64)
@@ -810,8 +810,9 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], steps:
         .into_iter().map(std::rc::Rc::new).collect();
     let mut engine = crate::logic_core::BlackboardEngine::new(prover);
     engine.work_limit = steps;
+    engine.prepare(&Default::default());
     engine.schedule_full_sweep();
-    let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, skip: Vec::new(), widen_first: false, widen_first_ceiling: 40, widen_every: 2, generic_aux: false, numeric_aux: false, numeric_aux_early: false };
+    let recovery = crate::logic_core::RecoveryOptions { midpoint_demands: true, ..crate::logic_core::RecoveryOptions::standard() };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(PROVE_TIME_CAP_SECS);
     let mut rotate = 0usize;
     while engine.prover.work_done() < steps && std::time::Instant::now() < deadline {
@@ -831,7 +832,7 @@ fn prove_together(mut egraph: EGraph, targets: &[(String, Vec<ClassId>)], steps:
         // まだ導けていない目標を順に回して、逆算した補助線を要求する。
         let open: Vec<(String, Vec<ClassId>)> = targets.iter().zip(&done)
             .filter(|(_, d)| !**d).map(|(t, _)| t.clone()).collect();
-        if engine.recover(&open, &mut rotate, &recovery) == crate::logic_core::Recovered::Exhausted {
+        if engine.on_stall(&open, &mut rotate, &recovery, true) == crate::logic_core::Recovered::Exhausted {
             break;   // これ以上は予算を使っても伸びない
         }
     }

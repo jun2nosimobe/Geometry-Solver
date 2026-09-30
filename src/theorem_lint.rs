@@ -271,6 +271,7 @@ mod tests {
     fn all_theorems() -> Vec<TheoremDef> {
         crate::theorems::theorem_set(&crate::theorems::TheoremSetOptions {
             projective: true, length_bridge: true, central_angle: true, chord: true, parallelogram: true, spiral: true, spiral_opp: true,
+            ar_replaces_chord: false,
         })
     }
 

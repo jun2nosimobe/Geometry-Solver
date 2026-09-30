@@ -1261,3 +1261,26 @@ fn a_right_angle_hypothesis_is_detected() {
     }
     assert!(!egraph.hypotheses_hold_numerically(), "直角の前提は乱数座標では成り立たない");
 }
+
+/// 接続の目標の監査: 記録の無い接続は、点・曲線の同値類の中で定義から従う組に戻す。点がマージで円の定義の点と
+/// 同じになった場合は、その定義の点(合流経路を展開する相手)を返す(bench_2022balkanmop1 で素通りしていた形)。
+#[test]
+fn goal_incidence_falls_back_to_the_defining_pair() {
+    let mut egraph = EGraph::new();
+    let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
+    let x = egraph.create_entity("X".into(), Definition::FreePoint, EntityType::Point);
+    let circ = egraph.create_entity("Circ".into(), Definition::Circumcircle(a, b, c), EntityType::Conic);
+    egraph.merge_entities(x, a);
+    egraph.apply_congruence_closure();
+    let goal = ("Connected".to_string(), vec![x, circ]);
+    assert!(egraph.goal_reached(&goal));
+    let links = egraph.goal_incidences(&goal);
+    assert_eq!(links.len(), 1);
+    let (p, cv, rec) = links[0];
+    assert_eq!((p, cv), (x, circ));
+    let (rp, rc) = rec.expect("定義から従う組が見つかるはず");
+    assert_eq!(egraph.get_rep(rp), egraph.get_rep(x));
+    assert_eq!(egraph.get_rep(rc), egraph.get_rep(circ));
+}

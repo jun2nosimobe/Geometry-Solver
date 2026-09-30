@@ -15,6 +15,13 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l86" data-status="shipped">
+  <summary><span class="idx">#86</span><span class="t">入口ごとの探索の組み立てを1本にし、共円・接続の目標も監査する ― 作図画面の証明が 55 → 67 件、solve は1ステップも変わらない</span><span class="pill">既定</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="backlog.html#b47">§05 b47</a>。Atlas のパイプラインを今のコードに合わせて書き直す中で、入口どうしの連携を点検した(ユーザー依頼)。<br><b>1. 探索の組み立て:</b> 前提の凍結・固定座標・検査の設定と、手詰まりの一手(AR と recover を同じ回に)が solve.rs の中だけにあり、serve の証明試行と discover(<code>build_full_engine</code>・<code>attempt_proof</code>)は古い組み立てのまま(固定座標・結論の検算・AR・数値で選ぶ補助作図・汎用の補助作図なし、回復の設定は2か所に直書き)だった。コメントは「solve と共通」と書いていた。<code>BlackboardEngine::prepare</code>・<code>on_stall</code>・<code>RecoveryOptions::standard()</code> にまとめて3つの入口で共有した(serve・discover は中点の需要だけ足す)。<code>Recovered::Algebra</code>(作図の手は尽きたが AR が併合した)を足した。<br><b>2. 定理集合:</b> AR が置き換える2定理の除外を solve.rs から <code>TheoremSetOptions::ar_replaces_chord</code> に移した。§07 の元データと定理の検査も同じ判定になる。<br><b>3. 共円・接続の目標:</b> 目標到達時の数値の検算と深い証明の監査が Identical の目標だけだった。固定座標で目標の接続を確かめ(前提が乱数座標で成り立たない図では、図全体の標本が前提を満たさず誤警報になった ― test_steiner_converse が一度落ちた ― ので固定座標でだけ)、<code>RawProof::verify_incidences</code> で目標の接続の由来を監査する。接続の記録が無いときは、点・曲線の同値類の中で一方の定義がもう一方を親に持つ組に戻し、そこまでの合流経路も展開する(bench_2022balkanmop1 は、これが無いと「定義から従う」の1ステップで素通りしていた)。</div>
+    <div class="evidence"><b>結果:</b> solve は簡易計測(37問×6設定)で基準と完全に一致。作図画面(<code>POST /discover</code>、同じ4つの図・各20件の発見)で証明できた件数: 3中点の三角形 6 → 12、垂心 15 → 19、垂直二等分線 14 → 16、交わる対角線 20 → 20(合計 55 → 67、却下0)。discover は試した設定(プリセット・systematic・MCTS)で一致が見つからず、証明試行まで届かなかったので比べられていない。共円・接続の目標の7問(miquel・miquel_quadrilateral・nine_point・nine_point_full・bench_2022balkanmop1・bench_2005usamop3・test_steiner_converse)で監査が回り、全てギャップ0。<b>残り:</b> MCTS の数値ショートカット判定は Identical の目標だけ。</div>
+  </div>
+</details>
 <details class="item" id="l85" data-status="shipped">
   <summary><span class="idx">#85</span><span class="t">等方線束で長さを比のまま AR に入れ、相似(AA)と相似で対応する点を AR で出す ― 方冪・交わる弦の相似の2定理を置き換え、2015 APMO・2018 CHN Western・centroid が解けた</span><span class="pill">既定</span></summary>
   <div class="body">

@@ -705,6 +705,24 @@ impl RawProof {
     /// かつTheoremの前提・LineUniqueness/PointUniquenessの由来も再帰的に
     /// rigorous)だけで合流しているかを検証し、その全経路を保持した
     /// DeepProofを返す。
+    /// 接続・共円の目標の監査。各 (点, 曲線) について、記録された接続 (x, y) があれば「点 ≡ x」「曲線 ≡ y」の合流経路と
+    /// Connected(x, y) の由来を展開する。記録が無い接続は定義から構造的に従うもの(作図時点の接続)として葉にする。
+    pub fn verify_incidences(&self, links: &[(usize, usize, Option<(usize, usize)>)]) -> DeepProof {
+        let mut visited = std::collections::HashSet::new();
+        let roots = links.iter().map(|&(p, c, rec)| {
+            let headline = format!("{} は {} に接続", self.name_of(p), self.name_of(c));
+            let Some((x, y)) = rec else {
+                return DeepStep::leaf(headline, "由来の明示的な記録なし(作図時点の構造的な接続として、定義から機械的に従う)".to_string());
+            };
+            let mut children = Vec::new();
+            if x != p { children.push(self.build_premise_step("Identical", &[p, x], &mut visited, 1)); }
+            if y != c { children.push(self.build_premise_step("Identical", &[c, y], &mut visited, 1)); }
+            children.push(self.build_premise_step("Connected", &[x, y], &mut visited, 1));
+            DeepStep { headline, reason: "以下の由来で成立".to_string(), children, is_gap: false, gap_reason: None, is_shortcut: false }
+        }).collect();
+        DeepProof { roots }
+    }
+
     pub fn verify_identical(&self, a: usize, b: usize) -> DeepProof {
         let mut visited = std::collections::HashSet::new();
         let roots = match self.explain(a, b) {

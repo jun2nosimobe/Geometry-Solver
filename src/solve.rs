@@ -160,6 +160,10 @@ impl SolveOptions {
     fn recovery_options(&self) -> RecoveryOptions {
         RecoveryOptions { midpoint_demands: self.midpoint_demands, skip: self.skip_recovery.clone(), widen_first: self.widen_first, widen_first_ceiling: self.widen_first_ceiling, widen_every: self.widen_every, generic_aux: self.generic_aux, numeric_aux: self.numeric_aux, numeric_aux_early: self.numeric_aux_early }
     }
+
+    fn search_setup(&self) -> logic_core::SearchSetup {
+        logic_core::SearchSetup { fixed_coords: !self.no_fixed_coords, merge_checks: !self.no_merge_checks, nondegeneracy: !self.no_nondegeneracy, conclusion_check: !self.no_conclusion_check }
+    }
 }
 
 fn theorem_set(opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
@@ -171,6 +175,7 @@ fn theorem_set(opts: &SolveOptions) -> Vec<logic_core::TheoremDef> {
         parallelogram: opts.rules.iter().any(|r| r == "parallelogram"),
         spiral: opts.rules.iter().any(|r| r == "spiral"),
         spiral_opp: !opts.no_spiral_opp,
+        ar_replaces_chord: opts.ar && !opts.no_fixed_coords && !opts.chord_theorems,
     })
 }
 
@@ -258,13 +263,19 @@ impl GoalChecker {
         }
         println!("🎉 証明完了！ (Time: {:.2?}s)", start_time.elapsed().as_secs_f64());
         output_proof(eg, problem_name, fact_type, target_args);
-        if fact_type == "Identical" {
-            // 上の判定は目標の直接のマージ経路しか見ないので、定理の前提まで再帰的に
-            // たどって、名前付き定理の連鎖だけで繋がっているかを監査する。
-            let raw_text = output_raw_proof(eg, problem_name);
-            let report = RawProof::parse(&raw_text).verify_identical(target_args[0].0, target_args[1].0);
-            output_extract_report(&report, problem_name);
-        }
+        // 上の判定は目標の直接の経路しか見ないので、定理の前提まで再帰的にたどって、名前付き定理の連鎖だけで
+        // 繋がっているかを監査する(接続・共円の目標は、目標の接続の由来から)。
+        let raw_text = output_raw_proof(eg, problem_name);
+        let raw = RawProof::parse(&raw_text);
+        let report = if fact_type == "Identical" {
+            raw.verify_identical(target_args[0].0, target_args[1].0)
+        } else {
+            let target = (fact_type.clone(), target_args.clone());
+            let links: Vec<(usize, usize, Option<(usize, usize)>)> = eg.goal_incidences(&target).into_iter()
+                .map(|(p, c, rec)| (p.0, c.0, rec.map(|(x, y)| (x.0, y.0)))).collect();
+            raw.verify_incidences(&links)
+        };
+        output_extract_report(&report, problem_name);
         Goal::Proved
     }
 }
@@ -285,10 +296,10 @@ impl Recovery {
         let recovery_start = Instant::now();
         let open: Vec<(String, Vec<ClassId>)> = target.iter().cloned().collect();
         let mut rotate = 0;
-        let step = engine.recover(&open, &mut rotate, &opts.recovery_options());
+        let step = engine.on_stall(&open, &mut rotate, &opts.recovery_options(), opts.ar);
         engine.prover.profile.recovery_time += recovery_start.elapsed();
         match step {
-            Recovered::Construction => return true,
+            Recovered::Construction | Recovered::Algebra => return true,
             Recovered::WidenedCap(cap) => {
                 println!("  -> 需要による補助線が尽きたため、MCTSの前に候補capを広げて再探索します(fanout_heat_cap={})。", cap);
                 return true;
@@ -385,10 +396,6 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     let mut theorems = theorem_set(opts);
     // --ar-replace: 角の足し算の規則(加法性・交替律)を外し、代数的な追跡に任せる。
     if opts.ar_replace { theorems.retain(|t| t.name != "有向角の加法性" && t.name != "有向角の交替律"); }
-    // AR の相似(対応する点を含む)が置き換えるので外す(来歴 #85)。
-    if opts.ar && !opts.no_fixed_coords && !opts.chord_theorems {
-        theorems.retain(|t| t.name != "共点二弦の相似(方冪の定理の基礎)" && t.name != "交わる弦の相似(逆向きのスパイラル相似)");
-    }
     // 名前が一致する定理を外す。末尾が * なら前方一致(「円周角の定理」で「円周角の定理の逆」まで外さないため)。
     theorems.retain(|t| !opts.drop_theorems.iter().any(|d| match d.strip_suffix('*') {
         Some(prefix) => t.name.starts_with(prefix),
@@ -419,16 +426,9 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         engine.emit(logic_core::Event::FactProven(fact.clone()));
     }
 
-    // 前提が座標への制約(「OP = OA」など)だと乱数座標はそれを満たさず、監査の「偽」や結論の数値チェックは誤警報になりうる。
-    engine.prover.egraph.freeze_premise_incidences();
-    let hypotheses_hold = engine.prover.egraph.hypotheses_hold_numerically();
-    // 前提が数値的に成り立つなら、座標をここで固定して以後の検算に使う(マージに依存せず、構造が変わっても捨てない)。
-    let fixed = hypotheses_hold && !opts.no_fixed_coords && engine.prover.egraph.fix_coordinates();
-    if !fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
-    engine.prover.egraph.merge_checks = !opts.no_merge_checks;
-    engine.prover.numeric_distinct = !opts.no_nondegeneracy;
-    engine.prover.guard_conclusions = !opts.no_merge_checks && !opts.no_conclusion_check && hypotheses_hold;
-    if !hypotheses_hold { println!("🛡️ 結論の数値チェックは無効(前提どおりに座標を置けない図)"); }
+    let prepared = engine.prepare(&opts.search_setup());
+    if !prepared.fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
+    if !prepared.hypotheses_hold { println!("🛡️ 結論の数値チェックは無効(前提どおりに座標を置けない図)"); }
     if opts.audit_merges {
         engine.prover.merge_audit = Some(logic_core::MergeAudit::default());
         engine.prover.egraph.merge_census = Some(mmp_core::MergeCensus::default());
@@ -453,8 +453,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         }
         // 手が止まったら、代数的な追跡(--ar)と回復の手(補助作図など)を同じ回に両方行う。追跡だけで次の回に進むと、
         // 補助作図が要る問題で全定理の試し直しが余分に挟まる(nine_point_full が4倍遅くなった)。
-        let ar_progressed = !applied_logic && opts.ar && engine.run_ar();
-        if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) && !ar_progressed {
+        if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) {
             break;
         }
     }
@@ -483,10 +482,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
             engine.prover.work_done(), engine.prover.heat_cap, engine.prover.fanout_heat_cap);
     }
     if let Some(audit) = &engine.prover.merge_audit {
-        print_merge_audit(audit, problem_name, hypotheses_hold);
+        print_merge_audit(audit, problem_name, prepared.hypotheses_hold);
     }
     if let Some(census) = &engine.prover.egraph.merge_census {
-        print_merge_census(census, problem_name, hypotheses_hold);
+        print_merge_census(census, problem_name, prepared.hypotheses_hold);
     }
     if opts.show_origins {
         trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);

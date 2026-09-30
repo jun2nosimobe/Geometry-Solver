@@ -19,8 +19,8 @@ pub enum GoalStatus {
 impl EGraph {
     /// 🌟 目標に到達したか。solve・serve・discover の証明試行で共通の判定。
     /// 図の崩壊は目標に関係なく先に調べる(崩壊した図からは何でも従うので、到達しても証明と認めない)。
-    /// Identical は前提を満たす座標で検算し、明確に矛盾すれば NumericallyFalse(座標を組み立てられない・評価
-    /// できない比較は判定不能なので、構造的な証明をそのまま信用する)。Concyclic と Connected はまだ検算しない。
+    /// 前提を満たす座標で検算し、明確に矛盾すれば NumericallyFalse(座標を組み立てられない・評価できない比較は
+    /// 判定不能なので、構造的な証明をそのまま信用する)。Concyclic は4点が乗る円への接続を、Connected は接続そのものを確かめる。
     pub fn goal_status(&self, target: Option<&(String, Vec<ClassId>)>) -> GoalStatus {
         if let Some((p, q)) = self.merged_free_points() {
             return GoalStatus::Collapsed(p, q);
@@ -28,10 +28,62 @@ impl EGraph {
         let Some(target) = target else { return GoalStatus::NotYet };
         if !self.goal_reached(target) { return GoalStatus::NotYet; }
         let (kind, args) = target;
-        if kind == "Identical" && self.numeric_plausibility_check(args[0], args[1], 3) == Some(false) {
-            return GoalStatus::NumericallyFalse;
-        }
+        let refuted = match kind.as_str() {
+            "Identical" => self.numeric_plausibility_check(args[0], args[1], 3) == Some(false),
+            // 接続は固定座標でだけ確かめる(前提が乱数座標で成り立たない図では、図全体の標本が前提を満たさず誤警報になる)。
+            "Connected" => {
+                let (p, c) = self.point_and_curve(args[0], args[1]);
+                self.fixed_incidence(p, c, self.entities[self.get_rep(c).0].entity_type) == Some(Some(false))
+            }
+            "Concyclic" => {
+                let reps: Vec<ClassId> = args.iter().map(|&id| self.get_rep(id)).collect();
+                self.find_shared_circle(&reps)
+                    .is_some_and(|c| reps.iter().any(|&p| self.fixed_incidence(p, c, EntityType::Conic) == Some(Some(false))))
+            }
+            _ => false,
+        };
+        if refuted { return GoalStatus::NumericallyFalse; }
         GoalStatus::Reached
+    }
+
+    /// 接続の2つの引数を (点, 曲線) の順に並べる(目標の Connected は順序を決めていない)。
+    pub fn point_and_curve(&self, a: ClassId, b: ClassId) -> (ClassId, ClassId) {
+        if self.entities[self.get_rep(a).0].entity_type == EntityType::Point { (a, b) } else { (b, a) }
+    }
+
+    /// 接続・共円の目標が使う (点, 曲線) の組と、その接続を記録した元の実体 (記録の点, 記録の曲線)。記録が無ければ
+    /// (定義から構造的に従う接続)記録の側は None。extract-proof の監査(RawProof::verify_incidences)に渡す。
+    pub fn goal_incidences(&self, (kind, args): &(String, Vec<ClassId>)) -> Vec<(ClassId, ClassId, Option<(ClassId, ClassId)>)> {
+        let pairs: Vec<(ClassId, ClassId)> = match kind.as_str() {
+            "Connected" => vec![self.point_and_curve(args[0], args[1])],
+            "Concyclic" => {
+                let reps: Vec<ClassId> = args.iter().map(|&id| self.get_rep(id)).collect();
+                match self.find_shared_circle(&reps) { Some(c) => args.iter().map(|&p| (p, c)).collect(), None => Vec::new() }
+            }
+            _ => Vec::new(),
+        };
+        pairs.into_iter().map(|(p, c)| {
+            let rec = self.find_incidence_justification(p, c).map(|(x, y, _)| (x, y)).or_else(|| self.structural_incidence(p, c));
+            (p, c, rec)
+        }).collect()
+    }
+
+    /// 記録の無い接続を、定義から従う組 (点 x, 曲線 y) に戻す: 点の同値類の定義の親に曲線の同値類の実体がある
+    /// (交点・第2交点など)か、曲線の同値類の定義の親に点の同値類の実体がある(2点を通る直線・外接円など)。
+    fn structural_incidence(&self, p: ClassId, c: ClassId) -> Option<(ClassId, ClassId)> {
+        let (rp, rc) = (self.get_rep(p), self.get_rep(c));
+        let owner = |def: &Definition, rep: ClassId| self.memo.get(&self.normalize_definition(def)).copied().unwrap_or(rep);
+        for comp in &self.entities[rc.0].components {
+            for def in &comp.definitions {
+                if let Some(&x) = def.get_parents().iter().find(|&&x| self.get_rep(x) == rp) { return Some((x, owner(def, rc))); }
+            }
+        }
+        for comp in &self.entities[rp.0].components {
+            for def in &comp.definitions {
+                if let Some(&y) = def.get_parents().iter().find(|&&y| self.get_rep(y) == rc) { return Some((owner(def, rp), y)); }
+            }
+        }
+        None
     }
 
     /// 目標が構造的に導けているか(崩壊と数値の検算は見ない。goal_status の一部)。

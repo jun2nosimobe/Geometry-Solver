@@ -270,11 +270,13 @@ fn run_one_seed(
         xml_escape_html(seed_label), sections.join("\n"))]
 }
 
-/// 🌟 仮説駆動プロービングと --prove の証明試行が使う BlackboardEngine を組み立てる(定理集合は solve の既定と同じ)。
+/// 🌟 仮説駆動プロービングと --prove の証明試行が使う BlackboardEngine を組み立てる(定理集合・固定座標・検査の設定は
+/// solve の既定と同じ)。
 fn build_full_engine(egraph: EGraph) -> BlackboardEngine {
     let mut prover = ProverEngine::new(egraph);
     prover.theorems = theorems::theorem_set(&Default::default()).into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
+    engine.prepare(&Default::default());
     // 🌟 プロービング・単発の証明試行はどちらも1回限りの短い実行なので、
     // UCB1バンディットの学習(複数回の試行で徐々に賢くなる仕組み)は
     // 恩恵が薄く、むしろ毎回同じ優先順位から始まる方が結果を再現しやすい。
@@ -669,7 +671,7 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
 
     let mut engine = build_full_engine(egraph.clone());
     let open = [("Identical".to_string(), vec![a, b])];
-    let recovery = RecoveryOptions { midpoint_demands: true, skip: Vec::new(), widen_first: false, widen_first_ceiling: 40, widen_every: 2, generic_aux: false, numeric_aux: false, numeric_aux_early: false };
+    let recovery = RecoveryOptions { midpoint_demands: true, ..RecoveryOptions::standard() };
     let mut rotate = 0;
 
     engine.work_limit = steps;
@@ -682,7 +684,7 @@ fn attempt_proof(egraph: &EGraph, a: ClassId, b: ClassId, steps: u64) {
         status = engine.prover.egraph.goal_status(Some(&open[0]));
         if status != GoalStatus::NotYet { break; }
         // 回復は serve の証明試行と同じ設定(中点の需要も使う)。
-        if !applied && engine.recover(&open, &mut rotate, &recovery) == Recovered::Exhausted {
+        if !applied && engine.on_stall(&open, &mut rotate, &recovery, true) == Recovered::Exhausted {
             break;
         }
     }

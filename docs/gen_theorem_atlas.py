@@ -4,14 +4,14 @@
 入力(すべて docs/ の下):
   theorems.json              geom_solver theorem-atlas の出力(パターン・作図・結論・lint・証人・見積もりの順序)
   theorem_stats_default.tsv  bench/theorem_stats.sh の出力(既定の定理集合、全44問)
-  theorem_stats_rules.tsv    bench/theorem_stats.sh "--rules=..." の出力(既定外の定理の実測に使う)
+  theorem_stats_rules.tsv    bench/theorem_stats.sh "--rules=... --chord-theorems" の出力(既定外の定理と、AR が置き換える2定理の実測に使う)
   notes/theorem_catalog.md   手書きの「主張」と「問題点」(見出し = 定理名)
 
 作り直し方(リポジトリ直下で):
   cargo build --release
   ./target/release/geom_solver theorem-atlas nine_point_full | sed -n '/^{"plan_problem"/,$p' > docs/theorems.json
   bench/theorem_stats.sh > docs/theorem_stats_default.tsv
-  bench/theorem_stats.sh "--rules=chord,parallelogram,spiral" > docs/theorem_stats_rules.tsv
+  bench/theorem_stats.sh "--rules=chord,parallelogram,spiral --chord-theorems" > docs/theorem_stats_rules.tsv
   python3 docs/gen_theorem_atlas.py
 """
 import html, json, os, re, sys
@@ -247,7 +247,10 @@ def main():
 <li><b>複比の一意性</b>(<code>propagate_cross_ratio_uniqueness</code>): 共線な3点を固定した複比が等しければ4点目は一致する(透視射影不変性の逆)。非退化条件: 固定した3点が図の上でも相異なる(#78)。
 以前は証明の前提に「2つの複比が等しい」を記録していなかったので、その等式が偽のマージから来ていても証明は「厳密」に見えた(#76、centroid)。</li>
 <li><b>代数的な追跡(AR)</b>(<code>logic_core/ar.rs</code>、既定、<code>--no-ar</code> で外す): 有向角・点の複比・線束の複比と、中点・調和共役の比(無限遠点との複比 −1)を、
-2点の差の記号の形式的な対数で表し、整数の格子(ℤⁿ ⊕ ℤ/4)でまとめて閉じる。等しいと分かった同値類と、平行と分かった方向を併合する。手が止まったとき、回復の手と同じ回に回す(#82)。</li>
+2点の差の記号の形式的な対数で表し、整数の格子(ℤⁿ ⊕ ℤ/4)でまとめて閉じる。等しいと分かった同値類と、平行と分かった方向を併合する。手が止まったとき、回復の手と同じ回に回す(#82)。
+円(円周角・接弦)・透視射影・シュタイナーは定理の代わりの等式として入れ、円周角の逆を検出で出す(#83)。同じ直線の上の比と平行(平行 ⇒ 比、比 ⇒ 平行)(#84)。
+虚円点からの線束(等方線束)で長さを比のまま入れ、相似(AA)と相似で対応する点(内分比の等しい点)を出す ― これが方冪・交わる弦の相似の2定理を置き換えるので、
+AR を使う探索では2定理を外す(#85、<code>--chord-theorems</code> で残す)。</li>
 <li><b>自明な関係</b>(<code>apply_trivial_relations</code>): 垂線と直角、垂直方向の対合、調和共役の対合など、定義から機械的に従うもの。</li>
 <li><b>スパイラル相似の局所伝播</b>(<code>mmp_core/spiral_prop.rs</code>、既定外 <code>--rules=spiral-prop</code>): 角の同値類に新しく合流した定義との組だけを見る差分評価。
 結論の図形(中点・直線・角)が既にあるときだけマージする。課税は小さいが、2016ARMO は結論で図形を作らないと解けないので、既定では使わない(#75)。</li>
