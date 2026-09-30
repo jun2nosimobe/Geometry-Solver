@@ -438,6 +438,9 @@ pub struct EGraph {
     /// 構造(components / subobjects / uses / memo)が変わるたびに増えるカウンタ。4つのゲートウェイの
     /// note_type_changed が上げる。構造だけで決まる計算のキャッシュ(structure_cache)の無効化に使う。
     pub(crate) structure_generation: u64,
+    /// 直線・二次曲線の一致判定(局所伝播)を、点・直線・二次曲線の世代がいくつのときに何も併合せずに終えたか。
+    /// 世代が動いていなければ同じ判定をやり直しても何も起きないので飛ばす。
+    pub(crate) uniqueness_checked: rustc_hash::FxHashMap<usize, u64>,
     /// 🌟 型世代を上げた理由の内訳 [理由][型](計測用。失敗キャッシュの無効化が
     /// 何で起きているかを見るためだけのもので、挙動には影響しない)。
     pub generation_bumps: [[u64; 4]; 4],
@@ -488,6 +491,9 @@ pub struct EGraph {
     pub spiral_propagation: bool,
     /// その探索の手数。仕事量の予算に含める(ProverEngine::work_done)。
     pub spiral_prop_work: u64,
+    /// --profile のときだけ、合同閉包の内訳の時間を測る(定義の合流・直線・二次曲線・スカラー・点・点を通る直線・点を通る二次曲線)。
+    pub closure_detail: bool,
+    pub closure_parts: [std::time::Duration; 7],
     /// 既に結論を適用した (E, A, B, D, C) の組。
     pub spiral_fired: rustc_hash::FxHashSet<[usize; 5]>,
     /// 🌟 差分評価: 代表元ごとの「まだ他の定義と組にしていない」角の定義。マージで合流してきた側の定義を積み、
@@ -612,6 +618,7 @@ impl EGraph {
             merge_generation: 0,
             rejected_conic_pairs: rustc_hash::FxHashMap::default(),
             structure_generation: 0,
+            uniqueness_checked: rustc_hash::FxHashMap::default(),
             generation_bumps: [[0; 4]; 4],
             structure_cache: std::cell::RefCell::new(StructureCache::default()),
             numeric_samples: std::cell::RefCell::new(Default::default()),
@@ -628,6 +635,8 @@ impl EGraph {
             trivial_depth: 0,
             spiral_propagation: false,
             spiral_prop_work: 0,
+            closure_detail: false,
+            closure_parts: [std::time::Duration::ZERO; 7],
             spiral_fired: rustc_hash::FxHashSet::default(),
             spiral_pending: rustc_hash::FxHashMap::default(),
             spiral_work_limit: u64::MAX,

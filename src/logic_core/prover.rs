@@ -148,6 +148,21 @@ pub struct ProfileStats {
     pub unseeded_pops: u64,
     pub unseeded_dfs_calls: u64,
     pub branch_counts: [u64; BRANCH_LABELS.len()],
+    /// dfs_match の中の内訳を測るか(--profile のときだけ。時刻を取る分だけ遅くなる)。
+    pub detail: bool,
+    /// 失敗キャッシュの鍵、次のパターンの選択(見積もり)、見つかった割り当ての適用(on_match)の時間。
+    pub sig_time: std::time::Duration,
+    pub select_time: std::time::Duration,
+    pub on_match_time: std::time::Duration,
+    /// タスクの根の dfs_match の時間の合計(run_step_time からこれを引いた残りが、結論の適用などタスクの後処理)。
+    pub dfs_time: std::time::Duration,
+    /// 見つかった割り当ての後処理: 既に成り立っているかの判定・作図・結論の適用。
+    pub proven_check_time: std::time::Duration,
+    pub construct_time: std::time::Duration,
+    pub apply_time: std::time::Duration,
+    /// タスクの合間の合同閉包(マージの後始末)と、失敗キャッシュ・変数の索引の用意。
+    pub closure_time: std::time::Duration,
+    pub prepare_time: std::time::Duration,
 }
 
 impl ProverEngine {

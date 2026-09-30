@@ -16,12 +16,12 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#91(既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#92(AR と重なる定理を外す・合同閉包の重複をなくす・座標を置く順番の工夫・既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
-    <div class="stat"><div class="n">39/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ。予算100万、1問7秒以内。800万では40/44で、差は newton_gauss、#91)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)、AR のメネラウスで newton_gauss・pascal(#88)、AR の二辺夾角・三辺の相似で 2016 ARMO(#90)が解けた。検査を外した監査で偽のマージ0件、時刻つきの証明の監査で既定で解ける問題全てがギャップなし(#87・#90)</div></div>
-    <div class="stat"><div class="n">22</div><div class="l">solve が既定で使う定理(基本15 + 長さ1 + 中心角1 + 射影5)。方冪と交わる弦の相似は AR が置き換える(<a class="secref" href="ledger.html#l85">#85</a>、<code>--chord-theorems</code> で戻す)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理は <a class="secref" href="theorems.html">§07</a></div></div>
+    <div class="stat"><div class="n">40/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ。予算100万、1問7秒以内。予算を1/8にして一度 39 に減り、AR と重なる定理を外し座標を置く順番を工夫して 40 に戻った、#91・#92)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)、AR のメネラウスで newton_gauss・pascal(#88)、AR の二辺夾角・三辺の相似で 2016 ARMO(#90)が解けた。検査を外した監査で偽のマージ0件、時刻つきの証明の監査で既定で解ける問題全てがギャップなし(#87・#90)</div></div>
+    <div class="stat"><div class="n">22</div><div class="l">solve が既定で使う定理(基本15 + 長さ1 + 中心角1 + 射影5)。AR が回る問題では、AR と重なる射影5件と角の4件を外して13件(<code>--ar-drop</code>、#92)。方冪と交わる弦の相似は AR が置き換える(<a class="secref" href="ledger.html#l85">#85</a>、<code>--chord-theorems</code> で戻す)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理は <a class="secref" href="theorems.html">§07</a></div></div>
     <div class="stat"><div class="n">1,000,000</div><div class="l">既定の予算(1問10秒前後、ユーザー方針)。秒ではなく dfs_match の呼び出し回数と AR の行演算で測る。大きい図では dfs_match 1回が重く、HAGeo で最大20秒(<a class="secref" href="backlog.html#b49">b49</a>)</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
@@ -38,7 +38,7 @@
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
-  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">39/44・決定的</span></summary>
+  <summary><span class="idx">方針B</span><span class="t">探索の効率と再現性</span><span class="pill shipped">40/44・決定的</span></summary>
   <div class="body">
 <div class="desc">予算は壁時計ではなく仕事量(<code>dfs_match</code> の呼び出し回数。AR の行演算は2回で1)で測り、乱数もシード固定なので、同じ設定なら結果が1ステップも変わらない。<br><b>マージの連鎖:</b> e-graph の合同閉包は worklist でマージを連鎖させるが、定理の層は1回の全探索(sweep)ごとにしか連鎖しない(差分だけ試し直す seeded rematch は既定で無効)。AR は手詰まりのたびに、角・複比・比・相似の線形な関係を格子で一度に閉じる ― 格子は毎回作り直す(差分で積むと古い記号の行と証明の前提が膨らんだ。<a class="secref" href="ledger.html#l85">#85</a>)。<br><b>現状の課題:</b> 定理を試す順序に左右される(登録順で仕事量±15%)。<code>dfs_match</code> は貪欲な入れ子ループ結合(<a class="secref" href="backlog.html#b30">b30</a>)。</div>
   </div>
@@ -102,7 +102,7 @@
 
     <p class="section-note" style="margin-top:20px">入口(サブコマンド)は次の通り。いずれも <code>geom_solver help</code> に一覧が出る。</p>
     <div class="gloss">
-      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定100万)が本当の予算で、<code>--time</code>(既定60秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>。<code>--audit-merges</code> は全てのマージ・接続を固定座標で確かめて出どころ別に真・偽・判定不能を数え、<code>--no-merge-checks</code> と組むと規則だけで健全かを測れる(<code>bench/census.sh</code>)。A/B 用に <code>--no-ar</code>・<code>--chord-theorems</code>・<code>--drop-theorems=名前,…</code>・<code>--no-numeric-aux</code>・<code>--no-fixed-coords</code>・<code>--no-nondegeneracy</code>・<code>--skip-recovery=…</code>。一覧は <code>geom_solver help</code>。</p></div>
+      <div class="gterm"><b>geom_solver &lt;問題名&gt;</b><p>証明を試す。<code>--steps</code>(既定100万)が本当の予算で、<code>--time</code>(既定60秒)は暴走時の安全弁。診断は<code>--stats</code>/<code>--profile</code>/<code>--trace</code>/<code>--origins</code>。<code>--audit-merges</code> は全てのマージ・接続を固定座標で確かめて出どころ別に真・偽・判定不能を数え、<code>--no-merge-checks</code> と組むと規則だけで健全かを測れる(<code>bench/census.sh</code>)。解けた証明の時刻つきの監査は <code>bench/audit.sh</code>。A/B 用に <code>--no-ar</code>・<code>--chord-theorems</code>・<code>--ar-drop=none</code>・<code>--drop-theorems=名前,…</code>・<code>--no-numeric-aux</code>・<code>--no-fixed-coords</code>・<code>--no-nondegeneracy</code>・<code>--skip-recovery=…</code>。一覧は <code>geom_solver help</code>。</p></div>
       <div class="gterm"><b>geom_solver sweep</b><p>全44問を順に解いて成否と所要時間を集計する。<code>--vary</code>でパラメータを振れる。</p></div>
       <div class="gterm"><b>geom_solver diagnose</b><p>問題ファイルに書いた人間の証明の筋書き(<code>SKETCH</code>)に沿って、補助作図と手順1..kを順に前提として与え、各手順が自力で出るかを表にする。解けない問題がどの手順で詰まるかを名指しする。</p></div>
       <div class="gterm"><b>geom_solver discover</b><p>目標なしの自由作図から非自明な性質を探す。<code>--prove</code>で見つけた性質の証明まで試す。</p></div>

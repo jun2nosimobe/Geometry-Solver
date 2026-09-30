@@ -17,6 +17,7 @@ cyclic_quad
 desargues
 miquel
 miquel_quadrilateral
+newton_gauss
 nine_point
 nine_point_full
 orthic_incenter
@@ -32,6 +33,7 @@ test_isosceles_converse
 test_parallel
 test_power_of_point
 test_right_midpoint
+test_spiral_similarity
 test_steiner
 test_steiner_converse
 test_steiner_tangent

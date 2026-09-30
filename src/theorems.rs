@@ -120,6 +120,22 @@ pub struct TheoremSetOptions {
 /// AR の相似(対応する点を含む)が同じ結論を出すので、AR を使う探索では外す定理(来歴 #85)。
 pub const AR_REPLACED_THEOREMS: [&str; 2] = ["共点二弦の相似(方冪の定理の基礎)", "交わる弦の相似(逆向きのスパイラル相似)"];
 
+/// AR の等式が同じ内容を出す定理の群(--ar-drop で、固定座標を置けて AR が回る問題に限って外す)。名前の末尾の * は前方一致。
+/// 円(円周角・接弦・中心角)と長さ(垂直二等分線・二等辺三角形・斜辺の中線・中点連結)の群は、外すと解ける問題が大きく減った
+/// (AR は手が止まったときにしか回らないので、定理の逐次の発火が効いている。来歴 #92)。
+pub const AR_COVERED_GROUPS: [(&str, &[&str]); 2] = [
+    ("proj", &["複比の透視射影不変性*", "シュタイナーの定理*"]),
+    ("angle", &["有向角の加法性", "有向角の交替律", "同位角による平行判定*"]),
+];
+
+/// 名前 pattern(末尾が * なら前方一致)に定理名 name が当たるか。
+pub fn theorem_name_matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == pattern,
+    }
+}
+
 impl Default for TheoremSetOptions {
     fn default() -> Self {
         Self { projective: true, length_bridge: true, central_angle: true, chord: false, parallelogram: false, spiral: false, spiral_opp: true, ar_replaces_chord: true }

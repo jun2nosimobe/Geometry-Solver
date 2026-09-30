@@ -39,13 +39,14 @@ pub struct SolveOptions {
     pub generic_aux: bool,
     /// 数値で選ぶ補助作図(既定。手が全部尽きたとき、汎用の補助作図と一緒に作る。--no-numeric-aux で外す)。
     pub numeric_aux: bool,
-    /// 代数的な追跡(複比・有向角の線形関係。既定、--no-ar で外す)と、角の足し算の規則を外してそれに任せる(--ar-replace)。
+    /// 代数的な追跡(複比・有向角の線形関係。既定、--no-ar で外す)。
     pub ar: bool,
     /// 最初の定理の総当たりの前に代数的な追跡を1回走らせる(図が一番小さい時点なので軽く、そこで出た合流が総当たりを短くする)。
     pub ar_first: bool,
     /// 使われなかった作図の刈り込み(有効な実体がこの倍を超えたら)。
     pub prune: Option<f64>,
-    pub ar_replace: bool,
+    /// AR が回る問題で外す定理の群(--ar-drop=proj,angle。theorems::AR_COVERED_GROUPS)。
+    pub ar_drop: Vec<String>,
     /// 名前で外す定理(--drop-theorems=名前,名前。AR への置き換えを試すため)。
     pub drop_theorems: Vec<String>,
     /// AR があっても、方冪・交わる弦の相似の2つの定理を残す(--chord-theorems)。
@@ -116,7 +117,8 @@ impl SolveOptions {
             ar: !flag(args, "--no-ar"),
             ar_first: !flag(args, "--no-ar-first"),
             prune: args.iter().find_map(|a| a.strip_prefix("--prune=")).and_then(|v| v.parse().ok()),
-            ar_replace: flag(args, "--ar-replace"),
+            ar_drop: args.iter().find_map(|a| a.strip_prefix("--ar-drop=")).unwrap_or("proj,angle")
+                .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "none").collect(),
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),
             chord_theorems: flag(args, "--chord-theorems"),
@@ -398,15 +400,12 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     prover.nogood_core = opts.nogood_core;
     prover.semijoin = opts.semijoin;
     prover.var_order = opts.var_order;
+    prover.profile.detail = opts.show_profile;
+    prover.egraph.closure_detail = opts.show_profile;
     prover.collinear_extra = opts.collinear_extra;
     let mut theorems = theorem_set(opts);
-    // --ar-replace: 角の足し算の規則(加法性・交替律)を外し、代数的な追跡に任せる。
-    if opts.ar_replace { theorems.retain(|t| t.name != "有向角の加法性" && t.name != "有向角の交替律"); }
     // 名前が一致する定理を外す。末尾が * なら前方一致(「円周角の定理」で「円周角の定理の逆」まで外さないため)。
-    theorems.retain(|t| !opts.drop_theorems.iter().any(|d| match d.strip_suffix('*') {
-        Some(prefix) => t.name.starts_with(prefix),
-        None => t.name == *d,
-    }));
+    theorems.retain(|t| !opts.drop_theorems.iter().any(|d| crate::theorems::theorem_name_matches(d, &t.name)));
     prover.theorems = theorems.into_iter().map(std::rc::Rc::new).collect();
     let mut engine = BlackboardEngine::new(prover);
     engine.bandit_enabled = opts.bandit;
@@ -433,6 +432,12 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
 
     let prepared = engine.prepare(&opts.search_setup());
+    // AR が回る(固定座標を置けた)問題では、AR の等式が同じ内容を出す定理の群を外す。まだタスクを積んでいないので番号はずれない。
+    if opts.ar && prepared.fixed && !opts.ar_drop.is_empty() {
+        let covered: Vec<&str> = crate::theorems::AR_COVERED_GROUPS.iter().filter(|(g, _)| opts.ar_drop.iter().any(|d| d == g))
+            .flat_map(|(_, names)| names.iter().copied()).collect();
+        engine.prover.theorems.retain(|t| !covered.iter().any(|c| crate::theorems::theorem_name_matches(c, &t.name)));
+    }
     if !prepared.fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
     if prepared.algebraic { println!("📐 乱数の座標では前提が成り立たないので、前提を方程式として解いて固定座標を置きました(検算専用)"); }
     if !prepared.hypotheses_hold { println!("🛡️ 結論の数値チェックは無効(前提どおりに座標を置けない図)"); }
@@ -568,6 +573,19 @@ fn print_profile(prover: &ProverEngine, total: Duration) {
     println!("\n=== ⏱️  実行時間の内訳 (--profile) ===");
     println!("  合計実行時間          : {:>7.2}s", total.as_secs_f64());
     println!("  ├─ dfs_match本体      : {:>7.2}s ({:>5.1}%)", p.run_step_time.as_secs_f64(), pct(p.run_step_time));
+    println!("  │   ├─ 合同閉包(タスクの合間): {:>7.2}s ({:>5.1}%)", p.closure_time.as_secs_f64(), pct(p.closure_time));
+    let cp = &prover.egraph.closure_parts;
+    for (i, name) in ["定義の合流", "直線の一意性", "二次曲線の一意性", "スカラー(複比)", "交点の一意性", "点を通る直線", "点を通る二次曲線"].iter().enumerate() {
+        println!("  │   │   {} {:<12}: {:>7.2}s ({:>5.1}%)", if i == 6 { "└─" } else { "├─" }, name, cp[i].as_secs_f64(), pct(cp[i]));
+    }
+    println!("  │   ├─ 失敗キャッシュ等の用意 : {:>7.2}s ({:>5.1}%)", p.prepare_time.as_secs_f64(), pct(p.prepare_time));
+    println!("  │   ├─ 照合(dfs_match)  : {:>7.2}s ({:>5.1}%)", p.dfs_time.as_secs_f64(), pct(p.dfs_time));
+    println!("  │   ├─ 失敗キャッシュの鍵 : {:>7.2}s ({:>5.1}%)", p.sig_time.as_secs_f64(), pct(p.sig_time));
+    println!("  │   ├─ 次のパターンの選択 : {:>7.2}s ({:>5.1}%)", p.select_time.as_secs_f64(), pct(p.select_time));
+    println!("  │   ├─ 割り当ての記録(on_match): {:>7.2}s ({:>5.1}%)", p.on_match_time.as_secs_f64(), pct(p.on_match_time));
+    println!("  │   ├─ 成り立っているかの判定 : {:>7.2}s ({:>5.1}%)", p.proven_check_time.as_secs_f64(), pct(p.proven_check_time));
+    println!("  │   ├─ 作図               : {:>7.2}s ({:>5.1}%)", p.construct_time.as_secs_f64(), pct(p.construct_time));
+    println!("  │   └─ 結論の適用         : {:>7.2}s ({:>5.1}%)", p.apply_time.as_secs_f64(), pct(p.apply_time));
     println!("  ├─ 回復フェーズ       : {:>7.2}s ({:>5.1}%)", p.recovery_time.as_secs_f64(), pct(p.recovery_time));
     println!("  ├─ MCTS               : {:>7.2}s ({:>5.1}%)", p.mcts_time.as_secs_f64(), pct(p.mcts_time));
     println!("  └─ 未計測(数値検証等) : {:>7.2}s ({:>5.1}%)",

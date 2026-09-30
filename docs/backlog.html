@@ -13,13 +13,13 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note"><b>2026-09-30 に全件を書き直した。</b>各項目の説明は今の状態を主にし、経緯と古い測定は来歴(§04)への参照に寄せた。上のグループから順に着手する: <b>①優先</b> → <b>②その他の未着手</b> → <b>③凍結・前提が古い・優先度が低い</b> → <b>④解決・反証・不発</b>。★は今の主線。「要再測定」は、固定座標・AR などの後で測り直していない項目。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="frozen" aria-pressed="false">凍結・古い</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">① 優先 · 上から順に着手する · 9件</div>
+<div class="group"><div class="group-title">① 優先 · 上から順に着手する · 8件</div>
 <details class="item" id="b45" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 鏡映・中心の分かった円・二辺夾角・長さからの接続まで入った。次は AR と重なる定理を外す測り直し</span></summary>
   <div class="body">
 <div class="desc">今の AR(<a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l83">#83</a>・<a class="secref" href="ledger.html#l84">#84</a>・<a class="secref" href="ledger.html#l85">#85</a>・<a class="secref" href="ledger.html#l88">#88</a>・<a class="secref" href="ledger.html#l89">#89</a>・<a class="secref" href="ledger.html#l90">#90</a>・<a class="secref" href="ledger.html#l91">#91</a>、規則の一覧は <a class="secref" href="theorems.html#ar">§07</a>、22件): 2点の差の形式的な対数と J・I の線束の記号を整数の格子(ℤⁿ ⊕ ℤ/4)で閉じる。有向角・複比・比と平行・射影(有限と無限遠の中心を1本に)・円・長さ・相似(AA・二辺夾角・三辺)と対応する点・メネラウスとチェバ(無限遠点を含む)・鏡映(接線の長さを含む)・中心の分かった円・長さからの接続(垂直二等分線の逆・円の上)・二次曲線の規則の統合(円もシュタイナーの形)とシュタイナーの逆。最初の総当たりの前に1回回す。既定(予算 100 万)39/44。</div>
     <div class="evidence"><b>済み(2026-09-30):</b> 鏡映・中心の分かった円・射影の統合(#89)、メネラウス・チェバの無限遠点・二辺夾角と三辺・長さからの接続(#90)、二次曲線の規則の統合・シュタイナーの逆・平行な2直線の「交点」の健全性の修正・列の順番などで速く(#91)。<br>
-<b>次の一手:</b> (1) <b>AR と重なる定理を外す測り直し</b> ― 円周角・角の足し算・透視射影・中点連結・垂直二等分線・二等辺三角形・中心角・斜辺の中線の定理は AR と同じ内容になった。#83 で外すと落ちた原因(座標を置けない問題)は2問に減っている。定理の課税(<a class="secref" href="#b20">b20</a>)・有向角の大量生成(<a class="secref" href="#b7">b7</a>)・定理の規模(<a class="secref" href="#b34">b34</a>)にも効く。
+<b>次の一手:</b> (1) <b>AR と重なる定理を外す</b> ― <a class="secref" href="ledger.html#l92">#92</a>: 射影(透視射影・シュタイナー)と角(角の足し算・同位角)の群を、AR が回る問題に限って外した(<code>--ar-drop</code>、既定の仕事量 −46.5%)。円(円周角・接弦・中心角)と長さ(垂直二等分線・二等辺三角形・斜辺の中線・中点連結)の群は、外すとそれぞれ11〜13問・5〜7問落ちる(AR は手が止まったときにしか回らず、定理の逐次の発火が効いている)。残りはこの2群を AR に任せられる形(手詰まり以外でも AR を回すなど)。
 (2) 相似で対応する点を三角形の中の点へ(外心どうし・垂心どうし)。(3) 極と極線・根軸(方冪は長さの差なので相似を経由してしか入っていない)。
 (4) 図が大きい問題で AR が重い ― #91 の列の順番で行演算は 1/3〜1/7 になったが、HAGeo 2020RMMSLG3(格子 3,600 行)では相似の AA だけで1回の上限(40万)に当たり、SAS・対応する点が回らない。規則の結果の使い回しは接続が毎回増えるので1〜3割しか当たらない(差分で足す形なら当たる)。<br>
 <b>方針:</b> 長さは比で(足し算は扱わない)。証明で数値に頼ってよいのは向きの選択と相異なることの確認だけ(二辺夾角・三辺の向き)。</div>
@@ -27,13 +27,12 @@
   </div>
 </details>
 <details class="item" id="b49" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 1問10秒の予算と壁時計を合わせる ― 大きい図では dfs_match 1回が重く、予算 100 万でも 20秒を超える</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 1問10秒の予算と壁時計を合わせる ― 合同閉包の重複をなくして HAGeo の最長 20 → 12秒(#92)。残りは仕事量の数え方</span></summary>
   <div class="body">
 <div class="desc">ユーザー方針(2026-09-30): 1問あたり10秒前後で探索を切り上げる。既定の予算を 800万 → 100万にした(<a class="secref" href="ledger.html#l91">#91</a>)。
-44問は1問7秒以内(12並列で全体8秒)だが、HAGeo は12並列で中央値8秒・最大20秒。仕事量1あたりの時間が、軽い問題の dfs_match で約5µs、
+44問は1問7秒以内(12並列で全体8秒)。HAGeo は12並列で中央値8秒・最大20秒だった(#92 の後は中央値6.4秒・最長11.9秒)。仕事量1あたりの時間が、軽い問題の dfs_match で約5µs、
 大きい図(HAGeo 2020RMMSLG3)で約60µs、AR の行演算で 1.5〜4µs と開いている(AR は #91 で速くなったので、今は2回で1と数えるのが時間より重い)。</div>
-    <div class="evidence"><b>次の一手:</b> (1) 大きい図で dfs_match 1回が重い理由を測る ― 呼び出しごとに全ての有効なパターンの候補数の見積もり(constrained_var_sizes・estimate_cost)をやり直している。
-失敗キャッシュは「世代が違って使えず」が dfs_match の45%(newton_gauss)。(2) 仕事量を「見た候補の数」で数えて壁時計に合わせる(再現性は保つ)。
+    <div class="evidence"><b>済み(<a class="secref" href="ledger.html#l92">#92</a>):</b> 大きい図で遅かったのは dfs_match ではなく、仕事量に数えないタスクの合間の合同閉包だった(XinXingV28p2 で時間の68%)。円周点 I・J や方向の点が変わるたびに全ての円・無限遠直線を調べ直していたのを飛ばし、何も併合しなかった判定は世代が動くまで繰り返さない。<code>--profile</code> に照合・合同閉包(種類別)・結論の適用などの内訳を足した。<br><b>次の一手:</b> (2) 仕事量を「見た候補の数」で数えて壁時計に合わせる(再現性は保つ)。
 (3) AR の行演算の換算(今は2回で1)を測り直す。<br>
 <b>予算を 200 万にした場合:</b> 44問は同じ 39、HAGeo 29 → 39 だが1問16秒前後(12並列)。</div>
     <div class="b-tags"><span class="tag">ユーザー方針</span><span class="tag">仕事量</span><span class="tag">dfs_match</span></div>
@@ -56,19 +55,11 @@
     <div class="b-tags"><span class="tag">健全性</span><span class="tag">監査</span></div>
   </div>
 </details>
-<details class="item" id="b46" data-status="open">
-  <summary><span class="idx"></span><span class="t">有限体で根を取り、座標を置けない問題を検算の対象にする ― 8問中6問を置けた(#87)。残りは担当の点で解けない前提の2問</span></summary>
-  <div class="body">
-<div class="desc">今(<a class="secref" href="ledger.html#l87">#87</a>): 乱数の座標では前提が成り立たない図で、前提を媒介変数の有理関数として標本から復元し、分子の根を有限体の上で求めて自由点を置く(平方根を含む一般の根)。検算専用で、次数の評価(動点法)には使わない(ユーザー方針)。置けたのは bench_2010g1・thales・test_right_midpoint・test_isosceles_converse・test_steiner_converse・two_circles_reim。</div>
-    <div class="evidence"><b>残り:</b> test_parallel ― 前提の担当は関わる自由点のうち最後に作った F だが、F では解けず C か D を動かす必要がある。test_spiral_similarity ― 1点に前提が3つかかる。担当を前の点へ移すと、前提が後の点にも依存したままになり置く順序と矛盾する。前提から「解ける点」を選ぶ仕組みか、複数の点を同時に解く仕組みが要る。</div>
-    <div class="b-tags"><span class="tag">健全性</span><span class="tag">2問</span><span class="tag">検算専用</span></div>
-  </div>
-</details>
 <details class="item" id="b8" data-status="open">
-  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは4問(2026-09-30)。既定は 32/44 → 34 → 37 → 39 → <b>40/44</b></span></summary>
+  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは4問(2026-10-01、予算100万)。既定は 32/44 → 34 → 37 → 39 → 40 → <b>40/44</b>(予算を1/8にして)</span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html#l67">#67</a> で未解決12問を型に分けた。その後に解けたもの: bench_2005usamop3(#69)、bench_2011balkanmop1(#74・#85)、desargues(#80)、pappus(#82)、centroid・bench_2015apmop1・bench_2018chnwesternmop5(#85)、newton_gauss・pascal(#88)、bench_2016armog10p2(AR の二辺夾角・三辺の相似、#90)。bench_2000usatstp2 は extras 設定で解ける(#90)。</div>
-    <div class="evidence"><table style="border-collapse:collapse;font-size:13px;margin:6px 0"><tr><th style="text-align:left;padding:3px 10px 3px 0">問題</th><th style="text-align:left;padding:3px 10px 3px 0">止まり方</th><th style="text-align:left;padding:3px 10px 3px 0">型</th><th style="text-align:left;padding:3px 10px 3px 0">詰まり所と、いま分かっていること</th></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2000usatstp2</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">既定外の extras(長さの定理・中心角・中点の需要)では仕事量23.6万で解ける(#90)。既定の定理集合と AR だけでは届かない ― 人の証明の補助点(AP・DP の中点)が要る。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2012chnwesternmop5</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+補助点</td><td style="padding:3px 10px 3px 0;vertical-align:top">人の証明は補助点 K(AH の中点)と九点円の中心の性質。中心の分かった円を入れても届かない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2008armog10p6</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+筋書きの隙間</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順4・5。全手順を前提にしても目標が出ない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">test_spiral_similarity</td><td style="padding:3px 10px 3px 0;vertical-align:top">—</td><td style="padding:3px 10px 3px 0;vertical-align:top">前提付き</td><td style="padding:3px 10px 3px 0;vertical-align:top">座標を置けない2問の1つ(<a class="secref" href="#b46">b46</a>)。</td></tr></table><b>ノイズ下:</b> ノイズ10・20では newton_gauss・pappus・pascal が落ちる(方針E)。作図の刈り込みの実験版(<a class="secref" href="#b48">b48</a>)で pappus が解ける。</div>
+    <div class="evidence"><table style="border-collapse:collapse;font-size:13px;margin:6px 0"><tr><th style="text-align:left;padding:3px 10px 3px 0">問題</th><th style="text-align:left;padding:3px 10px 3px 0">止まり方</th><th style="text-align:left;padding:3px 10px 3px 0">型</th><th style="text-align:left;padding:3px 10px 3px 0">詰まり所と、いま分かっていること</th></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2000usatstp2</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">既定外の extras(長さの定理・中心角・中点の需要)では仕事量23.6万で解ける(#90)。既定の定理集合と AR だけでは届かない ― 人の証明の補助点(AP・DP の中点)が要る。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2012chnwesternmop5</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+補助点</td><td style="padding:3px 10px 3px 0;vertical-align:top">人の証明は補助点 K(AH の中点)と九点円の中心の性質。中心の分かった円を入れても届かない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2008armog10p6</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+筋書きの隙間</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順4・5。全手順を前提にしても目標が出ない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">test_spiral_similarity</td><td style="padding:3px 10px 3px 0;vertical-align:top">—</td><td style="padding:3px 10px 3px 0;vertical-align:top">前提付き</td><td style="padding:3px 10px 3px 0;vertical-align:top">#92 で座標を置けるようになり、AR で解けた(<a class="secref" href="#b46">b46</a>)。</td></tr></table><b>ノイズ下:</b> ノイズ10・20では newton_gauss・pappus・pascal が落ちる(方針E)。作図の刈り込みの実験版(<a class="secref" href="#b48">b48</a>)で pappus が解ける。</div>
     <div class="b-tags"><span class="tag">A 規則 3問</span><span class="tag">前提付き 1問</span></div>
   </div>
 </details>
@@ -278,7 +269,15 @@
   </div>
 </details>
 </div>
-<div class="group"><div class="group-title">④ 解決・反証・不発 · 16件</div>
+<div class="group"><div class="group-title">④ 解決・反証・不発 · 17件</div>
+<details class="item" id="b46" data-status="done">
+  <summary><span class="idx"></span><span class="t">有限体で根を取り、座標を置けない問題を検算の対象にする ― 置く順番の工夫と軌跡で、8問全てを置けた(#87・#92)</span></summary>
+  <div class="body">
+<div class="desc">今(<a class="secref" href="ledger.html#l87">#87</a>): 乱数の座標では前提が成り立たない図で、前提を媒介変数の有理関数として標本から復元し、分子の根を有限体の上で求めて自由点を置く(平方根を含む一般の根)。検算専用で、次数の評価(動点法)には使わない(ユーザー方針)。置けたのは bench_2010g1・thales・test_right_midpoint・test_isosceles_converse・test_steiner_converse・two_circles_reim。</div>
+    <div class="evidence"><b>済み(<a class="secref" href="ledger.html#l92">#92</a>):</b> 作図の順番の工夫(ユーザー案「作図の順番の工夫で面倒な方程式を回避できることが多い」): 前提は関わる自由点のうち置く順番で最後の点が解き、作った順で置けなければ1点・2点を最後に回した順番を試す(test_parallel は D を最後 = C を通り AB に平行な直線の上)。前提が2つで前提の曲線が無いときは、1つ目の前提を満たす点の軌跡(直線)を求め、その上で2つ目を解く(test_spiral_similarity。AR で解けた)。44問で座標を置けない問題は0になった。軌跡が円(二次曲線)になる前提はまだ扱わない。</div>
+    <div class="b-tags"><span class="tag">健全性</span><span class="tag">2問</span><span class="tag">検算専用</span></div>
+  </div>
+</details>
 <details class="item" id="b47" data-status="done">
   <summary><span class="idx"></span><span class="t">入口ごとの探索の組み立てを1本にした ― serve・discover も固定座標・結論の検算・AR・数値で選ぶ補助作図を使う(2026-09-30)</span></summary>
   <div class="body">

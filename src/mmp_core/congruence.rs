@@ -135,7 +135,12 @@ impl EGraph {
     pub fn apply_congruence_closure(&mut self) -> bool {
         let mut changed_any = false;
 
+        let detail = self.closure_detail;
+        let lap = |parts: &mut [std::time::Duration; 7], i: usize, t: &mut Option<std::time::Instant>| {
+            if let Some(t0) = t.as_mut() { let now = std::time::Instant::now(); parts[i] += now - *t0; *t0 = now; }
+        };
         while let Some(changed_id) = self.worklist.pop() {
+            let mut t = detail.then(std::time::Instant::now);
             let rep_id = self.get_rep(changed_id);
             let uses: Vec<ClassId> = self.entities[rep_id.0].uses.iter().copied().collect();
 
@@ -190,46 +195,59 @@ impl EGraph {
             // - 点が変化した: 「2直線の交点は一意」を memo の O(1) 参照で判定する。
             // ここでのマージも worklist に積まれるので、連鎖的な合流はこの while ループがそのまま続けて処理する。
             let rep_id = self.get_rep(changed_id); // 上のuses処理でrepが動いた可能性があるので取り直す
+            lap(&mut self.closure_parts, 0, &mut t);
             match self.entities[rep_id.0].entity_type {
                 EntityType::Line => {
                     if self.propagate_line_uniqueness(rep_id) { changed_any = true; }
+                    lap(&mut self.closure_parts, 1, &mut t);
                 }
                 // 🌟 二次曲線(円を含む)も直線と全く同じ理由(点/方向が変化しても、
                 // それを含む二次曲線側の「一致条件」は自動的には再トリガーされない)
                 // でここに追加。
                 EntityType::Conic => {
                     if self.propagate_conic_uniqueness(rep_id) { changed_any = true; }
+                    lap(&mut self.closure_parts, 2, &mut t);
                 }
                 // 🌟 スカラー(複比)の一致から、点の一致を導く。propagate_cross_ratio_uniqueness 参照。
                 EntityType::Scalar => {
                     if self.propagate_cross_ratio_uniqueness(rep_id) { changed_any = true; }
                     if self.spiral_propagation && self.propagate_spiral(self.get_rep(rep_id)) { changed_any = true; }
+                    lap(&mut self.closure_parts, 3, &mut t);
                 }
                 EntityType::Point => {
                     if self.propagate_point_uniqueness(rep_id) { changed_any = true; }
+                    lap(&mut self.closure_parts, 4, &mut t);
 
                     // 🐛 点が他の点とマージされても、それを含む直線の一致判定は自動では走らない
                     // (propagate_line_uniqueness は直線自身の rep が変わったときしか呼ばれない)。1点を共有する2直線の
                     // 方向が後から一致した、というような合流を見逃さないよう、この点を含む直線についても再実行する。
+                    // 無限遠直線は除く(2点を共有する他の直線は無い。方向の点が変わるたびに全ての方向を辿って重かった)。
+                    let linf = self.get_rep(self.line_infinity);
                     let lines: Vec<ClassId> = self.entities[rep_id.0].components.first()
                         .map(|c| dedup_sorted_ids(c.subobjects.iter()
                             .map(|&s| self.get_rep(s))
-                            .filter(|&s| self.entities[s.0].entity_type == EntityType::Line)))
+                            .filter(|&s| s != linf && self.entities[s.0].entity_type == EntityType::Line)))
                         .unwrap_or_default();
                     for l in lines {
                         if self.propagate_line_uniqueness(l) { changed_any = true; }
                     }
+                    lap(&mut self.closure_parts, 5, &mut t);
 
                     // 🌟 同じ理由で、この点が乗っている二次曲線の一致判定も再実行する。円周点 I,J はあらゆる円に
-                    // 乗っているので、I,J 自身が変化すると全ての円が対象になるが、I,J は定数で他の実体と統合されない。
-                    let conics: Vec<ClassId> = self.entities[rep_id.0].components.first()
-                        .map(|c| dedup_sorted_ids(c.subobjects.iter()
-                            .map(|&s| self.get_rep(s))
-                            .filter(|&s| self.entities[s.0].entity_type == EntityType::Conic)))
-                        .unwrap_or_default();
+                    // 乗っているが、定数で他の点と統合されないので、変化は新しい円との接続だけ(その円は自分で積まれる)。
+                    // I,J のたびに全ての円を調べ直すと、大きい図で時間の半分をここで使っていた。
+                    let circular = rep_id == self.get_rep(self.circ_i) || rep_id == self.get_rep(self.circ_j);
+                    let conics: Vec<ClassId> = if circular { Vec::new() } else {
+                        self.entities[rep_id.0].components.first()
+                            .map(|c| dedup_sorted_ids(c.subobjects.iter()
+                                .map(|&s| self.get_rep(s))
+                                .filter(|&s| self.entities[s.0].entity_type == EntityType::Conic)))
+                            .unwrap_or_default()
+                    };
                     for c in conics {
                         if self.propagate_conic_uniqueness(c) { changed_any = true; }
                     }
+                    lap(&mut self.closure_parts, 6, &mut t);
                 }
             }
         }
@@ -241,7 +259,26 @@ impl EGraph {
     /// 共有点数を調べる。全直線を舐めない。
     /// 方向は無限遠直線上のただの Point なので、「1点を共有し方向も同じ」は「無限遠点を含めて2点を共有」
     /// という同じ規則に含まれる(平行なだけの直線は無限遠点1つしか共有しない)。
-    fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool {
+    /// 点・直線・二次曲線の世代の和(直線・二次曲線の一致判定が読むのはこの3つの型の構造だけ)。
+    fn geometric_generation(&self) -> u64 {
+        [EntityType::Point, EntityType::Line, EntityType::Conic].iter()
+            .map(|t| self.type_generation.get(t).copied().unwrap_or(0)).sum()
+    }
+
+    /// 直線・二次曲線の一致判定を、前回何も併合せずに終えてから構造が変わっていなければ飛ばす。
+    fn propagate_curve_uniqueness(&mut self, curve: ClassId, conic: bool) -> bool {
+        let curve = self.get_rep(curve);
+        let generation = self.geometric_generation();
+        if self.uniqueness_checked.get(&curve.0) == Some(&generation) { return false; }
+        let changed = if conic { self.propagate_conic_uniqueness_inner(curve) } else { self.propagate_line_uniqueness_inner(curve) };
+        if !changed && self.geometric_generation() == generation { self.uniqueness_checked.insert(curve.0, generation); }
+        changed
+    }
+
+    fn propagate_line_uniqueness(&mut self, line: ClassId) -> bool { self.propagate_curve_uniqueness(line, false) }
+    fn propagate_conic_uniqueness(&mut self, conic: ClassId) -> bool { self.propagate_curve_uniqueness(conic, true) }
+
+    fn propagate_line_uniqueness_inner(&mut self, line: ClassId) -> bool {
         let mut line = self.get_rep(line);
 
         // 🐛 共有点を数える前に、この直線上の点どうしの「交点の一意性」を局所的な不動点まで確定させる。
@@ -332,7 +369,7 @@ impl EGraph {
     /// 3+I+J=5 になり、「円は3点で決まる」が特別扱いなしに従う(3点しか共有しない一般の二次曲線は
     /// マージされない)。同一の円が別実体のまま残ると、実体数が膨らむうえ、片方にだけ乗った情報が
     /// もう片方に伝わらず証明が途切れる。
-    fn propagate_conic_uniqueness(&mut self, conic: ClassId) -> bool {
+    fn propagate_conic_uniqueness_inner(&mut self, conic: ClassId) -> bool {
         let mut conic = self.get_rep(conic);
 
         // 🐛 propagate_line_uniqueness と同じ理由で、共有点を数える前に点どうしの交点の一意性を確定させる

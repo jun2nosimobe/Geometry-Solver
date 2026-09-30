@@ -176,19 +176,17 @@ enum Constraint {
 }
 
 impl EGraph {
-    /// 前提どおりの座標を標本の数だけ作る(置けなければ None)。前提を持つ自由点を、作った順に1つずつ解いて置く。
+    /// 前提どおりの座標を標本の数だけ作る(置けなければ None)。前提を持つ自由点を、置く順に1つずつ解いて置く。
+    /// 前提は、関わる自由点のうち最後に置く点が解く。作った順で置けなければ、1点・2点を最後に回した順番も試す
+    /// (作図の順番の工夫: 「∠(AB,EF) = ∠(CD,EF)」は F を動かしても変わらないが、D を最後に置けば AB に平行な直線の上に置ける)。
     pub(crate) fn algebraic_premise_samples(&self) -> Option<Vec<Vars>> {
-        let points: Vec<ClassId> = {
+        let base: Vec<ClassId> = {
             let mut v: Vec<ClassId> = self.all_free_points().into_iter().map(|p| self.get_rep(p)).collect();
             v.sort_by_key(|p| p.0);
             v.dedup();
             v
         };
         let constraints = self.premise_constraints();
-        let mut owned: FxHashMap<usize, Vec<Constraint>> = FxHashMap::default();
-        for c in &constraints {
-            if let Some(o) = self.constraint_owner(c) { owned.entry(o.0).or_default().push(*c); }
-        }
         // 自由点ごとに、それに依存する実体(置いた点が退化した配置を作っていないかを見る)。
         let mut dependents: FxHashMap<usize, Vec<ClassId>> = FxHashMap::default();
         for i in 0..self.entities.len() {
@@ -199,11 +197,49 @@ impl EGraph {
         }
         let lines_and_points: Vec<ClassId> = (0..self.entities.len()).map(ClassId)
             .filter(|&e| matches!(self.entities[e.0].entity_type, EntityType::Point | EntityType::Line)).collect();
+        let n = base.len();
+        let mut orders: Vec<Vec<ClassId>> = vec![base.clone()];
+        for i in (0..n).rev() {
+            let mut o = base.clone();
+            let q = o.remove(i);
+            o.push(q);
+            orders.push(o);
+        }
+        for i in (0..n).rev() {
+            for j in (0..n).rev() {
+                if i == j { continue; }
+                let mut o: Vec<ClassId> = base.iter().copied().filter(|&x| x != base[i] && x != base[j]).collect();
+                o.push(base[i]);
+                o.push(base[j]);
+                orders.push(o);
+            }
+        }
+        let mut tried = rustc_hash::FxHashSet::default();
+        for order in orders {
+            if !tried.insert(order.iter().map(|p| p.0).collect::<Vec<_>>()) { continue; }
+            if let Some(samples) = self.samples_in_order(&order, &constraints, &dependents, &lines_and_points) {
+                if order != base && std::env::var("GS_DEBUG_ALG").is_ok() {
+                    println!("  ALG_DEBUG 置く順番 {}", order.iter().map(|p| self.entities[p.0].name.as_str()).collect::<Vec<_>>().join(" "));
+                }
+                return Some(samples);
+            }
+        }
+        None
+    }
+
+    /// 自由点を order の順に置き、各前提はそれに関わる自由点のうち order で最後のものが解く。
+    fn samples_in_order(&self, order: &[ClassId], constraints: &[Constraint], dependents: &FxHashMap<usize, Vec<ClassId>>,
+        lines_and_points: &[ClassId]) -> Option<Vec<Vars>> {
+        let pos: FxHashMap<usize, usize> = order.iter().enumerate().map(|(i, p)| (p.0, i)).collect();
+        let mut owned: FxHashMap<usize, Vec<Constraint>> = FxHashMap::default();
+        for c in constraints {
+            if let Some(o) = self.constraint_owner(c, &pos) { owned.entry(o.0).or_default().push(*c); }
+        }
         // 有限体では交点が無いこともある(判別式が平方剰余でない)ので、置けなければ乱数を変えて最初から置き直す。
         (0..self.fixed_samples()).map(|k| (0..40u64).find_map(|attempt| {
             let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ ((k as u64 + 1) * 0xD1B5_4A32_D192_ED03) ^ attempt.wrapping_mul(0x2545_F491_4F6C_DD1D));
             let mut vars = Vars::default();
-            for &p in &points {
+            for &p in order {
                 let cs = owned.get(&p.0).cloned().unwrap_or_default();
                 let deps = dependents.get(&p.0).cloned().unwrap_or_default();
                 let dep_set: rustc_hash::FxHashSet<usize> = deps.iter().map(|d| d.0).collect();
@@ -216,7 +252,7 @@ impl EGraph {
                 }
             }
             if std::env::var("GS_DEBUG_ALG").is_ok() {
-                for c in &constraints { if !self.constraint_holds(c, &vars) { println!("  ALG_DEBUG 最後に成り立たない前提 {}", self.describe_constraint(c)); } }
+                for c in constraints { if !self.constraint_holds(c, &vars) { println!("  ALG_DEBUG 最後に成り立たない前提 {}", self.describe_constraint(c)); } }
             }
             constraints.iter().all(|c| self.constraint_holds(c, &vars)).then_some(vars)
         })).collect()
@@ -238,13 +274,13 @@ impl EGraph {
         out
     }
 
-    /// 前提を解く担当の自由点: 関わる自由点のうち最後に作ったもの(それより前の点は置き済み)。
-    fn constraint_owner(&self, c: &Constraint) -> Option<ClassId> {
+    /// 前提を解く担当の自由点: 関わる自由点のうち置く順番(pos)で最後のもの(それより前の点は置き済み)。
+    fn constraint_owner(&self, c: &Constraint, pos: &FxHashMap<usize, usize>) -> Option<ClassId> {
         let ids = match *c { Constraint::Merge(a, b) => vec![a, b], Constraint::OnCurve(p, curve) => vec![p, curve] };
         let mut anc = Vec::new();
         let mut seen = rustc_hash::FxHashSet::default();
         for id in ids { self.original_free_ancestors(id, &mut seen, &mut anc); }
-        anc.into_iter().max_by_key(|p| p.0)
+        anc.into_iter().max_by_key(|p| pos.get(&p.0).copied().unwrap_or(0))
     }
 
     fn original_free_ancestors(&self, id: ClassId, seen: &mut rustc_hash::FxHashSet<usize>, out: &mut Vec<ClassId>) {
@@ -416,8 +452,7 @@ impl EGraph {
             });
             if !holds { real.push(*c); }
         }
-        let try_t = |t: ModInt, vars: &mut Vars| -> bool {
-            let Some(xy) = param(t) else { return false };
+        let check = |xy: (ModInt, ModInt), vars: &mut Vars| -> bool {
             self.set_point(p, xy, vars);
             cs.iter().all(|c| self.constraint_holds(c, vars)) && self.nondegenerate(deps, vars)
                 && self.generic_position(p, others, &premise_curves, vars)
@@ -427,27 +462,60 @@ impl EGraph {
                 used.map(|i| self.describe_constraint(&cs[i])), real.iter().map(|c| self.describe_constraint(c)).collect::<Vec<_>>());
         }
         let Some(first) = real.first().copied() else {
-            for _ in 0..8 { if try_t(rng.next(), vars) { return true; } }
+            for _ in 0..8 { if let Some(xy) = param(rng.next()) && check(xy, vars) { return true; } }
             return false;
         };
-        // 残差を t の有理関数として復元し、分子の根を試す。
+        // 前提の曲線が無く、解く前提が2つ以上なら、1つ目の前提を満たす点の軌跡が直線か確かめ、直線ならその上で2つ目を解く
+        // (2つの角の前提で決まる点: 軌跡は2本の直線で、点はその交点。1本の任意の直線の上では2つを同時に満たせない)。
+        if used.is_none() && real.len() >= 2
+            && let Some((q1, q2)) = self.line_locus(p, &first, vars, rng, &weights) {
+            let line = move |t: ModInt| Some((q1.0 + t * (q2.0 - q1.0), q1.1 + t * (q2.1 - q1.1)));
+            for r in self.roots_along(p, &line, &real[1], vars, rng, &weights) {
+                if let Some(xy) = line(r) && check(xy, vars) { return true; }
+            }
+        }
+        for r in self.roots_along(p, &*param, &first, vars, rng, &weights) {
+            if let Some(xy) = param(r) && check(xy, vars) { return true; }
+        }
+        false
+    }
+
+    /// 点 p を param(t) で動かしたときに前提 c が成り立つ t の候補: 残差を t の有理関数として標本から復元し、分子の根を返す
+    /// (分母が 0 になるものは除く)。
+    fn roots_along(&self, p: ClassId, param: &dyn Fn(ModInt) -> Option<(ModInt, ModInt)>, c: &Constraint, vars: &mut Vars,
+        rng: &mut Rng, weights: &[ModInt]) -> Vec<ModInt> {
         let mut samples = Vec::new();
         for _ in 0..40 {
             let t = rng.next();
             let Some(xy) = param(t) else { continue };
             self.set_point(p, xy, vars);
-            if let Some(h) = self.residual(&first, vars, &weights) { samples.push((t, h)); }
+            if let Some(h) = self.residual(c, vars, weights) { samples.push((t, h)); }
             if samples.len() >= 26 { break; }
         }
         for d in 1..=10 {
             let Some((num, den)) = reconstruct(&samples, d) else { continue };
-            for r in roots(&num, rng) {
-                if peval(&den, r).0 == 0 { continue; }
-                if try_t(r, vars) { return true; }
-            }
-            return false;
+            return roots(&num, rng).into_iter().filter(|&r| peval(&den, r).0 != 0).collect();
         }
-        false
+        Vec::new()
+    }
+
+    /// 前提 c を満たす点 p の軌跡が直線なら、その上の2点。任意の直線の上で c を解いた点を3つ集め、共線なら直線とみなす。
+    fn line_locus(&self, p: ClassId, c: &Constraint, vars: &mut Vars, rng: &mut Rng, weights: &[ModInt])
+        -> Option<((ModInt, ModInt), (ModInt, ModInt))> {
+        let mut pts: Vec<(ModInt, ModInt)> = Vec::new();
+        for _ in 0..6 {
+            let (bx, by, dx, dy) = (rng.next(), rng.next(), rng.next(), rng.next());
+            let line = move |t: ModInt| Some((bx + t * dx, by + t * dy));
+            for r in self.roots_along(p, &line, c, vars, rng, weights) {
+                let Some(xy) = line(r) else { continue };
+                self.set_point(p, xy, vars);
+                if self.constraint_holds(c, vars) && pts.iter().all(|q| q.0.0 != xy.0.0 || q.1.0 != xy.1.0) { pts.push(xy); }
+            }
+            if pts.len() >= 3 { break; }
+        }
+        if pts.len() < 3 { return None; }
+        let (a, b, e) = (pts[0], pts[1], pts[2]);
+        ((b.0 - a.0) * (e.1 - a.1) - (b.1 - a.1) * (e.0 - a.0)).0.eq(&0).then_some((a, b))
     }
 
     fn describe_constraint(&self, c: &Constraint) -> String {

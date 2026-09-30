@@ -165,7 +165,9 @@ impl ProverEngine {
         self.profile.branch_counts[self.branch_tag as usize] += 1;
         if self.dfs_calls > self.dfs_cap { return false; }
 
+        let t_sig = self.profile.detail.then(std::time::Instant::now);
         let state_sig = self.state_signature(s, active, &bind, &flip_states);
+        if let Some(t) = t_sig { self.profile.sig_time += t.elapsed(); }
         if let Some(&(cached_mask, cached_gens)) = s.failed_paths.get(&state_sig) {
             let still_valid = (0..4).all(|i| {
                 (cached_mask & (1 << i)) == 0
@@ -195,13 +197,16 @@ impl ProverEngine {
                 }
                 return false;
             }
+            let t_match = self.profile.detail.then(std::time::Instant::now);
             (s.on_match)(&bind, &flip_states);
+            if let Some(t) = t_match { self.profile.on_match_time += t.elapsed(); }
             return true;
         }
 
         // 一番安く見積もられたパターンを選ぶ。同じ1周で、束縛済みの範囲だけで既に破れている
         // 順序・相異の制約も検査して枝を早く切る(マスク0 = 型が変化しても有効な失敗)。
         let patterns = s.patterns;
+        let t_select = self.profile.detail.then(std::time::Instant::now);
         let var_sizes = if self.var_order { Some(self.constrained_var_sizes(patterns, theorem, active, &bind)) } else { None };
         let mut best_idx = 0;
         let mut best_cost = f64::INFINITY;
@@ -223,6 +228,7 @@ impl ProverEngine {
                 }
             if cost < best_cost { best_cost = cost; best_idx = i; }
         }
+        if let Some(t) = t_select { self.profile.select_time += t.elapsed(); }
         let next_active = active & !(1u64 << best_idx);
         let mut my_mask: u8 = 0;
 

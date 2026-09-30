@@ -456,7 +456,10 @@ impl BlackboardEngine {
             while let Some(event) = self.event_queue.pop_front() {
                 match event {
                     Event::NodeMerged => {
-                        if self.prover.egraph.apply_congruence_closure() {
+                        let t = self.prover.profile.detail.then(std::time::Instant::now);
+                        let closed = self.prover.egraph.apply_congruence_closure();
+                        if let Some(t) = t { self.prover.profile.closure_time += t.elapsed(); }
+                        if closed {
                             applied_anything = true;
                             self.event_queue.push_back(Event::NodeMerged);
                         }
@@ -482,8 +485,10 @@ impl BlackboardEngine {
             let theorem = self.prover.theorems[task.theorem_idx].clone();
 
             // 失敗パスは定理ごとの共有キャッシュ。dfs_match が &mut self を取るので一時的に取り出す。
+            let t_prep = self.prover.profile.detail.then(std::time::Instant::now);
             self.prover.ensure_global_failed_paths();
             self.prover.ensure_theorem_var_index();
+            if let Some(t) = t_prep { self.prover.profile.prepare_time += t.elapsed(); }
             let var_index = self.prover.theorem_var_index[task.theorem_idx].clone();
             let mut failed_paths = std::mem::take(&mut self.prover.global_failed_paths[task.theorem_idx]);
             let all_active: u64 = if theorem.patterns.len() >= 64 { u64::MAX } else { (1u64 << theorem.patterns.len()) - 1 };
@@ -500,7 +505,9 @@ impl BlackboardEngine {
                     pattern_masks: &var_index.per_pattern,
                 };
                 let mut dep_mask: u8 = 0;
+                let t_dfs = self.prover.profile.detail.then(std::time::Instant::now);
                 self.prover.dfs_match(&mut search, all_active, task.bind.clone(), task.flip_states.clone(), &mut dep_mask);
+                if let Some(t) = t_dfs { self.prover.profile.dfs_time += t.elapsed(); }
             }
             self.prover.global_failed_paths[task.theorem_idx] = failed_paths;
 
@@ -525,10 +532,20 @@ impl BlackboardEngine {
 
             let mut task_succeeded = false;
             for (mut bind, flips) in new_binds {
-                if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) { continue; }
-                if !self.prover.execute_constructions(&theorem.constructions, &mut bind) { continue; }
+                let detail = self.prover.profile.detail;
+                let t = detail.then(std::time::Instant::now);
+                let proven = self.prover.is_already_proven(&theorem.conclusions, &bind, &flips);
+                if let Some(t) = t { self.prover.profile.proven_check_time += t.elapsed(); }
+                if proven { continue; }
+                let t = detail.then(std::time::Instant::now);
+                let built = self.prover.execute_constructions(&theorem.constructions, &mut bind);
+                if let Some(t) = t { self.prover.profile.construct_time += t.elapsed(); }
+                if !built { continue; }
                 // 作図しただけで合同閉包により既に成り立った場合。
-                if self.prover.is_already_proven(&theorem.conclusions, &bind, &flips) { continue; }
+                let t = detail.then(std::time::Instant::now);
+                let proven = self.prover.is_already_proven(&theorem.conclusions, &bind, &flips);
+                if let Some(t) = t { self.prover.profile.proven_check_time += t.elapsed(); }
+                if proven { continue; }
 
                 println!("  🎯 [リーチ通知] 定理「{}」の前提条件がすべて満たされました！", theorem.name);
                 for (var_name, class_id) in &bind {
@@ -537,7 +554,9 @@ impl BlackboardEngine {
                     println!("      - 割り当て: {} = {}", var_name, entity_name);
                 }
 
+                let t = detail.then(std::time::Instant::now);
                 let (applied, generated_facts) = self.prover.apply_conclusions(&theorem, &bind, &flips);
+                if let Some(t) = t { self.prover.profile.apply_time += t.elapsed(); }
                 if applied {
                     applied_anything = true;
                     task_succeeded = true;
