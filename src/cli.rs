@@ -55,20 +55,19 @@ use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
 /// 探索の既定の予算(dfs_match の呼び出し回数)。
 /// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
 ///
-/// 値の根拠: 解けた問題が実際に使った仕事量を測ると、既定でいちばん重いのが bench_2018chnwesternmop5 の約215万ステップで、
-/// そこに3倍以上の余裕を見て800万にしてある。
-/// (解けない問題には、手が尽きて早く止まるものと、この予算を使い切るものがある。使い切るものは、この値を上げると実行時間が延びる。
-/// 手が尽きたときの最後の手(汎用の補助作図)があるので、以前に止まっていた問題も予算まで走ることがある。)
-pub const DEFAULT_STEP_BUDGET: u64 = 8_000_000;
+/// 値の根拠: 1問あたり10秒前後で探索を切り上げる(ユーザー方針、2026-09-30)。仕事量1は dfs_match 1回か AR の行演算2回。
+/// 100万で44問は1問7秒以内、HAGeo は12並列で中央値8秒・最大20秒(大きい図では dfs_match 1回が重く、時間が延びる)。
+/// (以前は800万で、AR の重い問題では1問に10分を超えていた。解けない問題の多くはこの予算を使い切る。)
+pub const DEFAULT_STEP_BUDGET: u64 = 1_000_000;
 /// --time の既定。解けるかどうかを決める予算ではなく、
 /// 「どれだけ待っても終わらない」を防ぐだけの安全弁。
-pub const DEFAULT_TIME_CAP_SECS: u64 = 600;
+pub const DEFAULT_TIME_CAP_SECS: u64 = 60;
 
 pub const OPTIONS: &[Opt] = &[
     // ---- 問題を解くモード ----
-    Opt { name: "--steps", arg: Value("回"), default: "8000000", mode: Solve,
+    Opt { name: "--steps", arg: Value("回"), default: "1000000", mode: Solve,
           help: "探索の予算(dfs_matchの呼び出し回数)。壁時計ではないので結果が再現する" },
-    Opt { name: "--time", arg: Value("秒"), default: "600", mode: Solve,
+    Opt { name: "--time", arg: Value("秒"), default: "60", mode: Solve,
           help: "打ち切るまでの壁時計の上限。予算ではなく暴走を止めるための安全弁" },
     Opt { name: "--mcts", arg: Switch, default: "無効", mode: Solve,
           help: "MCTSによる補助点の作図を有効にする(既定は無効)" },

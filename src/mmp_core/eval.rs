@@ -344,6 +344,9 @@ impl EGraph {
     pub(crate) fn definition_is_degenerate(&self, def: &Definition) -> bool {
         if matches!(def, Definition::FreePoint | Definition::GivenPoint | Definition::ConstantHomogeneous(..)) { return false; }
         if !self.fixed_active() && !self.shared_samples(1) { return false; }
+        // 平行な2直線の交点は無限遠点(方向)で、新しい点として作ると有限の点と取り違える。
+        if let Definition::Intersection(a, b) = *def
+            && self.parallel_lines(a, b) { return true; }
         // 円・二次曲線は、生成元のどれか3点が共線だと退化する(円は定まらず、5点の二次曲線は2直線になって
         // シュタイナーの定理のような二次曲線の性質が成り立たない)。値は計算できてしまうので別に確かめる。
         let generators: &[ClassId] = match def {
@@ -367,6 +370,17 @@ impl EGraph {
             r
         });
         parents_ok && value.is_none()
+    }
+
+    /// 無限遠直線でない2直線が固定座標で平行か(同じ直線も含む)。
+    fn parallel_lines(&self, a: ClassId, b: ClassId) -> bool {
+        let linf = self.get_rep(self.line_infinity);
+        let (a, b) = (self.get_rep(a), self.get_rep(b));
+        if a == linf || b == linf || self.entities[a.0].entity_type != EntityType::Line || self.entities[b.0].entity_type != EntityType::Line { return false; }
+        (0..self.fixed_samples()).any(|k| match (self.class_value(a, k), self.class_value(b, k)) {
+            (Some(u), Some(v)) if u.len() >= 3 && v.len() >= 3 => (u[0] * v[1] - u[1] * v[0]).0 == 0,
+            _ => false,
+        })
     }
 
     /// 点(方向・円周点を含む)たちが図の上で同じ直線に乗っているか(非退化条件の判定用)。3点未満は true。

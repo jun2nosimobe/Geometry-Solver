@@ -123,6 +123,9 @@ pub struct BlackboardEngine {
     pub ar_rounds: u64,
     /// 代数的な追跡が検出した相似な三角形の組の数。
     pub ar_similar: u64,
+    /// 代数的な追跡で、前回の規則の結果を使い回した回数と、その状態。
+    pub ar_reused: u64,
+    pub(crate) ar_cache: Option<super::ar::ArCache>,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -149,6 +152,8 @@ impl BlackboardEngine {
             ar_ops: 0,
             ar_rounds: 0,
             ar_similar: 0,
+            ar_reused: 0,
+            ar_cache: None,
             work_limit: u64::MAX,
         }
     }
@@ -192,6 +197,10 @@ impl BlackboardEngine {
             }
         }
         let merged = ar && self.run_ar();
+        // AR で予算を使い切ったら、回復の手は打たない(次の回の予算の確認で止まる)。
+        if self.work_limit > 0 && self.prover.work_done() >= self.work_limit {
+            return if merged { Recovered::Algebra } else { Recovered::Exhausted };
+        }
         match self.recover(open_targets, rotate, opts) {
             Recovered::Exhausted if merged => Recovered::Algebra,
             r => r,

@@ -32,12 +32,6 @@ fn on_circle(point: &str, circle: &str) -> Pattern {
     connected(point, circle, Refinement::Default, Refinement::Circle)
 }
 
-/// 🌟 円周点(I か J)と無限遠直線を同時に束縛する。どちらも図に固定の基準の実体なので、
-/// 候補は I と J の2つだけ。同じ変数を使い続ける限り、どちらに束縛されても一貫する。
-fn circular_point(point: &str, inf_line: &str) -> Pattern {
-    connected(point, inf_line, Refinement::CircularPoint, Refinement::InfinityLine)
-}
-
 fn identical(a: &str, b: &str, pool: SelfBindPool) -> Pattern {
     Pattern::Identical { a: a.to_string(), b: b.to_string(), pool }
 }

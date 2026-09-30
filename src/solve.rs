@@ -476,8 +476,8 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         println!("📐 局所伝播が非退化条件で見送った回数: 交点の一意性 {} / 二次曲線の一意性 {} / 複比の一意性 {}", sk[0], sk[1], sk[2]);
     }
     if opts.ar {
-        println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回、行演算 {}(仕事量に含む)",
-            engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_ops);
+        println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回(うち規則の結果の使い回し {} 回)、行演算 {}(仕事量に含む)",
+            engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_reused, engine.ar_ops);
     }
     if engine.prover.degenerate_matches > 0 {
         println!("📐 図の上で退化した配置(「相異なる」図形が数値的に一致)のマッチを {} 件捨てました。", engine.prover.degenerate_matches);

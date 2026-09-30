@@ -15,8 +15,8 @@ run() { name="$1"; base="$2"; shift 2; out="$S/res/${L}_${name}.tsv"; printf '%-
   fi
 }
 run default   baseline_default
-run extras    baseline_extras   --steps=1500000 --length-theorems --central-angle --midpoint-demands
-run skip      baseline_skip     --steps=1500000 --skip-recovery=angle,target
+run extras    baseline_extras   --steps=1000000 --length-theorems --central-angle --midpoint-demands
+run skip      baseline_skip     --steps=1000000 --skip-recovery=angle,target
 run noise5    baseline_noise5   --noise=5
 run noise10   baseline_noise10  --noise=10
 run noise20   baseline_noise20  --noise=20
