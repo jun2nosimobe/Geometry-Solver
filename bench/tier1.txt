@@ -4,9 +4,12 @@ bench_2010g1
 bench_2011armog10p6
 bench_2011balkanmop1
 bench_2012egmop1
+bench_2015apmop1
+bench_2018chnwesternmop5
 bench_2018silkroadp1
 bench_2019g1
 bench_2022balkanmop1
+centroid
 circumcenter
 cyclic_quad
 desargues

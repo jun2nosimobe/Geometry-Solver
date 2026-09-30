@@ -74,6 +74,8 @@ pub struct BlackboardEngine {
     /// 代数的な追跡の行演算の数(仕事量に数えている)と、追跡の回数。
     pub ar_ops: u64,
     pub ar_rounds: u64,
+    /// 代数的な追跡が検出した相似な三角形の組の数。
+    pub ar_similar: u64,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -94,6 +96,7 @@ impl BlackboardEngine {
             ar_rejected: 0,
             ar_ops: 0,
             ar_rounds: 0,
+            ar_similar: 0,
             work_limit: u64::MAX,
         }
     }

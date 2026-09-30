@@ -110,6 +110,8 @@ pub const OPTIONS: &[Opt] = &[
           help: "手が止まったとき、複比と有向角の等式を形式的な対数の線形代数(ℤⁿ ⊕ ℤ/4、エルミート標準形)でまとめて閉じ、等しいと分かった同値類と方向を併合する手を外す(A/B 用。来歴 #82)" },
     Opt { name: "--drop-theorems", arg: Value("名前,…"), default: "外さない", mode: Solve,
           help: "名前が一致する定理を外す(末尾が * なら前方一致。代数的な追跡への置き換えを試すため)" },
+    Opt { name: "--chord-theorems", arg: Switch, default: "AR があれば外す", mode: Solve,
+          help: "方冪(共点二弦の相似)と交わる弦の相似の2つの定理を、代数的な追跡があっても残す。既定では AR の相似(対応する点を含む)が置き換えるので外す(来歴 #85)" },
     Opt { name: "--ar-replace", arg: Switch, default: "使わない", mode: Solve,
           help: "角の足し算の規則(有向角の加法性・交替律)を外し、代数的な追跡に任せる(試験中)" },
     Opt { name: "--no-generic-aux", arg: Switch, default: "汎用の補助作図を足す", mode: Solve,

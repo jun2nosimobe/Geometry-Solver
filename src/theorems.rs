@@ -116,7 +116,8 @@ pub struct TheoremSetOptions {
     pub parallelogram: bool,
     /// スパイラル相似・同じ向き(--rules=spiral)。既定では入れない(来歴 #71・#74)。
     pub spiral: bool,
-    /// 交わる弦の相似(逆向きのスパイラル相似)。既定で入る(--no-spiral-opp で外せる。来歴 #74)。
+    /// 交わる弦の相似(逆向きのスパイラル相似)。--no-spiral-opp で外せる(来歴 #74)。代数的な追跡が有効なときは
+    /// AR の相似が置き換えるので既定で外す(--chord-theorems で残す。来歴 #85)。
     pub spiral_opp: bool,
 }
 

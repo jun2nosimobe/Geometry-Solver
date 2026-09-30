@@ -44,6 +44,8 @@ pub struct SolveOptions {
     pub ar_replace: bool,
     /// 名前で外す定理(--drop-theorems=名前,名前。AR への置き換えを試すため)。
     pub drop_theorems: Vec<String>,
+    /// AR があっても、方冪・交わる弦の相似の2つの定理を残す(--chord-theorems)。
+    pub chord_theorems: bool,
     pub numeric_aux_early: bool,
     pub length_theorems: bool,
     pub no_central_angle: bool,
@@ -111,6 +113,7 @@ impl SolveOptions {
             ar_replace: flag(args, "--ar-replace"),
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),
+            chord_theorems: flag(args, "--chord-theorems"),
             numeric_aux_early: !flag(args, "--no-numeric-aux") && flag(args, "--numeric-aux-early"),
             length_theorems: !flag(args, "--no-length-theorems"),
             no_central_angle: flag(args, "--no-central-angle"),
@@ -382,6 +385,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     let mut theorems = theorem_set(opts);
     // --ar-replace: 角の足し算の規則(加法性・交替律)を外し、代数的な追跡に任せる。
     if opts.ar_replace { theorems.retain(|t| t.name != "有向角の加法性" && t.name != "有向角の交替律"); }
+    // AR の相似(対応する点を含む)が置き換えるので外す(来歴 #85)。
+    if opts.ar && !opts.no_fixed_coords && !opts.chord_theorems {
+        theorems.retain(|t| t.name != "共点二弦の相似(方冪の定理の基礎)" && t.name != "交わる弦の相似(逆向きのスパイラル相似)");
+    }
     // 名前が一致する定理を外す。末尾が * なら前方一致(「円周角の定理」で「円周角の定理の逆」まで外さないため)。
     theorems.retain(|t| !opts.drop_theorems.iter().any(|d| match d.strip_suffix('*') {
         Some(prefix) => t.name.starts_with(prefix),
