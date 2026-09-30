@@ -174,6 +174,92 @@ fn sim_relations(atoms: &mut Atoms, a: ClassId, b: ClassId, a2: ClassId, b2: Cla
     out
 }
 
+/// AR の規則の一覧(Atlas §07 の「代数的な追跡の規則」の元。`geom_solver theorem-atlas` が書き出す)。
+/// kind は「等式」(図の状況から格子に関係式を足す)・「検出」(格子で式が 0 に還元されたら e-graph に結論を入れる)・
+/// 「検出→等式」(検出してから関係式を足す、線形でない一歩を含むもの)。規則を足したらここにも足す。
+pub(crate) struct ArRule {
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub situation: &'static str,
+    pub relation: &'static str,
+    pub ledger: &'static str,
+}
+
+pub(crate) const AR_RULES: &[ArRule] = &[
+    ArRule { kind: "等式", name: "定義の翻訳(有向角・複比)",
+        situation: "同値類にある AnglePair(D1,D2)・CrossRatio(A,B,C,D)・CrossRatioOfLines の定義(固定座標で写像を確かめたもの)",
+        relation: "(A,B;C,D) = s(A,C) + s(D,B) − s(C,B) − s(A,D)、有向角は虚円点との複比 (I,J;D1,D2)。同じ同値類の2つの定義の式は等しい", ledger: "82" },
+    ArRule { kind: "等式", name: "定義の翻訳(長さ)",
+        situation: "同値類にある LengthSq(X,Y)・Product(a,b) の定義",
+        relation: "LengthSq(X,Y) = s(JX,JY) + s(IX,IY)(虚円点 J・I からの線束の要素の差)、積は和", ledger: "85" },
+    ArRule { kind: "等式", name: "中点・調和共役の比",
+        situation: "Midpoint(A,B) = M(A,B,M を通る直線がある)、HarmonicConjugateOf(A,B,C) = D",
+        relation: "(A,B;M,∞) = −1、s(A,B) = s(A,M) + log 2、(A,B;C,D) = −1", ledger: "82・84" },
+    ArRule { kind: "等式", name: "アフィンの等式",
+        situation: "直線 L の上の2点 X, Y",
+        relation: "s(X,∞_L) = s(Y,∞_L)(z = 1 の座標で無限遠点までの差が一定。無限遠点との複比が本物の比になる)", ledger: "84" },
+    ArRule { kind: "等式", name: "地図の等式(直線と等方線束)",
+        situation: "直線 m の上の2点 X, Y",
+        relation: "s(JX,JY) − s(X,Y) = κ_J(m)、κ_J(m) − κ_I(m) = β(m の方向) + 定数(直線の上の比と方向の角をつなぐ)", ledger: "85" },
+    ArRule { kind: "等式", name: "円(円周角・接弦)",
+        situation: "円 C の上の2点 P, X と弦 PX の直線(または P での接線)",
+        relation: "β(PX) = θ_C(P) + θ_C(X) + c_C、接線は β = 2θ_C(P) + c_C(円周角の定理・接弦定理がこの1本にまとまる)", ledger: "83" },
+    ArRule { kind: "等式", name: "透視射影(点 → 線束・線束 → 点)",
+        situation: "中心 O と直線 L、L の上の点 X と直線 OX",
+        relation: "β(OX) の差 = s_L(X) の差 + 点ごとの倍率 + 定数(射影対応は一次分数変換)", ledger: "83" },
+    ArRule { kind: "等式", name: "シュタイナー(二次曲線)",
+        situation: "円以外の二次曲線の上の頂点 P と点 X、直線 PX",
+        relation: "頂点からの線束も二次曲線の媒介変数の一次分数変換なので、透視射影と同じ形", ledger: "83" },
+    ArRule { kind: "等式", name: "平行 ⇒ 比",
+        situation: "平行線の族(同じ方向の直線)が2直線 L1, L2 を点 X1→X2、Y1→Y2 で切る(2直線の交点は自分自身に対応)",
+        relation: "s_{L2}(X2,Y2) − s_{L1}(X1,Y1) = κ(族に沿った射影はアフィン)", ledger: "84" },
+    ArRule { kind: "等式", name: "メネラウスの定理",
+        situation: "3辺が図にある三角形 ABC と、辺 BC・CA・AB を D・E・F で切る直線(固定座標で積が −1)",
+        relation: "s(A,F) − s(F,B) + s(B,D) − s(D,C) + s(C,E) − s(E,A) = 2T(向きつきの比の積 = −1)", ledger: "88" },
+    ArRule { kind: "等式", name: "チェバの定理",
+        situation: "3辺が図にある三角形 ABC と、1点 O で交わる直線 AD・BE・CF(D・E・F は辺の上、固定座標で積が 1)",
+        relation: "s(A,F) − s(F,B) + s(B,D) − s(D,C) + s(C,E) − s(E,A) = 0(比の積 = 1)", ledger: "88" },
+    ArRule { kind: "検出→等式", name: "相似(AA)",
+        situation: "3辺が図にある2つの三角形で、2つの頂点の有向角の剰余が一致(裏返しは符号を変えて一致)",
+        relation: "対応する各辺で s(JX′,JY′) = s(JX,JY) + log a、I の線束でも同じ(裏返しは I と J を入れ替える)。三角形が閉じる条件が足し算なので、検出の一歩だけ線形でない", ledger: "85" },
+    ArRule { kind: "検出→等式", name: "相似で対応する点",
+        situation: "相似な三角形の辺 XY の上の点 P と対応する辺の上の点 P′ で、σ(X) = X′ からの2つの等式が格子で言える(同じ直線の上では内分比が等しいこと)",
+        relation: "P′ = σ(P) として、頂点・他の対応点との組で相似の等式を足す(図の上で同じ点の組は使わない)", ledger: "85" },
+    ArRule { kind: "検出", name: "同値類の併合",
+        situation: "2つの同値類の式の正準な剰余が一致",
+        relation: "2つの同値類をマージする(理由: 代数的な追跡(複比・有向角の線形関係))", ledger: "82" },
+    ArRule { kind: "検出", name: "平行(方向の併合)",
+        situation: "(I,J;D1,D2) の式が 0 に還元される",
+        relation: "方向 D1 と D2 をマージする(平行)", ledger: "82" },
+    ArRule { kind: "検出", name: "比 ⇒ 平行",
+        situation: "2直線を切る2本の横断線で、交点からの比(または既に平行な横断線を基準にした比)の式が一致",
+        relation: "2本の横断線の方向をマージする(中点連結定理はこの特別な場合)", ledger: "84" },
+    ArRule { kind: "検出", name: "円周角の逆",
+        situation: "円 C の外の点 Z から C の上の2点 A, B への β(ZA) − β(ZB) が θ_C(A) − θ_C(B) に還元される",
+        relation: "Z を C に接続する", ledger: "83" },
+    ArRule { kind: "検出", name: "メネラウスの逆",
+        situation: "三角形の2辺の上の点を通る直線 t があり、3つ目の辺の上の点 E で比の積の式が −1 に還元される(固定座標で E ∈ t が真の候補だけ)",
+        relation: "E を t に接続する(共線)", ledger: "88" },
+    ArRule { kind: "検出", name: "チェバの逆",
+        situation: "直線 AD・BE が O で交わり、AB の上の F で比の積の式が 1 に還元される(固定座標で F ∈ CO が真の候補だけ)",
+        relation: "F を直線 CO に接続する(共点)", ledger: "88" },
+];
+
+/// 三角形の枠(1回の追跡で1度だけ作る): 有限の点、2点を通る直線(図にあるもの)、3辺が図にある三角形、直線ごとの点。
+struct Frame {
+    points: Vec<ClassId>,
+    edge: FxHashMap<(usize, usize), ClassId>,
+    tris: Vec<[ClassId; 3]>,
+    on_line: FxHashMap<usize, Vec<ClassId>>,
+    /// 点ごとに、それを通る直線(図にあるもの)。
+    lines_at: FxHashMap<usize, Vec<ClassId>>,
+}
+
+impl Frame {
+    fn line_of(&self, a: ClassId, b: ClassId) -> Option<ClassId> { self.edge.get(&(a.0.min(b.0), a.0.max(b.0))).copied() }
+    fn on(&self, l: ClassId) -> &[ClassId] { self.on_line.get(&l.0).map(|v| v.as_slice()).unwrap_or(&[]) }
+}
+
 /// 1回の追跡の状態: 記号の表・格子・等式の出どころと、既に入れた等式。
 struct ArState {
     atoms: Atoms,
@@ -395,21 +481,23 @@ impl BlackboardEngine {
         let eg = &self.prover.egraph;
         let mut atoms = std::mem::take(&mut st.atoms);
         // 同値類ごとの (記号の式, その式を持つ実体)。
-        let mut classes: Vec<(ClassId, Vec<(SVec, ClassId)>)> = Vec::new();
+        let mut classes: Vec<(ClassId, Vec<(SVec, Vec<(String, Vec<ClassId>)>)>)> = Vec::new();
         let (mut dbg_degen, mut dbg_unverified, mut dbg_ratio) = (0usize, 0usize, 0usize);
         let (ang90, ang0) = (eg.get_rep(eg.ang90), eg.get_rep(eg.ang0));
         for i in 0..eg.entities.len() {
             let rep = ClassId(i);
             if eg.get_rep(rep) != rep || eg.entities[i].entity_type != EntityType::Scalar { continue; }
-            let mut vs: Vec<(SVec, ClassId)> = Vec::new();
-            if rep == ang90 { vs.push((SVec::from([(T, 2)]), eg.ang90)); }
-            if rep == ang0 { vs.push((SVec::new(), eg.ang0)); }
+            // 各式の前提: その定義がこの同値類にある(記録した実体の番号が、その時点で別の類にいることがあるので、
+            // 「どの実体か」ではなく「この類にこの定義がある」として記録する)。
+            let mut vs: Vec<(SVec, Vec<(String, Vec<ClassId>)>)> = Vec::new();
+            if rep == ang90 { vs.push((SVec::from([(T, 2)]), vec![("Identical".to_string(), vec![eg.ang90, rep])])); }
+            if rep == ang0 { vs.push((SVec::new(), vec![("Identical".to_string(), vec![eg.ang0, rep])])); }
             let defs = eg.entities[i].components.first().map(|c| c.definitions.clone()).unwrap_or_default();
             for def in &defs {
                 // 長さ: LengthSq(X,Y) = (z_X − z_Y)(z̄_X − z̄_Y) = s(JX,JY) + s(IX,IY)。積は和。
-                if let Some(v) = self.ar_length_vector(def, &mut atoms) {
-                    let ent = eg.memo.get(&eg.normalize_definition(def)).copied().unwrap_or(rep);
-                    vs.push((v, ent));
+                if let Some((v, mut extra)) = self.ar_length_vector(def, &mut atoms) {
+                    extra.push(Self::defined_by_premise(def, rep));
+                    vs.push((v, extra));
                     continue;
                 }
                 let Some(pts) = self.ar_cross_ratio_points(def) else { continue };
@@ -419,8 +507,7 @@ impl BlackboardEngine {
                     .and_then(|_| atoms.add(&mut v, c, b, -1)).and_then(|_| atoms.add(&mut v, a, d, -1));
                 if ok.is_none() { dbg_degen += 1; continue; }
                 if !self.ar_verify(def, pts) { dbg_unverified += 1; continue; }
-                let ent = eg.memo.get(&eg.normalize_definition(def)).copied().unwrap_or(rep);
-                vs.push((v, ent));
+                vs.push((v, vec![Self::defined_by_premise(def, rep)]));
             }
             if !vs.is_empty() { classes.push((rep, vs)); }
         }
@@ -428,10 +515,10 @@ impl BlackboardEngine {
         st.atoms = atoms;
         // 等式(同値類の中の2つの式の差)。ねじれの関係 4T = 0 は状態を作るときに入れてある。
         for (_, vs) in &classes {
-            for (v, ent) in &vs[1..] {
+            for (v, prem) in &vs[1..] {
                 let mut rel = v.clone();
                 if add_scaled(&mut rel, &vs[0].0, -1).is_none() { continue; }
-                st.insert(&self.prover.egraph, rel, vec![("Identical".to_string(), vec![*ent, vs[0].1])], &[])?;
+                st.insert(&self.prover.egraph, rel, [prem.clone(), vs[0].1.clone()].concat(), &[])?;
             }
         }
         // 定義から従う比の等式(無限遠点との複比が −1)。
@@ -452,7 +539,9 @@ impl BlackboardEngine {
             if st.insert(&self.prover.egraph, rel, premises, &[])? { gen_count += 1; }
         }
         let (t1, ops1) = (std::time::Instant::now(), st.lattice.ops);
-        let sims = self.ar_similarity(st)?;
+        let frame = self.ar_frame();
+        let sims = self.ar_similarity(st, &frame)?;
+        self.ar_menelaus_ceva_relations(st, &frame)?;
         self.ar_similar += sims as u64;
         let (t2, ops2) = (std::time::Instant::now(), st.lattice.ops);
         if std::env::var("GS_DEBUG_AR").is_ok() {
@@ -503,7 +592,9 @@ impl BlackboardEngine {
                 dir_merges.push((d1, d2, src));
             }
         }
-        let links = self.ar_detect_concyclic(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref());
+        let mut links: Vec<(ClassId, ClassId, Vec<u32>, &str)> = self.ar_detect_concyclic(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref())
+            .into_iter().map(|(z, c, src)| (z, c, src, "代数的な追跡(円周角の逆)")).collect();
+        links.extend(self.ar_detect_menelaus_ceva(st, &frame, &mut rc));
         let parallels = self.ar_detect_parallel(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref());
         if std::env::var("GS_DEBUG_AR").is_ok() {
             println!("  AR_DEBUG detect {:?}/{} ops", t2.elapsed(), st.lattice.ops - ops2);
@@ -529,15 +620,15 @@ impl BlackboardEngine {
                 merged += 1;
             }
         }
-        // 円周角の逆(検出): 点を円に接続する。
-        for (z, c, src) in links {
+        // 円周角の逆・メネラウスの逆・チェバの逆(検出): 点を円・直線に接続する。
+        for (z, c, src, name) in links {
             let eg = &mut self.prover.egraph;
             let (z, c) = (eg.get_rep(z), eg.get_rep(c));
             if eg.is_connected(z, c) { continue; }
             if eg.merge_checks && eg.numeric_incidence_check(z, c, 2) == Some(false) { self.ar_rejected += 1; continue; }
             let premises: Vec<(String, Vec<ClassId>)> = src.iter().flat_map(|&i| st.premises_of[i as usize].clone()).collect();
             let (nz, nc) = (eg.entities[z.0].name.clone(), eg.entities[c.0].name.clone());
-            eg.link_logical_incidence_justified(z, c, Justification::Theorem { name: "代数的な追跡(円周角の逆)".to_string(), premises });
+            eg.link_logical_incidence_justified(z, c, Justification::Theorem { name: name.to_string(), premises });
             println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
             merged += 1;
         }
@@ -877,7 +968,15 @@ impl BlackboardEngine {
     }
 
     /// 長さの記号の式: LengthSq(X,Y) = s(JX,JY) + s(IX,IY)、Product(a,b) は a と b の(LengthSq の)式の和。
-    fn ar_length_vector(&self, def: &Definition, atoms: &mut Atoms) -> Option<SVec> {
+    /// 「定義 def が同値類 rep にある」という前提(DefinedBy:型(引数…, rep))。監査は、その定義を元々持っていた実体と、
+    /// 引数・rep への合流まで辿る。
+    fn defined_by_premise(def: &Definition, rep: ClassId) -> (String, Vec<ClassId>) {
+        let mut args = def.get_parents();
+        args.push(rep);
+        (format!("DefinedBy:{}", def.get_type_name()), args)
+    }
+
+    fn ar_length_vector(&self, def: &Definition, atoms: &mut Atoms) -> Option<(SVec, Vec<(String, Vec<ClassId>)>)> {
         let eg = &self.prover.egraph;
         let len = |d: &Definition, atoms: &mut Atoms| -> Option<SVec> {
             let Definition::LengthSq(x, y) = *d else { return None };
@@ -889,14 +988,15 @@ impl BlackboardEngine {
             Some(v)
         };
         match def {
-            Definition::LengthSq(..) => len(def, atoms),
+            Definition::LengthSq(..) => Some((len(def, atoms)?, Vec::new())),
             Definition::Product(a, b) => {
                 let first_len = |c: ClassId| eg.entities[eg.get_rep(c).0].components.first()
                     .and_then(|comp| comp.definitions.iter().find(|d| matches!(d, Definition::LengthSq(..))).cloned());
                 let (da, db) = (first_len(*a)?, first_len(*b)?);
                 let mut v = len(&da, atoms)?;
                 add_scaled(&mut v, &len(&db, atoms)?, 1)?;
-                Some(v)
+                // 積の値は、それぞれの因子の同値類にある長さの定義で決まる(その定義がその類にあることも前提)。
+                Some((v, vec![Self::defined_by_premise(&da, eg.get_rep(*a)), Self::defined_by_premise(&db, eg.get_rep(*b))]))
             }
             _ => None,
         }
@@ -908,11 +1008,10 @@ impl BlackboardEngine {
     /// 対応する各辺 (X,Y) について s(JX′,JY′) = s(JX,JY) + log a、I の線束で s(IX′,IY′) = s(IX,IY) + log ā。
     /// 裏返しは I と J を入れ替える。仮定の角から結論を出すのは線形でない(三角形が閉じる条件が足し算)ので、ここで検出して等式を足す。
     /// 返り値は足した相似の組の数。
-    fn ar_similarity(&self, st: &mut ArState) -> Option<usize> {
+    /// 三角形の枠を作る(相似・メネラウス・チェバが共有する)。
+    fn ar_frame(&self) -> Frame {
         const MAX_TRIANGLES: usize = 3000;
-        const MAX_PAIRS: usize = 400;
         let eg = &self.prover.egraph;
-        let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
         let linf = eg.get_rep(eg.line_infinity);
         let points: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
             .filter(|&o| eg.get_rep(o) == o && eg.entities[o.0].entity_type == EntityType::Point && eg.entities[o.0].is_active()
@@ -920,6 +1019,7 @@ impl BlackboardEngine {
         // 辺: 2点を通る直線が図にある組。
         let mut edge: FxHashMap<(usize, usize), ClassId> = FxHashMap::default();
         let mut nbr: FxHashMap<usize, Vec<ClassId>> = FxHashMap::default();
+        let mut lines_at: FxHashMap<usize, Vec<ClassId>> = FxHashMap::default();
         for i in 0..points.len() {
             for j in (i + 1)..points.len() {
                 let (a, b) = (points[i], points[j]);
@@ -927,18 +1027,21 @@ impl BlackboardEngine {
                     edge.insert((a.0, b.0), l);
                     nbr.entry(a.0).or_default().push(b);
                     nbr.entry(b.0).or_default().push(a);
+                    for x in [a, b] { let v = lines_at.entry(x.0).or_default(); if !v.contains(&l) { v.push(l); } }
                 }
             }
         }
-        let line_of = |a: ClassId, b: ClassId| edge.get(&(a.0.min(b.0), a.0.max(b.0))).copied();
+        let mut on_line: FxHashMap<usize, Vec<ClassId>> = FxHashMap::default();
+        for &l in edge.values() { on_line.entry(l.0).or_insert_with(|| self.ar_points_on(l)); }
+        let mut frame = Frame { points, edge, tris: Vec::new(), on_line, lines_at };
         let mut tris: Vec<[ClassId; 3]> = Vec::new();
-        'outer: for &a in &points {
+        'outer: for &a in &frame.points {
             let Some(na) = nbr.get(&a.0) else { continue };
             for &b in na {
                 if b.0 <= a.0 { continue; }
                 for &c in na {
-                    if c.0 <= b.0 || line_of(b, c).is_none() { continue; }
-                    let (lab, lbc, lca) = (line_of(a, b).unwrap(), line_of(b, c).unwrap(), line_of(c, a).unwrap());
+                    if c.0 <= b.0 || frame.line_of(b, c).is_none() { continue; }
+                    let (lab, lbc, lca) = (frame.line_of(a, b).unwrap(), frame.line_of(b, c).unwrap(), frame.line_of(c, a).unwrap());
                     if lab == lbc || lbc == lca || lca == lab { continue; }
                     if eg.fixed_collinear(&[a, b, c]) != Some(Some(false)) { continue; }
                     tris.push([a, b, c]);
@@ -946,6 +1049,16 @@ impl BlackboardEngine {
                 }
             }
         }
+        frame.tris = tris;
+        frame
+    }
+
+    fn ar_similarity(&self, st: &mut ArState, frame: &Frame) -> Option<usize> {
+        const MAX_PAIRS: usize = 400;
+        let eg = &self.prover.egraph;
+        let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
+        let (points, tris) = (&frame.points, &frame.tris);
+        let line_of = |a: ClassId, b: ClassId| frame.line_of(a, b);
         // 順序つきの三角形 (P,Q,R) の鍵 = (P での角, Q での角) の剰余。角は2方向だけで決まるので、方向の β の剰余と
         // 角の剰余(と符号を変えた剰余)を方向の組ごとに1度だけ求める(剰余は線形なので、剰余の差をもう一度簡約すればよい)。
         // 出どころは、相似の組として使うと決めたものだけ、角の式を直接簡約して取り直す。
@@ -985,7 +1098,7 @@ impl BlackboardEngine {
         type Key = (Vec<(u32, i64)>, Vec<(u32, i64)>);
         let mut by_key: FxHashMap<Key, Vec<[ClassId; 3]>> = FxHashMap::default();
         let mut entries: Vec<([ClassId; 3], Key, Key)> = Vec::new();
-        for t in &tris {
+        for t in tris {
             for [p, q, r] in [[t[0], t[1], t[2]], [t[0], t[2], t[1]], [t[1], t[0], t[2]], [t[1], t[2], t[0]], [t[2], t[0], t[1]], [t[2], t[1], t[0]]] {
                 let (Some((kp, mp)), Some((kq, mq))) = (angle(st, p, q, r), angle(st, q, r, p)) else { continue };
                 let key: Key = (kp.into_iter().collect(), kq.into_iter().collect());
@@ -1032,7 +1145,7 @@ impl BlackboardEngine {
                 }
             }
         }
-        self.ar_sim_correspondences(st, &found, &line_of, &points)?;
+        self.ar_sim_correspondences(st, &found, &line_of, points)?;
         Some(pairs)
     }
 
@@ -1093,6 +1206,144 @@ impl BlackboardEngine {
             }
         }
         Some(count)
+    }
+
+    /// 三角形 ABC と、辺(の直線)BC・CA・AB の上の点 D・E・F の比の積 (AF/FB)(BD/DC)(CE/EA)(向きつき)の記号の式。
+    /// menelaus なら積が −1(D・E・F が共線、メネラウスの定理)、そうでなければ 1(AD・BE・CF が1点で交わる、チェバの定理)を
+    /// 引いた形にする(0 になれば成り立つ)。同じ直線の上の差の比なので、直線ごとの定数は打ち消し合う。
+    fn menelaus_vec(atoms: &mut Atoms, t: [ClassId; 3], d: ClassId, e: ClassId, f: ClassId, menelaus: bool) -> Option<SVec> {
+        let [a, b, c] = t;
+        let mut v = SVec::new();
+        atoms.add(&mut v, a.0, f.0, 1)?;
+        atoms.add(&mut v, f.0, b.0, -1)?;
+        atoms.add(&mut v, b.0, d.0, 1)?;
+        atoms.add(&mut v, d.0, c.0, -1)?;
+        atoms.add(&mut v, c.0, e.0, 1)?;
+        atoms.add(&mut v, e.0, a.0, -1)?;
+        if menelaus { add_scaled(&mut v, &SVec::from([(T, 2)]), -1)?; }
+        Some(v)
+    }
+
+    /// 同じ比の積の固定座標での値(全標本で c なら真)。
+    fn ratio_product_is(&self, t: [ClassId; 3], d: ClassId, e: ClassId, f: ClassId, c: ModInt) -> bool {
+        let eg = &self.prover.egraph;
+        (0..eg.fixed_samples()).all(|k| {
+            let Some(p) = [t[0], t[1], t[2], d, e, f].iter().map(|&x| eg.class_value(x, k).filter(|v| v.len() >= 3 && v[2].0 != 0)
+                .map(|v| [v[0] / v[2], v[1] / v[2], ModInt::new(1)])).collect::<Option<Vec<_>>>() else { return false };
+            let rr = [ModInt::new(314_159 + 17 * k as i64), ModInt::new(271_828 + 29 * k as i64), ModInt::new(1)];
+            let det = |x: &[ModInt; 3], y: &[ModInt; 3]| x[0] * (y[1] * rr[2] - y[2] * rr[1]) - x[1] * (y[0] * rr[2] - y[2] * rr[0]) + x[2] * (y[0] * rr[1] - y[1] * rr[0]);
+            let (a, b, cc, dd, ee, ff) = (&p[0], &p[1], &p[2], &p[3], &p[4], &p[5]);
+            let num = det(a, ff) * det(b, dd) * det(cc, ee);
+            let den = det(ff, b) * det(dd, cc) * det(ee, a);
+            den.0 != 0 && (num / den).0 == c.0
+        })
+    }
+
+    /// 三角形の枠の上で、メネラウスの定理(横断線 D・E・F)とチェバの定理(1点 O で交わる3本の直線)の等式を入れる。
+    /// 数値で積が −1・1 であることも確かめる(退化した配置を避ける)。
+    fn ar_menelaus_ceva_relations(&self, st: &mut ArState, frame: &Frame) -> Option<()> {
+        const MAX_RELATIONS: usize = 4000;
+        let eg = &self.prover.egraph;
+        let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
+        let mut done: rustc_hash::FxHashSet<Vec<usize>> = rustc_hash::FxHashSet::default();
+        let mut count = 0usize;
+        for &t in &frame.tris {
+            let [a, b, c] = t;
+            let (Some(lab), Some(lbc), Some(lca)) = (frame.line_of(a, b), frame.line_of(b, c), frame.line_of(c, a)) else { continue };
+            let inner = |l: ClassId, x: ClassId, y: ClassId| -> Vec<ClassId> { frame.on(l).iter().copied().filter(|&p| p != x && p != y).collect() };
+            // メネラウス: AB の上の F を通る別の直線 t が BC・CA と図の点 D・E で交わる。
+            for f in inner(lab, a, b) {
+                for &tl in frame.lines_at.get(&f.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if tl == lab || tl == lbc || tl == lca { continue; }
+                    let on_t = frame.on(tl);
+                    let Some(&d) = inner(lbc, b, c).iter().find(|p| on_t.contains(p)) else { continue };
+                    let Some(&e) = inner(lca, c, a).iter().find(|p| on_t.contains(p)) else { continue };
+                    let mut key = vec![0, t[0].0, t[1].0, t[2].0, tl.0];
+                    key[1..4].sort_unstable();
+                    if !done.insert(key) || !self.ratio_product_is(t, d, e, f, ModInt::new(-1)) { continue; }
+                    let Some(v) = Self::menelaus_vec(&mut st.atoms, t, d, e, f, true) else { continue };
+                    let prem = vec![conn(a, lab), conn(b, lab), conn(f, lab), conn(b, lbc), conn(c, lbc), conn(d, lbc),
+                        conn(c, lca), conn(a, lca), conn(e, lca), conn(d, tl), conn(e, tl), conn(f, tl)];
+                    if st.insert(eg, v, prem, &[])? { count += 1; }
+                    if count >= MAX_RELATIONS { return Some(()); }
+                }
+            }
+            // チェバ: A・B を通る直線が点 O で交わり、C と O を通る直線が AB と図の点 F で交わる。
+            for &la in frame.lines_at.get(&a.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if la == lab || la == lca { continue; }
+                let Some(&d) = inner(lbc, b, c).iter().find(|p| frame.on(la).contains(p)) else { continue };
+                for &lb in frame.lines_at.get(&b.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if lb == lab || lb == lbc { continue; }
+                    let Some(&e) = inner(lca, c, a).iter().find(|p| frame.on(lb).contains(p)) else { continue };
+                    let Some(&o) = frame.on(la).iter().find(|p| frame.on(lb).contains(p) && **p != a && **p != b) else { continue };
+                    let Some(lc) = frame.line_of(c, o) else { continue };
+                    if lc == lca || lc == lbc { continue; }
+                    let Some(&f) = inner(lab, a, b).iter().find(|p| frame.on(lc).contains(p)) else { continue };
+                    let mut key = vec![1, t[0].0, t[1].0, t[2].0, o.0];
+                    key[1..4].sort_unstable();
+                    if !done.insert(key) || !self.ratio_product_is(t, d, e, f, ModInt::new(1)) { continue; }
+                    let Some(v) = Self::menelaus_vec(&mut st.atoms, t, d, e, f, false) else { continue };
+                    let prem = vec![conn(a, lab), conn(b, lab), conn(f, lab), conn(b, lbc), conn(c, lbc), conn(d, lbc),
+                        conn(c, lca), conn(a, lca), conn(e, lca), conn(a, la), conn(o, la), conn(d, la),
+                        conn(b, lb), conn(o, lb), conn(e, lb), conn(c, lc), conn(o, lc), conn(f, lc)];
+                    if st.insert(eg, v, prem, &[])? { count += 1; }
+                    if count >= MAX_RELATIONS { return Some(()); }
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// メネラウスの逆・チェバの逆(検出)。固定座標で「その点がその直線に乗る」が真の候補だけを、格子で確かめる:
+    /// - メネラウスの逆: AB の上の F と BC の上の D を通る直線 t があり、CA の上の E で比の積が −1 に還元されれば E ∈ t。
+    /// - チェバの逆: A・B を通る直線が O で交わり(AD・BE)、AB の上の F で積が 1 に還元されれば F ∈ CO(CO が図にあれば)。
+    /// 返り値は (点, 直線, 使った等式, 理由の名前)。
+    fn ar_detect_menelaus_ceva(&self, st: &mut ArState, frame: &Frame, rc: &mut FxHashMap<u32, SVec>) -> Vec<(ClassId, ClassId, Vec<u32>, &'static str)> {
+        let eg = &self.prover.egraph;
+        let mut out = Vec::new();
+        let Some((zero, _)) = st.lattice.reduce(&SVec::new()) else { return out };
+        let mut done: rustc_hash::FxHashSet<(usize, usize)> = rustc_hash::FxHashSet::default();
+        let numeric_on = |p: ClassId, l: ClassId| eg.fixed_incidence(p, l, EntityType::Line) == Some(Some(true)) && !eg.is_connected(p, l);
+        for &t in &frame.tris {
+            for rot in 0..3 {
+                let [a, b, c] = [t[rot], t[(rot + 1) % 3], t[(rot + 2) % 3]];
+                let (Some(lab), Some(lbc), Some(lca)) = (frame.line_of(a, b), frame.line_of(b, c), frame.line_of(c, a)) else { continue };
+                let inner = |l: ClassId, x: ClassId, y: ClassId| -> Vec<ClassId> { frame.on(l).iter().copied().filter(|&p| p != x && p != y).collect() };
+                // メネラウスの逆
+                for f in inner(lab, a, b) {
+                    for d in inner(lbc, b, c) {
+                        let Some(tl) = frame.line_of(f, d) else { continue };
+                        if tl == lab || tl == lbc || tl == lca { continue; }
+                        for e in inner(lca, c, a) {
+                            if !numeric_on(e, tl) || !done.insert((e.0, tl.0)) { continue; }
+                            let Some(v) = Self::menelaus_vec(&mut st.atoms, [a, b, c], d, e, f, true) else { continue };
+                            if st.lattice.reduce_cached(&v, rc).as_ref() != Some(&zero) { continue; }
+                            let Some((_, src)) = st.lattice.reduce(&v) else { continue };
+                            out.push((e, tl, src, "代数的な追跡(メネラウスの逆)"));
+                        }
+                    }
+                }
+                // チェバの逆
+                for &la in frame.lines_at.get(&a.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if la == lab || la == lca { continue; }
+                    let Some(&d) = inner(lbc, b, c).iter().find(|p| frame.on(la).contains(p)) else { continue };
+                    for &lb in frame.lines_at.get(&b.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if lb == lab || lb == lbc { continue; }
+                        let Some(&e) = inner(lca, c, a).iter().find(|p| frame.on(lb).contains(p)) else { continue };
+                        let Some(&o) = frame.on(la).iter().find(|p| frame.on(lb).contains(p) && **p != a && **p != b) else { continue };
+                        let Some(lc) = frame.line_of(c, o) else { continue };
+                        for f in inner(lab, a, b) {
+                            if !numeric_on(f, lc) || !done.insert((f.0, lc.0)) { continue; }
+                            let Some(v) = Self::menelaus_vec(&mut st.atoms, [a, b, c], d, e, f, false) else { continue };
+                            if st.lattice.reduce_cached(&v, rc).as_ref() != Some(&zero) { continue; }
+                            let Some((_, src)) = st.lattice.reduce(&v) else { continue };
+                            out.push((f, lc, src, "代数的な追跡(チェバの逆)"));
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// 円周角の逆(検出): 円 C の外の点 Z から、C の上の2点 A, B への直線の方向の記号の差 β(ZA) − β(ZB) が

@@ -128,6 +128,13 @@ def main():
                 + ''.join(rows) + '</table>')
 
     missing = sorted(st_def[1] - st_rul[1])
+    ar_rules = data.get('ar_rules', [])
+    ar_rows = []
+    for kind in ['等式', '検出→等式', '検出']:
+        for r in [r for r in ar_rules if r['kind'] == kind]:
+            ledger = '・'.join('#' + x for x in r['ledger'].split('・'))
+            ar_rows.append(f'<tr><td>{html.escape(kind)}</td><td><b>{html.escape(r["name"])}</b></td><td>{md_inline(r["situation"])}</td>'
+                           f'<td>{md_inline(r["relation"])}</td><td class="num">{md_inline(ledger)}</td></tr>')
     missing_note = (f'既定外の規則を足した測定では {len(missing)}問(' + '・'.join(f'<code>{html.escape(p)}</code>' for p in missing)
                     + ')の統計が取れていない(<code>theorem_stats.sh</code> の時間の上限 900秒で打ち切られ、<code>--stats</code> の表が出ない。2026-09-29 は2問とも)。') if missing else ''
     cards, summary = [], []
@@ -194,7 +201,7 @@ def main():
 <div class="wrap">
 <section id="theorems">
 <div class="section-head"><span class="section-num">07</span><h2>定理</h2></div>
-<p class="section-note">登録されている全定理({len(data['theorems'])}件)の、主張・作図の需要・見積もり・実測・現状の問題点。パターン・作図・結論・見積もりの順序は
+<p class="section-note">登録されている全定理({len(data['theorems'])}件)と、代数的な追跡(AR)の規則(<a href="#ar">{len(data.get('ar_rules', []))}件</a>)の、主張・作図の需要・見積もり・実測・現状の問題点。パターン・作図・結論・見積もりの順序は
 コード(<code>geom_solver theorem-atlas</code>)から、実測はベンチ(<code>bench/theorem_stats.sh</code>)から、主張と問題点は
 <a href="notes/theorem_catalog.md">notes/theorem_catalog.md</a> から <code>docs/gen_theorem_atlas.py</code> が作る。作り直し方はそのスクリプトの先頭。
 見積もりの順序は <code>{html.escape(data['plan_problem'])}</code> の図の上で計算した(値は図に依存する)。</p>
@@ -237,6 +244,19 @@ def main():
 {chr(10).join(cards)}
 </div>
 
+<h3 id="ar">代数的な追跡(AR)の規則 · {len(ar_rules)}件</h3>
+<p class="section-note"><code>logic_core/ar.rs</code>(既定、<code>--no-ar</code> で外す)。定理のようにパターンを照合して結論を出すのではなく、
+手が止まるたびに図から<b>線形な関係式</b>を集めて整数の格子(ℤⁿ ⊕ ℤ/4、エルミート標準形)に積み、まとめて閉じる。規則は2種類:
+<b>等式</b>は「図にこの状況があれば、格子にこの関係式を足す」(定理の代わり)、<b>検出</b>は「格子でこの式が 0 に還元されれば、e-graph にこの結論を入れる」。
+<b>検出→等式</b>は、線形でない一歩(三角形が閉じる条件など)を検出で済ませてから関係式を足すもの。格子は毎回作り直す(#85)。<br>
+記号: s(X,Y) は同じ直線の上の2点の差の形式的な対数(数値の対数は取らない。積・商が和・差になる)。β(D) は方向 D の角の記号、
+θ_C(P) は円 C の上の点 P の記号、JX・IX は虚円点 J・I から点 X への線束の要素、T はねじれの記号(4T = 0、2T = log(−1)、T = log i)。
+κ・c・log a は、その状況ごとに新しく置く定数の記号。一覧はコードの <code>AR_RULES</code> から作る。</p>
+<div class="wrap-x"><table class="sum">
+<tr><th>種類</th><th>規則</th><th>状況(前提)</th><th>格子に足す関係式 / 出す結論</th><th>来歴</th></tr>
+{''.join(ar_rows)}
+</table></div>
+
 <h3>合同閉包に組み込まれた規則(定理ではない)</h3>
 <p class="section-note">次の規則は定理のマッチングではなく、マージのたびに変化した実体の近傍だけを見る局所伝播として <code>mmp_core/congruence.rs</code> などに組み込まれている。どれも既にある実体をマージするだけで、図形を作らない。</p>
 <ul>
@@ -246,11 +266,7 @@ def main():
 2直線に退化した二次曲線どうしは1本の直線を丸ごと共有でき、pappus の以前の証明はそこで誤ってマージしていた。</li>
 <li><b>複比の一意性</b>(<code>propagate_cross_ratio_uniqueness</code>): 共線な3点を固定した複比が等しければ4点目は一致する(透視射影不変性の逆)。非退化条件: 固定した3点が図の上でも相異なる(#78)。
 以前は証明の前提に「2つの複比が等しい」を記録していなかったので、その等式が偽のマージから来ていても証明は「厳密」に見えた(#76、centroid)。</li>
-<li><b>代数的な追跡(AR)</b>(<code>logic_core/ar.rs</code>、既定、<code>--no-ar</code> で外す): 有向角・点の複比・線束の複比と、中点・調和共役の比(無限遠点との複比 −1)を、
-2点の差の記号の形式的な対数で表し、整数の格子(ℤⁿ ⊕ ℤ/4)でまとめて閉じる。等しいと分かった同値類と、平行と分かった方向を併合する。手が止まったとき、回復の手と同じ回に回す(#82)。
-円(円周角・接弦)・透視射影・シュタイナーは定理の代わりの等式として入れ、円周角の逆を検出で出す(#83)。同じ直線の上の比と平行(平行 ⇒ 比、比 ⇒ 平行)(#84)。
-虚円点からの線束(等方線束)で長さを比のまま入れ、相似(AA)と相似で対応する点(内分比の等しい点)を出す ― これが方冪・交わる弦の相似の2定理を置き換えるので、
-AR を使う探索では2定理を外す(#85、<code>--chord-theorems</code> で残す)。</li>
+<li><b>代数的な追跡(AR)</b>: 上の<a href="#ar">代数的な追跡(AR)の規則</a>を参照。</li>
 <li><b>自明な関係</b>(<code>apply_trivial_relations</code>): 垂線と直角、垂直方向の対合、調和共役の対合など、定義から機械的に従うもの。</li>
 <li><b>スパイラル相似の局所伝播</b>(<code>mmp_core/spiral_prop.rs</code>、既定外 <code>--rules=spiral-prop</code>): 角の同値類に新しく合流した定義との組だけを見る差分評価。
 結論の図形(中点・直線・角)が既にあるときだけマージする。課税は小さいが、2016ARMO は結論で図形を作らないと解けないので、既定では使わない(#75)。</li>

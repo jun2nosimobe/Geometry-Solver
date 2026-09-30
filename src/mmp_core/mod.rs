@@ -1017,8 +1017,12 @@ impl EGraph {
         if self.merge_census.is_some() && !self.is_connected(self.get_rep(id1), self.get_rep(id2)) {
             self.census_record(id1, id2, true, &justification);
         }
+        // 既に接続している組には理由を記録しない(その接続の根拠は元の接続の方。後から来た理由を付けると、監査から見て
+        // 早い時刻の接続に後の前提が付いた「時刻の逆転」になる)。
+        let already = self.is_connected(self.get_rep(id1), self.get_rep(id2));
         self.clock += 1;
         self.link_logical_incidence(id1, id2);
+        if already { return; }
         let rep1 = self.get_rep(id1);
         let rep2 = self.get_rep(id2);
         let key = if rep1.0 < rep2.0 { (rep1, rep2) } else { (rep2, rep1) };

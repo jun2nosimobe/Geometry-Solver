@@ -14,7 +14,7 @@ mod blackboard;
 mod cost;
 mod matcher;
 mod numeric_aux;
-mod ar;
+pub(crate) mod ar;
 mod prover;
 mod theorem;
 

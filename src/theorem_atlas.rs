@@ -148,6 +148,12 @@ pub fn run(args: &[String]) {
             lint.join(","), witness.map_or("null".to_string(), esc), steps.join(","),
             if ti + 1 < all.len() { "," } else { "" }));
     }
+    out.push_str("],\"ar_rules\":[\n");
+    let rules = crate::logic_core::ar::AR_RULES;
+    for (i, r) in rules.iter().enumerate() {
+        out.push_str(&format!("{{\"kind\":{},\"name\":{},\"situation\":{},\"relation\":{},\"ledger\":{}}}{}\n",
+            esc(r.kind), esc(r.name), esc(r.situation), esc(r.relation), esc(r.ledger), if i + 1 < rules.len() { "," } else { "" }));
+    }
     out.push_str("]}\n");
     print!("{}", out);
 }

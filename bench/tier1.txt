@@ -15,12 +15,14 @@ cyclic_quad
 desargues
 miquel
 miquel_quadrilateral
+newton_gauss
 nine_point
 nine_point_full
 orthic_incenter
 orthocenter
 orthocenter_alt
 pappus
+pascal
 simson
 tangent_orthic
 test_cross_ratio

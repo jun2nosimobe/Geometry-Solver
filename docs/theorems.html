@@ -22,7 +22,7 @@
 <div class="wrap">
 <section id="theorems">
 <div class="section-head"><span class="section-num">07</span><h2>定理</h2></div>
-<p class="section-note">登録されている全定理(27件)の、主張・作図の需要・見積もり・実測・現状の問題点。パターン・作図・結論・見積もりの順序は
+<p class="section-note">登録されている全定理(27件)と、代数的な追跡(AR)の規則(<a href="#ar">19件</a>)の、主張・作図の需要・見積もり・実測・現状の問題点。パターン・作図・結論・見積もりの順序は
 コード(<code>geom_solver theorem-atlas</code>)から、実測はベンチ(<code>bench/theorem_stats.sh</code>)から、主張と問題点は
 <a href="notes/theorem_catalog.md">notes/theorem_catalog.md</a> から <code>docs/gen_theorem_atlas.py</code> が作る。作り直し方はそのスクリプトの先頭。
 見積もりの順序は <code>nine_point_full</code> の図の上で計算した(値は図に依存する)。</p>
@@ -577,6 +577,19 @@
 </details>
 </div>
 
+<h3 id="ar">代数的な追跡(AR)の規則 · 19件</h3>
+<p class="section-note"><code>logic_core/ar.rs</code>(既定、<code>--no-ar</code> で外す)。定理のようにパターンを照合して結論を出すのではなく、
+手が止まるたびに図から<b>線形な関係式</b>を集めて整数の格子(ℤⁿ ⊕ ℤ/4、エルミート標準形)に積み、まとめて閉じる。規則は2種類:
+<b>等式</b>は「図にこの状況があれば、格子にこの関係式を足す」(定理の代わり)、<b>検出</b>は「格子でこの式が 0 に還元されれば、e-graph にこの結論を入れる」。
+<b>検出→等式</b>は、線形でない一歩(三角形が閉じる条件など)を検出で済ませてから関係式を足すもの。格子は毎回作り直す(#85)。<br>
+記号: s(X,Y) は同じ直線の上の2点の差の形式的な対数(数値の対数は取らない。積・商が和・差になる)。β(D) は方向 D の角の記号、
+θ_C(P) は円 C の上の点 P の記号、JX・IX は虚円点 J・I から点 X への線束の要素、T はねじれの記号(4T = 0、2T = log(−1)、T = log i)。
+κ・c・log a は、その状況ごとに新しく置く定数の記号。一覧はコードの <code>AR_RULES</code> から作る。</p>
+<div class="wrap-x"><table class="sum">
+<tr><th>種類</th><th>規則</th><th>状況(前提)</th><th>格子に足す関係式 / 出す結論</th><th>来歴</th></tr>
+<tr><td>等式</td><td><b>定義の翻訳(有向角・複比)</b></td><td>同値類にある AnglePair(D1,D2)・CrossRatio(A,B,C,D)・CrossRatioOfLines の定義(固定座標で写像を確かめたもの)</td><td>(A,B;C,D) = s(A,C) + s(D,B) − s(C,B) − s(A,D)、有向角は虚円点との複比 (I,J;D1,D2)。同じ同値類の2つの定義の式は等しい</td><td class="num"><a class="secref" href="ledger.html#l82">#82</a></td></tr><tr><td>等式</td><td><b>定義の翻訳(長さ)</b></td><td>同値類にある LengthSq(X,Y)・Product(a,b) の定義</td><td>LengthSq(X,Y) = s(JX,JY) + s(IX,IY)(虚円点 J・I からの線束の要素の差)、積は和</td><td class="num"><a class="secref" href="ledger.html#l85">#85</a></td></tr><tr><td>等式</td><td><b>中点・調和共役の比</b></td><td>Midpoint(A,B) = M(A,B,M を通る直線がある)、HarmonicConjugateOf(A,B,C) = D</td><td>(A,B;M,∞) = −1、s(A,B) = s(A,M) + log 2、(A,B;C,D) = −1</td><td class="num"><a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l84">#84</a></td></tr><tr><td>等式</td><td><b>アフィンの等式</b></td><td>直線 L の上の2点 X, Y</td><td>s(X,∞_L) = s(Y,∞_L)(z = 1 の座標で無限遠点までの差が一定。無限遠点との複比が本物の比になる)</td><td class="num"><a class="secref" href="ledger.html#l84">#84</a></td></tr><tr><td>等式</td><td><b>地図の等式(直線と等方線束)</b></td><td>直線 m の上の2点 X, Y</td><td>s(JX,JY) − s(X,Y) = κ_J(m)、κ_J(m) − κ_I(m) = β(m の方向) + 定数(直線の上の比と方向の角をつなぐ)</td><td class="num"><a class="secref" href="ledger.html#l85">#85</a></td></tr><tr><td>等式</td><td><b>円(円周角・接弦)</b></td><td>円 C の上の2点 P, X と弦 PX の直線(または P での接線)</td><td>β(PX) = θ_C(P) + θ_C(X) + c_C、接線は β = 2θ_C(P) + c_C(円周角の定理・接弦定理がこの1本にまとまる)</td><td class="num"><a class="secref" href="ledger.html#l83">#83</a></td></tr><tr><td>等式</td><td><b>透視射影(点 → 線束・線束 → 点)</b></td><td>中心 O と直線 L、L の上の点 X と直線 OX</td><td>β(OX) の差 = s_L(X) の差 + 点ごとの倍率 + 定数(射影対応は一次分数変換)</td><td class="num"><a class="secref" href="ledger.html#l83">#83</a></td></tr><tr><td>等式</td><td><b>シュタイナー(二次曲線)</b></td><td>円以外の二次曲線の上の頂点 P と点 X、直線 PX</td><td>頂点からの線束も二次曲線の媒介変数の一次分数変換なので、透視射影と同じ形</td><td class="num"><a class="secref" href="ledger.html#l83">#83</a></td></tr><tr><td>等式</td><td><b>平行 ⇒ 比</b></td><td>平行線の族(同じ方向の直線)が2直線 L1, L2 を点 X1→X2、Y1→Y2 で切る(2直線の交点は自分自身に対応)</td><td>s_{L2}(X2,Y2) − s_{L1}(X1,Y1) = κ(族に沿った射影はアフィン)</td><td class="num"><a class="secref" href="ledger.html#l84">#84</a></td></tr><tr><td>等式</td><td><b>メネラウスの定理</b></td><td>3辺が図にある三角形 ABC と、辺 BC・CA・AB を D・E・F で切る直線(固定座標で積が −1)</td><td>s(A,F) − s(F,B) + s(B,D) − s(D,C) + s(C,E) − s(E,A) = 2T(向きつきの比の積 = −1)</td><td class="num"><a class="secref" href="ledger.html#l88">#88</a></td></tr><tr><td>等式</td><td><b>チェバの定理</b></td><td>3辺が図にある三角形 ABC と、1点 O で交わる直線 AD・BE・CF(D・E・F は辺の上、固定座標で積が 1)</td><td>s(A,F) − s(F,B) + s(B,D) − s(D,C) + s(C,E) − s(E,A) = 0(比の積 = 1)</td><td class="num"><a class="secref" href="ledger.html#l88">#88</a></td></tr><tr><td>検出→等式</td><td><b>相似(AA)</b></td><td>3辺が図にある2つの三角形で、2つの頂点の有向角の剰余が一致(裏返しは符号を変えて一致)</td><td>対応する各辺で s(JX′,JY′) = s(JX,JY) + log a、I の線束でも同じ(裏返しは I と J を入れ替える)。三角形が閉じる条件が足し算なので、検出の一歩だけ線形でない</td><td class="num"><a class="secref" href="ledger.html#l85">#85</a></td></tr><tr><td>検出→等式</td><td><b>相似で対応する点</b></td><td>相似な三角形の辺 XY の上の点 P と対応する辺の上の点 P′ で、σ(X) = X′ からの2つの等式が格子で言える(同じ直線の上では内分比が等しいこと)</td><td>P′ = σ(P) として、頂点・他の対応点との組で相似の等式を足す(図の上で同じ点の組は使わない)</td><td class="num"><a class="secref" href="ledger.html#l85">#85</a></td></tr><tr><td>検出</td><td><b>同値類の併合</b></td><td>2つの同値類の式の正準な剰余が一致</td><td>2つの同値類をマージする(理由: 代数的な追跡(複比・有向角の線形関係))</td><td class="num"><a class="secref" href="ledger.html#l82">#82</a></td></tr><tr><td>検出</td><td><b>平行(方向の併合)</b></td><td>(I,J;D1,D2) の式が 0 に還元される</td><td>方向 D1 と D2 をマージする(平行)</td><td class="num"><a class="secref" href="ledger.html#l82">#82</a></td></tr><tr><td>検出</td><td><b>比 ⇒ 平行</b></td><td>2直線を切る2本の横断線で、交点からの比(または既に平行な横断線を基準にした比)の式が一致</td><td>2本の横断線の方向をマージする(中点連結定理はこの特別な場合)</td><td class="num"><a class="secref" href="ledger.html#l84">#84</a></td></tr><tr><td>検出</td><td><b>円周角の逆</b></td><td>円 C の外の点 Z から C の上の2点 A, B への β(ZA) − β(ZB) が θ_C(A) − θ_C(B) に還元される</td><td>Z を C に接続する</td><td class="num"><a class="secref" href="ledger.html#l83">#83</a></td></tr><tr><td>検出</td><td><b>メネラウスの逆</b></td><td>三角形の2辺の上の点を通る直線 t があり、3つ目の辺の上の点 E で比の積の式が −1 に還元される(固定座標で E ∈ t が真の候補だけ)</td><td>E を t に接続する(共線)</td><td class="num"><a class="secref" href="ledger.html#l88">#88</a></td></tr><tr><td>検出</td><td><b>チェバの逆</b></td><td>直線 AD・BE が O で交わり、AB の上の F で比の積の式が 1 に還元される(固定座標で F ∈ CO が真の候補だけ)</td><td>F を直線 CO に接続する(共点)</td><td class="num"><a class="secref" href="ledger.html#l88">#88</a></td></tr>
+</table></div>
+
 <h3>合同閉包に組み込まれた規則(定理ではない)</h3>
 <p class="section-note">次の規則は定理のマッチングではなく、マージのたびに変化した実体の近傍だけを見る局所伝播として <code>mmp_core/congruence.rs</code> などに組み込まれている。どれも既にある実体をマージするだけで、図形を作らない。</p>
 <ul>
@@ -586,11 +599,7 @@
 2直線に退化した二次曲線どうしは1本の直線を丸ごと共有でき、pappus の以前の証明はそこで誤ってマージしていた。</li>
 <li><b>複比の一意性</b>(<code>propagate_cross_ratio_uniqueness</code>): 共線な3点を固定した複比が等しければ4点目は一致する(透視射影不変性の逆)。非退化条件: 固定した3点が図の上でも相異なる(#78)。
 以前は証明の前提に「2つの複比が等しい」を記録していなかったので、その等式が偽のマージから来ていても証明は「厳密」に見えた(#76、centroid)。</li>
-<li><b>代数的な追跡(AR)</b>(<code>logic_core/ar.rs</code>、既定、<code>--no-ar</code> で外す): 有向角・点の複比・線束の複比と、中点・調和共役の比(無限遠点との複比 −1)を、
-2点の差の記号の形式的な対数で表し、整数の格子(ℤⁿ ⊕ ℤ/4)でまとめて閉じる。等しいと分かった同値類と、平行と分かった方向を併合する。手が止まったとき、回復の手と同じ回に回す(#82)。
-円(円周角・接弦)・透視射影・シュタイナーは定理の代わりの等式として入れ、円周角の逆を検出で出す(#83)。同じ直線の上の比と平行(平行 ⇒ 比、比 ⇒ 平行)(#84)。
-虚円点からの線束(等方線束)で長さを比のまま入れ、相似(AA)と相似で対応する点(内分比の等しい点)を出す ― これが方冪・交わる弦の相似の2定理を置き換えるので、
-AR を使う探索では2定理を外す(#85、<code>--chord-theorems</code> で残す)。</li>
+<li><b>代数的な追跡(AR)</b>: 上の<a href="#ar">代数的な追跡(AR)の規則</a>を参照。</li>
 <li><b>自明な関係</b>(<code>apply_trivial_relations</code>): 垂線と直角、垂直方向の対合、調和共役の対合など、定義から機械的に従うもの。</li>
 <li><b>スパイラル相似の局所伝播</b>(<code>mmp_core/spiral_prop.rs</code>、既定外 <code>--rules=spiral-prop</code>): 角の同値類に新しく合流した定義との組だけを見る差分評価。
 結論の図形(中点・直線・角)が既にあるときだけマージする。課税は小さいが、2016ARMO は結論で図形を作らないと解けないので、既定では使わない(#75)。</li>
