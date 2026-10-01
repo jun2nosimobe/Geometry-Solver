@@ -163,6 +163,8 @@ pub struct ProfileStats {
     /// タスクの合間の合同閉包(マージの後始末)と、失敗キャッシュ・変数の索引の用意。
     pub closure_time: std::time::Duration,
     pub prepare_time: std::time::Duration,
+    /// 代数的な追跡(AR)の時間(最初の1回と、手詰まりのたびの回復の中の分)。
+    pub ar_time: std::time::Duration,
 }
 
 impl ProverEngine {

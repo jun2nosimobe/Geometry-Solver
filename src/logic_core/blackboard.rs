@@ -129,6 +129,9 @@ pub struct BlackboardEngine {
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
+    /// 壁時計の安全弁(--time)。run_step はタスクごとにこれも確かめる(1回の run_step が1万タスクを回すので、
+    /// 呼び出しの合間だけで確かめると、大きい図で上限を何分も超えた)。
+    pub deadline: Option<std::time::Instant>,
 }
 
 impl BlackboardEngine {
@@ -155,6 +158,7 @@ impl BlackboardEngine {
             ar_reused: 0,
             ar_cache: None,
             work_limit: u64::MAX,
+            deadline: None,
         }
     }
 
@@ -452,7 +456,8 @@ impl BlackboardEngine {
         let mut applied_anything = false;
         let mut calls = 0;
 
-        while calls < budget && self.prover.work_done() < self.work_limit {
+        while calls < budget && self.prover.work_done() < self.work_limit
+            && self.deadline.is_none_or(|d| std::time::Instant::now() < d) {
             while let Some(event) = self.event_queue.pop_front() {
                 match event {
                     Event::NodeMerged => {
@@ -532,6 +537,8 @@ impl BlackboardEngine {
 
             let mut task_succeeded = false;
             for (mut bind, flips) in new_binds {
+                // 1つのタスクが何千もの割り当てを見つけることがあるので、適用の途中でも壁時計の安全弁を確かめる。
+                if self.deadline.is_some_and(|d| std::time::Instant::now() >= d) { break; }
                 let detail = self.prover.profile.detail;
                 let t = detail.then(std::time::Instant::now);
                 let proven = self.prover.is_already_proven(&theorem.conclusions, &bind, &flips);

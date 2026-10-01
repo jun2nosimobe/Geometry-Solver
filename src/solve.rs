@@ -434,8 +434,11 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     let prepared = engine.prepare(&opts.search_setup());
     // AR が回る(固定座標を置けた)問題では、AR の等式が同じ内容を出す定理の群を外す。まだタスクを積んでいないので番号はずれない。
     if opts.ar && prepared.fixed && !opts.ar_drop.is_empty() {
-        let covered: Vec<&str> = crate::theorems::AR_COVERED_GROUPS.iter().filter(|(g, _)| opts.ar_drop.iter().any(|d| d == g))
-            .flat_map(|(_, names)| names.iter().copied()).collect();
+        // 群の名前でないものは定理の名前(末尾が * なら前方一致)として扱う(1件ずつ外して測るため)。
+        let covered: Vec<&str> = opts.ar_drop.iter().flat_map(|d| match crate::theorems::AR_COVERED_GROUPS.iter().find(|(g, _)| g == d) {
+            Some((_, names)) => names.to_vec(),
+            None => vec![d.as_str()],
+        }).collect();
         engine.prover.theorems.retain(|t| !covered.iter().any(|c| crate::theorems::theorem_name_matches(c, &t.name)));
     }
     if !prepared.fixed { println!("📐 固定座標は使いません(数値チェックは従来の経路)"); }
@@ -452,6 +455,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     if opts.prune.is_some() && args_has_prune_given() {
         if let Some((_, ids)) = &problem.target_fact { engine.prune_roots = ids.clone(); }
     }
+    engine.deadline = Some(start_time + Duration::from_secs(opts.time_budget_secs));
     if opts.ar && opts.ar_first { engine.run_ar(); }
     engine.schedule_full_sweep();
     while engine.prover.work_done() < opts.step_budget
@@ -515,6 +519,12 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
     if opts.show_profile {
         print_profile(&engine.prover, start_time.elapsed());
+        // 仕事量の換算を測るための1行(問題をまたいで集計する)。
+        let p = &engine.prover.profile;
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        println!("WORK_BREAKDOWN dfs_calls={} ar_ops={} dfs_ms={:.1} closure_ms={:.1} ar_ms={:.1} run_step_ms={:.1} recovery_ms={:.1} total_ms={:.1}",
+            p.seeded_dfs_calls + p.unseeded_dfs_calls, engine.ar_ops, ms(p.dfs_time), ms(p.closure_time), ms(p.ar_time),
+            ms(p.run_step_time), ms(p.recovery_time), ms(start_time.elapsed()));
     }
     proved
 }
@@ -587,6 +597,7 @@ fn print_profile(prover: &ProverEngine, total: Duration) {
     println!("  │   ├─ 作図               : {:>7.2}s ({:>5.1}%)", p.construct_time.as_secs_f64(), pct(p.construct_time));
     println!("  │   └─ 結論の適用         : {:>7.2}s ({:>5.1}%)", p.apply_time.as_secs_f64(), pct(p.apply_time));
     println!("  ├─ 回復フェーズ       : {:>7.2}s ({:>5.1}%)", p.recovery_time.as_secs_f64(), pct(p.recovery_time));
+    println!("  │   └─ 代数的な追跡(AR) : {:>7.2}s ({:>5.1}%)", p.ar_time.as_secs_f64(), pct(p.ar_time));
     println!("  ├─ MCTS               : {:>7.2}s ({:>5.1}%)", p.mcts_time.as_secs_f64(), pct(p.mcts_time));
     println!("  └─ 未計測(数値検証等) : {:>7.2}s ({:>5.1}%)",
         total.saturating_sub(accounted).as_secs_f64(), pct(total.saturating_sub(accounted)));

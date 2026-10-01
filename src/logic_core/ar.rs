@@ -25,7 +25,7 @@ use crate::mmp_core::{ClassId, Definition, EGraph, EntityOrigin, EntityType, Jus
 use crate::mmp_math::ModInt;
 
 /// 行演算を仕事量に数えるときの割り算(ar_round のコメント参照)。
-const AR_OPS_PER_WORK: u64 = 2;
+const AR_OPS_PER_WORK: u64 = 4;
 /// 1回の追跡で相似・対応する点に使う行演算の上限(超えたらそこで足すのをやめる。決定的)。図が大きいと行が長くなり、
 /// 相似の組の等式を入れるだけで1回に数十秒かかった(hageo:2020RMMSLG3 で 600万回・40秒)。
 const AR_ROUND_OPS_CAP: u64 = 400_000;
@@ -552,8 +552,8 @@ impl BlackboardEngine {
         // 記号の番号をそろえる(前回の状態を使い回すとき、今回の式を同じ番号で読む)。
         if let Some(c) = self.ar_cache.as_ref().filter(|c| c.fingerprint == fp) { st.atoms = c.after_rules.atoms.clone(); }
         let merged = self.ar_round_with(&mut st, fp);
-        // 行演算1回は、図が大きく行が長いと dfs_match 1回(約 15µs)の半分ほどかかる(hageo:2020RMMSLG3 で約 7µs)ので、
-        // 2回で仕事量1と数える(以前は 16回で1としていて、AR の重い問題で仕事量の予算が実時間の10倍以上に伸びた)。
+        // 行演算4回で仕事量1と数える: 44問と HAGeo の実測で、dfs_match 1回(合同閉包・結論の適用を含む)が約 7.7µs、
+        // 行演算1回が約 2.0µs(来歴 #94。#91 では行が長く 2回で1、それ以前は 16回で1)。
         self.prover.egraph.spiral_prop_work += st.lattice.ops / AR_OPS_PER_WORK;
         self.ar_ops += st.lattice.ops;
         self.ar_rounds += 1;
@@ -2442,6 +2442,7 @@ impl BlackboardEngine {
     /// 手が止まったときに呼ぶ。併合が無くなるまで(最大数回)追跡し、何か併合したら定理を全部試し直させる。
     pub fn run_ar(&mut self) -> bool {
         if !self.prover.egraph.fixed_active() { return false; }
+        let t_ar = std::time::Instant::now();
         let mut total = 0;
         for _ in 0..4 {
             // 予算を使い切ったら、続けて回さない(手詰まり1回の中で予算を大きく超えないように)。
@@ -2452,6 +2453,7 @@ impl BlackboardEngine {
             self.prover.egraph.apply_congruence_closure();
         }
         self.ar_merged += total as u64;
+        self.prover.profile.ar_time += t_ar.elapsed();
         if total > 0 { self.schedule_full_sweep(); }
         total > 0
     }

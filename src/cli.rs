@@ -55,8 +55,8 @@ use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
 /// 探索の既定の予算(dfs_match の呼び出し回数)。
 /// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
 ///
-/// 値の根拠: 1問あたり10秒前後で探索を切り上げる(ユーザー方針、2026-09-30)。仕事量1は dfs_match 1回か AR の行演算2回。
-/// 100万で44問は1問7秒以内、HAGeo は12並列で中央値8秒・最大20秒(大きい図では dfs_match 1回が重く、時間が延びる)。
+/// 値の根拠: 1問あたり10秒前後で探索を切り上げる(ユーザー方針、2026-09-30)。仕事量1は dfs_match 1回(約7.7µs)か
+/// AR の行演算4回(1回約2.0µs)で、どちらも実測の時間に合わせてある(来歴 #94)。100万で HAGeo は12並列で中央値11秒・最長16秒。
 /// (以前は800万で、AR の重い問題では1問に10分を超えていた。解けない問題の多くはこの予算を使い切る。)
 pub const DEFAULT_STEP_BUDGET: u64 = 1_000_000;
 /// --time の既定。解けるかどうかを決める予算ではなく、
@@ -118,7 +118,7 @@ pub const OPTIONS: &[Opt] = &[
     Opt { name: "--chord-theorems", arg: Switch, default: "AR があれば外す", mode: Solve,
           help: "方冪(共点二弦の相似)と交わる弦の相似の2つの定理を、代数的な追跡があっても残す。既定では AR の相似(対応する点を含む)が置き換えるので外す(来歴 #85)" },
     Opt { name: "--ar-drop", arg: Value("proj,angle,circle,length,none"), default: "proj,angle,circle,length", mode: Solve,
-          help: "固定座標を置けて代数的な追跡が回る問題で、AR の等式が同じ内容を出す定理の群を外す(proj: 透視射影・シュタイナー、angle: 角の足し算・同位角、circle: 円周角の定理の逆・接弦定理、length: 垂直二等分線の逆・二等辺三角形の底角・中点連結(長さ)。none で外さない。来歴 #92・#93)" },
+          help: "固定座標を置けて代数的な追跡が回る問題で、AR の等式が同じ内容を出す定理の群を外す(proj: 透視射影・シュタイナー、angle: 角の足し算・同位角、circle: 円周角の定理の逆・接弦定理、length: 垂直二等分線の逆・二等辺三角形の底角とその逆・中点連結(長さ)・直角三角形の斜辺の中線。群の名前でないものは定理の名前として外す。none で外さない。来歴 #92・#93)" },
     Opt { name: "--no-generic-aux", arg: Switch, default: "汎用の補助作図を足す", mode: Solve,
           help: "手が全部尽きたとき、最後に熱い点どうしの中点と熱い直線どうしの交点を足す手を外す(A/B用。今解けている問題の探索は変わらない。来歴 #72)" },
     Opt { name: "--midpoint-demands", arg: Switch, default: "無効", mode: Solve,
