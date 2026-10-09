@@ -118,6 +118,9 @@ pub struct BlackboardEngine {
     /// 代数的な追跡(ar.rs)で併合した数と、数値で偽と分かって見送った数。
     pub ar_merged: u64,
     pub ar_rejected: u64,
+    /// 係数があふれて諦めた等式の数と、途中で打ち切った追跡の回数(簡約のあふれ)。
+    pub ar_overflows: u64,
+    pub ar_aborted: u64,
     /// 代数的な追跡の行演算の数(仕事量に数えている)と、追跡の回数。
     pub ar_ops: u64,
     pub ar_rounds: u64,
@@ -126,6 +129,10 @@ pub struct BlackboardEngine {
     /// 代数的な追跡で、前回の規則の結果を使い回した回数と、その状態。
     pub ar_reused: u64,
     pub(crate) ar_cache: Option<super::ar::ArCache>,
+    /// --ar-usage: AR の結論の根拠(Justification のハッシュ)→ 使った等式の種類ごとの数。
+    pub ar_usage: Option<FxHashMap<u64, Vec<(&'static str, u32)>>>,
+    /// --ar-off: 格子に入れない等式の種類。
+    pub ar_off_kinds: Vec<String>,
     /// 仕事量(ProverEngine::work_done)の上限。run_step はタスクごとにこれを確かめるので、
     /// 1回の run_step の途中でも予算を使い切ったら止まる。
     pub work_limit: u64,
@@ -157,6 +164,10 @@ impl BlackboardEngine {
             ar_similar: 0,
             ar_reused: 0,
             ar_cache: None,
+            ar_overflows: 0,
+            ar_aborted: 0,
+            ar_usage: None,
+            ar_off_kinds: Vec::new(),
             work_limit: u64::MAX,
             deadline: None,
         }

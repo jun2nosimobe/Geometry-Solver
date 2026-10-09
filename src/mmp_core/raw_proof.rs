@@ -23,6 +23,19 @@ use rustc_hash::FxHashMap;
 /// このペイロードを再度Justificationへ完全に復元する必要はなく(検証に
 /// 必要な情報――種類と、Theoremならpremisesのfact_type/args――だけ取り出せれば
 /// 十分)、専用の軽量デコードだけを行う。
+/// 根拠の識別(ダンプの (種類, ペイロード) のハッシュ)。--ar-usage で、証明に残った AR の結論を実行中の記録と突き合わせる。
+pub(crate) fn payload_hash(kind: &str, payload: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    (kind, payload).hash(&mut h);
+    h.finish()
+}
+
+pub(crate) fn justification_hash(j: &Justification) -> u64 {
+    let (kind, payload) = encode_justification(j);
+    payload_hash(kind, &payload)
+}
+
 fn encode_justification(j: &Justification) -> (&'static str, String) {
     match j {
         Justification::Given => ("Given", String::new()),
@@ -772,7 +785,7 @@ impl RawProof {
                 is_shortcut: false,
             }],
         };
-        DeepProof { roots }
+        DeepProof { roots, theorem_payloads: Vec::new() }
     }
 }
 
@@ -819,6 +832,8 @@ struct Timed<'a> {
     rep: FxHashMap<usize, usize>,
     /// 接続を、両端の最終的な代表元の組(小さい方, 大きい方)で引く: (a, b, 時刻, 文脈)。
     link_index: FxHashMap<(usize, usize), Vec<(usize, usize, u64, String)>>,
+    /// 証明に使った定理の根拠(ペイロード)。
+    used: Vec<String>,
 }
 
 impl<'a> Timed<'a> {
@@ -830,7 +845,7 @@ impl<'a> Timed<'a> {
             let (ra, rb) = (raw.final_rep(*a), raw.final_rep(*b));
             link_index.entry((ra.min(rb), ra.max(rb))).or_default().push((*a, *b, *t, k.clone()));
         }
-        Timed { raw, memo: Default::default(), rep, link_index }
+        Timed { raw, memo: Default::default(), rep, link_index, used: Vec::new() }
     }
 
     fn frep(&self, id: usize) -> usize { self.rep.get(&id).copied().unwrap_or_else(|| self.raw.final_rep(id)) }
@@ -912,6 +927,7 @@ impl<'a> Timed<'a> {
             "Trivial" => DeepStep::leaf(headline, format!("定義から機械的に従う構造的な事実: {}", edge.payload)),
             "Theorem" => {
                 let (name, premises_str) = edge.payload.split_once('|').unwrap_or((edge.payload.as_str(), ""));
+                self.used.push(edge.payload.clone());
                 let mut children = Vec::new();
                 for premise in premises_str.split(';').filter(|x| !x.is_empty()) {
                     let Some((fact_type, args_str)) = premise.rsplit_once(':') else { continue };
@@ -1061,13 +1077,14 @@ impl RawProof {
     pub fn verify_identical_timed(&self, a: usize, b: usize) -> DeepProof {
         let mut tm = Timed::new(self);
         let (_, roots) = tm.identical(a, b);
-        DeepProof { roots }
+        DeepProof { roots, theorem_payloads: tm.used }
     }
 
     /// 接続・共円の目標の時刻つき監査。
     pub fn verify_incidences_timed(&self, pairs: &[(usize, usize)]) -> DeepProof {
         let mut tm = Timed::new(self);
-        DeepProof { roots: pairs.iter().map(|&(p, c)| tm.incidence(p, c).1).collect() }
+        let roots = pairs.iter().map(|&(p, c)| tm.incidence(p, c).1).collect();
+        DeepProof { roots, theorem_payloads: tm.used }
     }
 }
 
@@ -1151,6 +1168,8 @@ fn clean_label(s: &str) -> String {
 /// LineUniqueness/PointUniquenessの由来を再帰的に子として持つ。
 pub struct DeepProof {
     pub roots: Vec<DeepStep>,
+    /// 証明に使った定理の根拠(ペイロード「定理名|前提」)。時刻つきの監査だけが集める。
+    pub theorem_payloads: Vec<String>,
 }
 
 impl DeepProof {

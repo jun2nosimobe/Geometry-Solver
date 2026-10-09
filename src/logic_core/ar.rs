@@ -151,6 +151,8 @@ struct Lattice {
     joins: Vec<(u32, u32)>,
     /// 行の組み合わせの回数(仕事量に数える)。
     ops: u64,
+    /// 係数があふれて諦めた等式の数。
+    overflows: u64,
 }
 
 impl Lattice {
@@ -174,12 +176,29 @@ impl Lattice {
         out
     }
 
-    fn insert(&mut self, mut v: SVec, src: Vec<u32>) -> Option<()> {
+    /// 等式を積む。係数があふれたら、その等式だけを諦めて、途中で置き換えた行を元に戻す(格子は真の等式の張る空間のまま)。
+    /// 以前は追跡の1回を丸ごと打ち切っていて、方冪の等式を足すと 2013 CHN Western P3 で41回中31回が打ち切られた(来歴 #98)。
+    fn insert(&mut self, v: SVec, src: Vec<u32>) -> Option<()> {
+        let mut undo: Vec<(u32, Option<(SVec, u32)>)> = Vec::new();
+        if self.insert_or_undo(v, src, &mut undo).is_none() {
+            for (c, old) in undo.into_iter().rev() {
+                match old { Some(r) => { self.rows.insert(c, r); } None => { self.rows.remove(&c); } }
+            }
+            self.overflows += 1;
+        }
+        Some(())
+    }
+
+    fn insert_or_undo(&mut self, mut v: SVec, src: Vec<u32>, undo: &mut Vec<(u32, Option<(SVec, u32)>)>) -> Option<()> {
         let mut src = src.into_iter().fold(NO_SRC, |a, b| self.join(a, b));
         loop {
             let Some((&c, &b)) = v.iter().next() else { return Some(()) };
             let Some((row, rsrc)) = self.rows.get(&c) else {
                 if b < 0 { v = scaled(&v, -1)?; }
+                // 主成分より後ろの成分も剰余に揃えておく(揃えないと、長さ J + I と向き J − I が混ざる行で主成分 2 の行が
+                // でき、拡張ユークリッドの組み合わせを重ねるうちに係数があふれた。来歴 #98)。
+                let (v, used) = self.reduce_from(&v, Some(c))?;
+                for u in used { src = self.join(src, u); }
                 self.rows.insert(c, (v, src));
                 return Some(());
             };
@@ -194,8 +213,10 @@ impl Lattice {
                 add_scaled(&mut new_row, &v, y)?;
                 let mut rest = scaled(&v, a / g)?;
                 add_scaled(&mut rest, row, -(b / g))?;
-                let both = self.join(src, rsrc);
-                self.rows.insert(c, (new_row, both));
+                let mut both = self.join(src, rsrc);
+                let (new_row, used) = self.reduce_from(&new_row, Some(c))?;
+                for u in used { both = self.join(both, u); }
+                undo.push((c, self.rows.insert(c, (new_row, both))));
                 v = rest;
                 src = both;
             }
@@ -203,10 +224,13 @@ impl Lattice {
     }
 
     /// 正準な剰余(主成分の列を 0 ≤ v[c] < 主成分 に揃える)と、使った行の出どころ(番号の並び。展開は leaves)。
-    fn reduce(&mut self, v: &SVec) -> Option<(SVec, Vec<u32>)> {
+    fn reduce(&mut self, v: &SVec) -> Option<(SVec, Vec<u32>)> { self.reduce_from(v, None) }
+
+    /// reduce と同じことを、番号が from より大きい成分だけについて行う。
+    fn reduce_from(&mut self, v: &SVec, from: Option<u32>) -> Option<(SVec, Vec<u32>)> {
         let mut v = v.clone();
         let mut src: Vec<u32> = Vec::new();
-        let mut from: Option<u32> = None;
+        let mut from = from;
         while let Some((c, x)) = v.next_after(from) {
             if let Some((row, rsrc)) = self.rows.get(&c) {
                 let q = x.div_euclid(row[&c]);
@@ -248,6 +272,16 @@ impl Lattice {
         }
         Some(true)
     }
+}
+
+/// 出どころの等式の種類ごとの数(--ar-usage)。
+fn kind_counts(kinds: &[&'static str], src: &[u32]) -> Vec<(&'static str, u32)> {
+    let mut out: Vec<(&'static str, u32)> = Vec::new();
+    for &i in src {
+        let k = kinds.get(i as usize).copied().unwrap_or("?");
+        match out.iter_mut().find(|e| e.0 == k) { Some(e) => e.1 += 1, None => out.push((k, 1)) }
+    }
+    out
 }
 
 /// 記号の番号の端(実体・等方線束の要素)が指す実体。
@@ -396,12 +430,19 @@ struct ArState {
     sim_ids: FxHashMap<([usize; 3], [usize; 3], bool), usize>,
     /// 2つの実体が固定座標で区別できるか(記号 s(X,Y) が意味を持つか)の判定の使い回し。
     distinct: FxHashMap<(usize, usize), bool>,
+    /// 各等式(と前提だけの記録)の種類。premises_of と同じ添字(--ar-usage で証明に効いた種類を数える)。
+    kinds: Vec<&'static str>,
+    /// これから入れる等式の種類。
+    kind: &'static str,
+    /// 入れない種類(--ar-off。種類ごとの効き目を測る用)。
+    off: Vec<String>,
 }
 
 impl ArState {
     fn new() -> Option<Self> {
         let mut st = ArState { atoms: Atoms::default(), lattice: Lattice::default(), premises_of: Vec::new(),
-            seen: Default::default(), sim_ids: FxHashMap::default(), distinct: FxHashMap::default(), rels_dbg: Vec::new(), ops_cap: u64::MAX };
+            seen: Default::default(), sim_ids: FxHashMap::default(), distinct: FxHashMap::default(), rels_dbg: Vec::new(), ops_cap: u64::MAX,
+            kinds: Vec::new(), kind: "", off: Vec::new() };
         st.lattice.insert(SVec::from([(T, 4)]), Vec::new())?;
         Some(st)
     }
@@ -409,13 +450,14 @@ impl ArState {
     /// 格子に入れない前提だけの記録(検出の結論の出どころに、接続・方向などの前提を足すため)。番号を返す。
     fn note(&mut self, premises: Vec<(String, Vec<ClassId>)>) -> u32 {
         self.premises_of.push(premises);
+        self.kinds.push("note");
         (self.premises_of.len() - 1) as u32
     }
 
     /// 等式を(まだ入れていなければ)格子に入れる。extra は、この等式を出すのに使った既存の等式(出どころ)。
     /// 入れたら Some(true)、既にあれば Some(false)、係数があふれたら None。
     fn insert(&mut self, eg: &EGraph, rel: SVec, premises: Vec<(String, Vec<ClassId>)>, extra: &[u32]) -> Option<bool> {
-        if rel.is_empty() { return Some(false); }
+        if rel.is_empty() || self.off.iter().any(|k| k == self.kind) { return Some(false); }
         // 2点の差の記号は、2点が実際に別の点でないと意味を持たない(長さ 0 の差の対数)。まだマージされていないだけで
         // 図の上では同じ点(例: centroid で別々に作った2つの重心)の記号を含む等式は、格子に矛盾(2 = −1 など)を持ち込む。
         for &c in rel.keys() {
@@ -432,8 +474,10 @@ impl ArState {
         let id = self.premises_of.len() as u32;
         if std::env::var("GS_DEBUG_AR_REL").is_ok() || std::env::var("GS_DEBUG_AR_RAW").is_ok() { while self.rels_dbg.len() < self.premises_of.len() { self.rels_dbg.push(SVec::new()); } self.rels_dbg.push(rel.clone()); }
         self.premises_of.push(premises);
+        self.kinds.push(self.kind);
+        let before = self.lattice.overflows;
         self.lattice.insert(rel, union(&[id], extra))?;
-        Some(true)
+        Some(self.lattice.overflows == before)
     }
 }
 
@@ -467,6 +511,7 @@ const CHART_I: u8 = 10;    // 同じく I の等方線束
 const CHART_0: u8 = 11;    // 等方線束のずれの差と方向の角の記号のずれ(全体で1つ)
 const SIM_J: u8 = 12;      // 相似ごとの定数(J の線束の上の拡大・回転、複素数 a の対数)
 const CONIC_LINK: u8 = 16; // 円周角の記号 θ とシュタイナーの記号をつなぐ円ごとの定数 ℓ_C
+const POWER: u8 = 17;      // 点 P の円 C に関する方冪の2乗の対数 π_C(P)
 const CENTER_J: u8 = 14;   // 中心の分かった円の定数 c_J(s(JO,JP) = θ(P) + c_J)
 const CENTER_I: u8 = 15;   // 同じく c_I(s(IO,IP) = −θ(P) + c_I)
 const SIM_I: u8 = 13;      // 同じく I の線束(共役 ā)   // 素数 p の形式的な対数 log p(有理数の比の定数。足し算の関係から来る比を積の世界に持ち込む)  // 方向 D に沿った直線 L1 から L2 への射影(アフィン)の拡大率 κ_{D,L1,L2}
@@ -681,6 +726,7 @@ impl BlackboardEngine {
         // 行の出どころが合併を重ねて太り、証明が数十倍に膨らんだ)。
         let fp = self.ar_fingerprint();
         let Some(mut st) = ArState::new() else { return 0 };
+        st.off = self.ar_off_kinds.clone();
         // 記号の番号をそろえる(前回の状態を使い回すとき、今回の式を同じ番号で読む)。
         if let Some(c) = self.ar_cache.as_ref().filter(|c| c.fingerprint == fp) { st.atoms = c.after_rules.atoms.clone(); }
         let merged = self.ar_round_with(&mut st, fp);
@@ -689,6 +735,8 @@ impl BlackboardEngine {
         self.prover.egraph.spiral_prop_work += st.lattice.ops / AR_OPS_PER_WORK;
         self.ar_ops += st.lattice.ops;
         self.ar_rounds += 1;
+        self.ar_overflows += st.lattice.overflows;
+        if merged.is_none() { self.ar_aborted += 1; }
         merged.unwrap_or(0)
     }
 
@@ -766,6 +814,7 @@ impl BlackboardEngine {
         let mut ti = (std::time::Instant::now(), st.lattice.ops);
         if dbgi { println!("  AR_INSERT classes      {:?}", t0.elapsed()); }
         // 等式(同値類の中の2つの式の差)。ねじれの関係 4T = 0 は状態を作るときに入れてある。
+        st.kind = "class";
         for (_, vs) in &classes {
             for (v, prem) in &vs[1..] {
                 let mut rel = v.clone();
@@ -775,6 +824,7 @@ impl BlackboardEngine {
         }
         if dbgi { println!("  AR_INSERT class_rels   {:?} {} ops", ti.0.elapsed(), st.lattice.ops - ti.1); } ti = (std::time::Instant::now(), st.lattice.ops);
         // 定義から従う比の等式(無限遠点との複比が −1)。
+        st.kind = "ratio";
         let minus_one = ModInt::new(-1);
         for (pts, premise) in self.ar_ratio_facts() {
             let [a, b, c, d] = pts;
@@ -791,7 +841,8 @@ impl BlackboardEngine {
         let mut gen_count = 0usize;
         let generated = self.ar_generated_relations(&mut st.atoms);
         if dbgi { println!("  AR_INSERT gen_build    {:?} n={}", ti.0.elapsed(), generated.len()); } ti = (std::time::Instant::now(), st.lattice.ops);
-        for (rel, premises) in generated {
+        for (rel, premises, kind) in generated {
+            st.kind = kind;
             if st.insert(&self.prover.egraph, rel, premises, &[])? { gen_count += 1; }
         }
         if dbgi { println!("  AR_INSERT gen_insert   {:?} {} ops", ti.0.elapsed(), st.lattice.ops - ti.1); }
@@ -967,6 +1018,7 @@ impl BlackboardEngine {
             let (na, nb) = (eg.entities[eg.get_rep(a).0].name.clone(), eg.entities[eg.get_rep(b).0].name.clone());
             if std::env::var("GS_DEBUG_AR").is_ok() { println!("  AR_DEBUG merge src={} premises={}", src.len(), premises.len()); }
             let justification = Justification::Theorem { name: "代数的な追跡(複比・有向角の線形関係)".to_string(), premises };
+            if let Some(u) = self.ar_usage.as_mut() { u.insert(crate::mmp_core::justification_hash(&justification), kind_counts(&st.kinds, &src)); }
             if eg.merge_entities_justified(a, b, justification) {
                 println!("  🧮 [代数的な追跡] {} ≡ {}", na, nb);
                 merged += 1;
@@ -981,7 +1033,9 @@ impl BlackboardEngine {
             if eg.merge_checks && eg.numeric_incidence_check(z, c, 2) == Some(false) { self.ar_rejected += 1; continue; }
             let premises: Vec<(String, Vec<ClassId>)> = src.iter().flat_map(|&i| st.premises_of[i as usize].clone()).collect();
             let (nz, nc) = (eg.entities[z.0].name.clone(), eg.entities[c.0].name.clone());
-            eg.link_logical_incidence_justified(z, c, Justification::Theorem { name: name.to_string(), premises });
+            let justification = Justification::Theorem { name: name.to_string(), premises };
+            if let Some(u) = self.ar_usage.as_mut() { u.insert(crate::mmp_core::justification_hash(&justification), kind_counts(&st.kinds, &src)); }
+            eg.link_logical_incidence_justified(z, c, justification);
             println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
             merged += 1;
         }
@@ -998,7 +1052,9 @@ impl BlackboardEngine {
             if eg.merge_checks && eg.numeric_incidence_check(z, circle, 2) == Some(false) { self.ar_rejected += 1; continue; }
             let premises: Vec<(String, Vec<ClassId>)> = src.iter().flat_map(|&i| st.premises_of[i as usize].clone()).collect();
             let (nz, nc) = (eg.entities[z.0].name.clone(), eg.entities[circle.0].name.clone());
-            eg.link_logical_incidence_justified(z, circle, Justification::Theorem { name: "代数的な追跡(円周角の逆)".to_string(), premises });
+            let justification = Justification::Theorem { name: "代数的な追跡(円周角の逆)".to_string(), premises };
+            if let Some(u) = self.ar_usage.as_mut() { u.insert(crate::mmp_core::justification_hash(&justification), kind_counts(&st.kinds, &src)); }
+            eg.link_logical_incidence_justified(z, circle, justification);
             println!("  🧮 [代数的な追跡] {} ∈ {}", nz, nc);
             merged += 1;
         }
@@ -1076,7 +1132,7 @@ impl BlackboardEngine {
     /// - 透視射影: 中心 O から直線 L への射影は一次分数変換なので、方向の差 = 点の差 + 各点の倍率 + 定数
     ///   (点→線束・線束→点の透視射影不変性)。
     /// - 円以外の二次曲線: 頂点 P からの線束も二次曲線の媒介変数の一次分数変換なので、同じ形(シュタイナーの定理)。
-    fn ar_generated_relations(&self, atoms: &mut Atoms) -> Vec<(SVec, Vec<(String, Vec<ClassId>)>)> {
+    fn ar_generated_relations(&self, atoms: &mut Atoms) -> Vec<(SVec, Vec<(String, Vec<ClassId>)>, &'static str)> {
         let eg = &self.prover.egraph;
         let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
         let linf = eg.get_rep(eg.line_infinity);
@@ -1107,7 +1163,7 @@ impl BlackboardEngine {
                                 .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, p.0, 0), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, x.0, 0), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
-                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c), conn(p, l), conn(x, l)])); }
+                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c), conn(p, l), conn(x, l)], "chord")); }
                         }
                         // 直線の無い弦: 線分の向き s(JP,JX) − s(IP,IX) は、直線があればその β + c_0(地図の等式)なので、同じ形で書く。
                         if chords.is_empty() {
@@ -1117,7 +1173,7 @@ impl BlackboardEngine {
                                 .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, p.0, 0), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, x.0, 0), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
-                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c)])); }
+                            if ok.is_some() { out.push((v, vec![conn(p, c), conn(x, c)], "chord_noline")); }
                         }
                     }
                 }
@@ -1130,7 +1186,7 @@ impl BlackboardEngine {
                     let ok = atoms.add_beta(&mut v, ci, cj, d, 1)
                         .and_then(|_| atoms.add_fresh(&mut v, (THETA, c.0, tp.0, 0), -2))
                         .and_then(|_| atoms.add_fresh(&mut v, (CIRCLE_C, c.0, 0, 0), -1));
-                    if ok.is_some() { out.push((v, vec![conn(tp, c), ("DefinedBy:TangentLine".to_string(), vec![c, tp, l])])); }
+                    if ok.is_some() { out.push((v, vec![conn(tp, c), ("DefinedBy:TangentLine".to_string(), vec![c, tp, l])], "tangent")); }
                 }
                 // 円周角の記号 θ とシュタイナーの記号(二次曲線の媒介変数の差 s_C)をつなぐ: 円は I・J を通る二次曲線で、頂点から
                 // I・J への直線の方向は I・J そのものなので、線束と円の対応は I・J を動かさない。(I,J;d_X,d_Y) = (I,J;X,Y)_C から
@@ -1142,7 +1198,7 @@ impl BlackboardEngine {
                             .and_then(|_| atoms.add_fresh_diff(&mut v, CONIC_S, c.0, ci, x.0, -1))
                             .and_then(|_| atoms.add_fresh_diff(&mut v, CONIC_S, c.0, x.0, cj, 1))
                             .and_then(|_| atoms.add_fresh(&mut v, (CONIC_LINK, c.0, 0, 0), -1));
-                        if ok.is_some() { out.push((v, vec![conn(x, c)])); }
+                        if ok.is_some() { out.push((v, vec![conn(x, c)], "conic_link")); }
                     }
                 }
             }
@@ -1178,11 +1234,67 @@ impl BlackboardEngine {
                                 .and_then(|_| atoms.add_fresh(&mut v, (STEINER_MU, c.0, p.0, *x), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (STEINER_MU, c.0, p.0, *y), -1))
                                 .and_then(|_| atoms.add_fresh(&mut v, (STEINER_K, c.0, p.0, 0), -1));
-                            if ok.is_some() { out.push((v, [px.clone(), py.clone()].concat())); }
+                            if ok.is_some() { out.push((v, [px.clone(), py.clone()].concat(), "steiner")); }
                         }
                     }
                 }
             }
+        }
+
+        // 方冪: 円 C の上に無い有限の点 P を通る直線が C と図の2点 A, B で交わるなら |PA|²·|PB|² は P と C だけで決まる
+        // (len(P,A) + len(P,B) = π_C(P))。接線なら接点 T で A = B = T。根軸の上の点では2つの円の方冪が等しい。
+        // 相似(共点二弦・交わる弦)は弦の直線が図にあるときしか出ないので、ここで直接入れる。
+        let mut power_lines: Vec<(ClassId, ClassId, ClassId, ClassId, Vec<(String, Vec<ClassId>)>)> = Vec::new(); // (円, 直線, A, B, 前提)
+        for &c in &conics {
+            if !self.ar_is_circle(c) { continue; }
+            let on_c = self.ar_points_on(c);
+            for &l in &lines {
+                if let Some((tc, tp)) = tangent_of(l) && tc == c && on_c.contains(&tp) {
+                    power_lines.push((c, l, tp, tp, vec![conn(tp, c), ("DefinedBy:TangentLine".to_string(), vec![c, tp, l])]));
+                    continue;
+                }
+                let ab: Vec<ClassId> = on_c.iter().copied().filter(|&x| eg.is_connected(x, l)).collect();
+                if ab.len() == 2 { power_lines.push((c, l, ab[0], ab[1], vec![conn(ab[0], c), conn(ab[1], c), conn(ab[0], l), conn(ab[1], l)])); }
+            }
+        }
+        // (円, 点) → その点を通る方冪の直線。方冪の記号 π_C(P) が1つの等式にしか出ないなら何も言わない(行が増えるだけ)ので、
+        // 直線が2本以上あるか、根軸で他の円の方冪とつながる組だけ入れる。
+        let mut by_pc: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
+        for (i, (c, l, a, b, _)) in power_lines.iter().enumerate() {
+            for p in self.ar_points_on(*l) {
+                if p == *a || p == *b || eg.is_connected(p, *c) || eg.fixed_incidence(p, *c, EntityType::Conic) != Some(Some(false)) { continue; }
+                by_pc.entry((c.0, p.0)).or_default().push(i);
+            }
+        }
+        let mut radical: Vec<(ClassId, ClassId, ClassId, ClassId)> = Vec::new(); // (円1, 円2, 根軸, 点)
+        for &r in &lines {
+            let Some((c1, c2)) = eg.entities[r.0].components.first().and_then(|comp| comp.definitions.iter().find_map(|d| match *d {
+                Definition::RadicalAxis(c1, c2) => Some((eg.get_rep(c1), eg.get_rep(c2))), _ => None })) else { continue };
+            if c1 == c2 || !self.ar_is_circle(c1) || !self.ar_is_circle(c2) { continue; }
+            for p in self.ar_points_on(r) {
+                if [c1, c2].iter().any(|&c| eg.fixed_incidence(p, c, EntityType::Conic) != Some(Some(false))) { continue; }
+                if by_pc.contains_key(&(c1.0, p.0)) && by_pc.contains_key(&(c2.0, p.0)) { radical.push((c1, c2, r, p)); }
+            }
+        }
+        let linked: rustc_hash::FxHashSet<(usize, usize)> = radical.iter().flat_map(|&(c1, c2, _, p)| [(c1.0, p.0), (c2.0, p.0)]).collect();
+        let mut keys: Vec<(usize, usize)> = by_pc.keys().copied().collect();
+        keys.sort_unstable();
+        for key in keys {
+            let ls = &by_pc[&key];
+            if ls.len() < 2 && !linked.contains(&key) { continue; }
+            let p = ClassId(key.1);
+            for &i in ls {
+                let (c, l, a, b, prem) = &power_lines[i];
+                let mut v = SVec::new();
+                let ok = atoms.add_len(&mut v, p, *a, 1).and_then(|_| atoms.add_len(&mut v, p, *b, 1))
+                    .and_then(|_| atoms.add_fresh(&mut v, (POWER, c.0, p.0, 0), -1));
+                if ok.is_some() { out.push((v, [prem.clone(), vec![conn(p, *l)]].concat(), "power")); }
+            }
+        }
+        for (c1, c2, r, p) in radical {
+            let mut v = SVec::new();
+            let ok = atoms.add_fresh(&mut v, (POWER, c1.0, p.0, 0), 1).and_then(|_| atoms.add_fresh(&mut v, (POWER, c2.0, p.0, 0), -1));
+            if ok.is_some() { out.push((v, vec![conn(p, r), ("DefinedBy:RadicalAxis".to_string(), vec![c1, c2, r])], "power")); }
         }
 
         // 等方線束と直線のつながり: J から直線 m への射影は m の無限遠点を無限遠直線に移すので、J の線束の差と m の上の差の
@@ -1198,7 +1310,7 @@ impl BlackboardEngine {
                         let mut v = SVec::new();
                         let ok = atoms.add(&mut v, iso(x), iso(y), 1).and_then(|_| atoms.add(&mut v, x.0, y.0, -1))
                             .and_then(|_| atoms.add_fresh(&mut v, (kind, m.0, 0, 0), -1));
-                        if ok.is_some() { out.push((v, vec![conn(x, m), conn(y, m)])); }
+                        if ok.is_some() { out.push((v, vec![conn(x, m), conn(y, m)], "chart")); }
                     }
                 }
             }
@@ -1206,7 +1318,7 @@ impl BlackboardEngine {
             let mut v = SVec::new();
             let ok = atoms.add_fresh(&mut v, (CHART_J, m.0, 0, 0), 1).and_then(|_| atoms.add_fresh(&mut v, (CHART_I, m.0, 0, 0), -1))
                 .and_then(|_| atoms.add_beta(&mut v, ci, cj, d, -1)).and_then(|_| atoms.add_fresh(&mut v, (CHART_0, 0, 0, 0), -1));
-            if ok.is_some() { out.push((v, vec![conn(pts[0], m), conn(pts[1], m)])); }
+            if ok.is_some() { out.push((v, vec![conn(pts[0], m), conn(pts[1], m)], "chart")); }
         }
 
         // アフィンの等式: 同じ直線の上では、無限遠点までの差 s(X,∞_L) が一定(z=1 の座標で [X ∞ R] が X によらない)。
@@ -1220,7 +1332,7 @@ impl BlackboardEngine {
                 for &x in &pts[1..] {
                     let mut v = SVec::new();
                     let ok = atoms.add(&mut v, x.0, inf, 1).and_then(|_| atoms.add(&mut v, pts[0].0, inf, -1));
-                    if ok.is_some() { out.push((v, vec![conn(pts[0], l), conn(x, l)])); }
+                    if ok.is_some() { out.push((v, vec![conn(pts[0], l), conn(x, l)], "affine")); }
                 }
             }
             on_line.insert(l.0, pts);
@@ -1242,7 +1354,7 @@ impl BlackboardEngine {
                     let mut v = SVec::new();
                     let ok = atoms.add(&mut v, x.0, y.0, 1).and_then(|_| atoms.add(&mut v, x.0, m.0, -1))
                         .and_then(|_| atoms.add_fresh(&mut v, (LOG_PRIME, 2, 0, 0), -1));
-                    if ok.is_some() { out.push((v, premise.clone())); }
+                    if ok.is_some() { out.push((v, premise.clone(), "mid_ratio")); }
                 }
             }
         }
@@ -1259,12 +1371,12 @@ impl BlackboardEngine {
     ///   族の1本である無限遠直線の対応 (∞_L1, ∞_L2) は、新しい記号 μ(∞) が増えるだけで何も足さないので入れない。
     /// 一次分数変換は3組の対応で決まるので、等式が意味を持つのは対応が4組以上(アフィンなら3組以上)あるときだけ。
     fn ar_projection_relations(&self, atoms: &mut Atoms, lines: &[ClassId], on_line: &FxHashMap<usize, Vec<ClassId>>,
-        out: &mut Vec<(SVec, Vec<(String, Vec<ClassId>)>)>) {
+        out: &mut Vec<(SVec, Vec<(String, Vec<ClassId>)>, &'static str)>) {
         let eg = &self.prover.egraph;
         let linf = eg.get_rep(eg.line_infinity);
         let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
         type Corr = (usize, usize, Vec<(String, Vec<ClassId>)>);
-        let mut emit = |atoms: &mut Atoms, corr: &[Corr], mu: Option<(usize, usize)>, k: (u8, usize, usize, usize), shared: &[(String, Vec<ClassId>)]| {
+        let mut emit = |atoms: &mut Atoms, corr: &[Corr], mu: Option<(usize, usize)>, k: (u8, usize, usize, usize), shared: &[(String, Vec<ClassId>)], kind: &'static str| {
             for a in 0..corr.len() {
                 for b in (a + 1)..corr.len() {
                     let ((x1, x2, pa), (y1, y2, pb)) = (&corr[a], &corr[b]);
@@ -1275,7 +1387,7 @@ impl BlackboardEngine {
                         ok = ok.and_then(|_| atoms.add_fresh(&mut v, (PROJ_MU, o, l, *x1), -1))
                             .and_then(|_| atoms.add_fresh(&mut v, (PROJ_MU, o, l, *y1), -1));
                     }
-                    if ok.is_some() { out.push((v, [pa.clone(), pb.clone(), shared.to_vec()].concat())); }
+                    if ok.is_some() { out.push((v, [pa.clone(), pb.clone(), shared.to_vec()].concat(), kind)); }
                 }
             }
         };
@@ -1302,14 +1414,14 @@ impl BlackboardEngine {
                 let inf = self.ar_dir_or_virtual(l);
                 let prem = if is_virtual(inf) { Vec::new() } else { vec![("DefinedBy:DirectionOf".to_string(), vec![l, ClassId(inf)])] };
                 corr.push((inf, inf, prem));
-                emit(atoms, &corr, Some((o.0, l.0)), (PROJ_K, o.0, l.0, 0), &[]);
+                emit(atoms, &corr, Some((o.0, l.0)), (PROJ_K, o.0, l.0, 0), &[], "proj_center");
             }
         }
         // 無限遠の中心(平行線の族)。
         for (d, fam, l1, l2, corr) in self.ar_parallel_correspondences(lines, on_line) {
             if corr.len() < 3 { continue; }
             let corr: Vec<Corr> = corr.into_iter().map(|(x1, x2, p)| (x1.0, x2.0, p)).collect();
-            emit(atoms, &corr, None, (PARALLEL_K, d, l1.0, l2.0), &fam);
+            emit(atoms, &corr, None, (PARALLEL_K, d, l1.0, l2.0), &fam, "proj_parallel");
         }
     }
 
@@ -1595,6 +1707,7 @@ impl BlackboardEngine {
         let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
         // 見つけた相似の組 (t, u, 裏返しか, 番号)。後で対応する点を探す。
         let mut found: Vec<([ClassId; 3], [ClassId; 3], bool, usize)> = Vec::new();
+        st.kind = "sim_aa";
         'scan: for (t, key, mirror) in &entries {
             for (opposite, k) in [(false, key), (true, mirror)] {
                 let Some(others) = by_key.get(k) else { continue };
@@ -1707,6 +1820,7 @@ impl BlackboardEngine {
             let mut self_done: rustc_hash::FxHashSet<(Vec<(usize, usize)>, bool)> = rustc_hash::FxHashSet::default();
             for (t, u, opposite, sss) in cands {
                 if pairs >= MAX_PAIRS || st.lattice.ops > st.ops_cap { break; }
+                st.kind = if sss { "sim_sss" } else { "sim_sas" };
                 let (sa, sb) = (sorted_set(&t), sorted_set(&u));
                 // 同じ3点の組の中の対応(置換)ごとに別の相似。恒等な対応は除く。
                 let mut perm: Vec<(usize, usize)> = (0..3).map(|i| (t[i].0, u[i].0)).collect();
@@ -1773,6 +1887,7 @@ impl BlackboardEngine {
     fn ar_sim_correspondences(&self, st: &mut ArState, found: &[([ClassId; 3], [ClassId; 3], bool, usize)],
         line_of: &dyn Fn(ClassId, ClassId) -> Option<ClassId>, points: &[ClassId], zt: &ZTable) -> Option<usize> {
         const MAX_CANDIDATES: usize = 20000;
+        st.kind = "sim_corr";
         let is_point: rustc_hash::FxHashSet<usize> = points.iter().map(|p| p.0).collect();
         let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
         let eg = &self.prover.egraph;
@@ -1850,6 +1965,7 @@ impl BlackboardEngine {
     fn ar_reflections(&self, st: &mut ArState, frame: &Frame, xy: &[Option<Vec<(ModInt, ModInt)>>],
         links: &mut Vec<(ClassId, ClassId, Vec<u32>, &'static str)>) -> Option<usize> {
         const MAX_CORR: usize = 12;
+        st.kind = "reflect";
         let eg = &self.prover.egraph;
         let linf = eg.get_rep(eg.line_infinity);
         let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
@@ -2021,6 +2137,7 @@ impl BlackboardEngine {
     fn ar_centered_circles(&self, st: &mut ArState, frame: &Frame, xy: &[Option<Vec<(ModInt, ModInt)>>],
         links: &mut Vec<(ClassId, ClassId, Vec<u32>, &'static str)>) -> Option<usize> {
         const MAX_CIRCLES: usize = 200;
+        st.kind = "center_circle";
         const MAX_MEMBERS: usize = 16;
         let eg = &self.prover.egraph;
         let samples = eg.fixed_samples();
@@ -2281,6 +2398,7 @@ impl BlackboardEngine {
     /// 無限遠点(辺に平行な横断線・平行な3本の直線)も含める。数値で積が −1・1 であることも確かめる(退化した配置を避ける)。
     fn ar_menelaus_ceva_relations(&self, st: &mut ArState, frame: &Frame) -> Option<()> {
         const MAX_RELATIONS: usize = 4000;
+        st.kind = "menelaus";
         let eg = &self.prover.egraph;
         let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
         let mut done: rustc_hash::FxHashSet<Vec<usize>> = rustc_hash::FxHashSet::default();

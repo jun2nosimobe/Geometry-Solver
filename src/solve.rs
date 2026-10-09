@@ -49,6 +49,10 @@ pub struct SolveOptions {
     pub ar_drop: Vec<String>,
     /// 名前で外す定理(--drop-theorems=名前,名前。AR への置き換えを試すため)。
     pub drop_theorems: Vec<String>,
+    /// 証明に使った定理と、AR の結論が使った等式の種類を出す(--ar-usage)。
+    pub ar_usage: bool,
+    /// AR の格子に入れない等式の種類(--ar-off=sim_aa,chord。効き目を測る用)。
+    pub ar_off: Vec<String>,
     /// AR があっても、方冪・交わる弦の相似の2つの定理を残す(--chord-theorems)。
     pub chord_theorems: bool,
     pub numeric_aux_early: bool,
@@ -121,6 +125,10 @@ impl SolveOptions {
                 .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "none").collect(),
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),
+            ar_usage: flag(args, "--ar-usage"),
+            // 既定で方冪を外す(足しても解ける問題が増えず仕事量が増えた。来歴 #98)。none で全て入れる。
+            ar_off: args.iter().find_map(|a| a.strip_prefix("--ar-off=")).unwrap_or("power")
+                .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "none").collect(),
             chord_theorems: flag(args, "--chord-theorems"),
             numeric_aux_early: !flag(args, "--no-numeric-aux") && flag(args, "--numeric-aux-early"),
             length_theorems: !flag(args, "--no-length-theorems"),
@@ -208,6 +216,26 @@ pub fn output_extract_report(report: &mmp_core::DeepProof, problem_name: &str) {
     write_result(&format!("compressed_proof_{}.txt", problem_name), &report.format_compressed(), "compressed_proof(圧縮された証明)");
 }
 
+/// --ar-usage: 証明に使った定理ごとの回数と、証明に残った AR の結論が使った等式の種類(1行ずつ。問題をまたいで集計する)。
+/// PROOF_AR_KIND は (種類, その種類の等式を使った AR の結論の数, 使った等式の数)。
+fn print_proof_usage(report: &mmp_core::DeepProof, usage: &rustc_hash::FxHashMap<u64, Vec<(&'static str, u32)>>) {
+    let mut theorems: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut kinds: std::collections::BTreeMap<&str, (usize, u64)> = Default::default();
+    let mut unmatched = 0;
+    for p in &report.theorem_payloads {
+        let name = p.split_once('|').map_or(p.as_str(), |x| x.0);
+        *theorems.entry(name).or_default() += 1;
+        if !name.starts_with("代数的な追跡") { continue; }
+        match usage.get(&mmp_core::payload_hash("Theorem", p)) {
+            Some(ks) => for &(k, n) in ks { let e = kinds.entry(k).or_default(); e.0 += 1; e.1 += n as u64; },
+            None => unmatched += 1,
+        }
+    }
+    for (name, n) in &theorems { println!("PROOF_THEOREM\t{}\t{}", name, n); }
+    for (k, (steps, rels)) in &kinds { println!("PROOF_AR_KIND\t{}\t{}\t{}", k, steps, rels); }
+    if unmatched > 0 { println!("PROOF_AR_UNMATCHED\t{}", unmatched); }
+}
+
 fn write_result(file_name: &str, text: &str, label: &str) {
     let dir = "result";
     if fs::create_dir_all(dir).is_err() { return; }
@@ -284,6 +312,7 @@ impl GoalChecker {
             raw.verify_incidences_timed(&pairs)
         };
         output_extract_report(&report, problem_name);
+        if let Some(usage) = engine.ar_usage.as_ref() { print_proof_usage(&report, usage); }
         Goal::Proved
     }
 }
@@ -411,6 +440,8 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     engine.bandit_enabled = opts.bandit;
     engine.seeded_rematch_enabled = opts.seeded_rematch;
     engine.work_limit = opts.step_budget;
+    if opts.ar_usage { engine.ar_usage = Some(Default::default()); }
+    engine.ar_off_kinds = opts.ar_off.clone();
     if opts.show_trace { engine.prover.trace = Some(trace::TraceLog::default()); }
 
     let mut mcts = MCTSSearchEngine::new();
@@ -485,8 +516,8 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         println!("📐 局所伝播が非退化条件で見送った回数: 交点の一意性 {} / 二次曲線の一意性 {} / 複比の一意性 {}", sk[0], sk[1], sk[2]);
     }
     if opts.ar {
-        println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回(うち規則の結果の使い回し {} 回)、行演算 {}(仕事量に含む)",
-            engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_reused, engine.ar_ops);
+        println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回(うち規則の結果の使い回し {} 回・途中で打ち切り {} 回)、行演算 {}(仕事量に含む)、係数があふれて諦めた等式 {} 件",
+            engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_reused, engine.ar_aborted, engine.ar_ops, engine.ar_overflows);
     }
     if engine.prover.degenerate_matches > 0 {
         println!("📐 図の上で退化した配置(「相異なる」図形が数値的に一致)のマッチを {} 件捨てました。", engine.prover.degenerate_matches);

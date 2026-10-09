@@ -35,6 +35,7 @@ mod spiral_prop;
 mod query;
 mod raw_proof;
 pub use raw_proof::{RawProof, DeepProof};
+pub(crate) use raw_proof::{justification_hash, payload_hash};
 pub use query::GoalStatus;
 pub(crate) use coords::StructureCache;
 #[cfg(test)]

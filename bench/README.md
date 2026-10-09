@@ -115,3 +115,10 @@ HAGeo-409 から読める問題のうち、保留問題と手で写した bench_
 保留問題は**採用の直前に測って報告するだけ**で、調整には使わない。解けなかった理由を調べて規則や語彙を足したら、その問題は保留ではなくなる
 (`heldout.txt` から外して、`geom_solver hageo-list` で読める別の問題に置き換える)。詳しくは [設計ノート](../docs/notes/diagnostics.md) の「HAGeo-409 の取り込みと語彙の被覆率」。
 
+
+## どの定理・どの AR の等式が効いているか(来歴 #98)
+
+- `bench/ar_usage.sh <bin のラベル> <名前> [フラグ]`: 全44問と HAGeo を `--ar-usage` で解き、証明に使った定理と、証明に残った代数的な追跡の結論が
+  使った等式の種類を `res/usage_<名前>.tsv` に集める。`python3 bench/ar_usage_sum.py <名前>` で集計。
+- `--ar-off=種類`(`bench.sh` のフラグに渡す)でその種類の等式を格子に入れずに測り、結果を `res/abl/<種類>_hg.tsv`(基準は `res/abl/base_hg.tsv`)
+  に置くと、`python3 bench/ablation_features.py` が外して落ちた HAGeo の問題に多い作図・目標を数える。
