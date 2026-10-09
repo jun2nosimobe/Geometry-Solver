@@ -15,6 +15,16 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l96" data-status="shipped">
+  <summary><span class="idx">#96</span><span class="t">AR の土台の等式の投入を速くする(平行線の族の対応を点から引く・射影の数値の検算を後回し) ― 出力は #95 と同じ、HAGeo 12並列で最長 19.3 → 15.7秒</span><span class="pill">既定</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="backlog.html#b49">§05 b49</a>。ユーザー指示「土台の等式の投入を速くする」。<br>
+<b>どこが遅かったか:</b> 1回の追跡の「投入」の段(同値類の式・比・規則で作る等式を格子に積む)の大半は、格子ではなく等式を作る側(<code>ar_generated_relations</code>、2017 European MCup で 0.40秒・2021 Czech-Slovak P6 で 0.48秒)で、その7割が平行線の族の対応(<code>ar_parallel_correspondences</code>)だった。方向ごとに全ての2直線の組を調べ、族の直線ごとに点の並びを線形に探していた(直線の数の3乗)。<br>
+<b>直したこと:</b> (1) 点 → 通る直線の表を1度作り、族の直線の点から「どの直線と図の点で交わるか」を引く。族のどの直線とも交わらない直線は組にしない(対応は2組以上要り、2直線の交点は1組にしかならない)。交点は前と同じく、その直線の点の並びで最初のもの。対応の 0.30 → 0.05秒。(2) 有限の中心からの射影で、中心が直線に乗らないかの数値の検算(全ての点と直線の組)を、対応が3組そろった組だけにした。等式を作る側 0.40〜0.48 → 0.21〜0.23秒。<br>
+<b>出力:</b> 推論の記録・仕事量は #95 と1文字も変わらない(44問×6設定が基準と一致、HAGeo も同じ 65/172・同じ仕事量)。</div>
+    <div class="evidence"><b>結果</b>(<code>r97</code>、基準 r96 = #95):44問×6設定とも基準と一致。HAGeo 65/172 で解けた問題・仕事量とも同じ。12並列で1問 中央値 11.7 → 10.9秒・最長 19.3 → 15.7秒・合計 −8%。</div>
+  </div>
+</details>
 <details class="item" id="l95" data-status="shipped">
   <summary><span class="idx">#95</span><span class="t">AR を速くする(出どころを DAG で持つ・検出の候補を数値で絞る・行を配列で持つ)。行演算1回 2.0 → 0.74µs、換算を12回で1に ― 既定 41/44 のまま、HAGeo 60 → 65/172</span><span class="pill">既定</span></summary>
   <div class="body">

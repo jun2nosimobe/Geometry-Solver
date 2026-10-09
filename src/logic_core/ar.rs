@@ -714,6 +714,10 @@ impl BlackboardEngine {
         }
 
         st.atoms = atoms;
+        // 投入の段ごとの時間(GS_DEBUG_AR のとき)。
+        let dbgi = std::env::var("GS_DEBUG_AR").is_ok();
+        let mut ti = (std::time::Instant::now(), st.lattice.ops);
+        if dbgi { println!("  AR_INSERT classes      {:?}", t0.elapsed()); }
         // 等式(同値類の中の2つの式の差)。ねじれの関係 4T = 0 は状態を作るときに入れてある。
         for (_, vs) in &classes {
             for (v, prem) in &vs[1..] {
@@ -722,6 +726,7 @@ impl BlackboardEngine {
                 st.insert(&self.prover.egraph, rel, [prem.clone(), vs[0].1.clone()].concat(), &[])?;
             }
         }
+        if dbgi { println!("  AR_INSERT class_rels   {:?} {} ops", ti.0.elapsed(), st.lattice.ops - ti.1); } ti = (std::time::Instant::now(), st.lattice.ops);
         // 定義から従う比の等式(無限遠点との複比が −1)。
         let minus_one = ModInt::new(-1);
         for (pts, premise) in self.ar_ratio_facts() {
@@ -735,10 +740,14 @@ impl BlackboardEngine {
         }
 
         // 定理の代わりに等式を作る(円・透視射影・二次曲線の射影対応)。
+        if dbgi { println!("  AR_INSERT ratio        {:?} {} ops", ti.0.elapsed(), st.lattice.ops - ti.1); } ti = (std::time::Instant::now(), st.lattice.ops);
         let mut gen_count = 0usize;
-        for (rel, premises) in self.ar_generated_relations(&mut st.atoms) {
+        let generated = self.ar_generated_relations(&mut st.atoms);
+        if dbgi { println!("  AR_INSERT gen_build    {:?} n={}", ti.0.elapsed(), generated.len()); } ti = (std::time::Instant::now(), st.lattice.ops);
+        for (rel, premises) in generated {
             if st.insert(&self.prover.egraph, rel, premises, &[])? { gen_count += 1; }
         }
+        if dbgi { println!("  AR_INSERT gen_insert   {:?} {} ops", ti.0.elapsed(), st.lattice.ops - ti.1); }
         let (t1, ops1) = (std::time::Instant::now(), st.lattice.ops);
         st.ops_cap = st.lattice.ops + AR_ROUND_OPS_CAP;
         // 図の構造と土台の格子が前回と同じなら、規則を足した後の状態を使い回す(今回の記号の表は前回の上に足したもの)。
@@ -1232,7 +1241,7 @@ impl BlackboardEngine {
                 .filter(|&s| s != linf && eg.entities[s.0].entity_type == EntityType::Line).collect()).unwrap_or_default();
             if through_o.len() < 3 { continue; }
             for &l in lines {
-                if eg.is_connected(o, l) || eg.fixed_incidence(o, l, EntityType::Line) != Some(Some(false)) { continue; }
+                if eg.is_connected(o, l) { continue; }
                 let on_l = &on_line[&l.0];
                 let mut corr: Vec<Corr> = Vec::new();
                 for &m in &through_o {
@@ -1241,7 +1250,7 @@ impl BlackboardEngine {
                     if corr.iter().any(|c| c.0 == x.0) { continue; }
                     corr.push((x.0, self.ar_dir_or_virtual(m), vec![conn(o, m), conn(x, m), conn(x, l)]));
                 }
-                if corr.len() < 3 { continue; }
+                if corr.len() < 3 || eg.fixed_incidence(o, l, EntityType::Line) != Some(Some(false)) { continue; }
                 // L と無限遠直線の交点 ∞_L は動かない。
                 let inf = self.ar_dir_or_virtual(l);
                 let prem = if is_virtual(inf) { Vec::new() } else { vec![("DefinedBy:DirectionOf".to_string(), vec![l, ClassId(inf)])] };
@@ -1270,22 +1279,39 @@ impl BlackboardEngine {
         let mut out = Vec::new();
         let mut dirs: Vec<usize> = families.keys().copied().collect();
         dirs.sort();
+        // 点 → (それを通る直線の添字, その直線の点の並びでの位置)。
+        let mut at: FxHashMap<usize, Vec<(usize, usize)>> = FxHashMap::default();
+        for (li, l) in lines.iter().enumerate() {
+            for (pos, x) in on_line[&l.0].iter().enumerate() {
+                let e = at.entry(x.0).or_default();
+                if !e.iter().any(|&(k, _)| k == li) { e.push((li, pos)); }
+            }
+        }
         for d in dirs {
             let fam = &families[&d];
-            if fam.is_empty() { continue; }
-            for i in 0..lines.len() {
-                for j in (i + 1)..lines.len() {
+            // (直線, 族の直線) → 2直線に乗る点のうち、前者の点の並びで最初のもの。族のどれとも図の点で交わらない直線は組にしない
+            // (対応は2組以上要り、2直線の交点は1組にしかならない)。
+            let mut cut: FxHashMap<(usize, usize), (usize, ClassId)> = FxHashMap::default();
+            let mut is_cut = vec![false; lines.len()];
+            for (mi, m) in fam.iter().enumerate() {
+                for &x in &on_line[&m.0] {
+                    for &(li, pos) in at.get(&x.0).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        let e = cut.entry((li, mi)).or_insert((pos, x));
+                        if pos < e.0 { *e = (pos, x); }
+                        is_cut[li] = true;
+                    }
+                }
+            }
+            let cand: Vec<usize> = (0..lines.len()).filter(|&i| is_cut[i] && !fam.contains(&lines[i])).collect();
+            for (ci, &i) in cand.iter().enumerate() {
+                for &j in &cand[ci + 1..] {
                     let (l1, l2) = (lines[i], lines[j]);
-                    if fam.contains(&l1) || fam.contains(&l2) { continue; }
                     let (p1, p2) = (&on_line[&l1.0], &on_line[&l2.0]);
                     let mut corr: Vec<(ClassId, ClassId, Vec<(String, Vec<ClassId>)>)> = Vec::new();
                     // 2直線の交点
                     if let Some(&a) = p1.iter().find(|a| p2.contains(a)) { corr.push((a, a, vec![conn(a, l1), conn(a, l2)])); }
-                    for &m in fam {
-                        let on_m = &on_line[&m.0];
-                        let x1 = p1.iter().find(|x| on_m.contains(x));
-                        let x2 = p2.iter().find(|x| on_m.contains(x));
-                        if let (Some(&x1), Some(&x2)) = (x1, x2) {
+                    for (mi, &m) in fam.iter().enumerate() {
+                        if let (Some(&(_, x1)), Some(&(_, x2))) = (cut.get(&(i, mi)), cut.get(&(j, mi))) {
                             if x1 == x2 || corr.iter().any(|c| c.0 == x1 || c.1 == x2) { continue; }
                             corr.push((x1, x2, vec![conn(x1, l1), conn(x1, m), conn(x2, l2), conn(x2, m),
                                 ("DefinedBy:DirectionOf".to_string(), vec![m, ClassId(d)])]));
