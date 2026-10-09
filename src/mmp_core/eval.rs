@@ -601,16 +601,47 @@ impl EGraph {
         Some(dxd.max(dyd))
     }
 
-    /// 🌟 同次座標の時系列サンプルから次数を測る共通処理。比だけに意味があるので、最後の成分で他の全成分を
-    /// 割った値それぞれの次数の最大値を返す。成分数は問わない(点・直線の3、円の係数の4など)。基準の成分が
-    /// どれかのサンプルで0なら None。
+    /// 🌟 動点法の次数を、選んだ自由点(moving)を動かして測る。moving のうち entity の祖先にある点を、共通の媒介変数 t で
+    /// それぞれ一般の位置の直線の上に動かし、他の祖先の自由点は固定する。1点だけならその点についての次数、全部なら
+    /// 総次数(全ての座標を一度に変数とみなした次数)。entity が moving のどれにも依存しなければ 0。前提の曲線に乗る
+    /// 自由点は直線の上を勝手に動かせないので None(曲線に沿った媒介変数はまだ無い)。
+    pub fn measure_degree_moving(&self, entity: ClassId, moving: &[ClassId], max_d: usize) -> Option<usize> {
+        let ancestors = self.free_point_ancestors_of(&[entity]);
+        let movers: Vec<ClassId> = ancestors.iter().copied()
+            .filter(|&a| moving.iter().any(|&m| self.get_rep(m) == self.get_rep(a))).collect();
+        if movers.is_empty() { return Some(0); }
+        if movers.iter().any(|&m| self.has_extraneous_incidence(m)) { return None; }
+        let fixed: Vec<ClassId> = ancestors.iter().copied().filter(|a| !movers.contains(a)).collect();
+        let mut base_vars: FxHashMap<String, ModInt> = FxHashMap::default();
+        if !self.assign_free_point_coords_with(&fixed, &mut base_vars, RngSource::Degree) { return None; }
+        let lines: Vec<(String, (ModInt, ModInt, ModInt, ModInt))> =
+            movers.iter().map(|&m| (self.entities[m.0].name.clone(), self.random_mover_line())).collect();
+        let k = 2 * max_d + 2;
+        let mut t_vals = Vec::with_capacity(k);
+        let mut samples = Vec::with_capacity(k);
+        for i in 1..=k {
+            let t = ModInt::new(i as i64);
+            let mut vars = base_vars.clone();
+            for (name, (x0, y0, dx, dy)) in &lines {
+                vars.insert(format!("{}_x", name), *x0 + t * *dx);
+                vars.insert(format!("{}_y", name), *y0 + t * *dy);
+            }
+            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
+            samples.push(self.evaluate_node(entity, &vars, &mut cache)?);
+            t_vals.push(t);
+        }
+        Self::degree_of_homogeneous_samples(&t_vals, &samples, max_d)
+    }
+
+    /// 🌟 同次座標の時系列サンプルから次数を測る共通処理。比だけに意味があるので、基準の成分で他の全成分を
+    /// 割った値それぞれの次数の最大値を返す。成分数は問わない(点・直線の3、円の係数の4など)。基準は全ての
+    /// サンプルで0でない成分のうち最後のもの(無限遠点 (x,y,0) なら y か x)。そういう成分が無ければ None。
     fn degree_of_homogeneous_samples(t_vals: &[ModInt], samples: &[Vec<ModInt>], max_d: usize) -> Option<usize> {
         let n = samples.first()?.len();
-        if n < 2 { return None; }
-        let norm_idx = n - 1;
-        if samples.iter().any(|s| s.len() != n || s[norm_idx].0 == 0) { return None; }
+        if n < 2 || samples.iter().any(|s| s.len() != n) { return None; }
+        let norm_idx = (0..n).rev().find(|&i| samples.iter().all(|s| s[i].0 != 0))?;
         let mut max_deg = 0;
-        for i in 0..norm_idx {
+        for i in (0..n).filter(|&i| i != norm_idx) {
             let ratios: Vec<ModInt> = samples.iter().map(|s| s[i] / s[norm_idx]).collect();
             max_deg = max_deg.max(crate::mmp_math::get_numerical_degree(t_vals, &ratios, max_d));
         }

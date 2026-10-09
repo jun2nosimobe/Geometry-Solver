@@ -16,13 +16,13 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#94(仕事量の換算を実測に合わせる・壁時計の安全弁を直す・AR の円の規則を広げて円周角の定理の逆などを外す・AR と重なる定理を外す・合同閉包の重複をなくす・座標を置く順番の工夫・既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#95(AR を速く(出どころを DAG で・検出の候補を数値で)・仕事量の換算を実測に合わせる・壁時計の安全弁を直す・AR の円の規則を広げて円周角の定理の逆などを外す・AR と重なる定理を外す・合同閉包の重複をなくす・座標を置く順番の工夫・既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
     <div class="stat"><div class="n">41/44</div><div class="l">既定設定の掃引(仕事量予算なので何度流しても同じ。予算100万、1問7秒以内。予算を1/8にして一度 39 に減り、AR と重なる定理を外し座標を置く順番を工夫して 40 に戻り、仕事量の換算を実測に合わせて 41、#91〜#94)。数値で選ぶ補助作図で desargues(#80)、AR で pappus(#82)、AR の相似(対応する点を含む)で 2015 APMO・2018 CHN Western・centroid(#85)、AR のメネラウスで newton_gauss・pascal(#88)、AR の二辺夾角・三辺の相似で 2016 ARMO(#90)が解けた。検査を外した監査で偽のマージ0件、時刻つきの証明の監査で既定で解ける問題全てがギャップなし(#87・#90)</div></div>
     <div class="stat"><div class="n">22</div><div class="l">solve が既定で使う定理(基本15 + 長さ1 + 中心角1 + 射影5)。AR が回る問題では、AR と重なる射影5件・角4件・円2件・長さ7件を外して4件(<code>--ar-drop</code>、#92〜#94)。方冪と交わる弦の相似は AR が置き換える(<a class="secref" href="ledger.html#l85">#85</a>、<code>--chord-theorems</code> で戻す)。同じ向きのスパイラル相似・弦・平行四辺形は <code>--rules</code>。全27定理は <a class="secref" href="theorems.html">§07</a></div></div>
-    <div class="stat"><div class="n">1,000,000</div><div class="l">既定の予算(1問10秒前後、ユーザー方針)。秒ではなく dfs_match の呼び出し回数(約7.7µs)と AR の行演算(4回で1、約2.0µs×4)で測る。HAGeo は12並列で中央値11秒・最長16秒(<a class="secref" href="backlog.html#b49">b49</a>)</div></div>
+    <div class="stat"><div class="n">1,000,000</div><div class="l">既定の予算(1問10秒前後、ユーザー方針)。秒ではなく dfs_match の呼び出し回数(約8〜10µs)と AR の行演算(12回で1、約0.74µs×12、#95)で測る。HAGeo は12並列で中央値11.7秒・最長19秒(<a class="secref" href="backlog.html#b49">b49</a>)</div></div>
     <div class="stat"><div class="n">5〜28%</div><div class="l">証明が実際に要した仕事の割合(--traceで6問実測)</div></div>
     <div class="stat"><div class="n">3</div><div class="l">撤廃した専用EntityType(Direction/Circle/Angle)</div></div>
   </div>
@@ -34,7 +34,7 @@
 <details class="item" id="track-1" data-status="shipped">
   <summary><span class="idx">方針A</span><span class="t">射影幾何と、規則の側で保つ健全性</span><span class="pill shipped">座標を置ける問題では検査なしで偽0</span></summary>
   <div class="body">
-<div class="desc">原則: 「普通の図形の特殊ケース」には専用の <code>EntityType</code> を作らず、標準の型と基準の実体への接続で表す(方向 = 無限遠直線上の点、円 = 虚円点 I, J を通る二次曲線、有向角 = 無限遠直線上の複比)。健全性は規則の側で保つ: 定理に非退化条件を書き(<a class="secref" href="ledger.html#l78">#78</a>)、数値の検算を探索前に一度だけ置く固定座標にした(<a class="secref" href="ledger.html#l79">#79</a>)。座標を置ける問題では、マージ前の検査を外して監査しても偽のマージが0件(検査は安全網として残す)。代数的な追跡(AR)の等式も、定義の写像を数値で確かめ、図の上で同じ点の組を使わない(<a class="secref" href="ledger.html#l85">#85</a>)。<br>監査は時刻つき(各ステップの前提がそれより前に成り立っていたか・説明が循環していないか)で、解けている39問全てがギャップなし(<a class="secref" href="ledger.html#l87">#87</a>・<a class="secref" href="ledger.html#l88">#88</a>)。<b>残る穴:</b> 座標を置けない2問(8問中6問は検算専用の代数的な置き方で置けた、#87)では数値の検算も AR も効かない(<a class="secref" href="backlog.html#b46">b46</a>)。目標が共円・接続の8問も、目標到達時の検算と深い証明の監査を通す(<a class="secref" href="ledger.html#l86">#86</a>)。証明の各ステップの数値検算は未実施(<a class="secref" href="backlog.html#b44">b44</a>)。</div>
+<div class="desc">原則: 「普通の図形の特殊ケース」には専用の <code>EntityType</code> を作らず、標準の型と基準の実体への接続で表す(方向 = 無限遠直線上の点、円 = 虚円点 I, J を通る二次曲線、有向角 = 無限遠直線上の複比)。健全性は規則の側で保つ: 定理に非退化条件を書き(<a class="secref" href="ledger.html#l78">#78</a>)、数値の検算を探索前に一度だけ置く固定座標にした(<a class="secref" href="ledger.html#l79">#79</a>)。座標を置ける問題では、マージ前の検査を外して監査しても偽のマージが0件(検査は安全網として残す)。代数的な追跡(AR)の等式も、定義の写像を数値で確かめ、図の上で同じ点の組を使わない(<a class="secref" href="ledger.html#l85">#85</a>)。<br>監査は時刻つき(各ステップの前提がそれより前に成り立っていたか・説明が循環していないか)で、既定で解ける40問全てがギャップなし(<a class="secref" href="ledger.html#l87">#87</a>・<a class="secref" href="ledger.html#l88">#88</a>)。<b>残る穴:</b> 44問で座標を置けない問題は0になった(検算専用の代数的な置き方 #87 と、置く順番の工夫・軌跡 #92)。ただしノイズを足すと置けない問題があり、そこでは数値の検算も AR も効かない。目標が共円・接続の8問も、目標到達時の検算と深い証明の監査を通す(<a class="secref" href="ledger.html#l86">#86</a>)。証明の各ステップの数値検算は未実施(<a class="secref" href="backlog.html#b44">b44</a>)。</div>
   </div>
 </details>
 <details class="item" id="track-2" data-status="shipped">
@@ -50,13 +50,13 @@
   </div>
 </details>
 <details class="item" id="track-4" data-status="shipped">
-  <summary><span class="idx">方針D</span><span class="t">定理を増やさず、AR の等式に置き換える</span><span class="pill shipped">方冪・交わる弦の相似を置き換えた</span></summary>
+  <summary><span class="idx">方針D</span><span class="t">定理を増やさず、AR の等式に置き換える</span><span class="pill shipped">22件中18件を AR が回る問題で外した</span></summary>
   <div class="body">
-<div class="desc">定理を増やすと無関係な問題にも試行の仕事量が乗り、問題名で定理を入れる opt-in は使わない。代わりに、定理が言っていることを<b>形式的な対数の線形な等式</b>として AR に入れる: 有向角・点と線束の複比(<a class="secref" href="ledger.html#l82">#82</a>)、円・透視射影・シュタイナー(<a class="secref" href="ledger.html#l83">#83</a>)、比と平行(<a class="secref" href="ledger.html#l84">#84</a>)、メネラウスとチェバ(<a class="secref" href="ledger.html#l88">#88</a>)、等方線束での長さの比と相似・相似で対応する点(<a class="secref" href="ledger.html#l85">#85</a>)。AR が有効なら「共点二弦の相似」と「交わる弦の相似」を既定で外し、幾何平均 −11.9%・+3問。<br><b>まだ外せない:</b> 円・射影の定理と角の足し算の規則(座標を置けない問題では AR が働かない、定理が角・複比の実体を作る働きを置き換えられない)。長さは足し算を扱わず比のまま入れる方針(ユーザー)。</div>
+<div class="desc">定理を増やすと無関係な問題にも試行の仕事量が乗り、問題名で定理を入れる opt-in は使わない。代わりに、定理が言っていることを<b>形式的な対数の線形な等式</b>として AR に入れる: 有向角・点と線束の複比(<a class="secref" href="ledger.html#l82">#82</a>)、円・透視射影・シュタイナー(<a class="secref" href="ledger.html#l83">#83</a>)、比と平行(<a class="secref" href="ledger.html#l84">#84</a>)、メネラウスとチェバ(<a class="secref" href="ledger.html#l88">#88</a>)、等方線束での長さの比と相似・相似で対応する点(<a class="secref" href="ledger.html#l85">#85</a>)。AR が有効なら「共点二弦の相似」と「交わる弦の相似」を既定で外し、幾何平均 −11.9%・+3問。<br><b>その後(#92〜#94): 射影・角の足し算・同位角・円周角の逆・接弦・垂直二等分線の逆・二等辺三角形の底角とその逆・中点連結(長さ)・斜辺の中線を、AR が回る問題に限って外した(<code>--ar-drop</code>)。そのために AR に直線の無い弦・図に無い円の円周角の逆(円を作り、言えなければ直線を引く)を入れた。<b>まだ外せない:</b> 円周角の定理・中心角・垂直二等分線・中点連結(照合の途中で角や長さの実体を作り、他の定理がそれを使う。外すと1〜4問落ちる)。長さは足し算を扱わず比のまま入れる方針(ユーザー)。</div>
   </div>
 </details>
 <details class="item" id="track-5" data-status="open">
-  <summary><span class="idx">方針E</span><span class="t">無駄な作図のノイズを足しても解ける頑健性</span><span class="pill open">ノイズ5で34・10で34・20で33</span></summary>
+  <summary><span class="idx">方針E</span><span class="t">無駄な作図のノイズを足しても解ける頑健性</span><span class="pill open">ノイズ5で40・10で38・20で40</span></summary>
   <div class="body">
 <div class="desc">ユーザー方針(2026-09-17): 問題の初期作図に証明と無関係な作図を足しても解ける頑健性を目指す。改善は「余計な実体があっても探索のコストと結果が変わらない」方向を優先し、特定の問題の作図の並びに合わせた調整は採らない。<code>--noise=N</code> で測る(<a class="secref" href="ledger.html#l50">#50</a>)。<br><b>今の弱さ:</b> ノイズを足すと全探索の回数が増える(<a class="secref" href="backlog.html#b29">b29</a>)。AR の併合で手詰まりの時期がずれると道筋が変わり、bench_2012egmop1 はノイズ5で12倍重い(ノイズ20では逆に軽い)。</div>
   </div>

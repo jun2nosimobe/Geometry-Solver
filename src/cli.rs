@@ -35,6 +35,8 @@ pub enum Mode {
     Sweep,
     /// 作図インターフェース (`geom_solver serve`)
     Serve,
+    /// 動点法の次数の表 (`geom_solver degree`)
+    Degree,
 }
 
 impl Mode {
@@ -45,12 +47,13 @@ impl Mode {
             Mode::Degenerate => "退化させて関連を調べる: geom_solver discover-degenerate <問題名> [オプション]",
             Mode::Sweep => "パラメータを振って比べる: geom_solver sweep [オプション]",
             Mode::Serve => "ブラウザで作図する: geom_solver serve [オプション]",
+            Mode::Degree => "動点法の次数を表にする: geom_solver degree <問題名> [オプション]",
         }
     }
 }
 
 use Arg::{None as Switch, Value};
-use Mode::{Degenerate, Discover, Serve, Solve, Sweep};
+use Mode::{Degenerate, Degree, Discover, Serve, Solve, Sweep};
 
 /// 探索の既定の予算(dfs_match の呼び出し回数)。
 /// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
@@ -211,6 +214,12 @@ pub const OPTIONS: &[Opt] = &[
           help: "乱数シード" },
     Opt { name: "--min-hits", arg: Value("回"), default: "2", mode: Degenerate,
           help: "何回の独立な乱数で一致したら報告するか" },
+    Opt { name: "--movers", arg: Value("A,B,…"), default: "前提の無い自由点全部", mode: Degree,
+          help: "動かす自由点(名前)。表は点ごとの次数と、全部を同時に動かしたときの次数" },
+    Opt { name: "--max-d", arg: Value("次数"), default: "8", mode: Degree,
+          help: "測る次数の上限(標本は 2×上限+2 個)" },
+    Opt { name: "--only", arg: Value("名前,…"), default: "全ての点・直線・二次曲線", mode: Degree,
+          help: "表に出す実体(名前)" },
 
     // ---- パラメータ掃引 ----
     Opt { name: "--problems", arg: Value("名前,..|all|bench"), default: "all", mode: Sweep,
@@ -240,6 +249,7 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[
     ("<問題名>", "その問題の証明を試みる(名前は list で確認できます)"),
     ("discover", "自由作図で未知の関係を探す"),
     ("discover-degenerate", "図形を退化させて関連の深い図形の組を探す"),
+    ("degree", "動点法の次数を、自由点ごとと全部同時に動かしたときで表にする"),
     ("serve", "ブラウザで作図して定理を発見する(GeoGebra風の画面)"),
     ("sweep", "オプションを振って解けた数と時間を比べる"),
     ("diagnose", "証明の筋書きに沿って、解けない問題がどの手順で詰まるかを調べる"),
@@ -278,7 +288,7 @@ pub fn print_help() {
     for (name, help) in SUBCOMMANDS {
         println!("  {} {}", pad(name, 22), help);
     }
-    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep, Mode::Serve] {
+    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep, Mode::Serve, Mode::Degree] {
         println!("\n{}", mode.title());
         for o in OPTIONS.iter().filter(|o| o.mode == mode) {
             let shown = match o.arg {

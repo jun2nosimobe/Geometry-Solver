@@ -15,7 +15,7 @@
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="frozen" aria-pressed="false">凍結・古い</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="group"><div class="group-title">① 優先 · 上から順に着手する · 8件</div>
 <details class="item" id="b45" data-status="open">
-  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 鏡映・中心の分かった円・二辺夾角・長さからの接続まで入った。次は AR と重なる定理を外す測り直し</span></summary>
+  <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 重なる定理は22件中18件を外した(#92〜#94)。残りは円周角の定理・中心角・垂直二等分線・中点連結</span></summary>
   <div class="body">
 <div class="desc">今の AR(<a class="secref" href="ledger.html#l82">#82</a>・<a class="secref" href="ledger.html#l83">#83</a>・<a class="secref" href="ledger.html#l84">#84</a>・<a class="secref" href="ledger.html#l85">#85</a>・<a class="secref" href="ledger.html#l88">#88</a>・<a class="secref" href="ledger.html#l89">#89</a>・<a class="secref" href="ledger.html#l90">#90</a>・<a class="secref" href="ledger.html#l91">#91</a>、規則の一覧は <a class="secref" href="theorems.html#ar">§07</a>、22件): 2点の差の形式的な対数と J・I の線束の記号を整数の格子(ℤⁿ ⊕ ℤ/4)で閉じる。有向角・複比・比と平行・射影(有限と無限遠の中心を1本に)・円・長さ・相似(AA・二辺夾角・三辺)と対応する点・メネラウスとチェバ(無限遠点を含む)・鏡映(接線の長さを含む)・中心の分かった円・長さからの接続(垂直二等分線の逆・円の上)・二次曲線の規則の統合(円もシュタイナーの形)とシュタイナーの逆。最初の総当たりの前に1回回す。既定(予算 100 万)39/44。</div>
     <div class="evidence"><b>済み(2026-09-30):</b> 鏡映・中心の分かった円・射影の統合(#89)、メネラウス・チェバの無限遠点・二辺夾角と三辺・長さからの接続(#90)、二次曲線の規則の統合・シュタイナーの逆・平行な2直線の「交点」の健全性の修正・列の順番などで速く(#91)。<br>
@@ -32,7 +32,7 @@
 <div class="desc">ユーザー方針(2026-09-30): 1問あたり10秒前後で探索を切り上げる。既定の予算を 800万 → 100万にした(<a class="secref" href="ledger.html#l91">#91</a>)。
 44問は1問7秒以内(12並列で全体8秒)。HAGeo は12並列で中央値8秒・最大20秒だった(#92 の後は中央値6.4秒・最長11.9秒)。仕事量1あたりの時間が、軽い問題の dfs_match で約5µs、
 大きい図(HAGeo 2020RMMSLG3)で約60µs、AR の行演算で 1.5〜4µs と開いている(AR は #91 で速くなったので、今は2回で1と数えるのが時間より重い)。</div>
-    <div class="evidence"><b>済み(<a class="secref" href="ledger.html#l92">#92</a>):</b> 大きい図で遅かったのは dfs_match ではなく、仕事量に数えないタスクの合間の合同閉包だった(XinXingV28p2 で時間の68%)。円周点 I・J や方向の点が変わるたびに全ての円・無限遠直線を調べ直していたのを飛ばし、何も併合しなかった判定は世代が動くまで繰り返さない。<code>--profile</code> に照合・合同閉包(種類別)・結論の適用などの内訳を足した。<br><b>次の一手:</b> (2) 済み(<a class="secref" href="ledger.html#l94">#94</a>): AR の行演算を4回で仕事量1(実測で dfs_match 1回 7.7µs、行演算1回 2.0µs)。壁時計の安全弁がタスクの途中でも効くようにした。残り: 予算100万で HAGeo は12並列で中央値11秒・最長16秒なので、「1問10秒」に合わせるなら予算を 70〜80万に下げるかを決める。
+    <div class="evidence"><b>済み(<a class="secref" href="ledger.html#l92">#92</a>):</b> 大きい図で遅かったのは dfs_match ではなく、仕事量に数えないタスクの合間の合同閉包だった(XinXingV28p2 で時間の68%)。円周点 I・J や方向の点が変わるたびに全ての円・無限遠直線を調べ直していたのを飛ばし、何も併合しなかった判定は世代が動くまで繰り返さない。<code>--profile</code> に照合・合同閉包(種類別)・結論の適用などの内訳を足した。<br><b>次の一手:</b> (2) 済み(<a class="secref" href="ledger.html#l94">#94</a>): AR の行演算を4回で仕事量1(実測で dfs_match 1回 7.7µs、行演算1回 2.0µs)。壁時計の安全弁がタスクの途中でも効くようにした。(<a class="secref" href="ledger.html#l95">#95</a>) AR を速くし(行演算1回 2.0 → 0.74µs)、換算を12回で1にした。残り: 予算100万で HAGeo は12並列で中央値11.7秒・最長19秒(65/172)なので、「1問10秒」に合わせるなら予算を 70〜80万に下げるかを決める。
 (3) AR の行演算の換算(今は2回で1)を測り直す。<br>
 <b>予算を 200 万にした場合:</b> 44問は同じ 39、HAGeo 29 → 39 だが1問16秒前後(12並列)。</div>
     <div class="b-tags"><span class="tag">ユーザー方針</span><span class="tag">仕事量</span><span class="tag">dfs_match</span></div>
@@ -56,7 +56,7 @@
   </div>
 </details>
 <details class="item" id="b8" data-status="open">
-  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは4問(2026-10-01、予算100万)。既定は 32/44 → 34 → 37 → 39 → 40 → <b>40/44</b>(予算を1/8にして)</span></summary>
+  <summary><span class="idx"></span><span class="t">未解決の問題はどこで止まっているか ― 既定で残るのは3問(2026-10-01、予算100万、どれも予算切れ)。既定は 32/44 → 34 → 37 → 39 → 40 → 40(予算を1/8に)→ <b>41/44</b></span></summary>
   <div class="body">
 <div class="desc"><a class="secref" href="ledger.html#l67">#67</a> で未解決12問を型に分けた。その後に解けたもの: bench_2005usamop3(#69)、bench_2011balkanmop1(#74・#85)、desargues(#80)、pappus(#82)、centroid・bench_2015apmop1・bench_2018chnwesternmop5(#85)、newton_gauss・pascal(#88)、bench_2016armog10p2(AR の二辺夾角・三辺の相似、#90)。bench_2000usatstp2 は extras 設定で解ける(#90)。</div>
     <div class="evidence"><table style="border-collapse:collapse;font-size:13px;margin:6px 0"><tr><th style="text-align:left;padding:3px 10px 3px 0">問題</th><th style="text-align:left;padding:3px 10px 3px 0">止まり方</th><th style="text-align:left;padding:3px 10px 3px 0">型</th><th style="text-align:left;padding:3px 10px 3px 0">詰まり所と、いま分かっていること</th></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2000usatstp2</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則</td><td style="padding:3px 10px 3px 0;vertical-align:top">既定外の extras(長さの定理・中心角・中点の需要)では仕事量23.6万で解ける(#90)。既定の定理集合と AR だけでは届かない ― 人の証明の補助点(AP・DP の中点)が要る。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2012chnwesternmop5</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+補助点</td><td style="padding:3px 10px 3px 0;vertical-align:top">人の証明は補助点 K(AH の中点)と九点円の中心の性質。中心の分かった円を入れても届かない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">bench_2008armog10p6</td><td style="padding:3px 10px 3px 0;vertical-align:top">予算切れ</td><td style="padding:3px 10px 3px 0;vertical-align:top">A 規則+筋書きの隙間</td><td style="padding:3px 10px 3px 0;vertical-align:top">手順4・5。全手順を前提にしても目標が出ない。</td></tr><tr><td style="padding:3px 10px 3px 0;vertical-align:top">test_spiral_similarity</td><td style="padding:3px 10px 3px 0;vertical-align:top">—</td><td style="padding:3px 10px 3px 0;vertical-align:top">前提付き</td><td style="padding:3px 10px 3px 0;vertical-align:top">#92 で座標を置けるようになり、AR で解けた(<a class="secref" href="#b46">b46</a>)。</td></tr></table><b>ノイズ下:</b> ノイズ10・20では newton_gauss・pappus・pascal が落ちる(方針E)。作図の刈り込みの実験版(<a class="secref" href="#b48">b48</a>)で pappus が解ける。</div>
@@ -88,7 +88,7 @@
   </div>
 </details>
 </div>
-<div class="group"><div class="group-title">② 未着手 · その他 · 11件</div>
+<div class="group"><div class="group-title">② 未着手 · その他 · 10件</div>
 <details class="item" id="b35" data-status="done">
   <summary><span class="idx"></span><span class="t">基本規則の不足 ― 残っていた二辺夾角とメネラウスの逆は AR に入った(#88・#90)</span></summary>
   <div class="body">
@@ -126,14 +126,6 @@
 <div class="desc">今: 行き詰まり2回ごとに、需要作図より先に候補capを広げる(<code>--widen-every=2</code>、<a class="secref" href="ledger.html#l51">#51</a>、<code>RecoveryOptions::standard()</code>)。</div>
     <div class="evidence"><b>残り:</b> 広げる対象を全体ではなく「切り捨てが実際に起きた型・定理」に絞る。同じ種類の需要作図を何度も繰り返さない上限を設ける。きれいな図で仕事量を増やさずに、ノイズ下で図が膨らむ前に広げられるか。</div>
     <div class="b-tags"><span class="tag">方針E</span></div>
-  </div>
-</details>
-<details class="item" id="b26" data-status="open">
-  <summary><span class="idx"></span><span class="t">仕事量に数えない数値チェックの時間 ― 固定座標で形が変わった。測り直す</span></summary>
-  <div class="body">
-<div class="desc">以前(2026-09-17)、作図画面で実体が数百個の円の図を証明すると、1回の run_step が46秒かかった(時間の大半が二次曲線の一意性の伝播の数値チェック。キャッシュで6秒)。</div>
-    <div class="evidence">今は、各実体の値を探索前に一度だけ計算する固定座標(<a class="secref" href="ledger.html#l79">#79</a>)で、検算は値の比較になった。作図画面の証明も固定座標を使う(<a class="secref" href="ledger.html#l86">#86</a>)。同じ図で測り直し、解消していれば閉じる。</div>
-    <div class="b-tags"><span class="tag">要再測定</span></div>
   </div>
 </details>
 <details class="item" id="b25" data-status="open">
@@ -269,7 +261,15 @@
   </div>
 </details>
 </div>
-<div class="group"><div class="group-title">④ 解決・反証・不発 · 17件</div>
+<div class="group"><div class="group-title">④ 解決・反証・不発 · 18件</div>
+<details class="item" id="b26" data-status="done">
+  <summary><span class="idx"></span><span class="t">仕事量に数えない数値チェックの時間 ― 測り直した(#94): 仕事量に数えない時間は全体の約1%</span></summary>
+  <div class="body">
+<div class="desc">以前(2026-09-17)、作図画面で実体が数百個の円の図を証明すると、1回の run_step が46秒かかった(時間の大半が二次曲線の一意性の伝播の数値チェック。キャッシュで6秒)。</div>
+    <div class="evidence"><b>済み(<a class="secref" href="ledger.html#l94">#94</a>):</b> 44問と HAGeo の216問で、dfs_match(合同閉包・結論の適用を含む)59%・AR 39%・その他(数値の検算・補助作図など)約1%。仕事量に数えない時間で予算と壁時計がずれることは、もう無い(大きかった合同閉包の重複は #92 で消した)。</div>
+    <div class="b-tags"><span class="tag">要再測定</span></div>
+  </div>
+</details>
 <details class="item" id="b46" data-status="done">
   <summary><span class="idx"></span><span class="t">有限体で根を取り、座標を置けない問題を検算の対象にする ― 置く順番の工夫と軌跡で、8問全てを置けた(#87・#92)</span></summary>
   <div class="body">

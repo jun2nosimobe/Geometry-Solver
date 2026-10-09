@@ -15,6 +15,21 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l95" data-status="shipped">
+  <summary><span class="idx">#95</span><span class="t">AR を速くする(出どころを DAG で持つ・検出の候補を数値で絞る・行を配列で持つ)。行演算1回 2.0 → 0.74µs、換算を12回で1に ― 既定 41/44 のまま、HAGeo 60 → 65/172</span><span class="pill">既定</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="backlog.html#b45">§05 b45</a>・<a class="secref" href="backlog.html#b49">b49</a>。ユーザー指示「AR 自体をこれ以上高速にできるか」→「1,2,3を進める」。<br>
+<b>どこが遅かったか:</b> 時間の 39% が AR(44問と HAGeo の216問)。段ごとには相似 40〜50%・検出 25〜30%・土台の等式の投入 15〜20%。重い3問で格子を見ると、行は平均 6〜8 項と短いのに、行の出どころ(等式の番号の集合)が平均 136〜464 個(最大 1,449 個)あり、行演算のたびにその和集合を作り直し、行を出どころごと複製していた。<br>
+<b>(1) 出どころを合併の DAG で持つ:</b> 行演算では合わせた2つの出どころだけを記録し、等式の番号に展開するのは併合・接続の前提を作るときだけ。展開した集合は前と同じで、出力(推論の記録・証明)は変わらない(6問で全文一致を確かめた)。<br>
+<b>(2) 検出の候補を数値で絞る:</b> 方向どうしの一致と平行(切片の比)の検出は全ての組で剰余を求めていた。固定座標で同じ方向・平行に見える組だけを試す(数値は候補の選別だけで、一致は格子で示す)。2017 European MCup で方向の段 0.23 → 0.05秒、平行の段 0.17 → 0.10秒。<br>
+<b>(3) 行を BTreeMap から並べた配列にする:</b> 出力は変わらず、AR がさらに約2割速い。<br>
+<b>結果の速さ:</b> 行演算1回 2.02 → 0.74µs、時間に占める AR 39% → 22%。単独で流して 2017 European MCup の AR 4.8 → 1.8秒、2000 USA TST P2 3.0 → 0.8秒(相似の段は 4〜5倍)。<br>
+<b>仕事量の換算:</b> dfs_match 1回が 8〜10µs なので、行演算 12 回で仕事量1にした(#94 は4回)。同じ予算で AR を3倍回せる。</div>
+    <div class="evidence"><b>結果</b>(<code>r96</code>、基準 r95 = #94 との比較、予算100万):<table style="margin:6px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">設定</th><th style="text-align:left;padding:2px 12px 2px 0">解けた数</th><th style="text-align:left;padding:2px 12px 2px 0">両方で解けた問題の仕事量(新しい換算)</th></tr><tr><td style="padding:2px 12px 2px 0">default</td><td style="padding:2px 12px 2px 0">41(±0)</td><td style="padding:2px 12px 2px 0">−48.8%</td></tr><tr><td style="padding:2px 12px 2px 0">extras</td><td style="padding:2px 12px 2px 0">43(±0)</td><td style="padding:2px 12px 2px 0">−39.0%</td></tr><tr><td style="padding:2px 12px 2px 0">skip</td><td style="padding:2px 12px 2px 0">41(±0)</td><td style="padding:2px 12px 2px 0">−48.8%</td></tr><tr><td style="padding:2px 12px 2px 0">noise5</td><td style="padding:2px 12px 2px 0">40(±0)</td><td style="padding:2px 12px 2px 0">−23.3%</td></tr><tr><td style="padding:2px 12px 2px 0">noise10</td><td style="padding:2px 12px 2px 0">38(±0)</td><td style="padding:2px 12px 2px 0">−39.4%</td></tr><tr><td style="padding:2px 12px 2px 0">noise20</td><td style="padding:2px 12px 2px 0">40(±0)</td><td style="padding:2px 12px 2px 0">−28.7%</td></tr></table>解けた問題の増減なし(仕事量が減ったのは主に換算の変更による)。
+HAGeo の広い集合: 60 → 65/172(+2007 CHN South East P2・2012 EGMO P7・2013 CHN Western P3・2017 ARMO g10 P2・2020 POGCHAMP P1、落ちた問題なし)。12並列で1問 中央値 11.0 → 11.7秒・最長 16.3 → 19.3秒(同じ予算で AR を多く回すため)。両方で解けた60問の時間の合計は 0.72倍。<br>
+<b>健全性:</b> 検査を外した監査(予算800万)で HAGeo 172問・44問とも偽のマージ0件(このとき HAGeo 80/172(#94 は 77)、44問 41/44)。時刻つきの証明の監査で既定で解ける41問全てがギャップ・循環なし。</div>
+  </div>
+</details>
 <details class="item" id="l94" data-status="shipped">
   <summary><span class="idx">#94</span><span class="t">仕事量の換算を実測に合わせる(AR の行演算4回で1)。壁時計の安全弁がタスクの途中で効かなかったのを直す。斜辺の中線3件と二等辺三角形の底角の逆も AR が回る問題で外す ― 既定 41/44、HAGeo 60/172</span><span class="pill">既定</span></summary>
   <div class="body">

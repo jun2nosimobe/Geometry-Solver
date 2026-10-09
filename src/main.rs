@@ -57,6 +57,7 @@ mod discover_viz;
 mod padic;
 mod padic_eval;
 mod discover_degenerate;
+mod degree;
 mod trace;
 mod sketch;
 mod hageo;
@@ -128,6 +129,7 @@ fn main() {
         "extract-proof" => run_extract_proof(&args),
         "discover" => discover::run(&args),
         "discover-degenerate" => discover_degenerate::run(&args),
+        "degree" => degree::run(&args),
         problem_name => match solve::SolveOptions::parse(&args) {
             Ok(opts) => { solve::run(problem_name, &opts); }
             Err(e) => println!("⚠️ {}", e),

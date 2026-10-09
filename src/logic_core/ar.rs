@@ -16,7 +16,6 @@
 //! (重なった2点の差)を含む定義も使わない(非退化条件)。
 
 use std::collections::BTreeMap;
-use std::ops::Bound::{Excluded, Unbounded};
 
 use rustc_hash::FxHashMap;
 
@@ -25,7 +24,7 @@ use crate::mmp_core::{ClassId, Definition, EGraph, EntityOrigin, EntityType, Jus
 use crate::mmp_math::ModInt;
 
 /// 行演算を仕事量に数えるときの割り算(ar_round のコメント参照)。
-const AR_OPS_PER_WORK: u64 = 4;
+const AR_OPS_PER_WORK: u64 = 12;
 /// 1回の追跡で相似・対応する点に使う行演算の上限(超えたらそこで足すのをやめる。決定的)。図が大きいと行が長くなり、
 /// 相似の組の等式を入れるだけで1回に数十秒かかった(hageo:2020RMMSLG3 で 600万回・40秒)。
 const AR_ROUND_OPS_CAP: u64 = 400_000;
@@ -33,22 +32,80 @@ const AR_ROUND_OPS_CAP: u64 = 400_000;
 /// ねじれの座標(4倍すると0)。列の中で最後に来るよう最大値にする。
 const T: u32 = u32::MAX;
 
-type SVec = BTreeMap<u32, i64>;
+/// 記号の整数係数の式(記号の番号の昇順、係数 0 は持たない)。行は平均7項ほどと短いので、並べた配列で持つ。
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
+struct SVec(Vec<(u32, i64)>);
+
+impl SVec {
+    fn new() -> Self { SVec(Vec::new()) }
+    fn is_empty(&self) -> bool { self.0.is_empty() }
+    fn iter(&self) -> impl Iterator<Item = (&u32, &i64)> + '_ { self.0.iter().map(|(c, x)| (c, x)) }
+    fn keys(&self) -> impl Iterator<Item = &u32> + '_ { self.0.iter().map(|(c, _)| c) }
+    fn get(&self, c: &u32) -> Option<&i64> { self.0.binary_search_by_key(c, |e| e.0).ok().map(|i| &self.0[i].1) }
+    /// 番号が after より大きい最初の項。
+    fn next_after(&self, after: Option<u32>) -> Option<(u32, i64)> {
+        let i = match after { None => 0, Some(a) => self.0.partition_point(|e| e.0 <= a) };
+        self.0.get(i).copied()
+    }
+}
+
+impl std::ops::Index<&u32> for SVec {
+    type Output = i64;
+    fn index(&self, c: &u32) -> &i64 { self.get(c).expect("SVec: no such key") }
+}
+
+impl FromIterator<(u32, i64)> for SVec {
+    fn from_iter<I: IntoIterator<Item = (u32, i64)>>(it: I) -> Self {
+        let mut v: Vec<(u32, i64)> = it.into_iter().collect();
+        v.sort_by_key(|e| e.0);
+        // 同じ番号は後のものを残す(BTreeMap と同じ)。
+        let mut out: Vec<(u32, i64)> = Vec::with_capacity(v.len());
+        for e in v { match out.last_mut() { Some(l) if l.0 == e.0 => *l = e, _ => out.push(e) } }
+        out.retain(|e| e.1 != 0);
+        SVec(out)
+    }
+}
+
+impl<const N: usize> From<[(u32, i64); N]> for SVec {
+    fn from(a: [(u32, i64); N]) -> Self { a.into_iter().collect() }
+}
+
+impl IntoIterator for SVec {
+    type Item = (u32, i64);
+    type IntoIter = std::vec::IntoIter<(u32, i64)>;
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+
+impl<'a> IntoIterator for &'a SVec {
+    type Item = (&'a u32, &'a i64);
+    type IntoIter = std::iter::Map<std::slice::Iter<'a, (u32, i64)>, fn(&'a (u32, i64)) -> (&'a u32, &'a i64)>;
+    fn into_iter(self) -> Self::IntoIter { self.0.iter().map(|(c, x)| (c, x)) }
+}
 
 fn add_scaled(v: &mut SVec, r: &SVec, k: i64) -> Option<()> {
-    if k == 0 { return Some(()); }
-    for (&c, &x) in r {
-        let e = v.entry(c).or_insert(0);
-        *e = e.checked_add(x.checked_mul(k)?)?;
-        if *e == 0 { v.remove(&c); }
+    if k == 0 || r.0.is_empty() { return Some(()); }
+    let (a, b) = (&v.0, &r.0);
+    let mut out: Vec<(u32, i64)> = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if j == b.len() || (i < a.len() && a[i].0 < b[j].0) { out.push(a[i]); i += 1; continue; }
+        let y = b[j].1.checked_mul(k)?;
+        if i < a.len() && a[i].0 == b[j].0 {
+            let z = a[i].1.checked_add(y)?;
+            if z != 0 { out.push((a[i].0, z)); }
+            i += 1;
+        } else {
+            out.push((b[j].0, y));
+        }
+        j += 1;
     }
+    v.0 = out;
     Some(())
 }
 
 fn scaled(v: &SVec, k: i64) -> Option<SVec> {
-    let mut out = SVec::new();
-    for (&c, &x) in v { let y = x.checked_mul(k)?; if y != 0 { out.insert(c, y); } }
-    Some(out)
+    if k == 0 { return Some(SVec::new()); }
+    Some(SVec(v.0.iter().map(|&(c, x)| x.checked_mul(k).map(|y| (c, y))).collect::<Option<Vec<_>>>()?))
 }
 
 fn union(a: &[u32], b: &[u32]) -> Vec<u32> {
@@ -80,61 +137,89 @@ fn egcd(a: i64, b: i64) -> (i64, i64, i64) {
     if r0 < 0 { (-r0, -s0, -t0) } else { (r0, s0, t0) }
 }
 
+/// 出どころの番号: JOIN より下は等式の番号そのもの(葉)、JOIN から上は2つの出どころの合併(joins の添字)。
+const JOIN: u32 = 1 << 31;
+/// 出どころ無し(ねじれの行 4T = 0)。
+const NO_SRC: u32 = u32::MAX;
+
 /// 整数の格子(行はエルミート標準形の階段、主成分は正)。各行は、どの等式から作ったか(出どころ)を持つ。
+/// 出どころは合併の DAG で持ち、等式の番号の集合に展開するのは証明の前提を作るときだけ(leaves)。行演算のたびに
+/// 集合の和を作ると、出どころが数百個に太った行で行演算1回が数µs かかった(来歴 #95)。
 #[derive(Default, Clone)]
 struct Lattice {
-    rows: BTreeMap<u32, (SVec, Vec<u32>)>,
+    rows: BTreeMap<u32, (SVec, u32)>,
+    joins: Vec<(u32, u32)>,
     /// 行の組み合わせの回数(仕事量に数える)。
     ops: u64,
 }
 
 impl Lattice {
-    fn insert(&mut self, mut v: SVec, mut src: Vec<u32>) -> Option<()> {
+    fn join(&mut self, a: u32, b: u32) -> u32 {
+        if a == NO_SRC || a == b { return b; }
+        if b == NO_SRC { return a; }
+        self.joins.push((a, b));
+        JOIN + (self.joins.len() - 1) as u32
+    }
+
+    /// 出どころの番号の並びを、等式の番号の集合(昇順)に展開する。
+    fn leaves(&self, src: &[u32]) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut seen: rustc_hash::FxHashSet<u32> = Default::default();
+        let mut stack: Vec<u32> = src.to_vec();
+        while let Some(x) = stack.pop() {
+            if x == NO_SRC || !seen.insert(x) { continue; }
+            if x < JOIN { out.push(x); } else { let (a, b) = self.joins[(x - JOIN) as usize]; stack.push(a); stack.push(b); }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn insert(&mut self, mut v: SVec, src: Vec<u32>) -> Option<()> {
+        let mut src = src.into_iter().fold(NO_SRC, |a, b| self.join(a, b));
         loop {
             let Some((&c, &b)) = v.iter().next() else { return Some(()) };
-            let Some((row, rsrc)) = self.rows.get(&c).cloned() else {
+            let Some((row, rsrc)) = self.rows.get(&c) else {
                 if b < 0 { v = scaled(&v, -1)?; }
                 self.rows.insert(c, (v, src));
                 return Some(());
             };
+            let (a, rsrc) = (row[&c], *rsrc);
             self.ops += 1;
-            let a = row[&c];
             if b % a == 0 {
-                add_scaled(&mut v, &row, -(b / a))?;
-                src = union(&src, &rsrc);
+                add_scaled(&mut v, row, -(b / a))?;
+                src = self.join(src, rsrc);
             } else {
                 let (g, x, y) = egcd(a, b);
-                let mut new_row = scaled(&row, x)?;
+                let mut new_row = scaled(row, x)?;
                 add_scaled(&mut new_row, &v, y)?;
                 let mut rest = scaled(&v, a / g)?;
-                add_scaled(&mut rest, &row, -(b / g))?;
-                let both = union(&src, &rsrc);
-                self.rows.insert(c, (new_row, both.clone()));
+                add_scaled(&mut rest, row, -(b / g))?;
+                let both = self.join(src, rsrc);
+                self.rows.insert(c, (new_row, both));
                 v = rest;
                 src = both;
             }
         }
     }
 
-    /// 正準な剰余(主成分の列を 0 ≤ v[c] < 主成分 に揃える)と、使った行の出どころ。
+    /// 正準な剰余(主成分の列を 0 ≤ v[c] < 主成分 に揃える)と、使った行の出どころ(番号の並び。展開は leaves)。
     fn reduce(&mut self, v: &SVec) -> Option<(SVec, Vec<u32>)> {
         let mut v = v.clone();
         let mut src: Vec<u32> = Vec::new();
         let mut from: Option<u32> = None;
-        loop {
-            let next = match from { None => v.iter().next(), Some(c) => v.range((Excluded(c), Unbounded)).next() }
-                .map(|(&c, &x)| (c, x));
-            let Some((c, x)) = next else { break };
+        while let Some((c, x)) = v.next_after(from) {
             if let Some((row, rsrc)) = self.rows.get(&c) {
                 let q = x.div_euclid(row[&c]);
                 if q != 0 {
                     self.ops += 1;
                     add_scaled(&mut v, row, -q)?;
-                    src = union(&src, rsrc);
+                    if *rsrc != NO_SRC { src.push(*rsrc); }
                 }
             }
             from = Some(c);
         }
+        src.sort_unstable();
+        src.dedup();
         Some((v, src))
     }
 
@@ -552,8 +637,8 @@ impl BlackboardEngine {
         // 記号の番号をそろえる(前回の状態を使い回すとき、今回の式を同じ番号で読む)。
         if let Some(c) = self.ar_cache.as_ref().filter(|c| c.fingerprint == fp) { st.atoms = c.after_rules.atoms.clone(); }
         let merged = self.ar_round_with(&mut st, fp);
-        // 行演算4回で仕事量1と数える: 44問と HAGeo の実測で、dfs_match 1回(合同閉包・結論の適用を含む)が約 7.7µs、
-        // 行演算1回が約 2.0µs(来歴 #94。#91 では行が長く 2回で1、それ以前は 16回で1)。
+        // 行演算12回で仕事量1と数える: 44問と HAGeo の実測で、dfs_match 1回(合同閉包・結論の適用を含む)が約 8〜10µs、
+        // 行演算1回が約 0.74µs(来歴 #95。#94 では出どころの和集合が重く 4回で1)。
         self.prover.egraph.spiral_prop_work += st.lattice.ops / AR_OPS_PER_WORK;
         self.ar_ops += st.lattice.ops;
         self.ar_rounds += 1;
@@ -722,6 +807,9 @@ impl BlackboardEngine {
         }
         // 剰余が同じ同値類を探す。ここから先は格子を変えないので、記号ごとの剰余を使い回す。
         let mut rc: FxHashMap<u32, SVec> = FxHashMap::default();
+        // 検出の段ごとの時間(GS_DEBUG_AR のとき)。
+        let mut tq = std::time::Instant::now();
+        let mut tl = |n: &str| { if dbg { println!("  AR_DETECT {:<12} {:?}", n, tq.elapsed()); } tq = std::time::Instant::now(); };
         let mut by_key: FxHashMap<Vec<(u32, i64)>, usize> = FxHashMap::default();
         let mut merges: Vec<(ClassId, ClassId, Vec<u32>)> = Vec::new();
         for (idx, (rep, vs)) in classes.iter().enumerate() {
@@ -738,6 +826,7 @@ impl BlackboardEngine {
             }
         }
         // 方向どうしの一致: (I,J;D1,D2) の式が 0 に還元されるなら D1 = D2(平行)。等式に出てくる方向だけを見る。
+        tl("classes");
         let eg = &self.prover.egraph;
         let (ci, cj) = (eg.get_rep(eg.circ_i), eg.get_rep(eg.circ_j));
         let mut dirs: Vec<ClassId> = st.atoms.ids.keys()
@@ -749,8 +838,11 @@ impl BlackboardEngine {
         dirs.dedup();
         let zero = st.lattice.reduce(&SVec::new()).map(|r| r.0);
         let mut dir_merges: Vec<(ClassId, ClassId, Vec<u32>)> = Vec::new();
+        // 試すのは固定座標で同じ方向に見える組だけ(数値は候補の選別だけで、一致は格子で示す)。
+        let dvals: Vec<Option<Vec<ModInt>>> = dirs.iter().map(|&d| eg.class_value(d, 0)).collect();
         for i in 0..dirs.len() {
             for j in (i + 1)..dirs.len() {
+                if let (Some(a), Some(b)) = (&dvals[i], &dvals[j]) { if !EGraph::numeric_values_proportional(a, b) { continue; } }
                 let (d1, d2) = (dirs[i], dirs[j]);
                 let mut v = SVec::new();
                 let ok = st.atoms.add(&mut v, ci.0, d1.0, 1).and_then(|_| st.atoms.add(&mut v, d2.0, cj.0, 1))
@@ -762,7 +854,7 @@ impl BlackboardEngine {
                     let eg = &self.prover.egraph;
                     println!("AR_RAW target {} {} : {}", eg.entities[d1.0].name, eg.entities[d2.0].name,
                         v.iter().map(|(c, x)| format!("{}:{}", c, x)).collect::<Vec<_>>().join(" "));
-                    for &i in &src {
+                    for &i in &st.lattice.leaves(&src) {
                         let r = st.rels_dbg.get(i as usize).cloned().unwrap_or_default();
                         println!("AR_RAW rel {} : {}", i, r.iter().map(|(c, x)| format!("{}:{}", c, x)).collect::<Vec<_>>().join(" "));
                     }
@@ -770,14 +862,20 @@ impl BlackboardEngine {
                 dir_merges.push((d1, d2, src));
             }
         }
+        tl("dirs");
         let mut links: Vec<(ClassId, ClassId, Vec<u32>, &str)> = self.ar_detect_concyclic(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref())
             .into_iter().map(|(z, c, src)| (z, c, src, "代数的な追跡(円周角の逆)")).collect();
+        tl("concyclic");
         links.extend(self.ar_detect_menelaus_ceva(st, &frame, &mut rc));
+        tl("menelaus");
         links.extend(self.ar_detect_conic_converse(st, &mut rc));
+        tl("conic");
         links.extend(length_links);
         let (virtual_concyclic, wanted_lines) = if std::env::var("GS_AR_OFF").unwrap_or_default().contains("vconcyclic") { (Vec::new(), Vec::new()) }
             else { self.ar_detect_virtual_concyclic(st, &frame, &mut rc) };
+        tl("vconcyclic");
         let parallels = self.ar_detect_parallel(&mut st.atoms, &mut st.lattice, &mut rc, zero.as_ref());
+        tl("parallel");
         if std::env::var("GS_DEBUG_AR").is_ok() {
             println!("  AR_DEBUG detect {:?}/{} ops", t2.elapsed(), st.lattice.ops - ops2);
         }
@@ -786,6 +884,7 @@ impl BlackboardEngine {
 
         let mut merged = 0;
         for (a, b, src) in merges {
+            let src = st.lattice.leaves(&src);
             if std::env::var("GS_DEBUG_AR_RAW").is_ok() {
                 for &i in &src {
                     let r = st.rels_dbg.get(i as usize).cloned().unwrap_or_default();
@@ -819,6 +918,7 @@ impl BlackboardEngine {
         }
         // 円周角の逆・メネラウスの逆・チェバの逆(検出): 点を円・直線に接続する。
         for (z, c, src, name) in links {
+            let src = st.lattice.leaves(&src);
             let eg = &mut self.prover.egraph;
             let (z, c) = (eg.get_rep(z), eg.get_rep(c));
             if eg.is_connected(z, c) { continue; }
@@ -831,6 +931,7 @@ impl BlackboardEngine {
         }
         // 図に無い円の円周角の逆: 3点の外接円を作り、乗ると分かった点を接続する。
         for ([a, b, c], z, src) in virtual_concyclic {
+            let src = st.lattice.leaves(&src);
             let eg = &self.prover.egraph;
             let (a, b, c, z) = (eg.get_rep(a), eg.get_rep(b), eg.get_rep(c), eg.get_rep(z));
             let name = format!("Circ_{}_{}_{}_(AR)", eg.entities[a.0].name, eg.entities[b.0].name, eg.entities[c.0].name);
@@ -1208,6 +1309,14 @@ impl BlackboardEngine {
         let Some(zero) = zero else { return out };
         let lines: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
             .filter(|&l| eg.get_rep(l) == l && l != linf && eg.entities[l.0].entity_type == EntityType::Line && eg.entities[l.0].is_active()).collect();
+        // 横断線の候補: 固定座標で平行に見える別の方向の直線があるもの(数値は候補の選別だけ)。
+        let dvals: Vec<Option<(ClassId, Option<Vec<ModInt>>)>> = lines.iter().map(|&m| self.ar_direction(m).map(|d| (d, eg.class_value(d, 0)))).collect();
+        let cand: Vec<bool> = dvals.iter().map(|x| match x {
+            None => false,
+            Some((_, None)) => true,
+            Some((d, Some(v))) => dvals.iter().any(|o| matches!(o, Some((e, w)) if e != d && w.as_ref().is_none_or(|w| EGraph::numeric_values_proportional(v, w)))),
+        }).collect();
+        if !cand.contains(&true) { return out; }
         let on_line: FxHashMap<usize, Vec<ClassId>> = lines.iter().map(|&l| (l.0, self.ar_points_on(l))).collect();
         for i in 0..lines.len() {
             for j in (i + 1)..lines.len() {
@@ -1217,8 +1326,8 @@ impl BlackboardEngine {
                 let shared = p1.iter().find(|a| p2.contains(a)).copied();
                 // 横断線: L1, L2 以外の直線で、L1 と L2 のそれぞれと図にある点で交わるもの(交点は共有点以外)。
                 let mut trans: Vec<(ClassId, ClassId, ClassId, ClassId)> = Vec::new(); // (m, X1, X2, dir)
-                for &m in &lines {
-                    if m == l1 || m == l2 { continue; }
+                for (mi, &m) in lines.iter().enumerate() {
+                    if m == l1 || m == l2 || !cand[mi] { continue; }
                     let on_m = &on_line[&m.0];
                     let x1 = p1.iter().find(|x| on_m.contains(x) && Some(**x) != shared);
                     let x2 = p2.iter().find(|x| on_m.contains(x) && Some(**x) != shared);
@@ -1233,6 +1342,7 @@ impl BlackboardEngine {
                         let (ma, xa1, xa2, da) = trans[a];
                         let (mb, xb1, xb2, db) = trans[b];
                         if da == db || ma == mb { continue; }
+                        if let (Some(x), Some(y)) = (eg.class_value(da, 0), eg.class_value(db, 0)) { if !EGraph::numeric_values_proportional(&x, &y) { continue; } }
                         let mut v = SVec::new();
                         let ok = if let Some(o) = shared {
                             // s(A,Xa2) − s(A,Xa1) − s(A,Xb2) + s(A,Xb1) ≡ 0
@@ -2506,7 +2616,7 @@ mod tests {
         assert!(same(&mut l, &sv(&[(0, 1)]), &SVec::new()));
         assert!(same(&mut l, &sv(&[(1, 1)]), &SVec::new()));
         let (_, src) = l.reduce(&sv(&[(0, 1)])).unwrap();
-        assert_eq!(src, vec![0, 1]);
+        assert_eq!(l.leaves(&src), vec![0, 1]);
     }
 
     /// 記号ごとの剰余を足して簡約し直しても、まとめて簡約したのと同じ剰余になる(ねじれ・割り切れない主成分を含めて)。
