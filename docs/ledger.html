@@ -15,6 +15,18 @@
 <p class="section-note">新しい順に並べている。番号は古い順の通し番号で、<code>ledger.html#l12</code> のように直接開ける。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="shipped" aria-pressed="false">shipped</button><button type="button" data-filter="reverted" aria-pressed="false">reverted</button><button type="button" data-filter="backlog" aria-pressed="false">保留・要判断</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
 <div class="items">
+<details class="item" id="l97" data-status="shipped">
+  <summary><span class="idx">#97</span><span class="t">AR の相似を速くする(角の出どころを方向の組ごとに1度・複素座標の表)。行演算1回 0.74 → 0.46µs、換算を18回で1に ― 既定 41/44 のまま、HAGeo 65 → 66/172</span><span class="pill">既定</span></summary>
+  <div class="body">
+<div class="desc"><a class="secref" href="backlog.html#b45">§05 b45</a>・<a class="secref" href="backlog.html#b49">b49</a>。ユーザー指示「AR の相似を速くする」。<br>
+<b>どこが遅かったか:</b> 相似の段を AA・SAS/SSS・対応する点に分けて測ると、AA では相似の組ごとに両方の三角形の角の式を簡約し直して出どころを求めていた(newton_gauss で 0.17秒・170万行演算)。三角形は方向の組を共有するので同じ簡約の繰り返しだった。SAS/SSS の候補(格子の演算はほとんど無いのに 0.1〜0.2秒)と対応する点の検算は、固定座標の複素座標を候補ごとに評価し直していた。<br>
+<b>直したこと:</b> (1) 角の出どころを方向の組ごとに1度だけ求めて使い回す(後で格子に行が増えても、先に求めた出どころはその時点の等式からの導出として正しい。前提の集合は前と少し変わる)。(2) 枠の点の複素座標 z と共役を、1回の追跡で1度だけ求めた表から引く。相似の段は newton_gauss 2.40 → 1.56秒、2017 European MCup 0.72 → 0.46秒、2021 Czech-Slovak P6 0.45 → 0.28秒。<br>
+<b>仕事量の換算:</b> 速くなった分、行演算あたりの時間が dfs_match より軽くなり、換算12回のままだと浮いた仕事量が重い dfs_match に回って HAGeo の時間が延びた(2020 CSMGO P3 で行演算 700万 → 560万・AR 1.43 → 1.25秒なのに、dfs_match 44万 → 58万回で全体 3.8 → 4.5秒)。216問で測り直すと行演算1回 0.46µs・dfs_match 1回 8.2µs で、18回で1にした。</div>
+    <div class="evidence"><b>結果</b>(<code>r99</code>、基準 r97 = #96、予算100万):<table style="margin:6px 0;border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:2px 12px 2px 0">設定</th><th style="text-align:left;padding:2px 12px 2px 0">解けた数</th><th style="text-align:left;padding:2px 12px 2px 0">両方で解けた問題の仕事量</th></tr><tr><td style="padding:2px 12px 2px 0">default</td><td style="padding:2px 12px 2px 0">41(±0)</td><td style="padding:2px 12px 2px 0">−12.9%</td></tr><tr><td style="padding:2px 12px 2px 0">extras</td><td style="padding:2px 12px 2px 0">43(±0)</td><td style="padding:2px 12px 2px 0">−11.7%</td></tr><tr><td style="padding:2px 12px 2px 0">skip</td><td style="padding:2px 12px 2px 0">41(±0)</td><td style="padding:2px 12px 2px 0">−12.1%</td></tr><tr><td style="padding:2px 12px 2px 0">noise5</td><td style="padding:2px 12px 2px 0">40(±0)</td><td style="padding:2px 12px 2px 0">−5.1%</td></tr><tr><td style="padding:2px 12px 2px 0">noise10</td><td style="padding:2px 12px 2px 0">38(±0)</td><td style="padding:2px 12px 2px 0">−11.6%</td></tr><tr><td style="padding:2px 12px 2px 0">noise20</td><td style="padding:2px 12px 2px 0">40(±0)</td><td style="padding:2px 12px 2px 0">−7.8%</td></tr></table>解けた問題の増減なし。
+HAGeo の広い集合: 65 → 66/172(+2016 G2、落ちた問題なし)。12並列で合計時間は同じ(1,485 → 1,483秒)・最長 18.2 → 16.5秒、両方で解けた65問の時間の合計は 0.89倍。<br>
+<b>健全性:</b> 検査を外した監査(予算800万)で HAGeo 172問・44問とも偽のマージ0件(このとき HAGeo 84/172、44問 41/44)。時刻つきの証明の監査で既定で解ける41問全てがギャップ・循環なし。</div>
+  </div>
+</details>
 <details class="item" id="l96" data-status="shipped">
   <summary><span class="idx">#96</span><span class="t">AR の土台の等式の投入を速くする(平行線の族の対応を点から引く・射影の数値の検算を後回し) ― 出力は #95 と同じ、HAGeo 12並列で最長 19.3 → 15.7秒</span><span class="pill">既定</span></summary>
   <div class="body">

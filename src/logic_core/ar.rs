@@ -24,7 +24,7 @@ use crate::mmp_core::{ClassId, Definition, EGraph, EntityOrigin, EntityType, Jus
 use crate::mmp_math::ModInt;
 
 /// 行演算を仕事量に数えるときの割り算(ar_round のコメント参照)。
-const AR_OPS_PER_WORK: u64 = 12;
+const AR_OPS_PER_WORK: u64 = 18;
 /// 1回の追跡で相似・対応する点に使う行演算の上限(超えたらそこで足すのをやめる。決定的)。図が大きいと行が長くなり、
 /// 相似の組の等式を入れるだけで1回に数十秒かかった(hageo:2020RMMSLG3 で 600万回・40秒)。
 const AR_ROUND_OPS_CAP: u64 = 400_000;
@@ -539,6 +539,53 @@ fn line_key(v: &[ModInt]) -> Option<[i64; 3]> {
     Some([(v[0] / piv).0, (v[1] / piv).0, (v[2] / piv).0])
 }
 
+/// 固定座標の複素座標 z = x + iy と共役 x − iy の表(標本ごと。i は有限体の −1 の平方根)。相似の数値の検算で同じ点を
+/// 何度も評価しないため、1回の追跡の枠の点について1度だけ求める。
+struct ZTable {
+    z: FxHashMap<usize, Vec<Option<(ModInt, ModInt)>>>,
+}
+
+impl ZTable {
+    fn new(eg: &EGraph, points: &[ClassId]) -> Self {
+        let samples = eg.fixed_samples();
+        let iv: Vec<Option<ModInt>> = (0..samples).map(|k| eg.class_value(eg.circ_i, k)
+            .filter(|v| v.len() >= 2 && v[0].0 != 0).map(|v| v[1] / v[0])).collect();
+        let z = points.iter().map(|&p| (p.0, (0..samples).map(|k| {
+            let v = eg.class_value(p, k)?;
+            if v.len() < 3 || v[2].0 == 0 { return None; }
+            let (x, y, i) = (v[0] / v[2], v[1] / v[2], iv[k]?);
+            Some((x + i * y, x - i * y))
+        }).collect())).collect();
+        ZTable { z }
+    }
+
+    fn get(&self, p: ClassId, k: usize, conj: bool) -> Option<ModInt> {
+        self.z.get(&p.0)?.get(k).copied().flatten().map(|(z, zc)| if conj { zc } else { z })
+    }
+
+    /// t_i ↦ u_i が同じ向き(opposite なら裏返し)の相似か: (t1 − t0)/(t2 − t0) = (u1 − u0)/(u2 − u0)。
+    fn similar(&self, t: &[ClassId; 3], u: &[ClassId; 3], opposite: bool) -> bool {
+        let n = self.z.values().next().map_or(0, |v| v.len());
+        (0..n).all(|k| (|| {
+            let a: Vec<ModInt> = t.iter().map(|&p| self.get(p, k, false)).collect::<Option<_>>()?;
+            let b: Vec<ModInt> = u.iter().map(|&p| self.get(p, k, opposite)).collect::<Option<_>>()?;
+            if (a[1] - a[0]).0 == 0 || (a[2] - a[0]).0 == 0 { return None; }
+            Some(((a[1] - a[0]) * (b[2] - b[0])).0 == ((a[2] - a[0]) * (b[1] - b[0])).0)
+        })().unwrap_or(false))
+    }
+
+    /// 同じく (t2 − t0)/(t1 − t0) = (u2 − u0)/(u1 − u0)(t1 ≠ t0, u1 ≠ u0 だけを求める。対応する点の検算用)。
+    fn maps(&self, t: [ClassId; 3], u: [ClassId; 3], opposite: bool) -> bool {
+        let n = self.z.values().next().map_or(0, |v| v.len());
+        (0..n).all(|k| (|| {
+            let a: Vec<ModInt> = t.iter().map(|&p| self.get(p, k, false)).collect::<Option<_>>()?;
+            let b: Vec<ModInt> = u.iter().map(|&p| self.get(p, k, opposite)).collect::<Option<_>>()?;
+            if (a[1] - a[0]).0 == 0 || (b[1] - b[0]).0 == 0 { return None; }
+            Some(((a[2] - a[0]) * (b[1] - b[0])).0 == ((b[2] - b[0]) * (a[1] - a[0])).0)
+        })().unwrap_or(false))
+    }
+}
+
 /// 鏡映の相似の定数の番号(相似の番号と重ならない範囲)と、仮の円の番号。
 const REFLECT_BASE: usize = 1 << 42;
 const VIRTUAL_CIRCLE_BASE: usize = 1 << 43;
@@ -637,8 +684,8 @@ impl BlackboardEngine {
         // 記号の番号をそろえる(前回の状態を使い回すとき、今回の式を同じ番号で読む)。
         if let Some(c) = self.ar_cache.as_ref().filter(|c| c.fingerprint == fp) { st.atoms = c.after_rules.atoms.clone(); }
         let merged = self.ar_round_with(&mut st, fp);
-        // 行演算12回で仕事量1と数える: 44問と HAGeo の実測で、dfs_match 1回(合同閉包・結論の適用を含む)が約 8〜10µs、
-        // 行演算1回が約 0.74µs(来歴 #95。#94 では出どころの和集合が重く 4回で1)。
+        // 行演算18回で仕事量1と数える: 44問と HAGeo の実測で、dfs_match 1回(合同閉包・結論の適用を含む)が約 8µs、
+        // 行演算1回が約 0.46µs(来歴 #97。#95 は 12回、#94 は 4回で1)。
         self.prover.egraph.spiral_prop_work += st.lattice.ops / AR_OPS_PER_WORK;
         self.ar_ops += st.lattice.ops;
         self.ar_rounds += 1;
@@ -851,7 +898,7 @@ impl BlackboardEngine {
         let dvals: Vec<Option<Vec<ModInt>>> = dirs.iter().map(|&d| eg.class_value(d, 0)).collect();
         for i in 0..dirs.len() {
             for j in (i + 1)..dirs.len() {
-                if let (Some(a), Some(b)) = (&dvals[i], &dvals[j]) { if !EGraph::numeric_values_proportional(a, b) { continue; } }
+                if let (Some(a), Some(b)) = (&dvals[i], &dvals[j]) && !EGraph::numeric_values_proportional(a, b) { continue; }
                 let (d1, d2) = (dirs[i], dirs[j]);
                 let mut v = SVec::new();
                 let ok = st.atoms.add(&mut v, ci.0, d1.0, 1).and_then(|_| st.atoms.add(&mut v, d2.0, cj.0, 1))
@@ -1368,7 +1415,7 @@ impl BlackboardEngine {
                         let (ma, xa1, xa2, da) = trans[a];
                         let (mb, xb1, xb2, db) = trans[b];
                         if da == db || ma == mb { continue; }
-                        if let (Some(x), Some(y)) = (eg.class_value(da, 0), eg.class_value(db, 0)) { if !EGraph::numeric_values_proportional(&x, &y) { continue; } }
+                        if let (Some(x), Some(y)) = (eg.class_value(da, 0), eg.class_value(db, 0)) && !EGraph::numeric_values_proportional(&x, &y) { continue; }
                         let mut v = SVec::new();
                         let ok = if let Some(o) = shared {
                             // s(A,Xa2) − s(A,Xa1) − s(A,Xb2) + s(A,Xb1) ≡ 0
@@ -1486,6 +1533,7 @@ impl BlackboardEngine {
         let eg = &self.prover.egraph;
         let (ci, cj) = (eg.get_rep(eg.circ_i).0, eg.get_rep(eg.circ_j).0);
         let (points, tris) = (&frame.points, &frame.tris);
+        let zt = ZTable::new(eg, points);
         let line_of = |a: ClassId, b: ClassId| frame.line_of(a, b);
         // 順序つきの三角形 (P,Q,R) の鍵 = (P での角, Q での角) の剰余。角は2方向だけで決まるので、方向の β の剰余と
         // 角の剰余(と符号を変えた剰余)を方向の組ごとに1度だけ求める(剰余は線形なので、剰余の差をもう一度簡約すればよい)。
@@ -1512,14 +1560,20 @@ impl BlackboardEngine {
             angle_cache.insert((dpq, dpr), a.clone());
             a
         };
-        // 三角形 (P,Q,R) の P と Q の角の式を直接簡約したときの出どころ。
-        let exact_src = |st: &mut ArState, t: &[ClassId; 3]| -> Option<Vec<u32>> {
+        // 三角形 (P,Q,R) の P と Q の角の式を直接簡約したときの出どころ。角は2方向で決まるので、方向の組ごとに1度だけ求める
+        // (後で格子に行が増えても、先に求めた出どころはその時点の等式からの導出として正しい)。
+        let mut angle_src: FxHashMap<(usize, usize), Option<Vec<u32>>> = FxHashMap::default();
+        let mut exact_src = |st: &mut ArState, t: &[ClassId; 3]| -> Option<Vec<u32>> {
             let mut src = Vec::new();
             for (p, q, r) in [(t[0], t[1], t[2]), (t[1], t[2], t[0])] {
-                let mut v = SVec::new();
-                st.atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(line_of(p, q)?), 1)?;
-                st.atoms.add_beta(&mut v, ci, cj, self.ar_dir_or_virtual(line_of(p, r)?), -1)?;
-                src = union(&src, &st.lattice.reduce(&v)?.1);
+                let (dq, dr) = (self.ar_dir_or_virtual(line_of(p, q)?), self.ar_dir_or_virtual(line_of(p, r)?));
+                let s = angle_src.entry((dq, dr)).or_insert_with(|| {
+                    let mut v = SVec::new();
+                    st.atoms.add_beta(&mut v, ci, cj, dq, 1)?;
+                    st.atoms.add_beta(&mut v, ci, cj, dr, -1)?;
+                    Some(st.lattice.reduce(&v)?.1)
+                });
+                src = union(&src, s.as_ref()?);
             }
             Some(src)
         };
@@ -1581,24 +1635,7 @@ impl BlackboardEngine {
         if dbg { println!("  AR_STAGE   sim-AA         {:?} tris={} pairs={} {} ops", t_sim.elapsed(), tris.len(), pairs, st.lattice.ops); }
         let t_sas = std::time::Instant::now();
         if pairs < MAX_PAIRS && st.lattice.ops <= st.ops_cap && !std::env::var("GS_AR_OFF").unwrap_or_default().contains("sas") {
-            let samples = eg.fixed_samples();
-            let i_unit: Vec<Option<ModInt>> = (0..samples).map(|k| eg.class_value(eg.circ_i, k)
-                .filter(|v| v.len() >= 2 && v[0].0 != 0).map(|v| v[1] / v[0])).collect();
-            let zval = |p: ClassId, k: usize, conj: bool| -> Option<ModInt> {
-                let v = eg.class_value(p, k)?;
-                if v.len() < 3 || v[2].0 == 0 { return None; }
-                let (x, y, i) = (v[0] / v[2], v[1] / v[2], i_unit[k]?);
-                Some(if conj { x - i * y } else { x + i * y })
-            };
-            // t_i ↦ u_i が同じ向き(裏返しなら共役を取った)相似か: (t1 − t0)/(t2 − t0) = (u1 − u0)/(u2 − u0)。
-            let similar_numerically = |t: &[ClassId; 3], u: &[ClassId; 3], opposite: bool| -> bool {
-                (0..samples).all(|k| (|| {
-                    let a: Vec<ModInt> = t.iter().map(|&p| zval(p, k, false)).collect::<Option<_>>()?;
-                    let b: Vec<ModInt> = u.iter().map(|&p| zval(p, k, opposite)).collect::<Option<_>>()?;
-                    if (a[1] - a[0]).0 == 0 || (a[2] - a[0]).0 == 0 { return None; }
-                    Some(((a[1] - a[0]) * (b[2] - b[0])).0 == ((a[2] - a[0]) * (b[1] - b[0])).0)
-                })().unwrap_or(false))
-            };
+            let similar_numerically = |t: &[ClassId; 3], u: &[ClassId; 3], opposite: bool| zt.similar(t, u, opposite);
             fn len_vec(st: &mut ArState, p: ClassId, q: ClassId, r: ClassId) -> Option<SVec> {
                 let mut v = SVec::new();
                 st.atoms.add_len(&mut v, p, q, 1)?;
@@ -1724,7 +1761,7 @@ impl BlackboardEngine {
         }
         if dbg { println!("  AR_STAGE   sim-SAS/SSS    {:?} pairs={} {} ops", t_sas.elapsed(), pairs, st.lattice.ops); }
         let t = std::time::Instant::now();
-        let ncorr = self.ar_sim_correspondences(st, &found, &line_of, points)?;
+        let ncorr = self.ar_sim_correspondences(st, &found, &line_of, points, &zt)?;
         if dbg { println!("  AR_STAGE   sim-corr       {:?} corr={} {} ops", t.elapsed(), ncorr, st.lattice.ops); }
         Some(pairs)
     }
@@ -1733,28 +1770,8 @@ impl BlackboardEngine {
     /// σ(X) = X' からの2つの等式(s(JX',JP') − s(JX,JP) = log a と I の線束の同じ式)が格子で言えるなら P' = σ(P)
     /// (同じ直線の上では、これは内分比 XP/XY = X'P'/X'Y' が言えることと同じ)。
     /// 対応が分かった点は、三角形の頂点と既に分かった対応点の全てとの組で σ の等式を足す。返り値は見つけた対応の数。
-    /// 固定座標の複素座標 z = x + iy(conj なら x − iy。i は有限体の −1 の平方根)。
-    fn ar_zval(&self, p: ClassId, k: usize, conj: bool) -> Option<ModInt> {
-        let eg = &self.prover.egraph;
-        let iv = eg.class_value(eg.circ_i, k).filter(|v| v.len() >= 2 && v[0].0 != 0).map(|v| v[1] / v[0])?;
-        let v = eg.class_value(p, k)?;
-        if v.len() < 3 || v[2].0 == 0 { return None; }
-        let (x, y) = (v[0] / v[2], v[1] / v[2]);
-        Some(if conj { x - iv * y } else { x + iv * y })
-    }
-
-    /// 固定座標で、t_i ↦ u_i が同じ向き(opposite なら裏返し)の相似か: (t2 − t0)/(t1 − t0) = (u2 − u0)/(u1 − u0)。
-    fn ar_maps_numerically(&self, t: [ClassId; 3], u: [ClassId; 3], opposite: bool) -> bool {
-        (0..self.prover.egraph.fixed_samples()).all(|k| (|| {
-            let a: Vec<ModInt> = t.iter().map(|&p| self.ar_zval(p, k, false)).collect::<Option<_>>()?;
-            let b: Vec<ModInt> = u.iter().map(|&p| self.ar_zval(p, k, opposite)).collect::<Option<_>>()?;
-            if (a[1] - a[0]).0 == 0 || (b[1] - b[0]).0 == 0 { return None; }
-            Some(((a[2] - a[0]) * (b[1] - b[0])).0 == ((b[2] - b[0]) * (a[1] - a[0])).0)
-        })().unwrap_or(false))
-    }
-
     fn ar_sim_correspondences(&self, st: &mut ArState, found: &[([ClassId; 3], [ClassId; 3], bool, usize)],
-        line_of: &dyn Fn(ClassId, ClassId) -> Option<ClassId>, points: &[ClassId]) -> Option<usize> {
+        line_of: &dyn Fn(ClassId, ClassId) -> Option<ClassId>, points: &[ClassId], zt: &ZTable) -> Option<usize> {
         const MAX_CANDIDATES: usize = 20000;
         let is_point: rustc_hash::FxHashSet<usize> = points.iter().map(|p| p.0).collect();
         let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
@@ -1773,7 +1790,7 @@ impl BlackboardEngine {
                     for &p2 in &on_l2 {
                         if pts.iter().any(|&(a, b)| a == p || b == p2) { continue; }
                         // 候補は固定座標で絞る: 相似を当てはめて P が P′ に移るものだけを格子で確かめる(格子の簡約は重い)。
-                        if !self.ar_maps_numerically([t[x], t[y], p], [u[x], u[y], p2], opposite) { continue; }
+                        if !zt.maps([t[x], t[y], p], [u[x], u[y], p2], opposite) { continue; }
                         tried += 1;
                         if tried > MAX_CANDIDATES || st.lattice.ops > st.ops_cap { return Some(count); }
                         let rels = sim_relations(&mut st.atoms, t[x], p, u[x], p2, opposite, id);
