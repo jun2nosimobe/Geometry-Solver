@@ -350,6 +350,16 @@ impl EGraph {
         }
     }
 
+    /// 自由点 p の同値類のうち、元の定義が自由点の実体。代表元はノイズの作図(A を通る2直線の交点など、図の上で A と
+    /// 一致するもの)になることがあり、その定義で値を作ると置いていない点を待って値が出なかった(来歴 #99)。
+    fn free_member(&self, p: ClassId) -> ClassId {
+        let rep = self.get_rep(p);
+        if matches!(self.entities[rep.0].original_definition, Definition::FreePoint) { return rep; }
+        (0..self.entities.len()).map(ClassId)
+            .find(|&e| matches!(self.entities[e.0].original_definition, Definition::FreePoint) && self.get_rep(e) == rep)
+            .unwrap_or(rep)
+    }
+
     fn set_point(&self, p: ClassId, (x, y): (ModInt, ModInt), vars: &mut Vars) {
         let name = &self.entities[self.get_rep(p).0].name;
         vars.insert(format!("{}_x", name), x);
@@ -377,7 +387,7 @@ impl EGraph {
     /// 点そのものを選ぶ、3点が共線の退化した三角形を選ぶ、などを捨てる)。
     fn generic_position(&self, p: ClassId, others: &[ClassId], premise_curves: &[ClassId], vars: &Vars) -> bool {
         let mut memo = FxHashMap::default();
-        let Some(pv) = self.original_value(p, vars, &mut memo) else { return false };
+        let Some(pv) = self.original_value(self.free_member(p), vars, &mut memo) else { return false };
         if pv.len() < 3 || pv[2].0 == 0 { return true; }
         others.iter().all(|&e| {
             let Some(v) = self.original_value(e, vars, &mut memo) else { return true };
