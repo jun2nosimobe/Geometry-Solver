@@ -385,6 +385,15 @@ pub(crate) const AR_RULES: &[ArRule] = &[
     ArRule { kind: "検出", name: "メネラウスの逆",
         situation: "三角形の2辺の上の点(1つは無限遠点でもよい)を通る直線 t があり、3つ目の辺の上の点 E で比の積の式が −1 に還元される(固定座標で E ∈ t が真の候補だけ)",
         relation: "E を t に接続する(共線)", ledger: "88" },
+    ArRule { kind: "等式", name: "方冪(既定で外す。--ar-off=none で入れる)",
+        situation: "円 C の上に無い点 P を通る直線が C と図の2点 A, B で交わる(接線なら接点で2回)。根軸の上の点",
+        relation: "len(P,A) + len(P,B) = π_C(P)(方冪の2乗の対数)。根軸の上では π_C1(P) = π_C2(P)", ledger: "98" },
+    ArRule { kind: "検出→等式", name: "根軸",
+        situation: "中心の違う2つの円への方冪が固定座標で等しい点(候補。その点の方冪の等式だけは既定でも入れる)と、2つの円の共有点",
+        relation: "格子で π_C1(P) = π_C2(P) が言えた点と共有点が根軸の上。2点 R1, R2 と中心 O1, O2 が分かれば dir(R1,R) − dir(O1,O2) = 直角、3点目以降は R1R2 の直線に接続", ledger: "101" },
+    ArRule { kind: "検出→等式", name: "調和点列と中点",
+        situation: "直線の上の A, C, P, E が格子で調和((A,C;P,E) = −1)、M が PE の中点(候補は固定座標で MA·MC = ME² の組)",
+        relation: "len(M,A) + len(M,C) = 2·len(M,E)(足し算から出る比)", ledger: "101" },
     ArRule { kind: "検出", name: "チェバの逆",
         situation: "直線 AD・BE が O で交わり(平行なら無限遠点)、AB の上の F で比の積の式が 1 に還元される(固定座標で F ∈ CO が真の候補だけ)",
         relation: "F を直線 CO に接続する(共点)", ledger: "88" },
@@ -892,6 +901,9 @@ impl BlackboardEngine {
             lap("reflections", st);
             let circ = if off.contains("circle") { 0 } else { self.ar_centered_circles(st, &frame, &xy, &mut length_links)? };
             lap("circles", st);
+            if !off.contains("harmonic_mid") { self.ar_harmonic_midpoints(st)?; }
+            if !off.contains("radical") { self.ar_radical_axes(st, &mut length_links)?; }
+            lap("radical", st);
             if std::env::var("GS_DEBUG_AR").is_ok() { println!("  AR_DEBUG reflections={} centered_circles={}", refl, circ); }
             sims = self.ar_similarity(st, &frame)?;
             lap("similarity", st);
@@ -1277,18 +1289,21 @@ impl BlackboardEngine {
             }
         }
         let linked: rustc_hash::FxHashSet<(usize, usize)> = radical.iter().flat_map(|&(c1, c2, _, p)| [(c1.0, p.0), (c2.0, p.0)]).collect();
+        // 根軸の候補(固定座標で2つの円への方冪が等しい点)の方冪は、直線が1本でも入れる(種類 radical。根軸の規則が使う)。
+        let candidates: rustc_hash::FxHashSet<(usize, usize)> = self.ar_radical_candidates().into_iter()
+            .flat_map(|(c1, c2, p)| [(c1.0, p.0), (c2.0, p.0)]).collect();
         let mut keys: Vec<(usize, usize)> = by_pc.keys().copied().collect();
         keys.sort_unstable();
         for key in keys {
             let ls = &by_pc[&key];
-            if ls.len() < 2 && !linked.contains(&key) { continue; }
+            let kind = if candidates.contains(&key) { "radical" } else if ls.len() >= 2 || linked.contains(&key) { "power" } else { continue };
             let p = ClassId(key.1);
             for &i in ls {
                 let (c, l, a, b, prem) = &power_lines[i];
                 let mut v = SVec::new();
                 let ok = atoms.add_len(&mut v, p, *a, 1).and_then(|_| atoms.add_len(&mut v, p, *b, 1))
                     .and_then(|_| atoms.add_fresh(&mut v, (POWER, c.0, p.0, 0), -1));
-                if ok.is_some() { out.push((v, [prem.clone(), vec![conn(p, *l)]].concat(), "power")); }
+                if ok.is_some() { out.push((v, [prem.clone(), vec![conn(p, *l)]].concat(), kind)); }
             }
         }
         for (c1, c2, r, p) in radical {
@@ -2111,6 +2126,185 @@ impl BlackboardEngine {
     }
 
     /// 定義で中心が分かっている円(中心と1点で決まる円): (円, 中心, 前提)。
+    /// 調和点列と中点(検出→等式): 直線の上の A, C, P, E が調和((A,C;P,E) = −1)で M が PE の中点なら MA·MC = ME²
+    /// (len(M,A) + len(M,C) = 2·len(M,E))。足し算から出る比なので格子の線形結合では出ない。候補は固定座標でこの等式が
+    /// 成り立つ組、調和は格子で示す。内接円の接点と辺の交点(2007 CMO P4 の M が内接円と外接円の根軸に乗る)などで使う。
+    fn ar_harmonic_midpoints(&self, st: &mut ArState) -> Option<usize> {
+        st.kind = "harmonic_mid";
+        let eg = &self.prover.egraph;
+        let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
+        let zero = st.lattice.reduce(&SVec::new())?.0;
+        let samples = eg.fixed_samples();
+        let xy = |p: ClassId, k: usize| -> Option<(ModInt, ModInt)> {
+            let v = eg.class_value(p, k)?;
+            (v.len() >= 3 && v[2].0 != 0).then(|| (v[0] / v[2], v[1] / v[2]))
+        };
+        let d2 = |a: ClassId, b: ClassId, k: usize| -> Option<ModInt> {
+            let ((ax, ay), (bx, by)) = (xy(a, k)?, xy(b, k)?);
+            Some((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+        };
+        let mut count = 0;
+        for m in (0..eg.entities.len()).map(ClassId) {
+            if eg.get_rep(m) != m || eg.entities[m.0].entity_type != EntityType::Point || !self.ar_finite(m) { continue; }
+            let defs = eg.entities[m.0].components.first().map(|c| c.definitions.clone()).unwrap_or_default();
+            for def in &defs {
+                let Definition::Midpoint(pp, ee) = *def else { continue };
+                let (pp, ee) = (eg.get_rep(pp), eg.get_rep(ee));
+                if pp == ee || pp == m || ee == m { continue; }
+                let Some(&l) = self.ar_lines_through(pp, ee).first() else { continue };
+                let others: Vec<ClassId> = self.ar_points_on(l).into_iter().filter(|&x| x != pp && x != ee && x != m).collect();
+                for i in 0..others.len() {
+                    for j in (i + 1)..others.len() {
+                        let (a, c) = (others[i], others[j]);
+                        let numeric = (0..samples).all(|k| matches!((d2(m, a, k), d2(m, c, k), d2(m, ee, k)),
+                            (Some(x), Some(y), Some(z)) if (x * y).0 == (z * z).0 && z.0 != 0));
+                        if !numeric { continue; }
+                        let mut v = SVec::new();
+                        let ok = st.atoms.add(&mut v, a.0, pp.0, 1).and_then(|_| st.atoms.add(&mut v, ee.0, c.0, 1))
+                            .and_then(|_| st.atoms.add(&mut v, pp.0, c.0, -1)).and_then(|_| st.atoms.add(&mut v, a.0, ee.0, -1))
+                            .and_then(|_| add_scaled(&mut v, &SVec::from([(T, 2)]), -1));
+                        if ok.is_none() { continue; }
+                        let Some(src) = Self::ar_proves(st, &v, &zero) else { continue };
+                        let ent = eg.memo.get(&eg.normalize_definition(def)).copied().unwrap_or(m);
+                        let mut w = SVec::new();
+                        st.atoms.add_len(&mut w, m, a, 1)?;
+                        st.atoms.add_len(&mut w, m, c, 1)?;
+                        st.atoms.add_len(&mut w, m, ee, -2)?;
+                        let prem = vec![("DefinedBy:Midpoint".to_string(), vec![pp, ee, ent]), conn(a, l), conn(c, l), conn(pp, l), conn(ee, l)];
+                        if st.insert(eg, w, prem, &src)? { count += 1; }
+                    }
+                }
+            }
+        }
+        Some(count)
+    }
+
+    /// 根軸の候補 (円1, 円2, 点): 中心の違う2つの円について、固定座標の全ての標本で方冪が等しく 0 でない有限の点。
+    /// 数値は候補の選別と、格子が言う「方冪の2乗が等しい」の符号の選択にだけ使う(下の ar_radical_axes)。
+    fn ar_radical_candidates(&self) -> Vec<(ClassId, ClassId, ClassId)> {
+        let eg = &self.prover.egraph;
+        let samples = eg.fixed_samples();
+        let circles: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&c| eg.get_rep(c) == c && eg.entities[c.0].entity_type == EntityType::Conic && eg.entities[c.0].is_active() && self.ar_is_circle(c)).collect();
+        if circles.len() < 2 { return Vec::new(); }
+        let points: Vec<ClassId> = (0..eg.entities.len()).map(ClassId)
+            .filter(|&o| eg.get_rep(o) == o && eg.entities[o.0].entity_type == EntityType::Point && eg.entities[o.0].is_active() && self.ar_finite(o)).collect();
+        // 円 a(x² + y²) + dx + ey + f = 0 の (d/a, e/a, f/a)(標本ごと)。
+        let coef: Vec<Vec<Option<(ModInt, ModInt, ModInt)>>> = circles.iter().map(|&c| (0..samples).map(|k| {
+            let v = eg.class_value(c, k)?;
+            (v.len() >= 6 && v[0].0 != 0).then(|| (v[3] / v[0], v[4] / v[0], v[5] / v[0]))
+        }).collect()).collect();
+        let xy: Vec<Vec<Option<(ModInt, ModInt)>>> = points.iter().map(|&p| (0..samples).map(|k| {
+            let v = eg.class_value(p, k)?;
+            (v.len() >= 3 && v[2].0 != 0).then(|| (v[0] / v[2], v[1] / v[2]))
+        }).collect()).collect();
+        let pow = |ci: usize, pi: usize, k: usize| -> Option<ModInt> {
+            let ((d, e, f), (x, y)) = (coef[ci][k]?, xy[pi][k]?);
+            Some(x * x + y * y + d * x + e * y + f)
+        };
+        let mut out = Vec::new();
+        for i in 0..circles.len() {
+            for j in (i + 1)..circles.len() {
+                let concentric = (0..samples).all(|k| matches!((coef[i][k], coef[j][k]), (Some(a), Some(b)) if a.0 == b.0 && a.1 == b.1));
+                if concentric { continue; }
+                for (pi, &p) in points.iter().enumerate() {
+                    let equal = (0..samples).all(|k| matches!((pow(i, pi, k), pow(j, pi, k)), (Some(a), Some(b)) if a.0 == b.0 && a.0 != 0));
+                    if equal { out.push((circles[i], circles[j], p)); }
+                }
+            }
+        }
+        out
+    }
+
+    /// 根軸(検出→等式): 2つの円への方冪が等しい点は根軸(中心線に垂直な直線)の上にある。根軸の上の点は、2つの円の共有点(図で
+    /// 両方に接続)と、格子で π_C1(P) = π_C2(P) が言える候補の点。格子が言うのは方冪の2乗が等しいことなので、符号は固定座標で
+    /// 選ぶ(候補は方冪が等しい方の点だけ。(π1 − π2)(π1 + π2) は恒等的に 0 で、作図は有理的なので片方が恒等的に 0 ― 二辺夾角の
+    /// 向きの選び方と同じ、#90)。根軸の上の2点 R1, R2 と中心 O1, O2 が分かれば dir(R1,R) ⊥ dir(O1,O2) を格子に入れ、3点目以降は
+    /// R1, R2 を通る図の直線に接続する。
+    fn ar_radical_axes(&self, st: &mut ArState, links: &mut Vec<(ClassId, ClassId, Vec<u32>, &'static str)>) -> Option<usize> {
+        st.kind = "radical";
+        let eg = &self.prover.egraph;
+        let conn = |a: ClassId, b: ClassId| ("Connected".to_string(), vec![a, b]);
+        let zero = st.lattice.reduce(&SVec::new())?.0;
+        let centers: FxHashMap<usize, (ClassId, (String, Vec<ClassId>))> = self.ar_known_centers().into_iter().map(|(c, o, pr)| (c.0, (o, pr))).collect();
+        let mut by_pair: FxHashMap<(usize, usize), Vec<ClassId>> = FxHashMap::default();
+        for (c1, c2, p) in self.ar_radical_candidates() { by_pair.entry((c1.0, c2.0)).or_default().push(p); }
+        let mut pairs: Vec<(usize, usize)> = by_pair.keys().copied().collect();
+        pairs.sort_unstable();
+        let mut count = 0;
+        // 接線: 候補の点 P を通る図の直線 l が円 C と図の点では T だけで交わり、中心 O について OT ⊥ l が格子で言えるなら、
+        // l は T での接線で 2·len(P,T) = π_C(P)(接線の定義ではなく、垂直から接線と分かる場合。直線 AC が内接円に E で接するなど)。
+        let mut tangent_done: rustc_hash::FxHashSet<(usize, usize)> = Default::default();
+        for &(c1, c2) in &pairs {
+            for &p in &by_pair[&(c1, c2)] {
+                for c in [ClassId(c1), ClassId(c2)] {
+                    let Some((o, pr)) = centers.get(&c.0) else { continue };
+                    if !tangent_done.insert((c.0, p.0)) { continue; }
+                    let on_c = self.ar_points_on(c);
+                    for &t in &on_c {
+                        if t == p || t == *o { continue; }
+                        for l in self.ar_lines_through(p, t) {
+                            if on_c.iter().any(|&x| x != t && eg.is_connected(x, l)) { continue; }
+                            let mut v = SVec::new();
+                            st.atoms.add_dir(&mut v, *o, t, 1)?;
+                            st.atoms.add_dir(&mut v, p, t, -1)?;
+                            add_scaled(&mut v, &SVec::from([(T, 2)]), -1)?;
+                            let Some(src) = Self::ar_proves(st, &v, &zero) else { continue };
+                            let mut w = SVec::new();
+                            st.atoms.add_len(&mut w, p, t, 2)?;
+                            st.atoms.add_fresh(&mut w, (POWER, c.0, p.0, 0), -1)?;
+                            st.insert(eg, w, vec![pr.clone(), conn(t, c), conn(t, l), conn(p, l)], &src)?;
+                        }
+                    }
+                }
+            }
+        }
+        for (c1, c2) in pairs {
+            let (c1, c2) = (ClassId(c1), ClassId(c2));
+            // 根軸の上の点 (点, 使った等式, 前提)。
+            let mut on: Vec<(ClassId, Vec<u32>, Vec<(String, Vec<ClassId>)>)> = Vec::new();
+            for x in self.ar_points_on(c1) {
+                if eg.is_connected(x, c2) { on.push((x, Vec::new(), vec![conn(x, c1), conn(x, c2)])); }
+            }
+            for &p in &by_pair[&(c1.0, c2.0)] {
+                let (k1, k2) = ((POWER, c1.0, p.0, 0), (POWER, c2.0, p.0, 0));
+                if !st.atoms.fresh.contains_key(&k1) || !st.atoms.fresh.contains_key(&k2) { continue; }
+                let mut v = SVec::new();
+                st.atoms.add_fresh(&mut v, k1, 1)?;
+                st.atoms.add_fresh(&mut v, k2, -1)?;
+                if let Some(src) = Self::ar_proves(st, &v, &zero) { on.push((p, src, Vec::new())); }
+            }
+            if std::env::var("GS_DEBUG_AR").is_ok() {
+                let nm = |c: ClassId| eg.entities[c.0].name.clone();
+                println!("  AR_RADICAL {} {} candidates={} on={} [{}] centers={}/{}", nm(c1), nm(c2), by_pair[&(c1.0, c2.0)].len(), on.len(),
+                    on.iter().map(|r| nm(r.0)).collect::<Vec<_>>().join(" "), centers.contains_key(&c1.0), centers.contains_key(&c2.0));
+            }
+            let mut distinct: Vec<(ClassId, Vec<u32>, Vec<(String, Vec<ClassId>)>)> = Vec::new();
+            for r in on { if distinct.iter().all(|q| eg.fixed_equal(q.0, r.0) == Some(Some(false))) { distinct.push(r); } }
+            if distinct.len() < 2 { continue; }
+            let (r1, r2) = (&distinct[0], &distinct[1]);
+            if let (Some((o1, pr1)), Some((o2, pr2))) = (centers.get(&c1.0), centers.get(&c2.0))
+                && eg.fixed_equal(*o1, *o2) == Some(Some(false)) {
+                for r in &distinct[1..] {
+                    let mut v = SVec::new();
+                    st.atoms.add_dir(&mut v, r1.0, r.0, 1)?;
+                    st.atoms.add_dir(&mut v, *o1, *o2, -1)?;
+                    add_scaled(&mut v, &SVec::from([(T, 2)]), -1)?;
+                    let prem = [vec![pr1.clone(), pr2.clone()], r1.2.clone(), r.2.clone()].concat();
+                    if st.insert(eg, v, prem, &union(&r1.1, &r.1))? { count += 1; }
+                }
+            }
+            let Some(&l) = self.ar_lines_through(r1.0, r2.0).first() else { continue };
+            for r in &distinct[2..] {
+                if eg.is_connected(r.0, l) || eg.fixed_incidence(r.0, l, EntityType::Line) != Some(Some(true)) { continue; }
+                let n = st.note([r1.2.clone(), r2.2.clone(), r.2.clone(), vec![conn(r1.0, l), conn(r2.0, l)]].concat());
+                links.push((r.0, l, union(&union(&union(&r1.1, &r2.1), &r.1), &[n]), "代数的な追跡(根軸)"));
+                count += 1;
+            }
+        }
+        Some(count)
+    }
+
     fn ar_known_centers(&self) -> Vec<(ClassId, ClassId, (String, Vec<ClassId>))> {
         let eg = &self.prover.egraph;
         let mut out = Vec::new();

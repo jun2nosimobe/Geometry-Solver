@@ -122,3 +122,10 @@ HAGeo-409 から読める問題のうち、保留問題と手で写した bench_
   使った等式の種類を `res/usage_<名前>.tsv` に集める。`python3 bench/ar_usage_sum.py <名前>` で集計。
 - `--ar-off=種類`(`bench.sh` のフラグに渡す)でその種類の等式を格子に入れずに測り、結果を `res/abl/<種類>_hg.tsv`(基準は `res/abl/base_hg.tsv`)
   に置くと、`python3 bench/ablation_features.py` が外して落ちた HAGeo の問題に多い作図・目標を数える。
+
+## HAGeo の未解決の分類(来歴 #100)
+
+- `bench/unsolved.sh <bin のラベル>`: HAGeo の広い集合を既定で解き直し、仕事量・時間・AR の回数と上限に達した回・最後の格子の大きさを
+  `res/unsolved_<ラベル>.tsv` に出す。
+- `python3 bench/unsolved_sum.py <ラベル> <census のラベル>`: 予算800万の監査(`census.sh` の HAGeo 版)とつないで、未解決を
+  「予算」「AR の上限」「規則・補助作図が足りない」に分け、作図の語の出現率を解けた問題と比べる。
