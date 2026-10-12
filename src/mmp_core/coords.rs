@@ -255,6 +255,8 @@ impl EGraph {
             for c in self.compute_extraneous_incidences(fp) { pairs.push((fp, c)); }
         }
         self.premise_incidences = Some(pairs);
+        self.frozen_free_keys = Some(self.entities.iter().filter(|e| matches!(e.original_definition, Definition::FreePoint))
+            .map(|e| (e.id.0, self.get_rep(e.id).0)).collect());
         self.structure_cache.borrow_mut().extraneous.clear();
     }
 

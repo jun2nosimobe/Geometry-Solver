@@ -643,24 +643,23 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
     }
 
     // heat_cap による絞り込みは「同じ型の中で heat() の降順に上位N件」(cost.rs の heat_capped_* / matcher.rs の自己束縛ソート)
-    // なので、順位も型ごと・heat() 降順で数える。heat() と heat_with_degree、さらに動点法の次数(EGraph::cached_degree)を
+    // なので、順位も型ごと・heat() 降順で数える。heat() と heat_with_degree、さらに実体の次数(EGraph::natural_degree)を
     // 引いた並べ方の3つを並べ、どれが証明に要る実体を上に持ち上げるかをその場で比べられるようにする。
-    const DEGREE_MAX_D: usize = 6;
     const DEGREE_WEIGHT: f64 = 0.5;
     let score_of = |i: usize, mode: u8| -> f64 {
         match mode {
             1 => eg.entities[i].heat_with_degree(),
             2 => eg.entities[i].heat()
-                 - DEGREE_WEIGHT * eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+                 - DEGREE_WEIGHT * eg.natural_degree(ClassId(i)).unwrap_or(0) as f64,
             // 熱を全く動かさず、同点のときだけ低次数を先にする辞書式。
-            // 熱の刻みは 1.5 単位、次数は高々 DEGREE_MAX_D なので、
+            // 熱の刻みは 1.5 単位、次数は高々数百なので、
             // 熱を1000倍しておけば次数が熱の順序を覆すことはあり得ない。
             3 => eg.entities[i].heat() * 1000.0
-                 - eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+                 - eg.natural_degree(ClassId(i)).unwrap_or(0) as f64,
             // 逆向きの同点処理(高次数を先に)。低次数優先が効くのかどうかを
             // 片側だけ見ても判断できないので、必ず両方を並べて出す。
             4 => eg.entities[i].heat() * 1000.0
-                 + eg.cached_degree(ClassId(i), DEGREE_MAX_D).unwrap_or(0) as f64,
+                 + eg.natural_degree(ClassId(i)).unwrap_or(0) as f64,
             _ => eg.entities[i].heat(),
         }
     };
@@ -731,7 +730,7 @@ pub fn report(eg: &EGraph, log: &TraceLog, target: &Option<(String, Vec<ClassId>
             n += 1;
             heat += eg.entities[i].heat();
             uses += eg.entities[i].uses.len() as f64;
-            if let Some(d) = eg.cached_degree(ClassId(i), DEGREE_MAX_D) { deg_sum += d; deg_n += 1; }
+            if let Some(d) = eg.natural_degree(ClassId(i)) { deg_sum += d; deg_n += 1; }
             if let Some(rel) = &eg.degeneration_groups {
                 degen += rel.members_of(ClassId(i)).len();
             }

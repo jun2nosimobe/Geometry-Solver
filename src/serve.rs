@@ -367,7 +367,7 @@ impl Proof {
 /// 割って 0〜1 に揃えてから重みを掛ける。したがって点数は「この回の中での相対的な面白さ」で、別の図の点数とは比べられない。
 struct Score {
     /// 主張に出てくる図形の、作図の代数的次数の最大値
-    /// (EGraph::cached_degree。自由点を直線上で動かしたときに、その図形の
+    /// (EGraph::natural_degree。自由点を直線上で動かしたときに、その図形の
     /// 座標が何次の有理式で動くか)。中点や平行線は1次で、円と直線の交点や
     /// 垂心のような「本当に効いている」構成ほど高くなる。
     degree: usize,
@@ -401,7 +401,7 @@ impl Score {
     fn of(eg: &EGraph, f: &Finding, is_user: &dyn Fn(&String) -> bool,
           groups: &crate::padic_eval::DegenerationRelations) -> Score {
         let n = f.refs.len().max(1);
-        let degree = f.refs.iter().filter_map(|&r| eg.cached_degree(r, 6)).max().unwrap_or(0);
+        let degree = f.refs.iter().filter_map(|&r| eg.natural_degree(r)).max().unwrap_or(0);
         let heat = f.refs.iter()
             .map(|&r| eg.entities[eg.get_rep(r).0].heat_with_degree())
             .fold(0.0f64, f64::max);

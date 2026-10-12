@@ -520,215 +520,6 @@ impl EGraph {
         })
     }
 
-    /// 🌟 動点法(Method of Moving Points)の次数を数値的に測る。祖先の自由点の1つ(mover)を直線に沿って動かし、
-    /// 複数の t で評価して、有限体上のランク判定で座標が満たす有理関数の次数を求める。親の次数の和という構造的な
-    /// 上界と違い、中点のように次数が上がらない操作を正しく低く測れる。
-    /// mover が見つからないか、どれかのサンプルで評価できなければ None(次数不明)。呼び出し側は次数で足切りしない。
-    pub fn measure_numerical_degree(&self, entity: ClassId, max_d: usize) -> Option<usize> {
-        let ancestors = self.free_point_ancestors_of(&[entity]);
-        if ancestors.is_empty() { return Some(0); } // 自由点に一切依存しない(定数)ので次数0
-
-        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
-        let mover_name = self.entities[mover.0].name.clone();
-
-        let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = self.random_mover_line();
-        let mut t_vals = Vec::with_capacity(k);
-        let mut x_vals = Vec::with_capacity(k);
-        let mut y_vals = Vec::with_capacity(k);
-        for i in 1..=k {
-            let t = ModInt::new(i as i64);
-            let mut vars = base_vars.clone();
-            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
-            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
-            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-            let v = self.evaluate_node(entity, &vars, &mut cache)?;
-            if v.len() < 3 || v[2].0 == 0 { return None; }
-            t_vals.push(t);
-            x_vals.push(v[0] / v[2]);
-            y_vals.push(v[1] / v[2]);
-        }
-        let dxd = crate::mmp_math::get_numerical_degree(&t_vals, &x_vals, max_d);
-        let dyd = crate::mmp_math::get_numerical_degree(&t_vals, &y_vals, max_d);
-        Some(dxd.max(dyd))
-    }
-
-    /// 🌟 measure_numerical_degree のメモ化版。候補の多い DefinedBy パターンのマッチ候補を次数の低いものから試す
-    /// (logic_core::matcher)など同じ実体に何度も呼ばれるので、代表元の GeoEntity::degree_cache に結果を持つ。
-    pub fn cached_degree(&self, id: ClassId, max_d: usize) -> Option<usize> {
-        let rep = self.get_rep(id);
-        if let Some(cached) = self.entities[rep.0].degree_cache.get() {
-            return cached;
-        }
-        let deg = self.measure_numerical_degree(rep, max_d);
-        self.entities[rep.0].degree_cache.set(Some(deg));
-        deg
-    }
-
-    /// 🌟 measure_numerical_degreeの「まだエンティティとして存在しない候補」版。
-    /// resolve_point_demandsのような「実際に作る前に有望さを判定したい」
-    /// 場面向けに、2直線l1, l2の交点をentityとして作らずに次数だけ測定する。
-    pub fn measure_intersection_degree_candidate(&self, l1: ClassId, l2: ClassId, max_d: usize) -> Option<usize> {
-        let ancestors = self.free_point_ancestors_of(&[l1, l2]);
-        if ancestors.is_empty() { return Some(0); }
-
-        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
-        let mover_name = self.entities[mover.0].name.clone();
-
-        let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = self.random_mover_line();
-        let mut t_vals = Vec::with_capacity(k);
-        let mut x_vals = Vec::with_capacity(k);
-        let mut y_vals = Vec::with_capacity(k);
-        for i in 1..=k {
-            let t = ModInt::new(i as i64);
-            let mut vars = base_vars.clone();
-            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
-            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
-            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-            let v1 = self.evaluate_node(l1, &vars, &mut cache)?;
-            let v2 = self.evaluate_node(l2, &vars, &mut cache)?;
-            let p = mmp_calculators::calc_intersection(&v1, &v2);
-            // 🐛 2直線がこの標本で平行だと交点は無限遠(z=0)にあり、下の x/z が 0 除算になる。
-            // 有限の交点が無ければ次数は測れない。
-            if p.len() < 3 || p[2].0 == 0 { return None; }
-            t_vals.push(t);
-            x_vals.push(p[0] / p[2]);
-            y_vals.push(p[1] / p[2]);
-        }
-        let dxd = crate::mmp_math::get_numerical_degree(&t_vals, &x_vals, max_d);
-        let dyd = crate::mmp_math::get_numerical_degree(&t_vals, &y_vals, max_d);
-        Some(dxd.max(dyd))
-    }
-
-    /// 🌟 動点法の次数を、選んだ自由点(moving)を動かして測る。moving のうち entity の祖先にある点を、共通の媒介変数 t で
-    /// それぞれ一般の位置の直線の上に動かし、他の祖先の自由点は固定する。1点だけならその点についての次数、全部なら
-    /// 総次数(全ての座標を一度に変数とみなした次数)。entity が moving のどれにも依存しなければ 0。前提の曲線に乗る
-    /// 自由点は直線の上を勝手に動かせないので None(曲線に沿った媒介変数はまだ無い)。
-    pub fn measure_degree_moving(&self, entity: ClassId, moving: &[ClassId], max_d: usize) -> Option<usize> {
-        let ancestors = self.free_point_ancestors_of(&[entity]);
-        let movers: Vec<ClassId> = ancestors.iter().copied()
-            .filter(|&a| moving.iter().any(|&m| self.get_rep(m) == self.get_rep(a))).collect();
-        if movers.is_empty() { return Some(0); }
-        if movers.iter().any(|&m| self.has_extraneous_incidence(m)) { return None; }
-        let fixed: Vec<ClassId> = ancestors.iter().copied().filter(|a| !movers.contains(a)).collect();
-        let mut base_vars: FxHashMap<String, ModInt> = FxHashMap::default();
-        if !self.assign_free_point_coords_with(&fixed, &mut base_vars, RngSource::Degree) { return None; }
-        let lines: Vec<(String, (ModInt, ModInt, ModInt, ModInt))> =
-            movers.iter().map(|&m| (self.entities[m.0].name.clone(), self.random_mover_line())).collect();
-        let k = 2 * max_d + 2;
-        let mut t_vals = Vec::with_capacity(k);
-        let mut samples = Vec::with_capacity(k);
-        for i in 1..=k {
-            let t = ModInt::new(i as i64);
-            let mut vars = base_vars.clone();
-            for (name, (x0, y0, dx, dy)) in &lines {
-                vars.insert(format!("{}_x", name), *x0 + t * *dx);
-                vars.insert(format!("{}_y", name), *y0 + t * *dy);
-            }
-            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-            samples.push(self.evaluate_node(entity, &vars, &mut cache)?);
-            t_vals.push(t);
-        }
-        Self::degree_of_homogeneous_samples(&t_vals, &samples, max_d)
-    }
-
-    /// 🌟 同次座標の時系列サンプルから次数を測る共通処理。比だけに意味があるので、基準の成分で他の全成分を
-    /// 割った値それぞれの次数の最大値を返す。成分数は問わない(点・直線の3、円の係数の4など)。基準は全ての
-    /// サンプルで0でない成分のうち最後のもの(無限遠点 (x,y,0) なら y か x)。そういう成分が無ければ None。
-    fn degree_of_homogeneous_samples(t_vals: &[ModInt], samples: &[Vec<ModInt>], max_d: usize) -> Option<usize> {
-        let n = samples.first()?.len();
-        if n < 2 || samples.iter().any(|s| s.len() != n) { return None; }
-        let norm_idx = (0..n).rev().find(|&i| samples.iter().all(|s| s[i].0 != 0))?;
-        let mut max_deg = 0;
-        for i in (0..n).filter(|&i| i != norm_idx) {
-            let ratios: Vec<ModInt> = samples.iter().map(|s| s[i] / s[norm_idx]).collect();
-            max_deg = max_deg.max(crate::mmp_math::get_numerical_degree(t_vals, &ratios, max_d));
-        }
-        Some(max_deg)
-    }
-
-    /// 🌟 parents(2〜4点)それぞれの次数と、combine で組み合わせた結果の次数を、同じ mover・同じ他の自由点座標の
-    /// 1回のサンプリングで測る。deg(A)+deg(B) のような素朴な和より結果の次数が小さい組は、隠れた定理や偶然の
-    /// 一致が効いている兆候(「相性が良い」)とみなせる。parent ごとに measure_numerical_degree を別々に呼ぶと
-    /// mover や座標が揃わず、次数を比べる意味がなくなる。
-    pub fn measure_group_degrees(
-        &self,
-        parents: &[ClassId],
-        combine: impl Fn(&[Vec<ModInt>]) -> Vec<ModInt>,
-        max_d: usize,
-    ) -> Option<(Vec<usize>, usize)> {
-        let ancestors = self.free_point_ancestors_of(parents);
-        if ancestors.is_empty() { return Some((vec![0; parents.len()], 0)); }
-
-        let (mover, base_vars) = self.setup_mover_and_base_vars(&ancestors)?;
-        let mover_name = self.entities[mover.0].name.clone();
-
-        let k = 2 * max_d + 2;
-        let (x0, y0, dx, dy) = self.random_mover_line();
-        let mut t_vals = Vec::with_capacity(k);
-        let mut parent_samples: Vec<Vec<Vec<ModInt>>> = vec![Vec::with_capacity(k); parents.len()];
-        let mut combined_samples: Vec<Vec<ModInt>> = Vec::with_capacity(k);
-        for i in 1..=k {
-            let t = ModInt::new(i as i64);
-            let mut vars = base_vars.clone();
-            vars.insert(format!("{}_x", mover_name), x0 + t * dx);
-            vars.insert(format!("{}_y", mover_name), y0 + t * dy);
-            let mut cache: FxHashMap<usize, Vec<ModInt>> = FxHashMap::default();
-            let mut vals = Vec::with_capacity(parents.len());
-            for &p in parents {
-                vals.push(self.evaluate_node(p, &vars, &mut cache)?);
-            }
-            combined_samples.push(combine(&vals));
-            for (idx, v) in vals.into_iter().enumerate() {
-                parent_samples[idx].push(v);
-            }
-            t_vals.push(t);
-        }
-
-        let mut parent_degs = Vec::with_capacity(parents.len());
-        for samples in &parent_samples {
-            parent_degs.push(Self::degree_of_homogeneous_samples(&t_vals, samples, max_d)?);
-        }
-        let combined_deg = Self::degree_of_homogeneous_samples(&t_vals, &combined_samples, max_d)?;
-        Some((parent_degs, combined_deg))
-    }
-
-    /// 🌟 measure_group_degreesの2点(直線)特化版。resolve_demandsから使う。
-    pub fn measure_line_affinity(&self, a: ClassId, b: ClassId, max_d: usize) -> Option<(usize, usize, usize)> {
-        let (degs, combined) = self.measure_group_degrees(
-            &[a, b],
-            |vals| mmp_calculators::calc_line_through_points(&vals[0], &vals[1]),
-            max_d,
-        )?;
-        Some((degs[0], degs[1], combined))
-    }
-
-    /// 🌟 measure_group_degrees の3点(外接円)版。deg(A)+deg(B)+deg(C) に比べて Circumcircle(A,B,C) の次数が
-    /// 小さい組は、同じ円に乗りやすい構造の兆候。
-    #[allow(dead_code)]   // まだ探索のヒューリスティックに繋いでいない
-    pub fn measure_circle_affinity(&self, a: ClassId, b: ClassId, c: ClassId, max_d: usize) -> Option<(usize, usize, usize, usize)> {
-        let (degs, combined) = self.measure_group_degrees(
-            &[a, b, c],
-            |vals| mmp_calculators::calc_circumcircle(&vals[0], &vals[1], &vals[2]),
-            max_d,
-        )?;
-        Some((degs[0], degs[1], degs[2], combined))
-    }
-
-    /// 🌟 measure_group_degrees の4点(複比)版。複比は (k,1,1) なので実質 k の次数が結果を決める。4点の次数の和に
-    /// 比べて複比の次数が異常に高い(無関係な4点)なら、生成自体を諦めるゲートに使う。
-    pub fn measure_cross_ratio_affinity(&self, a: ClassId, b: ClassId, c: ClassId, d: ClassId, max_d: usize) -> Option<(usize, usize, usize, usize, usize)> {
-        let (degs, combined) = self.measure_group_degrees(
-            &[a, b, c, d],
-            |vals| mmp_calculators::calc_cross_ratio(&vals[0], &vals[1], &vals[2], &vals[3])
-                .map(|k| vec![k, ModInt::new(1), ModInt::new(1)])
-                .unwrap_or_default(),
-            max_d,
-        )?;
-        Some((degs[0], degs[1], degs[2], degs[3], combined))
-    }
-
     /// 🌟 新しく作った複比 new_id の値を、既存の全ての複比(点の複比・線束の複比)と1回の乱数サンプルで比べ、
     /// 一致すれば log_conjecture_candidate で予想として記録する。証明状態は変えない。
     /// 複比の値は (k,1,1) なので、比例ではなく等値で比べる。
@@ -761,20 +552,7 @@ impl EGraph {
         }
     }
 
-    /// 🌟 measure_numerical_degree系の共通処理: 祖先の自由点の中から
-    /// 「他の構造的前提(直線/円の上にあること)を持たない」ものを1つ選んで
-    /// mover(動点)とし、残りは(前提を満たす形で)1回だけ座標を固定する。
-    /// 適切なmoverが見つからない場合はNone。
-    fn setup_mover_and_base_vars(&self, ancestors: &[ClassId]) -> Option<(ClassId, FxHashMap<String, ModInt>)> {
-        let mover = *ancestors.iter().find(|&&fp| !self.has_extraneous_incidence(fp))?;
-        let others: Vec<ClassId> = ancestors.iter().copied().filter(|&fp| fp != mover).collect();
-        let mut base_vars: FxHashMap<String, ModInt> = FxHashMap::default();
-        // 次数測定は自分の乱数の列を使う(数値チェックの回数に結果を左右されないため)。
-        if !self.assign_free_point_coords_with(&others, &mut base_vars, RngSource::Degree) { return None; }
-        Some((mover, base_vars))
-    }
-
-    /// 数値検証・次数測定の乱数(SplitMix64)。rand::random だと実行ごとに座標が変わり、
+    /// 数値検証の乱数(SplitMix64)。rand::random だと実行ごとに座標が変わり、
     /// ごく低い確率とはいえ同じ問題で判定が変わりうる。
     pub(crate) fn random_modint(&self) -> ModInt {
         let mut z = self.rng_state.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -784,25 +562,6 @@ impl EGraph {
         ModInt::new((z ^ (z >> 31)) as i64)
     }
 
-    /// 🌟 moverが動く先の「一般の位置にある直線」: 基点(x0,y0)と方向(dx,dy)を
-    /// 無作為に選ぶ(moverの座標はx0+t*dx, y0+t*dyとしてtでパラメータ化される)。
-    fn random_mover_line(&self) -> (ModInt, ModInt, ModInt, ModInt) {
-        (
-            self.random_degree_modint(),
-            self.random_degree_modint(),
-            self.random_degree_modint(),
-            self.random_degree_modint(),
-        )
-    }
-
-    /// 次数測定用の乱数(数値チェックとは別の列。degree_rng_state 参照)。
-    fn random_degree_modint(&self) -> ModInt {
-        let mut z = self.degree_rng_state.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
-        self.degree_rng_state.set(z);
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        ModInt::new((z ^ (z >> 31)) as i64)
-    }
 }
 
 /// 有限体での各定義の値。点・直線は同次座標、二次曲線は6係数、スカラーは [値, 1, 1]。
@@ -1048,11 +807,11 @@ pub(crate) struct ModIntPlacer<'v> {
 
 /// 乱数の列。数値チェックの回数が変わっても次数測定の結果が動かないよう、2本に分けてある。
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RngSource { Numeric, Degree }
+pub(crate) enum RngSource { Numeric }
 
 impl ModIntPlacer<'_> {
     fn random(&self, eg: &EGraph) -> ModInt {
-        match self.rng { RngSource::Numeric => eg.random_modint(), RngSource::Degree => eg.random_degree_modint() }
+        match self.rng { RngSource::Numeric => eg.random_modint() }
     }
 
     fn set(&mut self, eg: &EGraph, point: ClassId, x: ModInt, y: ModInt) {

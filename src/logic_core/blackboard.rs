@@ -139,6 +139,8 @@ pub struct BlackboardEngine {
     /// 壁時計の安全弁(--time)。run_step はタスクごとにこれも確かめる(1回の run_step が1万タスクを回すので、
     /// 呼び出しの合間だけで確かめると、大きい図で上限を何分も超えた)。
     pub deadline: Option<std::time::Instant>,
+    /// 目標を Wu の方法で示す試み(wu.rs)。None なら試さない。
+    pub wu: Option<super::WuSchedule>,
 }
 
 impl BlackboardEngine {
@@ -170,6 +172,7 @@ impl BlackboardEngine {
             ar_off_kinds: Vec::new(),
             work_limit: u64::MAX,
             deadline: None,
+            wu: None,
         }
     }
 
@@ -687,7 +690,6 @@ impl BlackboardEngine {
     pub fn resolve_demands(&mut self) -> bool {
         if self.prover.construction_demands.is_empty() { return false; }
 
-        const AFFINITY_MAX_D: usize = 4;
         const AFFINITY_WEIGHT: f64 = 2.0;
         const LINES_PER_STALL: usize = 3;
         type Demand = ((ClassId, ClassId), f64, Option<(usize, usize, usize)>);
@@ -696,7 +698,7 @@ impl BlackboardEngine {
             score + AFFINITY_WEIGHT * bonus
         };
         let mut demands: Vec<Demand> = self.prover.construction_demands.iter()
-            .map(|(&(p1, p2), &score)| ((p1, p2), score, self.prover.egraph.measure_line_affinity(p1, p2, AFFINITY_MAX_D)))
+            .map(|(&(p1, p2), &score)| ((p1, p2), score, self.prover.egraph.measure_line_affinity(p1, p2)))
             .collect();
         demands.sort_by(|a, b| {
             priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal)
@@ -841,13 +843,14 @@ impl BlackboardEngine {
 
         if self.prover.point_construction_demands.is_empty() { return false; }
 
-        const DEGREE_CAP: usize = 4;
-        const MAX_D: usize = 6;
+        // どれかの自由点についての次数(次数のベクトルの成分)が DEGREE_CAP を超える交点は作らない。並べるのは成分の和。
+        const DEGREE_CAP: u32 = 4;
         // 一度に全部作ると探索が拡散して届かなくなる。必要なら次の行き詰まりでまた候補に挙がる。
         const POINTS_PER_STALL: usize = 2;
         let mut demands: Vec<((ClassId, ClassId), f64, Option<usize>)> = self.prover.point_construction_demands.iter()
-            .map(|(&(l1, l2), &score)| ((l1, l2), score, self.prover.egraph.measure_intersection_degree_candidate(l1, l2, MAX_D)))
-            .filter(|&(_, _, deg)| deg.is_none_or(|d| d <= DEGREE_CAP))
+            .map(|(&(l1, l2), &score)| ((l1, l2), score, self.prover.egraph.intersection_multidegree(l1, l2)))
+            .filter(|(_, _, md)| md.as_ref().is_none_or(|v| v.iter().all(|&x| x <= DEGREE_CAP)))
+            .map(|(k, s, md)| (k, s, md.map(|v| v.iter().map(|&x| x as usize).sum())))
             .collect();
         demands.sort_by(|a, b| {
             let da = a.2.unwrap_or(usize::MAX);

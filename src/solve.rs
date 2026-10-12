@@ -51,6 +51,16 @@ pub struct SolveOptions {
     pub drop_theorems: Vec<String>,
     /// 証明に使った定理と、AR の結論が使った等式の種類を出す(--ar-usage)。
     pub ar_usage: bool,
+    /// 探索の前の図の事実を、探索の後に知っているか(FACT_COUNT・FACT_COVERAGE を出す)。
+    pub fact_census: bool,
+    /// 目標を Wu の方法で示す試み(logic_core/wu.rs)。
+    pub wu: bool,
+    /// Wu の方法を最初にも試す(false なら手詰まりのときだけ)。
+    pub wu_start: bool,
+    /// 定理の照合の代わりに、次数の順に事実を確定していく探索(logic_core/degree_search.rs)。
+    pub degree_search: bool,
+    /// 次数の順の段を先に(予算の 1/4 まで)回してから、定理の照合に続ける(既定。--no-degree-first で外す)。
+    pub degree_first: bool,
     /// AR の格子に入れない等式の種類(--ar-off=sim_aa,chord。効き目を測る用)。
     pub ar_off: Vec<String>,
     /// AR があっても、方冪・交わる弦の相似の2つの定理を残す(--chord-theorems)。
@@ -126,6 +136,11 @@ impl SolveOptions {
             drop_theorems: args.iter().filter_map(|a| a.strip_prefix("--drop-theorems="))
                 .flat_map(|v| v.split(',').map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect(),
             ar_usage: flag(args, "--ar-usage"),
+            fact_census: flag(args, "--fact-census"),
+            wu: !flag(args, "--no-wu"),
+            wu_start: !flag(args, "--no-wu-start"),
+            degree_search: flag(args, "--degree-search"),
+            degree_first: !flag(args, "--no-degree-first"),
             // 既定で方冪を外す(足しても解ける問題が増えず仕事量が増えた。来歴 #98)。none で全て入れる。
             ar_off: args.iter().find_map(|a| a.strip_prefix("--ar-off=")).unwrap_or("power")
                 .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "none").collect(),
@@ -463,6 +478,9 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
 
     let prepared = engine.prepare(&opts.search_setup());
+    if opts.wu && let Some(t) = &problem.target_fact {
+        engine.wu = Some(logic_core::WuSchedule::new(engine.prover.egraph.goal_degree(t), opts.step_budget));
+    }
     // AR が回る(固定座標を置けた)問題では、AR の等式が同じ内容を出す定理の群を外す。まだタスクを積んでいないので番号はずれない。
     if opts.ar && prepared.fixed && !opts.ar_drop.is_empty() {
         // 群の名前でないものは定理の名前(末尾が * なら前方一致)として扱う(1件ずつ外して測るため)。
@@ -480,6 +498,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         engine.prover.egraph.merge_census = Some(mmp_core::MergeCensus::default());
     }
 
+    let census = opts.fact_census.then(|| engine.prover.egraph.fact_census(problem.target_fact.as_ref(), 90));
     let mut proved = false;
     let start_time = Instant::now();
     engine.prune_growth = opts.prune;
@@ -487,9 +506,22 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
         if let Some((_, ids)) = &problem.target_fact { engine.prune_roots = ids.clone(); }
     }
     engine.deadline = Some(start_time + Duration::from_secs(opts.time_budget_secs));
-    if opts.ar && opts.ar_first { engine.run_ar(); }
+    // 次数の順に事実を確定していく探索(--degree-search): 定理の照合は使わない。
+    if (opts.degree_search || opts.degree_first) && let Some(t) = &problem.target_fact {
+        let (reached, levels) = engine.degree_search(t, !opts.degree_search);
+        for l in &levels {
+            println!("DEGREE_LEVEL	{}	{}	{}	{}	{}	{}	{}", problem_name, l.degree, l.facts, l.known, l.by_ar, l.by_wu, l.unproved);
+        }
+        proved = reached && matches!(goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time), Goal::Proved);
+    }
+    let search = !opts.degree_search;
+    // 最初に、目標の次数で決めた上限で Wu の方法を試す。
+    if search && !proved && opts.wu_start && let Some(t) = &problem.target_fact && engine.try_wu(t, logic_core::WuTry::Start) {
+        proved = matches!(goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time), Goal::Proved);
+    }
+    if search && opts.ar && opts.ar_first && !proved { engine.run_ar(); }
     engine.schedule_full_sweep();
-    while engine.prover.work_done() < opts.step_budget
+    while search && !proved && engine.prover.work_done() < opts.step_budget
         && start_time.elapsed() < Duration::from_secs(opts.time_budget_secs) {
         let run_step_start = Instant::now();
         let applied_logic = engine.run_step(10000);
@@ -503,10 +535,32 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
             Goal::Abort => break,
             Goal::NotYet => {}
         }
+        // 探索が Wu の方法の次の上限の分だけ進んだら、手詰まりでなくても試す。
+        if engine.wu_due() && let Some(t) = &problem.target_fact && engine.try_wu(t, logic_core::WuTry::Credit) {
+            match goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time) {
+                Goal::Proved => { proved = true; break; }
+                Goal::Abort => break,
+                Goal::NotYet => {}
+            }
+        }
         // 手が止まったら、代数的な追跡(--ar)と回復の手(補助作図など)を同じ回に両方行う。追跡だけで次の回に進むと、
         // 補助作図が要る問題で全定理の試し直しが余分に挟まる(nine_point_full が4倍遅くなった)。
-        if !applied_logic && !recovery.run(&mut engine, &problem.target_fact, opts) {
-            break;
+        if !applied_logic {
+            // 手詰まり: 上限を上げて Wu の方法を試してから、回復の手を打つ。打つ手が尽きたら、残りの予算の全部で Wu の方法を試す。
+            let mut last = false;
+            loop {
+                let when = if last { logic_core::WuTry::Last } else { logic_core::WuTry::Credit };
+                if let Some(t) = &problem.target_fact && engine.try_wu(t, when) {
+                    match goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time) {
+                        Goal::Proved => proved = true,
+                        Goal::Abort => last = true,
+                        Goal::NotYet => {}
+                    }
+                }
+                if proved || last || recovery.run(&mut engine, &problem.target_fact, opts) { break; }
+                last = true;
+            }
+            if proved || last { break; }
         }
     }
 
@@ -518,6 +572,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     if opts.ar {
         println!("🧮 代数的な追跡: {} 件併合(数値で偽と分かって見送り {} 件)、{} 回(うち規則の結果の使い回し {} 回・途中で打ち切り {} 回)、行演算 {}(仕事量に含む)、係数があふれて諦めた等式 {} 件",
             engine.ar_merged, engine.ar_rejected, engine.ar_rounds, engine.ar_reused, engine.ar_aborted, engine.ar_ops, engine.ar_overflows);
+    }
+    if let Some(w) = &engine.wu {
+        let status = if w.proved { "目標を示した".to_string() } else { w.stopped.as_ref().map_or("上限に達した".to_string(), |s| format!("使えない({})", s)) };
+        println!("🧮 代数計算(Wu の方法): {} 回、掛け算 {} 回(仕事量 {} に含む)、{}", w.tries, w.mults, w.mults / logic_core::WU_MULTS_PER_WORK, status);
     }
     if engine.prover.degenerate_matches > 0 {
         println!("📐 図の上で退化した配置(「相異なる」図形が数値的に一致)のマッチを {} 件捨てました。", engine.prover.degenerate_matches);
@@ -557,7 +615,41 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
             p.seeded_dfs_calls + p.unseeded_dfs_calls, engine.ar_ops, ms(p.dfs_time), ms(p.closure_time), ms(p.ar_time),
             ms(p.run_step_time), ms(p.recovery_time), ms(start_time.elapsed()));
     }
+    // 証明・状態を出した後に測る(角・長さの実体を足して代数的な追跡を回すので、e-graph が変わる)。
+    if let Some(c) = &census { print_fact_coverage(&mut engine, c, problem_name, proved); }
     proved
+}
+
+/// --fact-census: 探索の前の図の事実を、探索の後に知っているか。「後」は e-graph が知っているもの、「AR」はさらに角・長さの
+/// 実体を足して代数的な追跡を1回回せば分かるもの(格子から従う)。次数と種類ごとの
+/// `FACT_COUNT\t問題\t次数\t種類\t事実\t前\t後\tAR` と、要約の `FACT_COVERAGE` を出す(bench/coverage.sh が集める)。
+fn print_fact_coverage(engine: &mut BlackboardEngine, c: &mmp_core::Census, problem_name: &str, proved: bool) {
+    let after: Vec<bool> = c.facts.iter().map(|f| engine.prover.egraph.census_known(f)).collect();
+    for (f, &k) in c.facts.iter().zip(&after) {
+        if !k { engine.prover.egraph.census_materialize(f); }
+    }
+    engine.prover.egraph.apply_congruence_closure();
+    (engine.work_limit, engine.deadline) = (0, None);
+    engine.run_ar();
+    let ar: Vec<bool> = c.facts.iter().map(|f| engine.prover.egraph.census_known(f)).collect();
+    let mut counts: std::collections::BTreeMap<(u32, &str), [usize; 4]> = Default::default();
+    for (i, f) in c.facts.iter().enumerate() {
+        let e = counts.entry((f.degree, f.kind)).or_default();
+        e[0] += 1;
+        e[1] += f.known as usize;
+        e[2] += after[i] as usize;
+        e[3] += ar[i] as usize;
+    }
+    let (mut all, mut below) = ([0usize; 4], [0usize; 4]);
+    for (&(d, kind), n) in &counts {
+        println!("FACT_COUNT\t{}\t{}\t{}\t{}\t{}\t{}\t{}", problem_name, d, kind, n[0], n[1], n[2], n[3]);
+        for k in 0..4 {
+            all[k] += n[k];
+            if c.goal_degree.is_some_and(|g| d < g) { below[k] += n[k]; }
+        }
+    }
+    println!("FACT_COVERAGE\t{}\tsolved={}\tgoal_degree={}\tfacts={}\tknown_before={}\tknown_after={}\tknown_ar={}\tbelow_goal={}\tbelow_goal_before={}\tbelow_goal_after={}\tbelow_goal_ar={}",
+        problem_name, proved as u8, c.goal_degree.map_or("-".to_string(), |g| g.to_string()), all[0], all[1], all[2], all[3], below[0], below[1], below[2], below[3]);
 }
 
 /// --audit-merges の集計。`MERGE_AUDIT\t問題\t定理\t真\t偽\t判定不能\t前提` の行は全問の掃引で集計しやすいように出す

@@ -13,7 +13,17 @@
 <div class="section-head"><span class="section-num">05</span><h2>改善候補(優先度順)</h2></div>
 <p class="section-note"><b>2026-09-30 に全件を書き直した。</b>各項目の説明は今の状態を主にし、経緯と古い測定は来歴(§04)への参照に寄せた。上のグループから順に着手する: <b>①優先</b> → <b>②その他の未着手</b> → <b>③凍結・前提が古い・優先度が低い</b> → <b>④解決・反証・不発</b>。★は今の主線。「要再測定」は、固定座標・AR などの後で測り直していない項目。</p>
 <div class="toolbar"><input type="search" id="q" placeholder="見出し・本文を検索(空白区切りで AND)"><button type="button" data-filter="all" aria-pressed="true">すべて</button><button type="button" data-filter="open" aria-pressed="false">未着手</button><button type="button" data-filter="frozen" aria-pressed="false">凍結・古い</button><button type="button" data-filter="done" aria-pressed="false">解決・反証・不発</button><button type="button" id="expand">全て開く</button><button type="button" id="collapse">全て閉じる</button><span class="count" id="count"></span></div>
-<div class="group"><div class="group-title">① 優先 · 上から順に着手する · 8件</div>
+<div class="group"><div class="group-title">① 優先 · 上から順に着手する · 9件</div>
+<details class="item" id="b50" data-status="open">
+  <summary><span class="idx"></span><span class="t">★ 記号計算(Wu の方法)と次数の順の探索の続き ― 探索と Wu の方法の予算の分け方、Wu の方法の1回の上限、ノイズの癖</span></summary>
+  <div class="body">
+<div class="desc">今(<a class="secref" href="ledger.html#l103">#103</a>〜<a class="secref" href="ledger.html#l105">#105</a>): 既定は、次数の順の段(予算の 1/4 まで)→ 定理の照合に Wu の方法の試みを足したもの(探索と予算を半分ずつ)で、44問は noise10 を除く全設定で 44/44、HAGeo 119/172。次数の順の探索だけ(<code>--degree-search</code>)は HAGeo 111 だが、段を回さない形(116)と解ける問題が違い、合わせると 127。<br>
+<b>次の一手:</b> (1) <b>予算の分け方</b> ― 既定は Wu の方法の1回の試みが掛け算およそ 4,000 万回まで(探索と半分ずつ・上限は2倍ずつ)で、それを超える HAGeo 18問(#102 の1問60秒では示せた)を取れない。次数の順の段は安く済む問題が多く、そのとき残りの予算の大半を Wu の方法の1回に回すと取れる(<code>--degree-search</code> が拾う11問)。探索の手応え(手詰まりの続き方)で分け方を変えるなど、両方を取る形を探す。<br>
+(2) <b>Wu の方法を安くする</b> ― e-graph が示した事実で、実体をより低い次数の定義で計算し直す(同値類の中で次数の低い定義を選ぶ・2つの曲線に乗ると分かった点を交点として作り直す。使った併合・接続を Wu の方法の一歩の前提に書く)。一番重いのは目標の式の小行列式なので、ここが小さくなれば効く。<br>
+(3) <b>ノイズの癖</b>(以前から): ノイズの作図が前提の直線と一致すると、前提の接続が「定義から従う接続」とみなされて前提の曲線から外れる(<code>compute_extraneous_incidences</code>。Wu の方法は前提の少ない広い図で考えて示せなくなる)。前提を乱数の座標で満たせない図(bench_2010g1)では、ノイズの作図の退化の見送りが効かず、2点が一致する円ができる(#105 で、それに点を接続して偽の併合が連鎖した。Wu の方法の側は直した)。<br>
+(4) 特定の図に依らない定理の一覧(計画の段階4、ユーザーの別の興味): 小さい図(三角形と外心・垂心などの標準的な点)で成り立つ事実を次数の順に全て数え、#105 の「線形には従わない新しい事実」を図をまたいで集める。</div>
+  </div>
+</details>
 <details class="item" id="b45" data-status="open">
   <summary><span class="idx"></span><span class="t">★ 代数的な追跡(AR)を広げる ― 重なる定理は22件中18件を外した(#92〜#94)。残りは円周角の定理・中心角・垂直二等分線・中点連結</span></summary>
   <div class="body">

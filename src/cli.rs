@@ -37,6 +37,10 @@ pub enum Mode {
     Serve,
     /// 動点法の次数の表 (`geom_solver degree`)
     Degree,
+    /// 記号計算での証明 (`geom_solver algebra`)
+    Algebra,
+    /// 図の事実を次数の順に数える (`geom_solver facts`)
+    Facts,
 }
 
 impl Mode {
@@ -47,13 +51,15 @@ impl Mode {
             Mode::Degenerate => "退化させて関連を調べる: geom_solver discover-degenerate <問題名> [オプション]",
             Mode::Sweep => "パラメータを振って比べる: geom_solver sweep [オプション]",
             Mode::Serve => "ブラウザで作図する: geom_solver serve [オプション]",
-            Mode::Degree => "動点法の次数を表にする: geom_solver degree <問題名> [オプション]",
+            Mode::Degree => "実体の次数のベクトル(自由点ごとの成分と和)を表にする: geom_solver degree <問題名> [オプション]",
+            Mode::Algebra => "目標を記号計算(Wu の方法)で示せるか試す: geom_solver algebra <問題名> [オプション]",
+            Mode::Facts => "図の中で成り立つ事実(定理)を次数の順に並べて数える: geom_solver facts <問題名> [オプション]",
         }
     }
 }
 
 use Arg::{None as Switch, Value};
-use Mode::{Degenerate, Degree, Discover, Serve, Solve, Sweep};
+use Mode::{Algebra, Degenerate, Degree, Discover, Facts, Serve, Solve, Sweep};
 
 /// 探索の既定の予算(dfs_match の呼び出し回数)。
 /// 壁時計ではなくこれで測るので、同じ問題は何度流しても同じ結果になる。
@@ -124,6 +130,16 @@ pub const OPTIONS: &[Opt] = &[
           help: "固定座標を置けて代数的な追跡が回る問題で、AR の等式が同じ内容を出す定理の群を外す(proj: 透視射影・シュタイナー、angle: 角の足し算・同位角、circle: 円周角の定理の逆・接弦定理、length: 垂直二等分線の逆・二等辺三角形の底角とその逆・中点連結(長さ)・直角三角形の斜辺の中線。群の名前でないものは定理の名前として外す。none で外さない。来歴 #92・#93)" },
     Opt { name: "--ar-usage", arg: Switch, default: "出さない", mode: Solve,
           help: "解けたとき、証明に使った定理ごとの回数(PROOF_THEOREM)と、証明に残った代数的な追跡の結論が使った等式の種類(PROOF_AR_KIND)を出す(bench/ar_usage.sh が集計する)" },
+    Opt { name: "--no-wu", arg: Switch, default: "使う", mode: Solve,
+          help: "目標を Wu の方法(作図を媒介変数の多項式で表し、目標の式が法 2⁶¹−1 で恒等的に 0)で示す試みをしない。既定では最初と、手詰まりのときと、探索が次の上限の分だけ進んだときに、掛け算の回数の上限(最初は目標の次数 d から 1000·2^(d/2) と予算の 1/16 の小さい方、試すたびに2倍。Wu の方法の掛け算は探索の仕事量を超えない。途中の値は覚えて続きから計算する。160回を仕事量1と数える)を決めて試し、示せたら目標を「代数計算(Wu の方法)」で閉じる(来歴 #104)" },
+    Opt { name: "--no-wu-start", arg: Switch, default: "最初にも試す", mode: Solve,
+          help: "Wu の方法を最初には試さず、手詰まりのときだけ試す(探索ですぐ示せる問題は定理の連鎖の証明になる)" },
+    Opt { name: "--degree-search", arg: Switch, default: "使わない", mode: Solve,
+          help: "定理の照合の代わりに、次数の順に事実を確定していく探索をする: 図の事実を次数の低い順に、角・長さの実体を足して代数的な追跡で閉じ、残りを Wu の方法で確かめて入れる(次数ごとの数を DEGREE_LEVEL に出す)。目標の次数まで来たら、残りの予算で目標を Wu の方法で試す(来歴 #105)" },
+    Opt { name: "--no-degree-first", arg: Switch, default: "使う", mode: Solve,
+          help: "次数の順の段(--degree-search の段を予算の 1/4 まで、最後の Wu の方法の試みはせずに)を先に回さず、すぐ定理の照合に入る(来歴 #105)" },
+    Opt { name: "--fact-census", arg: Switch, default: "出さない", mode: Solve,
+          help: "探索の前の図の事実(geom_solver facts と同じ一覧)を、探索の後に知っているか(e-graph が知っているもの、角・長さの実体を足して代数的な追跡を1回回せば分かるもの)を次数と種類ごとに数える(FACT_COUNT・FACT_COVERAGE。bench/coverage.sh が集める)" },
     Opt { name: "--ar-off", arg: Value("種類,…,none"), default: "power", mode: Solve,
           help: "代数的な追跡の格子に入れない等式の種類(効き目を測る用。none で全て入れる): class ratio chord chord_noline tangent conic_link steiner chart affine mid_ratio power proj_center proj_parallel reflect center_circle sim_aa sim_sas sim_sss sim_corr menelaus。種類ごとの効き目は docs/notes/theorems.md(来歴 #98)" },
     Opt { name: "--no-generic-aux", arg: Switch, default: "汎用の補助作図を足す", mode: Solve,
@@ -218,10 +234,18 @@ pub const OPTIONS: &[Opt] = &[
           help: "乱数シード" },
     Opt { name: "--min-hits", arg: Value("回"), default: "2", mode: Degenerate,
           help: "何回の独立な乱数で一致したら報告するか" },
-    Opt { name: "--movers", arg: Value("A,B,…"), default: "前提の無い自由点全部", mode: Degree,
-          help: "動かす自由点(名前)。表は点ごとの次数と、全部を同時に動かしたときの次数" },
-    Opt { name: "--max-d", arg: Value("次数"), default: "8", mode: Degree,
-          help: "測る次数の上限(標本は 2×上限+2 個)" },
+    Opt { name: "--list", arg: Value("件数"), default: "0", mode: Facts,
+          help: "未知の事実を次数の低い順にこの件数だけ並べる" },
+    Opt { name: "--max-points", arg: Value("点の数"), default: "90", mode: Facts,
+          help: "共線・共円・等長を数える点の数の上限" },
+    Opt { name: "--method", arg: Value("wu|cert"), default: "wu", mode: Algebra,
+          help: "wu: Wu の方法(有理的な作図を代入)、cert: 次数を区切った多項式の線形結合(作図でない前提も使える)" },
+    Opt { name: "--max-rows", arg: Value("行の数"), default: "300000", mode: Algebra,
+          help: "cert の行列の行の数の上限" },
+    Opt { name: "--max-terms", arg: Value("項の数"), default: "2000000", mode: Algebra,
+          help: "多項式の項の数の上限(超えたら諦める)" },
+    Opt { name: "--max-mults", arg: Value("回数"), default: "2000000000", mode: Algebra,
+          help: "項の掛け算の回数の上限(超えたら諦める)" },
     Opt { name: "--only", arg: Value("名前,…"), default: "全ての点・直線・二次曲線", mode: Degree,
           help: "表に出す実体(名前)" },
 
@@ -253,7 +277,9 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[
     ("<問題名>", "その問題の証明を試みる(名前は list で確認できます)"),
     ("discover", "自由作図で未知の関係を探す"),
     ("discover-degenerate", "図形を退化させて関連の深い図形の組を探す"),
-    ("degree", "動点法の次数を、自由点ごとと全部同時に動かしたときで表にする"),
+    ("degree", "実体の次数のベクトル(自由点ごとの成分=動点法の次数と、その和)を表にする"),
+    ("algebra", "目標を記号計算(Wu の方法、法 2⁶¹−1 の合同式)で示せるか試す"),
+    ("facts", "図の中で成り立つ事実(定理)を次数の順に並べて数える"),
     ("serve", "ブラウザで作図して定理を発見する(GeoGebra風の画面)"),
     ("sweep", "オプションを振って解けた数と時間を比べる"),
     ("diagnose", "証明の筋書きに沿って、解けない問題がどの手順で詰まるかを調べる"),
@@ -292,7 +318,7 @@ pub fn print_help() {
     for (name, help) in SUBCOMMANDS {
         println!("  {} {}", pad(name, 22), help);
     }
-    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep, Mode::Serve, Mode::Degree] {
+    for mode in [Mode::Solve, Mode::Discover, Mode::Degenerate, Mode::Sweep, Mode::Serve, Mode::Degree, Mode::Algebra, Mode::Facts] {
         println!("\n{}", mode.title());
         for o in OPTIONS.iter().filter(|o| o.mode == mode) {
             let shown = match o.arg {

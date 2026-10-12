@@ -75,50 +75,8 @@ impl DivAssign for ModInt {
     fn div_assign(&mut self, rhs: Self) { *self = *self / rhs; }
 }
 
-// === 行列ランク計算 ===
-
-pub fn matrix_rank_mod(matrix: &mut Vec<Vec<ModInt>>) -> usize {
-    if matrix.is_empty() || matrix[0].is_empty() { return 0; }
-    let rows = matrix.len();
-    let cols = matrix[0].len();
-    let mut rank = 0;
-
-    for c in 0..cols {
-        let mut pivot_r = None;
-        for r in rank..rows {
-            if matrix[r][c].0 != 0 {
-                pivot_r = Some(r);
-                break;
-            }
-        }
-
-        if let Some(r) = pivot_r {
-            if r != rank {
-                matrix.swap(r, rank);
-            }
-            let inv_val = matrix[rank][c].inv();
-            for j in c..cols {
-                matrix[rank][j] *= inv_val;
-            }
-            for i in (rank + 1)..rows {
-                let factor = matrix[i][c];
-                if factor.0 != 0 {
-                    for j in c..cols {
-                        let sub_val = factor * matrix[rank][j];
-                        matrix[i][j] -= sub_val;
-                    }
-                }
-            }
-            rank += 1;
-        }
-    }
-    rank
-}
-
-
 /// 🌟 汎用のn×n行列式(ガウス消去法、体上のpivotで割るので特異でなければ
-/// 常に厳密に計算できる)。matrix_rank_modと同じ消去の骨格だが、こちらは
-/// ランクではなく実際の行列式の値(行入替の符号反転込み)を返す。
+/// 常に厳密に計算できる)。行列式の値(行入替の符号反転込み)を返す。
 /// 二次曲線の5点復元(calc_conic_through_5_points)で、5×6行列の零空間を
 /// 「6本の5×5小行列式」として求めるために使う(3D外積の6次元への一般化)。
 /// 特異(=途中の列に非ゼロのpivotが見つからない)なら0を返す。
@@ -150,27 +108,4 @@ pub fn determinant_mod(matrix: &mut Vec<Vec<ModInt>>) -> ModInt {
         }
     }
     det
-}
-
-pub fn get_numerical_degree(t_values: &[ModInt], x_values: &[ModInt], max_d: usize) -> usize {
-    let n = t_values.len();
-    for d in 0..=max_d {
-        let cols = 2 * d + 2;
-        if n < cols { continue; }
-        
-        let mut a = vec![vec![ModInt::new(0); cols]; n];
-        for i in 0..n {
-            let t = t_values[i];
-            let x = x_values[i];
-            for k in 0..=d {
-                let t_k = t.pow(k as i64);
-                a[i][k] = t_k;
-                a[i][d + 1 + k] = -x * t_k;
-            }
-        }
-        if matrix_rank_mod(&mut a) < cols {
-            return d;
-        }
-    }
-    max_d
 }

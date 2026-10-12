@@ -129,3 +129,26 @@ HAGeo-409 から読める問題のうち、保留問題と手で写した bench_
   `res/unsolved_<ラベル>.tsv` に出す。
 - `python3 bench/unsolved_sum.py <ラベル> <census のラベル>`: 予算800万の監査(`census.sh` の HAGeo 版)とつないで、未解決を
   「予算」「AR の上限」「規則・補助作図が足りない」に分け、作図の語の出現率を解けた問題と比べる。
+
+## 記号計算での証明(来歴 #102)
+
+- `SUFFIX=_wu bash bench/algebra.sh <bin のラベル>` / `SUFFIX=_cert bash bench/algebra.sh <bin のラベル> --method=cert`: 全44問と HAGeo で
+  `geom_solver algebra` を1問60秒まで試し、`res/algebra_<ラベル><SUFFIX>.tsv` に結果(proved・nonzero・gave-up・timeout)を出す。
+
+## 図の事実を次数ごとに数える(来歴 #103)
+
+- `bench/facts.sh <bin のラベル>`: 全44問と HAGeo で `geom_solver facts`(図の中で成り立つ事実を、共通の写像の次数の順に数える)を走らせ、
+  要約の行を `res/facts_<ラベル>.tsv` に集める。`python3 bench/facts_sum.py <facts のラベル> [探索のラベル] [記号計算のラベル]` が
+  目標の次数ごとに 問題数 / 探索で解けた数 / Wu の方法で示せた数 を出す。
+- `bench/coverage.sh <bin のラベル>`: 全44問と HAGeo を既定の設定と `--fact-census` で解き、探索の前の図の事実を探索の後に知っているか
+  (e-graph が知っているもの・AR を1回回せば分かるもの)を `res/coverage_<ラベル>.tsv`(次数と種類ごと)と `.sum`(問題ごと)に出す。
+  `python3 bench/coverage_sum.py <ラベル>` が 事実の次数 / 目標の次数との差 / 種類 ごとに、解けた問題と解けなかった問題に分けて集計する。
+
+## 次数の順に事実を確定していく探索(来歴 #105)
+
+- `bench/degree_levels.sh <bin のラベル>`: 全44問と HAGeo を `--degree-search` で解き、次数ごとの事実の数(既知・AR で分かった・Wu の方法で
+  示した・示せない)を `res/dlevels_<ラベル>.tsv` に、問題ごとの解けたか・仕事量を `.sum` に集める。`python3 bench/degree_levels_sum.py <ラベル>` が
+  次数の区間ごとに集計する(Wu の方法で示した数が「低い次数の事実から線形には従わない、その次数の新しい事実」)。
+- 既定は次数の順の段を先に(予算の 1/4 まで)回してから定理の照合に続ける。比べるときは `compare.sh`・`hageo.sh` に `"--degree-search"`
+  (定理の照合を使わない)か `"--no-degree-first"`(段を回さない)を渡す。
+

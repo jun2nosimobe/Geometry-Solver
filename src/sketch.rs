@@ -302,7 +302,8 @@ pub fn diagnose(args: &[String]) {
     for chunk in (0..rungs.len()).collect::<Vec<_>>().chunks(width) {
         std::thread::scope(|scope| {
             let handles: Vec<_> = chunk.iter().map(|&k| {
-                let mut argv = vec![problem.clone(), format!("--sketch={}", rungs[k].arg())];
+                // 定理の照合で手順を辿れるかを見るので、Wu の方法・次数の順の段は使わない(目標を先に示してしまう)。
+                let mut argv = vec![problem.clone(), format!("--sketch={}", rungs[k].arg()), "--no-wu".to_string(), "--no-degree-first".to_string()];
                 argv.extend(passthrough.iter().cloned());
                 let exe = &exe;
                 (k, scope.spawn(move || {

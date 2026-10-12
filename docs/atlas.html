@@ -16,7 +16,7 @@
     <div class="meta-row">
       <span><b>対象</b> src/mmp_core/・src/logic_core/・src/problems/・src/solve.rs(全体像は<a class="secref" href="atlas.html#layout">§01</a>)</span>
       <span><b>ベンチ</b> 44問(単体検証14 + 古典幾何15 + HAGeo-409由来15、難易度1.2〜2.3)</span>
-      <span><b>最新の来歴</b> #67〜#101(AR の根軸の逆・調和点列と中点・HAGeo の未解決の分類・ノイズ下でも固定座標を置く・AR の等式の種類ごとの効き目・格子の係数のあふれ・AR の相似を速く・AR の等式の投入を速く・AR を速く(出どころを DAG で・検出の候補を数値で)・仕事量の換算を実測に合わせる・壁時計の安全弁を直す・AR の円の規則を広げて円周角の定理の逆などを外す・AR と重なる定理を外す・合同閉包の重複をなくす・座標を置く順番の工夫・既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
+      <span><b>最新の来歴</b> #67〜#102(記号計算での証明(Wu の方法)を試す・AR の根軸の逆・調和点列と中点・HAGeo の未解決の分類・ノイズ下でも固定座標を置く・AR の等式の種類ごとの効き目・格子の係数のあふれ・AR の相似を速く・AR の等式の投入を速く・AR を速く(出どころを DAG で・検出の候補を数値で)・仕事量の換算を実測に合わせる・壁時計の安全弁を直す・AR の円の規則を広げて円周角の定理の逆などを外す・AR と重なる定理を外す・合同閉包の重複をなくす・座標を置く順番の工夫・既定の予算を100万に・AR を速く・二次曲線の規則の統合とシュタイナーの逆・平行な2直線の「交点」の健全性の修正・AR の二辺夾角・三辺と長さからの接続・AR を最初に1回・AR の鏡映と中心の分かった円・HAGeo の語彙と広い集合・発見パイプラインの質・AR のメネラウスとチェバ・時刻つきの証明の監査と検算専用の代数的な置き方・入口ごとの探索の組み立ての1本化・AR の相似と対応する点・AR の比と平行・AR の等式の生成・数値で選ぶ補助作図・代数的な追跡・未解決の分類・弦と平行四辺形の規則・汎用の補助作図・保留問題・交わる弦の相似・結論の数値検算・定理の一覧・非退化条件・固定座標)</span>
     </div>
   </div>
   <div class="stats">
@@ -52,7 +52,7 @@
 <details class="item" id="track-4" data-status="shipped">
   <summary><span class="idx">方針D</span><span class="t">定理を増やさず、AR の等式に置き換える</span><span class="pill shipped">22件中18件を AR が回る問題で外した</span></summary>
   <div class="body">
-<div class="desc">定理を増やすと無関係な問題にも試行の仕事量が乗り、問題名で定理を入れる opt-in は使わない。代わりに、定理が言っていることを<b>形式的な対数の線形な等式</b>として AR に入れる: 有向角・点と線束の複比(<a class="secref" href="ledger.html#l82">#82</a>)、円・透視射影・シュタイナー(<a class="secref" href="ledger.html#l83">#83</a>)、比と平行(<a class="secref" href="ledger.html#l84">#84</a>)、メネラウスとチェバ(<a class="secref" href="ledger.html#l88">#88</a>)、等方線束での長さの比と相似・相似で対応する点(<a class="secref" href="ledger.html#l85">#85</a>)。AR が有効なら「共点二弦の相似」と「交わる弦の相似」を既定で外し、幾何平均 −11.9%・+3問。<br><b>その後(#92〜#94): 射影・角の足し算・同位角・円周角の逆・接弦・垂直二等分線の逆・二等辺三角形の底角とその逆・中点連結(長さ)・斜辺の中線を、AR が回る問題に限って外した(<code>--ar-drop</code>)。そのために AR に直線の無い弦・図に無い円の円周角の逆(円を作り、言えなければ直線を引く)を入れた。<b>まだ外せない:</b> 円周角の定理・中心角・垂直二等分線・中点連結(照合の途中で角や長さの実体を作り、他の定理がそれを使う。外すと1〜4問落ちる)。長さは足し算を扱わず比のまま入れる方針(ユーザー)。</div>
+<div class="desc">定理を増やすと無関係な問題にも試行の仕事量が乗り、問題名で定理を入れる opt-in は使わない。代わりに、定理が言っていることを<b>形式的な対数の線形な等式</b>として AR に入れる: 有向角・点と線束の複比(<a class="secref" href="ledger.html#l82">#82</a>)、円・透視射影・シュタイナー(<a class="secref" href="ledger.html#l83">#83</a>)、比と平行(<a class="secref" href="ledger.html#l84">#84</a>)、メネラウスとチェバ(<a class="secref" href="ledger.html#l88">#88</a>)、等方線束での長さの比と相似・相似で対応する点(<a class="secref" href="ledger.html#l85">#85</a>)。AR が有効なら「共点二弦の相似」と「交わる弦の相似」を既定で外し、幾何平均 −11.9%・+3問。<br><b>その後(#92〜#94):</b> 射影・角の足し算・同位角・円周角の逆・接弦・垂直二等分線の逆・二等辺三角形の底角とその逆・中点連結(長さ)・斜辺の中線を、AR が回る問題に限って外した(<code>--ar-drop</code>)。そのために AR に直線の無い弦・図に無い円の円周角の逆(円を作り、言えなければ直線を引く)を入れた。<b>まだ外せない:</b> 円周角の定理・中心角・垂直二等分線・中点連結(照合の途中で角や長さの実体を作り、他の定理がそれを使う。外すと1〜4問落ちる)。長さは足し算を扱わず比のまま入れる方針(ユーザー)。</div>
   </div>
 </details>
 <details class="item" id="track-5" data-status="open">
@@ -69,13 +69,17 @@
 
     <div class="gloss">
       <div class="gterm"><b>src/main.rs</b><p>入口。未知のフラグの検出とサブコマンドの振り分け、<code>extract-proof</code>。</p></div>
-      <div class="gterm"><b>src/solve.rs</b><p>問題を1つ解くメインループ。オプションの解析(<code>SolveOptions</code>)→ 問題の読み込み(ノイズ・筋書き)→ 定理集合 → 前提の投入 → 探索の前の準備(<code>prepare</code>)→ <code>run_step</code> → 目標判定(<code>GoalChecker</code>)→ 行き詰まったら手詰まりの一手(<code>on_stall</code>: AR と回復を同じ回に。尽きたら <code>--mcts</code> のときだけ MCTS)、の一巡と、終了時のレポート。diagnose(<code>--sketch</code>)と sweep もここを通る。</p></div>
+      <div class="gterm"><b>src/solve.rs</b><p>問題を1つ解くメインループ。オプションの解析(<code>SolveOptions</code>)→ 問題の読み込み(ノイズ・筋書き)→ 定理集合 → 前提の投入 → 探索の前の準備(<code>prepare</code>)→ 次数の順の段(<code>degree_search</code>、予算の 1/4 まで)→ 最初の Wu の方法の試み → <code>run_step</code> → 目標判定(<code>GoalChecker</code>)→ 行き詰まったら手詰まりの一手(<code>on_stall</code>: AR と回復を同じ回に。尽きたら <code>--mcts</code> のときだけ MCTS)、の一巡と、終了時のレポート。diagnose(<code>--sketch</code>。定理の照合だけで解かせる)と sweep もここを通る。</p></div>
       <div class="gterm"><b>src/cli.rs</b><p>オプションの一覧表と<code>help</code>/<code>list</code>。知らないフラグは黙って無視せずエラーにする(「変えたつもりで既定値のまま走る」事故を止めるため)。</p></div>
       <div class="gterm"><b>src/mmp_core/mod.rs</b><p><code>EGraph</code>・<code>GeoEntity</code>・<code>Definition</code>・<code>EntityType</code>・<code>Fact</code>・<code>Justification</code>。生の構造を書き換える4ゲートウェイもここ(<a class="secref" href="atlas.html#matching">§03</a>)。</p></div>
       <div class="gterm"><b>mmp_core/congruence.rs</b><p><code>apply_congruence_closure</code>と、直線・二次曲線・交点の一意性の局所伝播。マージの実行(<code>merge_entities_justified</code>)もここ。</p></div>
       <div class="gterm"><b>mmp_core/fixed_coords.rs</b><p>固定座標: 前提が乱数座標で成り立つなら探索の前に一度だけ座標を置き、各実体を元の定義から計算する(マージに依存しない)。マージ前の検査・結論の検算・非退化条件・AR の写像の確認・数値で選ぶ補助作図が使う(<a class="secref" href="ledger.html#l79">#79</a>)。</p></div>
       <div class="gterm"><b>mmp_core/algebraic.rs</b><p>検算専用の代数的な置き方。乱数の座標では前提が成り立たない図(直線と円の両方に乗る点・「OP = OA」のような前提)で、前提を媒介変数の有理関数として標本から復元し、有限体の上で根を求めて自由点を置く。次数の評価には使わない(<a class="secref" href="ledger.html#l87">#87</a>)。</p></div>
-      <div class="gterm"><b>mmp_core/eval.rs</b><p>有限体上の数値評価。<code>numeric_plausibility_check</code>(マージ前と目標到達時の裏付け)と<code>cached_degree</code>(動点法の代数的次数)。</p></div>
+      <div class="gterm"><b>mmp_core/eval.rs</b><p>有限体上の数値評価。<code>numeric_plausibility_check</code>(マージ前と目標到達時の裏付け)。</p></div>
+      <div class="gterm"><b>mmp_core/symbolic.rs</b><p>記号計算。作図を元の定義どおりに、同次座標の成分が媒介変数の多項式(法 2⁶¹−1)になるよう組み立てる。目標の式が恒等的に 0 になるかを見る Wu の方法(<code>symbolic_prove</code>)と、次数を測る塊モード・事実の候補を選ぶ線モード(<a class="secref" href="ledger.html#l102">#102</a>・<a class="secref" href="ledger.html#l103">#103</a>)。</p></div>
+      <div class="gterm"><b>mmp_core/natural_degree.rs</b><p>実体の次数: 配置空間(自由点ごとの P²・前提の曲線の上なら P¹ の積)の Picard 群の類、つまり自由点ごとの次数のベクトル。照合の候補の並べ方・交点の需要・複比の制限が和や成分を使う(<a class="secref" href="ledger.html#l103">#103</a>)。</p></div>
+      <div class="gterm"><b>mmp_core/fact_census.rs</b><p>図の中で成り立つ事実を共通の写像の次数の順に数え(候補は値の比較で選ぶ。測定用)、その時点の e-graph が知っているかを判定する(<code>geom_solver facts</code>・<code>--fact-census</code>、<a class="secref" href="ledger.html#l103">#103</a>)。</p></div>
+      <div class="gterm"><b>mmp_core/certificate.rs</b><p>次数を区切った多項式の線形結合で目標を示す(<code>geom_solver algebra --method=cert</code>、<a class="secref" href="ledger.html#l102">#102</a>)。</p></div>
       <div class="gterm"><b>mmp_core/coords.rs</b><p>数の表現によらない評価の骨組み: 同値類の評価(同居する定義を順に試す・循環の検出)と、自由点の置き方(前提の曲線の上に置く・循環の解消・最後の検証)。有限体(eval.rs)・p進(padic_eval.rs)・実数(discover_viz.rs)の3つが共有する。</p></div>
       <div class="gterm"><b>mmp_core/proof.rs</b><p><code>explain_identical</code>: なぜ2つが同じ同値類に入ったかを「証明の森」から復元する。人間向けの<code>generate_proof</code>も。</p></div>
       <div class="gterm"><b>mmp_core/raw_proof.rs</b><p>全マージ履歴のダンプと、その再帰的な検証(<code>verify_identical</code>)。<code>extract-proof</code>サブコマンドの実体で、合流履歴を前向き・逆向きの両方に辿る。</p></div>
@@ -86,6 +90,8 @@
       <div class="gterm"><b>logic_core/matcher.rs</b><p>深さ優先探索の本体(<code>dfs_match</code>)と、fact_typeごとの候補の展開。どれを選ぶかの方針はcost.rsに分離済み。</p></div>
       <div class="gterm"><b>logic_core/blackboard.rs</b><p>探索の司令塔。タスク待ち行列を回し、行き詰まったときは<code>recover</code>(需要駆動の補助作図 → 候補capの拡大 → 汎用・数値で選ぶ補助作図)で図を伸ばす。探索の前の準備(<code>prepare</code>: 前提の凍結 → 固定座標 → 検査の設定)と手詰まりの一手(<code>on_stall</code>: AR と <code>recover</code> を同じ回に)は solve・serve・discover で共通(<a class="secref" href="ledger.html#l86">#86</a>)。</p></div>
       <div class="gterm"><b>logic_core/ar.rs</b><p>代数的な追跡(AR)。2点の差の形式的な対数を記号にし、有向角・複比・比・長さ(等方線束)・相似の等式を整数の格子(ℤⁿ ⊕ ℤ/4、エルミート標準形)で閉じて、同値類・方向・円への接続を併合する。手詰まりのたびに格子を作り直す(<a class="secref" href="ledger.html#l82">#82</a>〜<a class="secref" href="ledger.html#l85">#85</a>)。規則の一覧(状況 → 格子に足す関係式、格子で言えたら → 結論)は <a class="secref" href="theorems.html#ar">§07</a>。</p></div>
+      <div class="gterm"><b>logic_core/wu.rs</b><p>探索の中で目標を Wu の方法で示す試み。最初と、手詰まりのときと、探索が次の上限の分だけ進んだときに、掛け算の回数の上限を決めて試し(Wu の方法と探索で予算をおおよそ半分ずつ)、示せたら目標を「代数計算(Wu の方法)」で閉じる(<a class="secref" href="ledger.html#l104">#104</a>)。</p></div>
+      <div class="gterm"><b>logic_core/degree_search.rs</b><p>次数の順に事実を確定していく段。図の事実を次数の低い順に、角・長さの実体を足して AR で閉じ、残りを Wu の方法で確かめて入れる。既定では予算の 1/4 まで回してから定理の照合に続ける(<code>--degree-search</code> で照合を使わない、<code>--no-degree-first</code> で回さない。<a class="secref" href="ledger.html#l105">#105</a>)。</p></div>
       <div class="gterm"><b>logic_core/numeric_aux.rs</b><p>数値で選ぶ補助作図。交点・中点・垂線や平行線との交点・第2交点の候補を固定座標で試作し、既存の直線・円に乗る/点と重なる/新しく共円・共線になるものを点数順に作る(<a class="secref" href="ledger.html#l80">#80</a>)。</p></div>
       <div class="gterm"><b>src/theorems.rs</b><p>定理の定義(27件)。<code>theorem_set</code> の既定は24件(基本16・長さ1・中心角1・射影5・交わる弦の相似1)、<code>--rules</code> で弦・平行四辺形・同じ向きのスパイラル相似。solve は AR が有効なら方冪と交わる弦の相似の2件を外して22件で探索する(<code>--chord-theorems</code> で残す)。</p></div>
       <div class="gterm"><b>theorem_lint.rs / theorem_atlas.rs</b><p>定理の書き方の検査(役割・規模・対称性・証人)と、§07 定理の頁の元データ(<code>geom_solver theorem-atlas</code>)。</p></div>
@@ -108,6 +114,9 @@
       <div class="gterm"><b>geom_solver discover</b><p>目標なしの自由作図から非自明な性質を探す。<code>--prove</code>で見つけた性質の証明まで試す。</p></div>
       <div class="gterm"><b>geom_solver discover-degenerate</b><p>図を退化させて「一緒に潰れる」実体の組を観測する。</p></div>
       <div class="gterm"><b>geom_solver extract-proof</b><p>記録したマージ履歴から、目標までの証明を再帰的に展開して監査する。</p></div>
+      <div class="gterm"><b>geom_solver algebra</b><p>探索をせず、問題の作図と前提だけから目標を記号計算で示す(既定は Wu の方法、<code>--method=cert</code> で次数を区切った線形結合)。</p></div>
+      <div class="gterm"><b>geom_solver facts</b><p>図の中で成り立つ事実を次数の順に並べて数え、目標の次数と、未知の事実を表にする。</p></div>
+      <div class="gterm"><b>geom_solver degree</b><p>図の点・直線・二次曲線ごとに、次数のベクトル(自由点ごとの成分)と和を表にする。</p></div>
       <div class="gterm"><b>geom_solver serve</b><p>ブラウザUIを配信する。発見結果を逐次ストリームし、1件ずつ証明を試す(予算は solve と同じ仕事量)。</p></div>
     </div>
   </section>

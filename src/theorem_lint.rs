@@ -324,7 +324,8 @@ mod tests {
         for (theorem, problem) in WITNESS {
             assert!(names.iter().any(|n| n == theorem),
                 "証人の表に、もう存在しない定理「{}」が載っている", theorem);
-            let mut args = vec!["--steps=600000".to_string()];
+            // 定理の照合だけで解かせる(Wu の方法・次数の順の段が目標を先に示すと、定理が発火したかを確かめられない)。
+            let mut args = vec!["--steps=600000".to_string(), "--no-wu".to_string(), "--no-degree-first".to_string()];
             if let Some(r) = rule_of(theorem) { args.push(format!("--rules={}", r)); }
             let opts = crate::solve::SolveOptions::parse(&args).expect("既定のオプションは読めるはず");
             assert!(crate::solve::run(problem, &opts),

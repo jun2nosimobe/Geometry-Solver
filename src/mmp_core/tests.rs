@@ -618,105 +618,65 @@ fn test_cross_ratio_degenerate_cases_return_none() {
     assert!(mmp_calculators::calc_cross_ratio(&a, &b, &c, &a).is_none());
 }
 
-/// 🌟 Method of Moving Points(動点法)の次数測定(measure_numerical_degree)の
-/// 検証: ユーザーが指摘した通り、中点の作図を何段重ねても次数は1のまま
-/// 留まるべきである(中点は自由点1つが直線的に動く時、常に直線的にしか
-/// 動かないため)。
+/// 🌟 実体の次数のベクトル(natural_degree.rs)の成分: 中点を何段重ねても、どの自由点についての次数も1のまま
+/// (中点は各自由点について一次)。
 #[test]
-fn test_numerical_degree_stays_low_for_repeated_midpoints() {
+fn test_natural_degree_stays_one_for_repeated_midpoints() {
     let mut egraph = EGraph::new();
     let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
-    let mut e = egraph.create_entity("E0".into(), Definition::FreePoint, EntityType::Point);
-
     let mut current = a;
     for i in 1..=3 {
-        e = egraph.create_entity(format!("E{}", i).into(), Definition::FreePoint, EntityType::Point);
-        current = egraph.create_entity(format!("M{}", i).into(), Definition::Midpoint(current, e), EntityType::Point);
-        let deg = egraph.measure_numerical_degree(current, 6).expect("次数が測定できるはず");
-        assert_eq!(deg, 1, "中点をM{}段重ねても次数は1のまま留まるべき", i);
+        let e = egraph.create_entity(format!("E{}", i), Definition::FreePoint, EntityType::Point);
+        current = egraph.create_entity(format!("M{}", i), Definition::Midpoint(current, e), EntityType::Point);
+        let md = egraph.multidegree(current).expect("次数が測定できるはず");
+        assert!(md.iter().all(|&d| d <= 1), "中点をM{}段重ねても各成分は1以下のはず: {:?}", i, md);
+        let ia = egraph.degree_blocks().iter().position(|&b| b == a).unwrap();
+        assert_eq!(md[ia], 1, "A についての成分は1のはず");
     }
-    let _ = e; // 未使用警告よけ
 }
 
-/// 🌟 対照実験: 無関係な2直線の交点を取ると、中点とは対照的に次数が
-/// 明確に増加する(1段取っただけでmover自身の次数1から2へ上がる)。これに
-/// より「次数の低い補助点(中点等)は積極的に採用し、次数が上がる補助点
-/// (無関係な交点)は警戒する」というフィルタが実際に意味のある判定に
-/// なることを確認する。
-/// 🌟 注記: 2段目以降は交点の取り方によって偶然の代数的な相殺が起こり
-/// 次数が上がりきらないことがある(実測で確認済み――これ自体はMMPの
-/// 次数評価が「常に最良の上界を単純に足し算できるとは限らない」ことの
-/// 実例で、上界の予測にはPDFが述べる通り数個の図での実測が必要になる
-/// 理由でもある)。ここでは「中点は増えない・交点は増える」という
-/// 最小限の対照だけを固く検証する。
+/// 🌟 対照: 無関係な2直線の交点は、A についての成分が A 自身(1)より大きくなる。
 #[test]
-fn test_numerical_degree_grows_with_arbitrary_intersection() {
+fn test_natural_degree_grows_with_arbitrary_intersection() {
     let mut egraph = EGraph::new();
     let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
     let c = egraph.create_entity("C".into(), Definition::FreePoint, EntityType::Point);
     let d = egraph.create_entity("D".into(), Definition::FreePoint, EntityType::Point);
     let e = egraph.create_entity("E".into(), Definition::FreePoint, EntityType::Point);
-
-    let deg_a = egraph.measure_numerical_degree(a, 6).expect("次数が測定できるはず");
-    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
-
     let l1 = egraph.create_entity("L1".into(), Definition::new_line(a, c), EntityType::Line);
     let m = egraph.create_entity("Mid".into(), Definition::Midpoint(a, e), EntityType::Point);
     let l2 = egraph.create_entity("L2".into(), Definition::new_line(m, d), EntityType::Line);
     let p = egraph.create_entity("P".into(), Definition::Intersection(l1, l2), EntityType::Point);
-
-    let deg_p = egraph.measure_numerical_degree(p, 6).expect("次数が測定できるはず");
-    assert!(deg_p > deg_a, "無関係な2直線の交点は、moverそのものより次数が高くなるべき(1 -> {})", deg_p);
+    let ia = egraph.degree_blocks().iter().position(|&b| b == a).unwrap();
+    assert_eq!(egraph.multidegree(a).unwrap()[ia], 1, "A 自身の成分は1のはず");
+    let pa = egraph.multidegree(p).unwrap()[ia];
+    assert!(pa > 1, "無関係な2直線の交点の A についての成分は1より大きいはず(実測 {})", pa);
 }
 
-/// 🌟 ユーザー提案の検証: 「点の組A,Bについて、線分ABの次数がdeg(A)+deg(B)
-/// という素朴な上界より退化して小さい組は、隠れた定理・偶然の一致(この
-/// テストでは「B=Midpoint(A,F)なのでA,B,Fは常に共線」という自明な幾何的
-/// 事実)が効いている兆候として『相性が良い』とみなせる」を実測で確認する。
-/// A(mover, 次数1)とB=Midpoint(A,F)(次数1、Fは固定点)は素朴には
-/// deg(A)+deg(B)=2の直線を作りそうに見えるが、実際にはA,B,Fが常に
-/// 一直線上にある(=Line(A,B)は実質的にLine(A,F)、次数1)ため、
-/// measure_line_affinityはこの退化(2ではなく1)を検出できるはず。
+/// 🌟 「相性」: B = Midpoint(A,F) なので A, B, F は常に一直線で、Line(A,B) は Line(A,F)。直線の次数(和 2)は
+/// deg A + deg B(1 + 2)より小さい(2点を通る直線の写像に基点がある)。
 #[test]
 fn test_line_affinity_detects_collinear_degeneracy() {
     let mut egraph = EGraph::new();
     let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
     let f = egraph.create_entity("F".into(), Definition::FreePoint, EntityType::Point);
     let b = egraph.create_entity("B".into(), Definition::Midpoint(a, f), EntityType::Point);
-
-    let (deg_a, deg_b, deg_line) = egraph.measure_line_affinity(a, b, 6).expect("次数が測定できるはず");
-    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
-    assert_eq!(deg_b, 1, "中点(Midpoint)は次数を上げないはず");
-    assert!(
-        deg_line < deg_a + deg_b,
-        "A,B=Midpoint(A,F),Fは常に共線なので、Line(A,B)の次数は素朴な和({})より小さいはず(実測: {})",
-        deg_a + deg_b, deg_line
-    );
+    let (deg_a, deg_b, deg_line) = egraph.measure_line_affinity(a, b).expect("次数が測定できるはず");
+    assert_eq!((deg_a, deg_b), (1, 2), "A は (1,0)、B は (1,1)");
+    assert!(deg_line < deg_a + deg_b, "Line(A,B) = Line(A,F) の次数({})は素朴な和({})より小さいはず", deg_line, deg_a + deg_b);
 }
 
-/// 🌟 ユーザー提案「多点での評価を導入する。円も係数を射影空間の点だと
-/// 思えばOK」の検証: 3点版(measure_circle_affinity)でも同じ退化検出が
-/// 働くことを確認する。A(mover), B(固定点), D=Midpoint(A,B)は常に一直線上
-/// (Dが線分AB上にある)にあるため、本来「外接円」であるはずの
-/// Circumcircle(A,B,D)は退化して実質的にLine(A,B)そのものになる。
-/// deg(A)+deg(B)+deg(D)という素朴な和より、実際のCircumcircle(A,B,D)の
-/// (係数ベクトルを4成分の同次座標とみなした)次数の方が小さくなるはず。
+/// 🌟 3点版: D = Midpoint(A,B) なので Circumcircle(A,B,D) は直線 AB(と無限遠直線)に退化し、次数は素朴な和より小さい。
 #[test]
 fn test_circle_affinity_detects_collinear_degeneracy() {
     let mut egraph = EGraph::new();
     let a = egraph.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
     let b = egraph.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
     let d = egraph.create_entity("D".into(), Definition::Midpoint(a, b), EntityType::Point);
-
-    let (deg_a, deg_b, deg_d, deg_circle) = egraph.measure_circle_affinity(a, b, d, 6).expect("次数が測定できるはず");
-    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
-    assert_eq!(deg_b, 0, "Bは固定点なので次数0のはず");
-    assert_eq!(deg_d, 1, "中点(Midpoint)は次数を上げないはず");
-    assert!(
-        deg_circle < deg_a + deg_b + deg_d,
-        "A,B,D=Midpoint(A,B)は常に共線なので、Circumcircle(A,B,D)(実質的にLine(A,B))の次数は素朴な和({})より小さいはず(実測: {})",
-        deg_a + deg_b + deg_d, deg_circle
-    );
+    let circle = egraph.multidegree_with(&|s| Some(super::symbolic::circle_reduced(&s.value(a)?, &s.value(b)?, &s.value(d)?)))
+        .expect("次数が測定できるはず").iter().sum::<u32>() as usize;
+    let sum = [a, b, d].iter().map(|&x| egraph.natural_degree(x).unwrap()).sum::<usize>();
+    assert!(circle < sum, "共線の3点の円の次数({})は素朴な和({})より小さいはず", circle, sum);
 }
 
 /// 🌟 A,B,M1=Midpoint(A,B),M2=Midpoint(A,M1)の4点を作る共通ヘルパー。
@@ -761,7 +721,7 @@ fn test_detect_cross_ratio_coincidences_finds_matching_values() {
 }
 
 /// 🌟 ユーザー提案「複比自体を次数を用いて生成に制限をかけて」の土台となる
-/// measure_cross_ratio_affinityの検証。A(mover),B(固定点),M1=Midpoint(A,B),
+/// cross_ratio_multidegree の検証。A(mover),B(固定点),M1=Midpoint(A,B),
 /// M2=Midpoint(A,M1)は、A,Bの実際の位置に関わらず常に同じ定数の複比を
 /// 持つ(make_double_midpoint_quadのコメント参照)ので、複比自体の次数は
 /// ちょうど0(定数)になるはず――たとえ入力の4点が次数1のmoverを含んでいても、
@@ -772,10 +732,9 @@ fn test_cross_ratio_affinity_is_zero_for_affine_invariant_configuration() {
     let mut egraph = EGraph::new();
     let (a, _b, m1, m2) = make_double_midpoint_quad(&mut egraph, "A", "B");
 
-    let (deg_a, _deg_b, _deg_m1, _deg_m2, deg_cr) = egraph.measure_cross_ratio_affinity(a, _b, m1, m2, 6)
-        .expect("次数が測定できるはず");
-    assert_eq!(deg_a, 1, "mover自身の次数は1のはず");
-    assert_eq!(deg_cr, 0, "2重中点の複比は常に同じ定数なので次数0のはず(実測: {})", deg_cr);
+    let cr = egraph.cross_ratio_multidegree(a, _b, m1, m2).expect("次数が測定できるはず");
+    assert_eq!(egraph.natural_degree(a), Some(1), "A 自身の次数は1のはず");
+    assert!(cr.iter().all(|&d| d == 0), "2重中点の複比は常に同じ定数なので次数0のはず(実測: {:?})", cr);
 }
 
 /// 🌟 ユーザー提案「有向角を複比として扱う」の検証: AnglePairの評価式を
@@ -1306,4 +1265,21 @@ fn circle_center_point_matches_circumcircle() {
     let v1 = egraph.evaluate_node(circ, &vars, &mut cache).expect("外接円");
     let v2 = egraph.evaluate_node(cc, &vars, &mut cache).expect("中心と1点の円");
     assert_eq!(mmp_calculators::normalize(&v1), mmp_calculators::normalize(&v2));
+}
+
+/// 🌟 値が恒等的に 0 の作図(2点が一致する円)には、どの点も「乗る」ことにしない(Wu の方法は諦める。#105 で、ノイズの退化した
+/// 円に点を接続して二次曲線の一意性の伝播が偽の併合を連鎖させた)。
+#[test]
+fn test_wu_refuses_degenerate_circle() {
+    let mut eg = EGraph::new();
+    let a = eg.create_entity("A".into(), Definition::FreePoint, EntityType::Point);
+    let b = eg.create_entity("B".into(), Definition::FreePoint, EntityType::Point);
+    let x = eg.create_entity("X".into(), Definition::FreePoint, EntityType::Point);
+    let m = eg.create_entity("M".into(), Definition::Midpoint(a, a), EntityType::Point);
+    let c = eg.create_entity("C".into(), Definition::Circumcircle(a, m, b), EntityType::Conic);
+    eg.freeze_premise_incidences();
+    let (r, ..) = eg.symbolic_prove("Connected", &[x, c], 100_000, 1_000_000);
+    assert_ne!(r, Some(true), "退化した円への接続を示したことにしてはいけない");
+    let (r, ..) = eg.symbolic_prove("Concyclic", &[a, m, b, x], 100_000, 1_000_000);
+    assert_ne!(r, Some(true), "一致する2点を含む共円を示したことにしてはいけない");
 }

@@ -5,6 +5,8 @@
 //!   cost.rs       次にどのパターンを見るかの見積もりと、候補の絞り方(枝刈り)
 //!   matcher.rs    パターン列を消費していく深さ優先探索の本体
 //!   blackboard.rs タスク待ち行列と、行き詰まったときの需要駆動の補助作図
+//!   wu.rs         最初と手詰まりのときに目標を Wu の方法で示す試み
+//!   degree_search.rs 次数の順に事実を確定していく探索(--degree-search)
 //!
 //! 以前は1ファイル3100行に全部入っていた。中身は分割時に1文字も
 //! 変えていない(挙動が同じことは消費仕事量が1ステップも変わらないことで
@@ -17,7 +19,10 @@ mod numeric_aux;
 pub(crate) mod ar;
 mod prover;
 mod theorem;
+mod wu;
+mod degree_search;
 
 pub use blackboard::*;
 pub use prover::*;
 pub use theorem::*;
+pub use wu::*;

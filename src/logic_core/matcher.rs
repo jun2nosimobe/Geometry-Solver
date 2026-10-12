@@ -700,15 +700,14 @@ impl ProverEngine {
             }
 
         // 熱の高い候補から試す。候補が多いときだけ、次数の低い(単純な構成の)候補を優先する
-        // (次数の測定は重いので少数のときは省く。MAX_D は乱数サンプリングで順位がぶれない大きさ)。
+        // (次数は natural_degree.rs の、各自由点の超平面類の和についての次数)。
         const DEGREE_HEURISTIC_THRESHOLD: usize = 10;
-        const DEGREE_MAX_D_FOR_ORDERING: usize = 4;
         const DEGREE_WEIGHT: f64 = 3.0;
         let use_degree_heuristic = matches.len() > DEGREE_HEURISTIC_THRESHOLD;
         let degree_score = |b: &Bind| -> f64 {
             if !use_degree_heuristic { return 0.0; }
             b.get(result_var)
-                .and_then(|&id| self.egraph.cached_degree(id, DEGREE_MAX_D_FOR_ORDERING))
+                .and_then(|&id| self.egraph.natural_degree(id))
                 .unwrap_or(0) as f64
         };
         // 並べ替えのキー(熱と、同点のときの決定的な順序・重複除去に使う束縛の文字列)は
@@ -761,13 +760,12 @@ impl ProverEngine {
             } else if role == DefRole::Build {
                 // 図の上で値の定まらない図形(重なった2点の長さなど)は作らない。
                 if self.egraph.nondegeneracy && self.egraph.without_consuming_rng(|eg| eg.definition_is_degenerate(&temp_def)) { return valid_nodes; }
-                // 無関係な4点・4直線の複比は次数が積み上がるので、高すぎるものは作らない。
+                // 無関係な4点・4直線の複比は次数が積み上がるので、どれかの自由点についての次数が高すぎるものは作らない。
                 if let Definition::CrossRatio(a, b, c, d) | Definition::CrossRatioOfLines(a, b, c, d) = temp_def {
-                    const CR_DEGREE_CAP: usize = 8;
-                    const CR_MAX_D: usize = 6;
-                    if let Some((da, db, dc, dd, d_cr)) = self.egraph.measure_cross_ratio_affinity(a, b, c, d, CR_MAX_D)
-                        && d_cr > CR_DEGREE_CAP {
-                            println!("  🚫 [複比の生成を制限] 次数{}(次数{}+{}+{}+{})が高すぎるため、{}の生成を見送りました", d_cr, da, db, dc, dd, kind.name());
+                    const CR_DEGREE_CAP: u32 = 8;
+                    if let Some(md) = self.egraph.cross_ratio_multidegree(a, b, c, d)
+                        && md.iter().any(|&x| x > CR_DEGREE_CAP) {
+                            println!("  🚫 [複比の生成を制限] 次数のベクトル {:?} の成分が {} を超えるため、{}の生成を見送りました", md, CR_DEGREE_CAP, kind.name());
                             return valid_nodes;
                         }
                 }

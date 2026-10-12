@@ -26,6 +26,12 @@ mod census;
 pub use census::MergeCensus;
 mod fixed_coords;
 mod algebraic;
+mod symbolic;
+mod certificate;
+mod fact_census;
+mod natural_degree;
+pub(crate) use fact_census::{Census, CensusFact};
+pub(crate) use symbolic::WuMemo;
 pub(crate) use fixed_coords::point_lies_on;
 pub(crate) mod coords;
 pub(crate) mod eval;
@@ -452,9 +458,8 @@ pub struct EGraph {
     /// 数値検証・次数測定に使う乱数の状態(EGraph::random_modint)。シード固定なので、
     /// 同じ問題は毎回同じ座標で検算する。
     rng_state: Cell<u64>,
-    /// 次数測定(動点法)が使う乱数の状態。数値チェックとは別の列にしてある ― 同じ列だと、検算の回数が変わる
-    /// だけで次数の測り方が変わり、次数で並べ替えるマッチの候補順、ひいては探索の結果まで動いてしまう。
-    degree_rng_state: Cell<u64>,
+    /// 実体の次数(代数幾何的な定式化、natural_degree.rs)の覚え。
+    pub(crate) natural_degrees: std::cell::RefCell<natural_degree::NaturalDegrees>,
     // 🌟 EntityType ごとの生成済み ClassId の一覧。create_entity で追記するだけでマージでは消さないので、
     // 使う側は get_rep で代表元に直す(iter_reps_of_type)。定理マッチングが特定の型の実体を探すときに
     // 全件を走査しないための索引。
@@ -516,6 +521,9 @@ pub struct EGraph {
     /// 接続を全て前提として扱う(作図画面・発見)。探索中に規則が導いた接続は前提ではない: 前提に数えると、偽の接続を
     /// 満たすように点を置いて検算が偽を見逃し、導いた接続が積み重なると点を置けなくなって検算が全て判定不能になる(pascal)。
     pub premise_incidences: Option<Vec<(ClassId, ClassId)>>,
+    /// 元の定義が自由点の実体ごとの、freeze_premise_incidences の時点の代表元。記号計算は自由点の変数をこれで引く(探索の併合で
+    /// 代表元が変わっても、作図から計算する値が変わらないように)。
+    pub(crate) frozen_free_keys: Option<rustc_hash::FxHashMap<usize, usize>>,
     /// 固定座標の数値モデル(fixed_coords.rs)。Some なら数値チェックはこれを使う。
     pub(crate) fixed_coords: std::cell::RefCell<Option<fixed_coords::FixedCoords>>,
 }
@@ -624,7 +632,7 @@ impl EGraph {
             structure_cache: std::cell::RefCell::new(StructureCache::default()),
             numeric_samples: std::cell::RefCell::new(Default::default()),
             rng_state: Cell::new(0x5EED_6E0_5017_E5),
-            degree_rng_state: Cell::new(0xD_E6_6E_5EED),
+            natural_degrees: std::cell::RefCell::new(Default::default()),
             type_index: rustc_hash::FxHashMap::default(),
             type_generation: rustc_hash::FxHashMap::default(),
             type_counts: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
@@ -646,6 +654,7 @@ impl EGraph {
             nondegenerate_skips: [0; 3],
             nondegeneracy: true,
             premise_incidences: None,
+            frozen_free_keys: None,
             fixed_coords: std::cell::RefCell::new(None),
         };
         // 🌟 定数ノードの生成 (GivenPointをプレースホルダとして利用)
@@ -729,7 +738,6 @@ impl EGraph {
             original_definition: norm_def.clone(),
             uses: rustc_hash::FxHashSet::default(),
             mcts_depth: 0,
-            degree_cache: std::cell::Cell::new(None),
             origin: self.current_origin,
             origin_cascade: self.trivial_depth > 0,
         };
@@ -946,9 +954,6 @@ pub struct GeoEntity {
     // MCTS自身の産物の上に何段も構成を積み増す(例:中点のまた中点のまた中点…)
     // ことだけを対象にした、ローカルな連鎖専用のカウンタ。
     pub mcts_depth: usize,
-    // 🌟 動点法の次数(measure_numerical_degree)のメモ。None=未計算、Some(None)=測定不能、
-    // Some(Some(d))=次数d。マッチングのホットパスから &self のまま読み書きするための Cell。
-    pub degree_cache: std::cell::Cell<Option<Option<usize>>>,
     // 🌟 この図形を「誰が作ったか」(EntityOrigin 参照)。
     pub origin: EntityOrigin,
     // 🌟 上の origin が「直接そう頼まれて作られた」のか、「その作図に付随して
