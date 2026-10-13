@@ -30,8 +30,12 @@ mod symbolic;
 mod certificate;
 mod fact_census;
 mod natural_degree;
+mod units;
+mod aux_census;
 pub(crate) use fact_census::{Census, CensusFact};
 pub(crate) use symbolic::WuMemo;
+pub(crate) use units::{cumulative_ranks, rational, Eliminator, ProvEliminator};
+pub(crate) use aux_census::AuxKind;
 pub(crate) use fixed_coords::point_lies_on;
 pub(crate) mod coords;
 pub(crate) mod eval;
@@ -894,6 +898,8 @@ pub enum EntityOrigin {
     Mcts,
     /// 調和共役点の完全四辺形作図 (construct_harmonic_conjugate)。
     Harmonic,
+    /// 次数の順の補助作図 (logic_core/degree_search.rs、mmp_core/aux_census.rs)。
+    DegreeAux,
 }
 
 impl EntityOrigin {
@@ -911,6 +917,7 @@ impl EntityOrigin {
             EntityOrigin::TargetDemand => "目標駆動",
             EntityOrigin::Mcts => "MCTS",
             EntityOrigin::Harmonic => "調和共役作図",
+            EntityOrigin::DegreeAux => "次数の順の補助作図",
         }
     }
 
@@ -919,7 +926,7 @@ impl EntityOrigin {
         EntityOrigin::Given, EntityOrigin::DefinedBy, EntityOrigin::Construct,
         EntityOrigin::LineDemand, EntityOrigin::PointDemand, EntityOrigin::SecondDemand, EntityOrigin::MidDemand,
         EntityOrigin::AngleDemand, EntityOrigin::TargetDemand, EntityOrigin::Mcts,
-        EntityOrigin::Harmonic,
+        EntityOrigin::Harmonic, EntityOrigin::DegreeAux,
     ];
 }
 

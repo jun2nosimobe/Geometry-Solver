@@ -152,3 +152,17 @@ HAGeo-409 から読める問題のうち、保留問題と手で写した bench_
 - 既定は次数の順の段を先に(予算の 1/4 まで)回してから定理の照合に続ける。比べるときは `compare.sh`・`hageo.sh` に `"--degree-search"`
   (定理の照合を使わない)か `"--no-degree-first"`(段を回さない)を渡す。
 
+## 点の差の乗法的関係の格子(来歴 #106)
+
+- `bench/coverage.sh` は FACT_RANK(次数ごとの、事実の全て・最初から既知・探索の後・AR が張る階数)と LATTICE(格子の階数・基底の大きさ・
+  時間)も `res/coverage_<ラベル>.rank`・`.lattice` に集める。`python3 bench/lattice_sum.py <ラベル>` が目標の次数より下・目標の次数まで・全体で
+  集計する。AR だけを測るときは別のラベルで `bench/coverage.sh <ラベル> "--steps=0 --no-wu"`。
+
+## 補助点の役立ち(来歴 #110)
+
+- `bench/aux_rich.sh <ラベル>`: 216問を `GS_AUX_RICH=1` で解き、問題文の図から作る補助点の候補(中点・交点・垂線の足・2つ目の交点、
+  1問 最大300個。`GS_AUX_RICH_MAX` で変える)ごとに、因子の共有・事実の増え・目標が低い次数の空間に入るかを測る。証明に使った補助点
+  (`--origins` の AUXPT)が候補の中で何番目かも出す。`python3 bench/aux_rich_sum.py <ラベル>` で集計。重い問題があるので 216問で15分ほど。
+- `--degree-search` の段の補助作図を見るときは `GS_DEBUG_AUX=1`(候補ごとの判定)、補助点の後で示せなかった事実は `GS_DEBUG_UNPROVED=1`。
+  補助点の次数の上限(目標の次数の倍、既定 2)は `GS_AUX_DEGREE_FACTOR` で変えられる(`inf` で上限なし。来歴 #111)。
+

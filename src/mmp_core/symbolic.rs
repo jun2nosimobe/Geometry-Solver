@@ -133,7 +133,7 @@ pub(crate) type V = Vec<Poly>;
 // --- 一変数(線モード: 媒介変数の空間の一般の直線 u = u0 + t·w の上)の計算。多項式は t = 変数0 だけ。 ---
 
 /// t の係数の列(次数の低い順、最高次は 0 でない。0 は空)。
-fn dense(p: &Poly) -> Vec<u64> {
+pub(crate) fn dense(p: &Poly) -> Vec<u64> {
     let mut v = vec![0u64; p.maxdeg[0] as usize + 1];
     for (&m, &c) in &p.terms { v[(m & 0xFFFF) as usize] = c; }
     while v.last() == Some(&0) { v.pop(); }
@@ -444,8 +444,7 @@ impl<'a> Symbolic<'a> {
         if !self.visiting.insert(id.0) { return self.give_up("定義が循環".into()); }
         let mut v = self.compute(id);
         if let Some(v) = v.as_mut() {
-            strip_monomial(v);
-            if self.univariate() { reduce_line(v); }
+            self.normalize(v);
             if std::env::var("GS_DEBUG_SYM").is_ok() {
                 let deg: u32 = v.iter().flat_map(|p| p.terms.keys().map(|&m| exps(m).iter().map(|&e| e as u32).sum::<u32>())).max().unwrap_or(0);
                 let terms: usize = v.iter().map(|p| p.terms.len()).sum();
@@ -463,9 +462,36 @@ impl<'a> Symbolic<'a> {
         if id == eg.ang0 { return Some(vec![Poly::constant(0), Poly::constant(1)]); }
         if id == eg.line_infinity { return Some(vec![Poly::constant(0), Poly::constant(0), Poly::constant(1)]); }
         let def = eg.entities[id.0].original_definition.clone();
+        if matches!(def, Definition::FreePoint) { return self.free_point(id); }
+        self.compute_def(def)
+    }
+
+    /// 実体の無い作図の値(補助作図の候補を測る用)。簡約は value と同じ。
+    pub(crate) fn value_of(&mut self, def: Definition) -> Option<V> {
+        let mut v = self.compute_def(def)?;
+        self.normalize(&mut v);
+        Some(v)
+    }
+
+    /// 点 p から直線 l への垂線の足(実体の無い作図)。
+    pub(crate) fn foot_value(&mut self, p: ClassId, l: ClassId) -> Option<V> {
+        let (lv, pv) = (self.value(l)?, self.value(p)?);
+        let bg = &mut self.budget;
+        let perp = vec![lv[1].mul(&pv[2], bg)?, lv[0].mul(&pv[2], bg)?.neg(), lv[1].mul(&pv[0], bg)?.sub(&lv[0].mul(&pv[1], bg)?).neg()];
+        let mut v = cross(&lv, &perp, &mut self.budget)?;
+        self.normalize(&mut v);
+        Some(v)
+    }
+
+    fn normalize(&self, v: &mut V) {
+        strip_monomial(v);
+        if self.univariate() { reduce_line(v); }
+    }
+
+    fn compute_def(&mut self, def: Definition) -> Option<V> {
         let z = Poly::default;
         Some(match def {
-            Definition::FreePoint => return self.free_point(id),
+            Definition::FreePoint => return self.give_up("自由点の値は実体から".into()),
             Definition::Midpoint(a, b) => {
                 let (a, b) = (self.value(a)?, self.value(b)?);
                 let bg = &mut self.budget;

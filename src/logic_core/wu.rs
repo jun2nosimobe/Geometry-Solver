@@ -14,6 +14,8 @@ use crate::mmp_core::{ClassId, Definition, EntityType, Justification, WuMemo};
 use super::BlackboardEngine;
 
 pub const WU_THEOREM: &str = "代数計算(Wu の方法)";
+/// 次数の順の段で、既知の事実から線形に従わない乗法的関係を示した一歩。
+pub const MULT_THEOREM: &str = "代数計算(乗法的関係)";
 pub const WU_MULTS_PER_WORK: u64 = 160;
 const WU_MAX_TERMS: usize = 1_000_000;
 
@@ -98,14 +100,14 @@ impl BlackboardEngine {
         w.proved = true;
         w.memo = WuMemo::default();
         let tries = w.tries;
-        if !self.close_by_wu(kind, args) { return false; }
+        if !self.close_by_wu(kind, args, WU_THEOREM) { return false; }
         println!("  🧮 [代数計算] Wu の方法で目標を示しました({} 回目、掛け算 {} 回)", tries, used);
         true
     }
 
-    /// Wu の方法で示した事実(kind, args)を e-graph に入れる: 等しい → 併合、接続 → 接続、共円 → 最初の3点を通る円(無ければ作る)に
-    /// 残りの点を接続。根拠は「代数計算(Wu の方法)」で、前提は事実の作図の祖先にあって前提の曲線に乗せた自由点の接続。
-    pub(crate) fn close_by_wu(&mut self, kind: &str, args: &[ClassId]) -> bool {
+    /// 記号計算で示した事実(kind, args)を e-graph に入れる: 等しい → 併合、接続 → 接続、共円 → 最初の3点を通る円(無ければ作る)に
+    /// 残りの点を接続。根拠は name(代数計算)で、前提は事実の作図の祖先にあって前提の曲線に乗せた自由点の接続。
+    pub(crate) fn close_by_wu(&mut self, kind: &str, args: &[ClassId], name: &str) -> bool {
         let eg = &mut self.prover.egraph;
         let incidences = eg.premise_incidences.clone().unwrap_or_default();
         let mut seen: FxHashSet<usize> = FxHashSet::default();
@@ -117,7 +119,7 @@ impl BlackboardEngine {
         }
         let premises: Vec<(String, Vec<ClassId>)> = incidences.iter().filter(|&&(p, _)| seen.contains(&p.0))
             .map(|&(p, c)| ("Connected".to_string(), vec![p, c])).collect();
-        let j = Justification::Theorem { name: WU_THEOREM.to_string(), premises };
+        let j = Justification::Theorem { name: name.to_string(), premises };
         match (kind, args) {
             ("Identical", [a, b]) => { eg.merge_entities_justified(*a, *b, j); }
             ("Connected", [a, b]) => { let (p, c) = eg.point_and_curve(*a, *b); eg.link_logical_incidence_justified(c, p, j); }

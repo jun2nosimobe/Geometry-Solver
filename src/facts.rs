@@ -58,6 +58,16 @@ pub fn run(args: &[String]) {
             println!("  {:>4}  {:<10} {}", f.degree, f.kind, f.objs.iter().map(|&x| name(x)).collect::<Vec<_>>().join(" "));
         }
     }
+    // 点の差の乗法的関係の格子(改善候補 b51 の測定)。
+    let t1 = Instant::now();
+    let (ur, vecs) = eg.unit_relations(&c.facts);
+    let not_rel = vecs.iter().flatten().filter(|v| !ur.holds(v)).count();
+    let all = crate::mmp_core::cumulative_ranks(&c.facts, &vecs, &|_| true);
+    let known = crate::mmp_core::cumulative_ranks(&c.facts, &vecs, &|i| c.facts[i].known);
+    println!("乗法的関係: 原子 {}・基底 {}・格子の階数 {}、事実のうち関係の形に書けるもの {}/{}(成り立たないと出たもの {})、{:.2}秒",
+        ur.atoms(), ur.base_len, ur.lattice_rank(), vecs.iter().flatten().count(), c.facts.len(), not_rel, t1.elapsed().as_secs_f64());
+    println!("{:>4} {:>10} {:>10}", "次数", "事実の階数", "既知の階数");
+    for ((d, a), (_, k)) in all.iter().zip(known.iter()) { println!("{:>4} {:>10} {:>10}", d, a, k); }
     let unknown: Vec<&crate::mmp_core::CensusFact> = c.facts.iter().filter(|f| !f.known).collect();
     let below = c.goal_degree.map(|g| unknown.iter().filter(|f| f.degree < g).count());
     println!("FACTS\t{}\tgoal_degree={}\tgoal_true={}\tparams={}\tobjects={}\tmax_degree={}\tfacts={}\tunknown={}\tunknown_below_goal={}\tsecs={:.2}",

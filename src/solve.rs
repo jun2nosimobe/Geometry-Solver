@@ -499,6 +499,8 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     }
 
     let census = opts.fact_census.then(|| engine.prover.egraph.fact_census(problem.target_fact.as_ref(), 90));
+    // 補助作図の測定(GS_AUX_RICH): 問題文の図の事実は探索の前に数える(「既知」を読み込んだ時点のものにするため)。
+    let aux_census = std::env::var("GS_AUX_RICH").is_ok().then(|| engine.prover.egraph.aux_figure(problem.target_fact.as_ref()));
     let mut proved = false;
     let start_time = Instant::now();
     engine.prune_growth = opts.prune;
@@ -510,7 +512,7 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     if (opts.degree_search || opts.degree_first) && let Some(t) = &problem.target_fact {
         let (reached, levels) = engine.degree_search(t, !opts.degree_search);
         for l in &levels {
-            println!("DEGREE_LEVEL	{}	{}	{}	{}	{}	{}	{}", problem_name, l.degree, l.facts, l.known, l.by_ar, l.by_wu, l.unproved);
+            println!("DEGREE_LEVEL\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", problem_name, l.degree, l.facts, l.known, l.by_ar, l.by_wu, l.unproved, l.dependent, l.ar_missed, l.round);
         }
         proved = reached && matches!(goal.check(&engine, problem_name, &problem.target_fact, recovery.mcts_ever_committed, start_time), Goal::Proved);
     }
@@ -600,6 +602,10 @@ pub fn run(problem_name: &str, opts: &SolveOptions) -> bool {
     if opts.show_origins {
         trace::report_origins(&engine.prover.egraph, &problem.target_fact, problem_name);
     }
+    if let Some(c) = &aux_census {
+        let used = trace::proof_aux_points(&engine.prover.egraph, &problem.target_fact);
+        engine.prover.egraph.report_aux_richness(problem_name, &used, c);
+    }
     if let Some(p) = &sketch_ctx {
         sketch::report(&engine.prover.egraph, p);
     }
@@ -648,6 +654,18 @@ fn print_fact_coverage(engine: &mut BlackboardEngine, c: &mmp_core::Census, prob
             if c.goal_degree.is_some_and(|g| d < g) { below[k] += n[k]; }
         }
     }
+    // 点の差の乗法的関係の格子と、事実の部分集合が張る階数(改善候補 b51 の測定)。
+    let t1 = Instant::now();
+    let (ur, vecs) = engine.prover.egraph.unit_relations(&c.facts);
+    let ranks: Vec<Vec<(u32, usize)>> = [
+        &(|_: usize| true) as &dyn Fn(usize) -> bool, &|i: usize| c.facts[i].known, &|i: usize| after[i], &|i: usize| ar[i],
+    ].iter().map(|sel| mmp_core::cumulative_ranks(&c.facts, &vecs, *sel)).collect();
+    for (((&(d, all), b), a), r) in ranks[0].iter().zip(&ranks[1]).zip(&ranks[2]).zip(&ranks[3]) {
+        println!("FACT_RANK\t{}\t{}\t{}\t{}\t{}\t{}", problem_name, d, all, b.1, a.1, r.1);
+    }
+    println!("LATTICE\t{}\tatoms={}\tbase={}\tlattice_rank={}\tfacts_rank={}\twritable={}\tnot_relation={}\tsecs={:.2}",
+        problem_name, ur.atoms(), ur.base_len, ur.lattice_rank(), ranks[0].last().map_or(0, |r| r.1),
+        vecs.iter().flatten().count(), vecs.iter().flatten().filter(|v| !ur.holds(v)).count(), t1.elapsed().as_secs_f64());
     println!("FACT_COVERAGE\t{}\tsolved={}\tgoal_degree={}\tfacts={}\tknown_before={}\tknown_after={}\tknown_ar={}\tbelow_goal={}\tbelow_goal_before={}\tbelow_goal_after={}\tbelow_goal_ar={}",
         problem_name, proved as u8, c.goal_degree.map_or("-".to_string(), |g| g.to_string()), all[0], all[1], all[2], all[3], below[0], below[1], below[2], below[3]);
 }

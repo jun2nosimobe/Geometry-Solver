@@ -43,7 +43,10 @@ type LineVal = (ClassId, u32, V, [[u64; 3]; 3]);
 type ConicVal = (ClassId, u32, [[u64; 6]; 3]);
 
 impl EGraph {
-    pub(crate) fn fact_census(&self, target: Option<&(String, Vec<ClassId>)>, max_points: usize) -> Census {
+    pub(crate) fn fact_census(&self, target: Option<&(String, Vec<ClassId>)>, max_points: usize) -> Census { self.fact_census_in(target, max_points, None) }
+
+    /// keep(代表元の番号)を与えると、その実体だけで数える。
+    pub(crate) fn fact_census_in(&self, target: Option<&(String, Vec<ClassId>)>, max_points: usize, keep: Option<&FxHashSet<usize>>) -> Census {
         // 写像 f の次数(次数のベクトルの成分の和)。
         let nd = |f: &dyn Fn(&mut Symbolic) -> Option<V>| -> Option<u32> { self.multidegree_with(f).map(|v| v.iter().sum()) };
         let mut s = Symbolic::on_line(self, 0x9E37_79B9_7F4A_7C15);
@@ -56,7 +59,7 @@ impl EGraph {
         let mut cns: Vec<ConicVal> = Vec::new();
         for i in 0..self.entities.len() {
             let id = ClassId(i);
-            if self.get_rep(id) != id || !self.entities[i].is_active() || id == linf || id == ci || id == cj { continue; }
+            if self.get_rep(id) != id || keep.is_some_and(|k| !k.contains(&i)) || !self.entities[i].is_active() || id == linf || id == ci || id == cj { continue; }
             let ty = self.entities[i].entity_type;
             if !matches!(ty, EntityType::Point | EntityType::Line | EntityType::Conic) { continue; }
             let Some(v) = s.value(id) else { c.failed += 1; s.fail = None; continue };

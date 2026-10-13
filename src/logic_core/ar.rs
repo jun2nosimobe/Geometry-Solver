@@ -82,10 +82,25 @@ impl<'a> IntoIterator for &'a SVec {
     fn into_iter(self) -> Self::IntoIter { self.0.iter().map(|(c, x)| (c, x)) }
 }
 
+thread_local! {
+    /// add_scaled の作業領域(行演算のたびに配列を確保しない)。
+    static SCRATCH: std::cell::RefCell<Vec<(u32, i64)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn add_scaled(v: &mut SVec, r: &SVec, k: i64) -> Option<()> {
     if k == 0 || r.0.is_empty() { return Some(()); }
-    let (a, b) = (&v.0, &r.0);
-    let mut out: Vec<(u32, i64)> = Vec::with_capacity(a.len() + b.len());
+    SCRATCH.with(|sc| {
+        let mut out = std::mem::take(&mut *sc.borrow_mut());
+        out.clear();
+        let res = merge_scaled(&v.0, &r.0, k, &mut out);
+        if res.is_some() { std::mem::swap(&mut v.0, &mut out); }
+        *sc.borrow_mut() = out;
+        res
+    })
+}
+
+/// out = a + k·b(どちらも番号の昇順)。係数があふれたら None(v は変えない)。
+fn merge_scaled(a: &[(u32, i64)], b: &[(u32, i64)], k: i64, out: &mut Vec<(u32, i64)>) -> Option<()> {
     let (mut i, mut j) = (0, 0);
     while i < a.len() || j < b.len() {
         if j == b.len() || (i < a.len() && a[i].0 < b[j].0) { out.push(a[i]); i += 1; continue; }
@@ -99,7 +114,6 @@ fn add_scaled(v: &mut SVec, r: &SVec, k: i64) -> Option<()> {
         }
         j += 1;
     }
-    v.0 = out;
     Some(())
 }
 
@@ -147,7 +161,8 @@ const NO_SRC: u32 = u32::MAX;
 /// 集合の和を作ると、出どころが数百個に太った行で行演算1回が数µs かかった(来歴 #95)。
 #[derive(Default, Clone)]
 struct Lattice {
-    rows: BTreeMap<u32, (SVec, u32)>,
+    /// 主成分の列 → 行(列は疎な番号なので表で引く。並びが要るのは same_span だけ)。
+    rows: FxHashMap<u32, (SVec, u32)>,
     joins: Vec<(u32, u32)>,
     /// 行の組み合わせの回数(仕事量に数える)。
     ops: u64,
@@ -264,9 +279,8 @@ impl Lattice {
 
     /// 2つの格子が同じか: 主成分の列と値が同じで、self の行が全て other で 0 に還元される(指数が 1 になる)。
     fn same_span(&self, other: &mut Lattice) -> Option<bool> {
-        if self.rows.len() != other.rows.len() || self.rows.iter().zip(other.rows.iter()).any(|((c, (r, _)), (d, (q, _)))| c != d || r[c] != q[d]) {
-            return Some(false);
-        }
+        let pivots = |l: &Lattice| { let mut v: Vec<(u32, i64)> = l.rows.iter().map(|(&c, (r, _))| (c, r[&c])).collect(); v.sort_unstable(); v };
+        if self.rows.len() != other.rows.len() || pivots(self) != pivots(other) { return Some(false); }
         for (row, _) in self.rows.values() {
             if !other.reduce(row)?.0.is_empty() { return Some(false); }
         }

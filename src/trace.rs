@@ -378,15 +378,8 @@ fn on_proof_path(f: &Firing, sup: &ProofSupport) -> bool {
 struct Row { fires: u64, useful: u64, anc_useful: u64, work: u64, useful_work: u64, pri_sum: i64, seeded: u64 }
 
 
-/// 🌟 「その場で作った図形は、本当に使われているのか」の集計(--origins)。オンデマンド作図と、DefinedBy パターンを
-/// 満たすためにマッチャがその場で作る図形は、どちらも「行き詰まったら図を増やす」という賭けで、それが証明に効いたかを測る。
-/// 数え方で気を付ける2点:
-/// - 直接作ったものと、apply_trivial_relations が芋づる式に作ったもの(方向・長さ・自動生成の直線)を分ける
-///   (混ぜると作った数が実態の何倍にも見える)。
-/// - 「証明に登場した」は代表元ではなくスロット単位で数える(代表元だと、同じ同値類へ合流しただけの無関係な補助図形まで
-///   数えてしまう)。collect_proof_support の merges/incidences は生のスロット対なのでそのまま使える。
-pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, problem: &str) {
-    // --- 証明に実際に登場したスロット ---
+/// 証明に登場したスロット(親方向へ閉じたもの)と、証明の手順に端点として登場したスロット、目標に届いたか。
+fn proof_slots(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>) -> (FxHashSet<usize>, FxHashSet<usize>, bool) {
     let mut in_proof: FxHashSet<usize> = FxHashSet::default();
     // 証明の手順そのもの(マージ・接続)に端点として登場したスロットだけ。
     // in_proof はこれを親方向へ閉じたものなので、両方出さないと
@@ -417,6 +410,28 @@ pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, prob
             }
         }
     }
+    (in_proof, in_steps, reached)
+}
+
+/// 証明に使った、その場で作った点(補助作図の選び方の正解として測る用)。
+pub fn proof_aux_points(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>) -> Vec<ClassId> {
+    let (in_proof, _, reached) = proof_slots(eg, target);
+    if !reached { return Vec::new(); }
+    (0..eg.entities.len()).filter(|&i| {
+        let e = &eg.entities[i];
+        e.origin != EntityOrigin::Given && !e.origin_cascade && in_proof.contains(&i) && e.entity_type == EntityType::Point
+    }).map(ClassId).collect()
+}
+
+/// 🌟 「その場で作った図形は、本当に使われているのか」の集計(--origins)。オンデマンド作図と、DefinedBy パターンを
+/// 満たすためにマッチャがその場で作る図形は、どちらも「行き詰まったら図を増やす」という賭けで、それが証明に効いたかを測る。
+/// 数え方で気を付ける2点:
+/// - 直接作ったものと、apply_trivial_relations が芋づる式に作ったもの(方向・長さ・自動生成の直線)を分ける
+///   (混ぜると作った数が実態の何倍にも見える)。
+/// - 「証明に登場した」は代表元ではなくスロット単位で数える(代表元だと、同じ同値類へ合流しただけの無関係な補助図形まで
+///   数えてしまう)。collect_proof_support の merges/incidences は生のスロット対なのでそのまま使える。
+pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, problem: &str) {
+    let (in_proof, in_steps, reached) = proof_slots(eg, target);
 
     // --- マージの履歴に一度でも現れたスロット(吸収された側・吸収した側の両方) ---
     // このエンジンの進捗は全てマージか接続なので、一度もマージに関与しなかった
@@ -488,6 +503,13 @@ pub fn report_origins(eg: &EGraph, target: &Option<(String, Vec<ClassId>)>, prob
             .collect();
         named.sort_unstable();
         named.dedup();
+        // 証明に使った補助点の定義(機械可読: 補助作図の選び方の正解として集める)。
+        for (i, e) in eg.entities.iter().enumerate() {
+            if e.origin == EntityOrigin::Given || e.origin_cascade || !in_proof.contains(&i) || e.entity_type != EntityType::Point { continue; }
+            let ps: Vec<String> = e.original_definition.get_parents().iter()
+                .map(|p| format!("{}:{:?}:{}", eg.entities[p.0].original_name, eg.entities[p.0].entity_type, eg.entities[p.0].origin.label())).collect();
+            println!("AUXPT\t{}\t{:?}\t{}\t{}\t{}", problem, e.origin, e.original_definition.get_type_name(), e.original_name, ps.join(" "));
+        }
         if named.is_empty() {
             println!("  証明に効いた「その場の作図」: なし(問題文の図形だけで閉じている)");
         } else {

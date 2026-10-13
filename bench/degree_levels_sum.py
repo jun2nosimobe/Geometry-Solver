@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """usage: degree_levels_sum.py <ラベル>
 
-res/dlevels_<ラベル>.tsv(degree_levels.sh)を次数の区間ごとに集計する: 事実 / 見る前から既知 / AR で分かった / Wu の方法で示した
-(低い次数の事実から線形には従わない「次数 d の新しい事実」)/ 示せない。解けた問題と解けなかった問題に分ける。"""
+res/dlevels_<ラベル>.tsv(degree_levels.sh)を次数の区間ごとに集計する: 事実 / 見る前から既知 / AR で分かった / 記号計算で示した
+(既知の事実から線形には従わない「次数 d の新しい事実」)/ 示せない / 既知の事実から線形に従うのに AR が出さなかった(#107 から)。
+解けた問題と解けなかった問題に分ける。"""
 import os
 import sys
 from collections import defaultdict
@@ -29,14 +30,14 @@ def main():
     rows = [line.rstrip('\n').split('\t') for line in open(os.path.join(R, f'dlevels_{label}.tsv'), encoding='utf-8') if line.strip()]
     print(f'問題 {len(solved)}、解けた {sum(solved.values())}')
     for want, title in [(True, '解けた問題'), (False, '解けなかった問題')]:
-        t = defaultdict(lambda: [0] * 5)
+        t = defaultdict(lambda: [0] * 7)
         for p, d, *n in rows:
             if solved.get(p) != want:
                 continue
-            for k, x in enumerate(map(int, n)):
+            for k, x in enumerate((list(map(int, n)) + [0] * 7)[:7]):
                 t[bucket(int(d))][k] += x
         print(f'== {title}')
-        print('次数\t事実\t既知\tAR\tWu の方法\t示せない')
+        print('次数\t事実\t既知\tAR\t示した\t示せない\t従属なので AR に任せた\tAR が出せず示しにいった')
         for (_, name), n in sorted(t.items()):
             print(name, *n, sep='\t')
 
